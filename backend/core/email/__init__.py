@@ -2,12 +2,30 @@
 Core email package public surface.
 """
 
-from core.email.email_client import DraftMetadata, EmailClient, EmailContent, EmailMetadata, LabelUpdate, SpamMoveResult, SyncResult
+from core.email.blocked_extensions import BLOCKED_EXTENSIONS, is_blocked_extension
+from core.email.email_client import (
+    AttachmentBinary,
+    AttachmentMetadata,
+    AttachmentUploadResult,
+    DraftAttachmentInput,
+    DraftMetadata,
+    EmailClient,
+    EmailContent,
+    EmailMetadata,
+    LabelUpdate,
+    SpamMoveResult,
+    SyncResult,
+)
 from core.email.email_manager import EmailManager
 from core.email.errors import (
     CoreError,
     EmailAccountNotFoundError,
     EmailAccountRecordError,
+    EmailAttachmentBlockedByProvider,
+    EmailAttachmentDownloadFailed,
+    EmailAttachmentNotFound,
+    EmailAttachmentSendFailed,
+    EmailAttachmentTooLargeForProvider,
     EmailAuthError,
     EmailConfigError,
     EmailDuplicateAccountLabelError,
@@ -26,10 +44,20 @@ from core.email.errors import (
 )
 
 __all__ = [
+    "AttachmentBinary",
+    "AttachmentMetadata",
+    "AttachmentUploadResult",
+    "BLOCKED_EXTENSIONS",
     "CoreError",
+    "DraftAttachmentInput",
     "DraftMetadata",
     "EmailAccountNotFoundError",
     "EmailAccountRecordError",
+    "EmailAttachmentBlockedByProvider",
+    "EmailAttachmentDownloadFailed",
+    "EmailAttachmentNotFound",
+    "EmailAttachmentSendFailed",
+    "EmailAttachmentTooLargeForProvider",
     "EmailAuthError",
     "EmailClient",
     "EmailContent",
@@ -52,4 +80,5 @@ __all__ = [
     "EmailRecipientsMissingError",
     "EmailRefreshFailedError",
     "SyncResult",
+    "is_blocked_extension",
 ]

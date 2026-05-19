@@ -738,3 +738,53 @@ def test_exists_propagates_connection_pool_error(monkeypatch):
 
     with pytest.raises(ConnectionPoolError, match="pool down"):
         em_module.email_metadata_store.exists("acc1", "m1")
+
+
+# ===== update_has_attachments (D-09) =====
+# Recomputes ``email_metadata.has_attachments`` from the live count of
+# non-inline rows in ``email_attachments``. The query is idempotent so
+# calling twice in a row is harmless; the tests verify error wrapping
+# and the InvalidTextRepresentation soft fallback.
+
+
+def test_update_has_attachments_executes_with_correct_params(monkeypatch):
+    cursor = FakeCursor()
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.update_has_attachments("acc-1", "msg-1")
+    assert len(cursor.executed) == 1
+    _sql, params = cursor.executed[0]
+    assert params["account_id"] == "acc-1"
+    assert params["provider_message_id"] == "msg-1"
+
+
+def test_update_has_attachments_invalid_uuid_raises_query_error(monkeypatch):
+    # Phase 2.2 fix: bad UUID at the boundary now raises instead of
+    # returning silently. Letting it pass would leave ``has_attachments``
+    # stale without any signal that the helper failed (B.lazy invariant).
+    from database.errors import QueryError as DbQueryError
+    cursor = FakeCursor(
+        execute_side_effect=psycopg2.errors.InvalidTextRepresentation("bad uuid"),
+    )
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(DbQueryError):
+        em_module.email_metadata_store.update_has_attachments("not-a-uuid", "msg-1")
+
+
+def test_update_has_attachments_db_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("db down"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError):
+        em_module.email_metadata_store.update_has_attachments("acc-1", "msg-1")
+
+
+def test_update_has_attachments_unexpected_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.update_has_attachments("acc-1", "msg-1")
+
+
+def test_update_has_attachments_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool"))
+    with pytest.raises(ConnectionPoolError):
+        em_module.email_metadata_store.update_has_attachments("acc-1", "msg-1")

@@ -55,8 +55,14 @@ def _persisted_row(
     cc_recipients: list[str] | None = None,
     bcc_recipients: list[str] | None = None,
     subject: str = "Hello draft",
-    body_html: str = "<p>body</p>",
+    body: str = "body",
+    attachments: list[dict] | None = None,
 ) -> dict:
+    # Phase 2.5: list_drafts queries now bring ``attachments`` pre-aggregated
+    # (json_agg subquery) so ``_draft_out_from_row`` can skip the per-row
+    # follow-up fetch. Tests therefore include the field by default; legacy
+    # single-draft endpoints that did NOT carry it still work via the
+    # fallback branch in ``_draft_out_from_row``.
     return {
         "provider_draft_id": provider_draft_id,
         "account_id": _ACCOUNT_ID,
@@ -64,9 +70,10 @@ def _persisted_row(
         "cc_recipients": cc_recipients if cc_recipients is not None else [],
         "bcc_recipients": bcc_recipients if bcc_recipients is not None else [],
         "subject": subject,
-        "body_html": body_html,
+        "body": body,
         "created_at": datetime(2024, 1, 1, 12, 0, 0),
         "updated_at": datetime(2024, 1, 1, 12, 0, 0),
+        "attachments": attachments if attachments is not None else [],
     }
 
 
@@ -119,7 +126,7 @@ def _patch_common(monkeypatch, *, fake_client_kwargs=None):
             cc_recipients=row.get("cc_recipients", []),
             bcc_recipients=row.get("bcc_recipients", []),
             subject=row.get("subject", ""),
-            body_html=row.get("body_html", ""),
+            body=row.get("body", ""),
         ),
     )
 
@@ -132,7 +139,7 @@ class TestCreateDraft:
             cc_recipients=[],
             bcc_recipients=[],
             subject="Hello draft",
-            body_html="<p>body</p>",
+            body="body",
         )
 
     def test_happy_path_returns_draft_out(self, monkeypatch):
@@ -144,7 +151,7 @@ class TestCreateDraft:
         assert result.account_id == _ACCOUNT_ID
         assert result.to_recipients == ["to@example.com"]
         assert result.subject == "Hello draft"
-        assert result.body_html == "<p>body</p>"
+        assert result.body == "body"
         assert result.created_at == datetime(2024, 1, 1, 12, 0, 0)
         assert result.updated_at == datetime(2024, 1, 1, 12, 0, 0)
 
@@ -154,7 +161,7 @@ class TestCreateDraft:
             _MAILBOX_ID, _ACCOUNT_ID, DraftCreate(), _USER_ID,
         )
         assert result.subject == ""
-        assert result.body_html == ""
+        assert result.body == ""
         assert result.to_recipients == []
         assert result.cc_recipients == []
         assert result.bcc_recipients == []
@@ -261,7 +268,7 @@ class TestCreateDraft:
             cc_recipients=["cc@e.com"],
             bcc_recipients=["bcc@f.com"],
             subject="My subject",
-            body_html="<b>html</b>",
+            body="plain body",
         )
         drafts_service.create_draft(_MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID)
         assert len(captured_clients) == 1
@@ -272,7 +279,7 @@ class TestCreateDraft:
             ["cc@e.com"],
             ["bcc@f.com"],
             "My subject",
-            "<b>html</b>",
+            "plain body",
         )
 
     def test_persist_refreshed_tokens_happy_path(self, monkeypatch):
@@ -377,7 +384,7 @@ class TestCreateDraft:
             )
 
     def test_none_fields_coalesced_to_defaults(self, monkeypatch):
-        # When the persisted row has None for recipients/subject/body_html,
+        # When the persisted row has None for recipients/subject/body,
         # DraftOut must expose [] / "" via the `or []`/`or ""` coalescing.
         _patch_common(monkeypatch)
         monkeypatch.setattr(
@@ -389,9 +396,13 @@ class TestCreateDraft:
                 "cc_recipients": None,
                 "bcc_recipients": None,
                 "subject": None,
-                "body_html": None,
+                "body": None,
                 "created_at": datetime(2024, 1, 1, 12, 0, 0),
                 "updated_at": datetime(2024, 1, 1, 12, 0, 0),
+                # Phase 2.5: ``_draft_out_from_row`` short-circuits the
+                # follow-up ``list_by_draft`` query when ``attachments`` is
+                # already present, so the test never hits the DB.
+                "attachments": [],
             },
         )
         result = drafts_service.create_draft(
@@ -401,7 +412,7 @@ class TestCreateDraft:
         assert result.cc_recipients == []
         assert result.bcc_recipients == []
         assert result.subject == ""
-        assert result.body_html == ""
+        assert result.body == ""
 
 
 def _patch_list_common(monkeypatch):
@@ -568,9 +579,11 @@ class TestListDrafts:
                     "cc_recipients": None,
                     "bcc_recipients": None,
                     "subject": None,
-                    "body_html": None,
+                    "body": None,
                     "created_at": datetime(2024, 1, 1, 12, 0, 0),
                     "updated_at": datetime(2024, 1, 1, 12, 0, 0),
+                    # Phase 2.5: pre-aggregated by the listing query.
+                    "attachments": [],
                 },
             ],
         )
@@ -580,7 +593,7 @@ class TestListDrafts:
         assert result[0].cc_recipients == []
         assert result[0].bcc_recipients == []
         assert result[0].subject == ""
-        assert result[0].body_html == ""
+        assert result[0].body == ""
 
 
 # =====================================================================
@@ -597,7 +610,7 @@ def _sample_draft(provider_draft_id: str = "d1", subject: str = "S") -> DraftMet
         cc_recipients=[],
         bcc_recipients=[],
         subject=subject,
-        body_html="<p>hi</p>",
+        body="hi",
         created_at=_DRAFT_TS,
         updated_at=_DRAFT_TS,
     )
@@ -806,7 +819,7 @@ class TestSyncDrafts:
         assert row["cc_recipients"] == []
         assert row["bcc_recipients"] == []
         assert row["subject"] == "S"
-        assert row["body_html"] == "<p>hi</p>"
+        assert row["body"] == "hi"
         assert row["created_at"] == _DRAFT_TS
         assert row["updated_at"] == _DRAFT_TS
 
@@ -936,7 +949,7 @@ def _patch_update_common(monkeypatch, *, fake_client_kwargs=None):
             cc_recipients=row.get("cc_recipients", []),
             bcc_recipients=row.get("bcc_recipients", []),
             subject=row.get("subject", ""),
-            body_html=row.get("body_html", ""),
+            body=row.get("body", ""),
         ),
     )
 
@@ -949,7 +962,7 @@ class TestUpdateDraft:
             cc_recipients=[],
             bcc_recipients=[],
             subject="Updated subject",
-            body_html="<p>updated</p>",
+            body="updated",
         )
 
     def test_happy_path_returns_draft_out(self, monkeypatch):
@@ -962,7 +975,7 @@ class TestUpdateDraft:
         assert result.account_id == _ACCOUNT_ID
         assert result.to_recipients == ["updated@example.com"]
         assert result.subject == "Updated subject"
-        assert result.body_html == "<p>updated</p>"
+        assert result.body == "updated"
 
     def test_mailbox_access_denied_raises(self, monkeypatch):
         _patch_update_common(monkeypatch)
@@ -1140,7 +1153,7 @@ class TestUpdateDraft:
             cc_recipients=["cc@e.com"],
             bcc_recipients=["bcc@f.com"],
             subject="New subject",
-            body_html="<b>new</b>",
+            body="new",
         )
         drafts_service.update_draft(
             _MAILBOX_ID, _ACCOUNT_ID, _PROVIDER_DRAFT_ID, payload, _USER_ID,
@@ -1154,7 +1167,7 @@ class TestUpdateDraft:
             ["cc@e.com"],
             ["bcc@f.com"],
             "New subject",
-            "<b>new</b>",
+            "new",
         )
 
     def test_persist_refreshed_tokens_happy_path(self, monkeypatch):
@@ -1242,9 +1255,11 @@ class TestUpdateDraft:
                 "cc_recipients": None,
                 "bcc_recipients": None,
                 "subject": None,
-                "body_html": None,
+                "body": None,
                 "created_at": datetime(2024, 1, 1, 12, 0, 0),
                 "updated_at": datetime(2024, 1, 1, 12, 0, 0),
+                # Phase 2.5: short-circuit the follow-up attachments fetch.
+                "attachments": [],
             },
         )
         result = drafts_service.update_draft(
@@ -1255,7 +1270,7 @@ class TestUpdateDraft:
         assert result.cc_recipients == []
         assert result.bcc_recipients == []
         assert result.subject == ""
-        assert result.body_html == ""
+        assert result.body == ""
 
 
 # ------------------------------------------------------------------
@@ -1544,6 +1559,24 @@ def _patch_send_common(monkeypatch, *, fake_client_kwargs=None):
         drafts_service, "persist_email_metadata_batch",
         lambda _aid, _metas, **_kw: len(_metas),
     )
+    # Draft attachments — the unified send path collects them from the
+    # store before delegating to the manager. Tests that don't care about
+    # attachments default to "no rows" so the path stays focused on the
+    # provider behaviour they exercise. Tests that DO care override these
+    # patches inline.
+    monkeypatch.setattr(
+        drafts_service.draft_attachment_store, "list_by_draft",
+        lambda _aid, _did: [],
+    )
+    # The send path uses ``list_by_draft_with_blob`` (single round trip).
+    monkeypatch.setattr(
+        drafts_service.draft_attachment_store, "list_by_draft_with_blob",
+        lambda _aid, _did: [],
+    )
+    monkeypatch.setattr(
+        drafts_service.draft_attachment_store, "update_provider_attachment_id",
+        lambda _id, _pid: None,
+    )
 
 
 class TestSendDraft:
@@ -1591,10 +1624,15 @@ class TestSendDraft:
             )
 
     def test_provider_external_api_error_translated(self, monkeypatch):
+        # The send path goes through ``send_draft_with_attachments`` even
+        # for drafts without attachments — it is the unified entry point
+        # for the new flow. Inject the failure on that method's kwarg.
         _patch_send_common(
             monkeypatch,
             fake_client_kwargs={
-                "send_draft_exc": EmailExternalAPIError("Provider boom"),
+                "send_draft_with_attachments_exc": EmailExternalAPIError(
+                    "Provider boom",
+                ),
             },
         )
         with pytest.raises(ExternalAPIError):
@@ -1693,7 +1731,7 @@ class TestSendDraft:
 
     def test_provider_generic_exception_raises_external_api_error(self, monkeypatch):
         _patch_send_common(monkeypatch, fake_client_kwargs={
-            "send_draft_exc": RuntimeError("boom"),
+            "send_draft_with_attachments_exc": RuntimeError("boom"),
         })
         with pytest.raises(ExternalAPIError):
             drafts_service.send_draft(

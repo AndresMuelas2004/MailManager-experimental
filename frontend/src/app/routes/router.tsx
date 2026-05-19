@@ -3,10 +3,10 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 
 import RequireAuth from './RequireAuth';
 import RootLayout from '../layout/RootLayout';
-import MailboxLayout from '../layout/MailboxLayout';
 import LoginPage from '../../features/auth/pages/LoginPage';
 import CreateMailboxPage from '../../features/mailboxes/pages/CreateMailboxPage';
 import MailboxGatewayPage from '../../features/mailboxes/pages/MailboxGatewayPage';
+import MailboxLayoutPage from '../../features/mailboxes/pages/MailboxLayoutPage';
 
 const ConnectedAccountsPage = lazy(
   () => import('../../features/accounts/pages/ConnectedAccountsPage'),
@@ -29,7 +29,7 @@ const router = createBrowserRouter([
           { path: 'create-mailbox', element: <CreateMailboxPage /> },
           {
             path: 'm/:mailboxId',
-            element: <MailboxLayout />,
+            element: <MailboxLayoutPage />,
             children: [
               { path: 'accounts', element: <ConnectedAccountsPage /> },
               { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },

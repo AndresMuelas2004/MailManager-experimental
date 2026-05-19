@@ -84,8 +84,10 @@ When drafts are **synced** from the provider (Section 5c), the draft is intentio
 
 ### Provider-specific behavior worth knowing
 
-- **Outlook** wraps plain HTML bodies in a full `<html>/<body>` structure via the Graph API. Outlook tests assert body content by containment (`"E2E updated body" in data["body_html"]`), not byte-for-byte equality. Gmail preserves the input HTML as-is.
+- **Outlook normalises plain-text bodies server-side** (may add a trailing newline / whitespace tweak). Outlook tests assert by containment (`"E2E updated body" in data["body"]`), not byte-for-byte equality. The earlier HTML-wrapping behaviour (`<html>/<body>` injection on plain HTML inputs) no longer applies — D-31 ships every draft body as `text/plain` to both providers, and the API field is `body` (not `body_html`).
 - **Send-draft response IDs differ by provider**: Gmail returns a **new** `provider_message_id` (Gmail creates a new Message on send, different from the draft ID). Outlook returns the **same** ID as the draft thanks to `Prefer: IdType="ImmutableId"` used at draft creation.
+- **Email content cache-aside tests (`test_46a..d`).** Cover the MISS → persist and HIT → serve-from-DB paths for both providers. `test_46a` (Gmail MISS) and `test_46c` (Outlook MISS) explicitly delete the `email_content` row before calling the endpoint and assert the row was written after the response; `test_46b` (Gmail HIT) and `test_46d` (Outlook HIT) depend on the prior MISS via `flow_state` keys (`gmail_content_msg_id` / `gmail_content_fetched_at` / `outlook_content_*`) and verify that `fetched_at` is unchanged on the second call — proving the provider was not re-fetched. Test order is load-bearing: 46a before 46b, 46c before 46d. `test_38` and `test_39` cover list/get content too, but without the explicit MISS/HIT split — `test_46a..d` are the authoritative cache-aside spec.
+- **Attachments e2e tests (`test_46e..l`).** Cover the local-only draft-attachment lifecycle (POST → DELETE without provider contact, one Gmail + one Outlook variant), the send-with-attachment paths against both providers (`test_46h`/`test_46i`), and the three states of the admin purge endpoint (`test_46j..l`) — `503 purge_disabled` when `ATTACHMENTS_PURGE_TOKEN` is unset, `401 invalid_admin_token` when set but the header is wrong, `200 {purged_count, freed_bytes}` otherwise. The blocked-extension test runs against Gmail only because the blocklist is uniform (D-04a). **Accepted gaps**: `test_46l` does NOT pre-seed an expired blob — it asserts `purged_count >= 0`/`freed_bytes >= 0`, so a no-op purge against a clean database passes trivially. The cache-aside attachment download endpoint (`GET .../emails/{id}/attachments/{aid}`) and the 30 MB multipart cap have no E2E coverage today; both are exercised at unit + integration level.
 
 ### Safety-net cleanup in fixture teardown
 
@@ -111,3 +113,11 @@ When adding a new provider:
 - [ ] Ensure flow assertions include the new provider behavior.
 
 The E2E suite should always represent the full set of supported providers.
+
+## Search endpoint coverage — `test_38a` / `test_38b`
+
+`GET /mailboxes/{mailbox_id}/emails?q=…` is exercised by `test_38a_search_emails_single_account` and `test_38b_search_emails_unified_mailbox`. Why the dedicated mention here:
+
+- The contract on `q` (OR semantics across `subject`, `from_email`, `from_name`, AND between tokens, literal substring, no stemming) is not visible from the router signature alone — the test is the executable spec for it. A change in the predicate that breaks one column's contribution must surface here.
+- 38a scopes the search to a single `account_id` and verifies every returned row matches the needle in at least one of the three searchable columns.
+- 38b drops the `account_id` filter (unified mailbox view) and verifies every returned row belongs to **some** account inside the requested mailbox AND matches the needle. This pins down that the unified path does not leak rows from foreign mailboxes when no `account_id` is supplied — a contract the router signature alone does not express.

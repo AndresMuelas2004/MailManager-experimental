@@ -2015,7 +2015,7 @@ class TestFetchDrafts:
         draft = client._parse_outlook_draft(msg)
         assert draft.provider_draft_id == "d1"
         assert draft.subject == "Parsed subject"
-        assert draft.body_html == "<p>body-d1</p>"
+        assert draft.body == "<p>body-d1</p>"
         assert draft.to_recipients == ["a@b.com"]
         assert draft.cc_recipients == ["c@d.com"]
         assert draft.bcc_recipients == []
@@ -2122,3 +2122,301 @@ class TestFetchEmailContentInlineImages:
         client._graph_request = MagicMock(side_effect=responses)
         content = client.fetch_email_content("mid")
         assert 'src="cid:doc"' in content.html_body
+
+
+# ── fetch_attachment_binary status tree (D-17) ──────────────────────
+
+
+@pytest.fixture
+def authenticated_client() -> OutlookClient:
+    client = OutlookClient(account_label="mb__acct")
+    client._access_token = "test-token"
+    return client
+
+
+class TestOutlookFetchAttachmentBinary:
+    def _attachment(self):
+        from core.email.email_client import AttachmentMetadata
+        return AttachmentMetadata(
+            provider_message_id="msg-1",
+            part_id=None,
+            provider_attachment_id="att-1",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            size=10,
+            content_id=None,
+            is_inline=False,
+            position=0,
+        )
+
+    def test_200_returns_decoded_binary(self, authenticated_client, monkeypatch):
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: (200, {}, b"hello"),
+        )
+        binary = authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+        assert binary.data == b"hello"
+        assert binary.size == 5
+        assert binary.mime_type == "application/pdf"
+
+    def test_404_raises_attachment_not_found(self, authenticated_client, monkeypatch):
+        from core.email.errors import EmailAttachmentNotFound
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: (404, {}, b""),
+        )
+        with pytest.raises(EmailAttachmentNotFound):
+            authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+
+    def test_410_raises_attachment_not_found(self, authenticated_client, monkeypatch):
+        from core.email.errors import EmailAttachmentNotFound
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: (410, {}, b""),
+        )
+        with pytest.raises(EmailAttachmentNotFound):
+            authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+
+    def test_403_raises_forbidden_reason(self, authenticated_client, monkeypatch):
+        from core.email.errors import EmailAttachmentDownloadFailed
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: (403, {}, b""),
+        )
+        with pytest.raises(EmailAttachmentDownloadFailed) as exc_info:
+            authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+        assert exc_info.value.detail.get("reason") == "forbidden"
+
+    def test_persistent_5xx_after_retries_raises_unavailable(self, authenticated_client, monkeypatch):
+        from core.email.errors import EmailAttachmentDownloadFailed
+        # Speed up the test by collapsing sleep delays.
+        monkeypatch.setattr("core.email.outlook_client.time.sleep", lambda _s: None)
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: (503, {}, b""),
+        )
+        with pytest.raises(EmailAttachmentDownloadFailed) as exc_info:
+            authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+        assert exc_info.value.detail.get("reason") == "unavailable"
+
+    def test_429_then_200_succeeds_after_retry(self, authenticated_client, monkeypatch):
+        monkeypatch.setattr("core.email.outlook_client.time.sleep", lambda _s: None)
+        responses = iter([
+            (429, {"Retry-After": "1"}, b""),
+            (200, {}, b"ok"),
+        ])
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request_raw",
+            lambda method, url, extra_headers=None: next(responses),
+        )
+        binary = authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+        assert binary.data == b"ok"
+
+    def test_url_error_treated_as_503_and_retried(self, authenticated_client, monkeypatch):
+        # Phase 2.3 fix: URLError must be folded into the retry loop as a
+        # synthetic 503 instead of escaping immediately as
+        # EmailExternalAPIError. Verifying the retry continues until success.
+        monkeypatch.setattr("core.email.outlook_client.time.sleep", lambda _s: None)
+        # Build a real URLError + a successful follow-up so the retry path
+        # is exercised end-to-end via the production _graph_request_raw.
+        call_count = {"n": 0}
+
+        def fake_urlopen(req, timeout):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise urllib.error.URLError("connection refused")
+            response = MagicMock()
+            response.status = 200
+            response.headers = {}
+            response.read.return_value = b"recovered"
+            response.__enter__ = lambda self: self
+            response.__exit__ = lambda self, *a: None
+            return response
+
+        monkeypatch.setattr(
+            "core.email.outlook_client.urllib.request.urlopen", fake_urlopen,
+        )
+        binary = authenticated_client.fetch_attachment_binary("msg-1", self._attachment())
+        assert binary.data == b"recovered"
+
+
+class TestOutlookListMessageAttachments:
+    def test_returns_classification_tuple(self, authenticated_client, monkeypatch):
+        from core.email.email_client import AttachmentMetadata
+        sample = AttachmentMetadata(
+            provider_message_id="msg-1",
+            part_id=None,
+            provider_attachment_id="att-1",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            size=10,
+            content_id=None,
+            is_inline=False,
+            position=0,
+        )
+        # list_message_attachments first calls _graph_request to fetch the
+        # body (for cid resolution), then _classify_attachments. Stub both.
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request",
+            lambda method, url, body=None, extra_headers=None: {
+                "body": {"contentType": "html", "content": "<p>hi</p>"},
+            },
+        )
+        monkeypatch.setattr(
+            authenticated_client, "_classify_attachments",
+            lambda escaped_id, html_body, *, provider_message_id=None: (
+                {"cid-x": "data:image/png;base64,YQ=="}, [sample],
+            ),
+        )
+        attachments, cid_map = authenticated_client.list_message_attachments("msg-1")
+        assert attachments == [sample]
+        assert cid_map == {"cid-x": "data:image/png;base64,YQ=="}
+
+
+# ── send_draft_with_attachments ────────────────────────────────────
+
+
+class TestOutlookSendDraftWithAttachments:
+    """Cover the non-atomic Outlook send-with-attachments path (D-07, D-18, D-27)."""
+
+    def _attachment_input(
+        self,
+        *,
+        draft_attachment_id: str = "local-1",
+        provider_attachment_id: str | None = None,
+        size: int = 100,
+        data: bytes = b"PDF",
+        position: int = 0,
+    ):
+        from core.email.email_client import DraftAttachmentInput
+        return DraftAttachmentInput(
+            draft_attachment_id=draft_attachment_id,
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            data=data,
+            size=size,
+            position=position,
+            content_id=None,
+            is_inline=False,
+            provider_attachment_id=provider_attachment_id,
+        )
+
+    def test_unauthenticated_raises(self):
+        client = OutlookClient(account_label="mb__acct")
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "S", "B",
+                [self._attachment_input()],
+            )
+
+    def _stub_metadata(self, monkeypatch, authenticated_client):
+        """Replace `_build_outlook_sent_metadata` with a synthetic stub
+        carrying the bare-minimum fields the assertions need."""
+        from core.email.email_client import EmailMetadata
+        from datetime import datetime, timezone
+
+        def _fake(provider_draft_id: str) -> EmailMetadata:
+            return EmailMetadata(
+                provider_message_id=provider_draft_id,
+                thread_id=None,
+                from_email="me@outlook.test",
+                from_name="Me",
+                subject="Subject",
+                received_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                is_read=True,
+                box="SENT",
+            )
+
+        monkeypatch.setattr(
+            authenticated_client, "_build_outlook_sent_metadata", _fake,
+        )
+
+    def test_simple_upload_then_send_returns_metadata_and_uploads(
+        self, authenticated_client, monkeypatch,
+    ):
+        # Stub the simple upload to return a synthetic provider attachment id.
+        monkeypatch.setattr(
+            authenticated_client, "_upload_attachment_simple",
+            lambda did, att: "graph-att-1",
+        )
+        # The send POST goes through _graph_request — return an inert dict.
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request",
+            lambda method, url, body=None, extra_headers=None: {},
+        )
+        self._stub_metadata(monkeypatch, authenticated_client)
+
+        metadata, uploads = authenticated_client.send_draft_with_attachments(
+            "draft-1", ["to@x"], [], [], "Subject", "Body",
+            [self._attachment_input()],
+        )
+        assert metadata.box == "SENT"
+        assert len(uploads) == 1
+        assert uploads[0].provider_attachment_id == "graph-att-1"
+        assert uploads[0].draft_attachment_id == "local-1"
+
+    def test_attachment_with_provider_id_skips_reupload(
+        self, authenticated_client, monkeypatch,
+    ):
+        upload_calls: list[str] = []
+        monkeypatch.setattr(
+            authenticated_client, "_upload_attachment_simple",
+            lambda did, att: upload_calls.append(att.draft_attachment_id) or "x",
+        )
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request",
+            lambda method, url, body=None, extra_headers=None: {},
+        )
+        self._stub_metadata(monkeypatch, authenticated_client)
+
+        already_uploaded = self._attachment_input(
+            draft_attachment_id="resumed-1",
+            provider_attachment_id="graph-att-existing",
+        )
+        _, uploads = authenticated_client.send_draft_with_attachments(
+            "draft-1", ["to@x"], [], [], "Subject", "Body",
+            [already_uploaded],
+        )
+        # No re-upload, but the existing id surfaces back in the result list.
+        assert upload_calls == []
+        assert len(uploads) == 1
+        assert uploads[0].provider_attachment_id == "graph-att-existing"
+
+    def test_mid_flight_failure_raises_email_attachment_send_failed_with_succeeded(
+        self, authenticated_client, monkeypatch,
+    ):
+        from core.email.errors import EmailAttachmentSendFailed
+
+        # First attachment uploads ok; second raises EmailExternalAPIError.
+        upload_iter = iter([
+            ("ok-id-1", None),
+            (None, EmailExternalAPIError("provider 500")),
+        ])
+
+        def _upload(did, att):
+            value, exc = next(upload_iter)
+            if exc is not None:
+                raise exc
+            return value
+
+        monkeypatch.setattr(authenticated_client, "_upload_attachment_simple", _upload)
+
+        with pytest.raises(EmailAttachmentSendFailed) as excinfo:
+            authenticated_client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "Subject", "Body",
+                [
+                    self._attachment_input(draft_attachment_id="ok-1"),
+                    self._attachment_input(draft_attachment_id="fail-1"),
+                ],
+            )
+        detail = excinfo.value.detail or {}
+        # D-27 contract: succeeded list carries the partial state for retry resume.
+        assert any(
+            entry.get("draft_attachment_id") == "ok-1"
+            and entry.get("provider_attachment_id") == "ok-id-1"
+            for entry in detail.get("succeeded", [])
+        )
+        assert any(
+            entry.get("draft_attachment_id") == "fail-1"
+            for entry in detail.get("failed_attachments", [])
+        )

@@ -6,7 +6,7 @@ import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
-import AccountTabs from '../components/AccountTabs';
+import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import useDebounce from '../hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';

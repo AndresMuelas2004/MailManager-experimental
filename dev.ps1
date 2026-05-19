@@ -24,17 +24,23 @@ $FrontendUrl  = "http://localhost:$FrontendPort"
 
 function Test-PortListening {
     param([int]$Port)
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $iar    = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
-        $ok     = $iar.AsyncWaitHandle.WaitOne(500, $false)
-        $reachable = $false
-        if ($ok) {
-            try { $client.EndConnect($iar); $reachable = $true } catch { $reachable = $false }
-        }
-        $client.Close()
-        return $reachable
-    } catch { return $false }
+    # Probe both stacks: Vite (and other Node servers) often bind only to ::1,
+    # so a 127.0.0.1-only check returns a false negative and the script wrongly
+    # decides the port is free.
+    foreach ($addr in @('127.0.0.1', '::1')) {
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $iar    = $client.BeginConnect($addr, $Port, $null, $null)
+            $ok     = $iar.AsyncWaitHandle.WaitOne(500, $false)
+            $reachable = $false
+            if ($ok) {
+                try { $client.EndConnect($iar); $reachable = $true } catch { $reachable = $false }
+            }
+            $client.Close()
+            if ($reachable) { return $true }
+        } catch { }
+    }
+    return $false
 }
 
 function Wait-ForPort {
@@ -66,14 +72,30 @@ if (Test-PortListening -Port $PgPort) {
     Write-Host '      PostgreSQL started.' -ForegroundColor Green
 }
 
-# --- 2. Frontend (new window, fire-and-forget) ----------------------------
+# --- 2. Frontend (new window, with log capture + bind verification) -------
 Write-Host "[2/3] Starting frontend on port $FrontendPort..." -ForegroundColor Cyan
 if (Test-PortListening -Port $FrontendPort) {
     Write-Host "      Port $FrontendPort already in use, skip." -ForegroundColor Green
 } else {
-    $frontendCmd = "Set-Location '$ProjectRoot\frontend'; npm run dev"
+    $frontendLog = Join-Path $ProjectRoot 'frontend\dev.log'
+    if (Test-Path $frontendLog) { Remove-Item $frontendLog -Force -ErrorAction SilentlyContinue }
+    # Tee output to dev.log so a silent crash inside the new window can still be diagnosed.
+    $frontendCmd = "Set-Location '$ProjectRoot\frontend'; npm run dev 2>&1 | Tee-Object -FilePath '$frontendLog'"
     Start-Process powershell -ArgumentList '-NoExit', '-Command', $frontendCmd | Out-Null
-    Write-Host '      Launched in new window.' -ForegroundColor Green
+    Write-Host '      Launched in new window. Waiting for port to bind...' -ForegroundColor Green
+    if (Wait-ForPort -Port $FrontendPort -TimeoutSec 30) {
+        Write-Host "      Frontend reachable on port $FrontendPort." -ForegroundColor Green
+    } else {
+        Write-Host "      ERROR: frontend did not bind port $FrontendPort within 30s." -ForegroundColor Red
+        if (Test-Path $frontendLog) {
+            Write-Host "      ----- tail of $frontendLog -----" -ForegroundColor DarkGray
+            Get-Content $frontendLog -Tail 40 | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+            Write-Host '      ----- end log -----' -ForegroundColor DarkGray
+        } else {
+            Write-Host "      No log produced at $frontendLog (the new shell died before writing)." -ForegroundColor DarkGray
+        }
+        Write-Host '      Continuing with the backend anyway; fix the frontend separately.' -ForegroundColor DarkGray
+    }
 }
 
 # --- 3. Browser auto-open (fires once BOTH frontend and backend respond) --
@@ -81,15 +103,18 @@ $browserJob = Start-Job -ScriptBlock {
     param($Url, $FrontPort, $BackPort)
     function Test-Port {
         param([int]$Port)
-        try {
-            $c   = New-Object System.Net.Sockets.TcpClient
-            $iar = $c.BeginConnect('127.0.0.1', $Port, $null, $null)
-            $ok  = $iar.AsyncWaitHandle.WaitOne(300, $false)
-            $reachable = $false
-            if ($ok) { try { $c.EndConnect($iar); $reachable = $true } catch {} }
-            $c.Close()
-            return $reachable
-        } catch { return $false }
+        foreach ($addr in @('127.0.0.1', '::1')) {
+            try {
+                $c   = New-Object System.Net.Sockets.TcpClient
+                $iar = $c.BeginConnect($addr, $Port, $null, $null)
+                $ok  = $iar.AsyncWaitHandle.WaitOne(300, $false)
+                $reachable = $false
+                if ($ok) { try { $c.EndConnect($iar); $reachable = $true } catch {} }
+                $c.Close()
+                if ($reachable) { return $true }
+            } catch { }
+        }
+        return $false
     }
     $deadline = (Get-Date).AddSeconds(120)
     $ready = $false

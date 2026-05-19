@@ -153,7 +153,7 @@ class PgDraftStore(DraftStore):
                                 list(d.get("cc_recipients") or []),
                                 list(d.get("bcc_recipients") or []),
                                 str(d.get("subject") or ""),
-                                str(d.get("body_html") or ""),
+                                str(d.get("body") or ""),
                                 d.get("created_at"),
                                 d.get("updated_at"),
                             )

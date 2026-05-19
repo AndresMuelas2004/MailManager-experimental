@@ -32,7 +32,7 @@ def _fake_draft_row(
         "cc_recipients": [],
         "bcc_recipients": [],
         "subject": subject,
-        "body_html": "<p>body</p>",
+        "body": "body",
         "created_at": datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         "updated_at": datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
     }
@@ -56,7 +56,7 @@ class TestPgDraftStoreCreate:
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": "Hello",
-            "body_html": "<p>body</p>",
+            "body": "body",
         })
         assert result["provider_draft_id"] == "draft_1"
         assert result["account_id"] == "acc-1"
@@ -158,7 +158,7 @@ class TestPgDraftStoreUpdate:
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": "Updated",
-            "body_html": "<p>new</p>",
+            "body": "new",
         }
 
     def test_update_happy_path(self, monkeypatch):
@@ -308,7 +308,7 @@ class TestPgDraftStoreReplaceAllForAccount:
                 "cc_recipients": [],
                 "bcc_recipients": [],
                 "subject": "s1",
-                "body_html": "<p>b1</p>",
+                "body": "b1",
                 "created_at": ts,
                 "updated_at": ts,
             },
@@ -318,7 +318,7 @@ class TestPgDraftStoreReplaceAllForAccount:
                 "cc_recipients": ["cc@example.com"],
                 "bcc_recipients": [],
                 "subject": "s2",
-                "body_html": "<p>b2</p>",
+                "body": "b2",
                 "created_at": ts,
                 "updated_at": ts,
             },

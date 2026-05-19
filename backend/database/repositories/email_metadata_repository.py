@@ -44,26 +44,13 @@ class PgEmailMetadataStore(EmailMetadataStore):
             ) from exc
 
     def upsert_batch(self, account_id: str, rows: list[tuple]) -> int:
-        if not rows:
-            return 0
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        queries.UPSERT_EMAIL_METADATA_BATCH,
-                        rows,
-                        page_size=500,
-                    )
-                    return cur.rowcount
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to upsert email metadata batch.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected email metadata upsert error ({type(exc).__name__}): {exc}"
-            ) from exc
+        # account_id is embedded in each tuple by the caller; this parameter
+        # exists for contract symmetry only.
+        return self._execute_batch_values(
+            queries.UPSERT_EMAIL_METADATA_BATCH,
+            rows,
+            "Failed to upsert email metadata batch.",
+        )
 
     def delete_batch_by_message_ids(self, account_id: str, message_ids: list[str]) -> int:
         if not message_ids:
@@ -86,48 +73,22 @@ class PgEmailMetadataStore(EmailMetadataStore):
             ) from exc
 
     def update_labels_batch(self, account_id: str, rows: list[tuple]) -> int:
-        if not rows:
-            return 0
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        queries.UPDATE_LABELS_BATCH,
-                        rows,
-                        page_size=500,
-                    )
-                    return cur.rowcount
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to update email metadata labels batch.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected email metadata label update error ({type(exc).__name__}): {exc}"
-            ) from exc
+        # account_id is embedded in each tuple by the caller; this parameter
+        # exists for contract symmetry only.
+        return self._execute_batch_values(
+            queries.UPDATE_LABELS_BATCH,
+            rows,
+            "Failed to update email metadata labels batch.",
+        )
 
     def update_read_status_batch(self, account_id: str, rows: list[tuple]) -> int:
-        if not rows:
-            return 0
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        queries.UPDATE_READ_STATUS_BATCH,
-                        rows,
-                        page_size=500,
-                    )
-                    return cur.rowcount
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to update email read status batch.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected email read status update error ({type(exc).__name__}): {exc}"
-            ) from exc
+        # account_id is embedded in each tuple by the caller; this parameter
+        # exists for contract symmetry only.
+        return self._execute_batch_values(
+            queries.UPDATE_READ_STATUS_BATCH,
+            rows,
+            "Failed to update email read status batch.",
+        )
 
     def list_provider_message_ids(self, account_id: str) -> list[str]:
         try:
@@ -231,26 +192,11 @@ class PgEmailMetadataStore(EmailMetadataStore):
         )
 
     def update_spam_status_batch(self, account_id: str, rows: list[tuple]) -> int:
-        if not rows:
-            return 0
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        queries.UPDATE_SPAM_STATUS_BATCH,
-                        rows,
-                        page_size=500,
-                    )
-                    return cur.rowcount
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to update email spam status batch.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected email spam status update error ({type(exc).__name__}): {exc}"
-            ) from exc
+        # account_id is embedded in each tuple by the caller; this parameter
+        # exists for contract symmetry only.
+        return self._execute_batch_values(
+            queries.MOVE_SPAM_BATCH, rows, "Failed to update email spam status batch.",
+        )
 
 
     def list_filtered(
@@ -299,6 +245,34 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected list filtered email metadata error ({type(exc).__name__}): {exc}"
             ) from exc
         return [dict(row) for row in rows]
+
+    def update_has_attachments(self, account_id: str, provider_message_id: str) -> None:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        queries.UPDATE_HAS_ATTACHMENTS,
+                        {
+                            "account_id": account_id,
+                            "provider_message_id": provider_message_id,
+                        },
+                    )
+        except psycopg2.errors.InvalidTextRepresentation as exc:
+            # Bad UUID at the boundary breaks the B.lazy invariant loudly so
+            # the caller can repair the upstream value rather than silently
+            # leaving ``has_attachments`` stale.
+            raise QueryError(
+                "Invalid identifier passed to update_has_attachments.",
+                detail={"account_id": account_id, "provider_message_id": provider_message_id},
+            ) from exc
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to recompute has_attachments.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected has_attachments recompute error ({type(exc).__name__}): {exc}"
+            ) from exc
 
 
 email_metadata_store = PgEmailMetadataStore()

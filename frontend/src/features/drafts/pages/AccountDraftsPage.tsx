@@ -6,7 +6,7 @@ import useDraftsList from '../hooks/useDraftsList';
 import useDraftBulkDelete from '../hooks/useDraftBulkDelete';
 import DraftsTable from '../components/DraftsTable';
 import DraftBulkActionsBar from '../components/DraftBulkActionsBar';
-import AccountTabs from '../../emails/components/AccountTabs';
+import AccountTabs from '../../../components/ui/AccountTabs';
 import useSelection from '../../../lib/hooks/useSelection';
 import { isGenericLabel } from '../../../lib/providers';
 import type { DraftRef } from '../types';

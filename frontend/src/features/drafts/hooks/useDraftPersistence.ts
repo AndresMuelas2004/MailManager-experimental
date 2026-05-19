@@ -14,6 +14,11 @@ export type UseDraftPersistenceReturn = {
   providerDraftId: string | null;
   setProviderDraftId: (id: string | null) => void;
   persistDraft: (mailboxId: string, accountId: string, payload: DraftPayload) => Promise<void>;
+  ensureProviderDraftId: (
+    mailboxId: string,
+    accountId: string,
+    payload: DraftPayload,
+  ) => Promise<string>;
   sendEmailNow: (
     mailboxId: string,
     accountId: string,
@@ -48,6 +53,22 @@ export default function useDraftPersistence(): UseDraftPersistenceReturn {
       } else {
         const created = await createDraft(mailboxId, accountId, payload);
         providerDraftIdRef.current = created.provider_draft_id;
+      }
+    },
+    [],
+  );
+
+  const ensureProviderDraftId = useCallback(
+    async (mailboxId: string, accountId: string, payload: DraftPayload): Promise<string> => {
+      const existingId = providerDraftIdRef.current;
+      if (existingId) return existingId;
+      try {
+        const created = await createDraft(mailboxId, accountId, payload);
+        providerDraftIdRef.current = created.provider_draft_id;
+        return created.provider_draft_id;
+      } catch (err) {
+        setError(toUiError(err));
+        throw err;
       }
     },
     [],
@@ -140,6 +161,7 @@ export default function useDraftPersistence(): UseDraftPersistenceReturn {
     providerDraftId: providerDraftIdRef.current,
     setProviderDraftId,
     persistDraft,
+    ensureProviderDraftId,
     sendEmailNow,
     sendDraftNow,
     saveDraftNow,

@@ -9,6 +9,7 @@ export type AuthState = {
   error: UiError | null;
   login: (idToken: string) => Promise<void>;
   logout: () => Promise<void>;
+  deleteCurrentUser: () => Promise<boolean>;
 };
 
 export const AuthContext = createContext<AuthState | null>(null);

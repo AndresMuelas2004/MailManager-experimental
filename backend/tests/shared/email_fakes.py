@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.email import DraftMetadata, EmailClient, EmailContent, EmailMetadata, LabelUpdate, SpamMoveResult, SyncResult
+from core.email import (
+    AttachmentBinary,
+    AttachmentMetadata,
+    AttachmentUploadResult,
+    DraftAttachmentInput,
+    DraftMetadata,
+    EmailClient,
+    EmailContent,
+    EmailMetadata,
+    LabelUpdate,
+    SpamMoveResult,
+    SyncResult,
+)
 
 
 DEFAULT_RECEIVED_AT = datetime(2024, 1, 1, 12, 0, 0)
@@ -63,6 +75,12 @@ class FakeEmailClient(EmailClient):
         delete_draft_exc: Exception | None = None,
         fetch_drafts_exc: Exception | None = None,
         send_draft_exc: Exception | None = None,
+        list_message_attachments_exc: Exception | None = None,
+        fetch_attachment_binary_exc: Exception | None = None,
+        send_draft_with_attachments_exc: Exception | None = None,
+        list_message_attachments_return: tuple[list[AttachmentMetadata], dict[str, str]] | None = None,
+        fetch_attachment_binary_return: AttachmentBinary | None = None,
+        send_draft_with_attachments_return: tuple[EmailMetadata, list[AttachmentUploadResult]] | None = None,
         metadata: list[EmailMetadata] | None = None,
         sync_cursor_return: str = DEFAULT_SYNC_CURSOR,
         auth_return: dict | None = None,
@@ -105,6 +123,12 @@ class FakeEmailClient(EmailClient):
         self._fetch_drafts_return = list(fetch_drafts_return or [])
         self._send_draft_exc = send_draft_exc
         self._send_draft_return = send_draft_return
+        self._list_message_attachments_exc = list_message_attachments_exc
+        self._fetch_attachment_binary_exc = fetch_attachment_binary_exc
+        self._send_draft_with_attachments_exc = send_draft_with_attachments_exc
+        self._list_message_attachments_return = list_message_attachments_return
+        self._fetch_attachment_binary_return = fetch_attachment_binary_return
+        self._send_draft_with_attachments_return = send_draft_with_attachments_return
         self._metadata = list(metadata or [])
         self._sync_cursor_return = sync_cursor_return
         self._auth_return = auth_return
@@ -135,6 +159,11 @@ class FakeEmailClient(EmailClient):
         self.delete_draft_calls: list[str] = []
         self.fetch_drafts_calls = 0
         self.send_draft_calls: list[str] = []
+        self.list_message_attachments_calls: list[str] = []
+        self.fetch_attachment_binary_calls: list[tuple[str, AttachmentMetadata]] = []
+        self.send_draft_with_attachments_calls: list[
+            tuple[str, list[str], list[str], list[str], str, str, list[DraftAttachmentInput]]
+        ] = []
         self.deleted_message_ids: list[str] = []
         self.restored_items: list[dict] = []
         self.trashed_items: list[dict[str, str]] = []
@@ -253,10 +282,10 @@ class FakeEmailClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         self.create_draft_calls.append(
-            (list(to_recipients), list(cc_recipients), list(bcc_recipients), subject, body_html)
+            (list(to_recipients), list(cc_recipients), list(bcc_recipients), subject, body)
         )
         if self._create_draft_exc:
             raise self._create_draft_exc
@@ -268,7 +297,7 @@ class FakeEmailClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=DEFAULT_RECEIVED_AT,
             updated_at=DEFAULT_RECEIVED_AT,
         )
@@ -280,7 +309,7 @@ class FakeEmailClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         self.update_draft_calls.append(
             (
@@ -289,7 +318,7 @@ class FakeEmailClient(EmailClient):
                 list(cc_recipients),
                 list(bcc_recipients),
                 subject,
-                body_html,
+                body,
             )
         )
         if self._update_draft_exc:
@@ -302,7 +331,7 @@ class FakeEmailClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=DEFAULT_RECEIVED_AT,
             updated_at=DEFAULT_RECEIVED_AT,
         )
@@ -330,6 +359,67 @@ class FakeEmailClient(EmailClient):
             box="SENT",
             is_read=True,
         )
+
+    def list_message_attachments(
+        self,
+        provider_message_id: str,
+    ) -> tuple[list[AttachmentMetadata], dict[str, str]]:
+        self.list_message_attachments_calls.append(provider_message_id)
+        if self._list_message_attachments_exc:
+            raise self._list_message_attachments_exc
+        if self._list_message_attachments_return is not None:
+            return self._list_message_attachments_return
+        return [], {}
+
+    def fetch_attachment_binary(
+        self,
+        provider_message_id: str,
+        attachment: AttachmentMetadata,
+    ) -> AttachmentBinary:
+        self.fetch_attachment_binary_calls.append((provider_message_id, attachment))
+        if self._fetch_attachment_binary_exc:
+            raise self._fetch_attachment_binary_exc
+        if self._fetch_attachment_binary_return is not None:
+            return self._fetch_attachment_binary_return
+        return AttachmentBinary(
+            mime_type=attachment.mime_type or "application/octet-stream",
+            filename=attachment.filename,
+            data=b"fake-bytes",
+            size=len(b"fake-bytes"),
+        )
+
+    def send_draft_with_attachments(
+        self,
+        provider_draft_id: str,
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
+        self.send_draft_with_attachments_calls.append(
+            (
+                provider_draft_id,
+                list(to_recipients),
+                list(cc_recipients),
+                list(bcc_recipients),
+                subject,
+                body,
+                list(attachments),
+            )
+        )
+        if self._send_draft_with_attachments_exc:
+            raise self._send_draft_with_attachments_exc
+        if self._send_draft_with_attachments_return is not None:
+            return self._send_draft_with_attachments_return
+        sent_meta = build_metadata(
+            provider_message_id=f"sent_{provider_draft_id}",
+            subject=subject,
+            box="SENT",
+            is_read=True,
+        )
+        return sent_meta, []
 
     def get_account_label(self) -> str:
         return self._account_label

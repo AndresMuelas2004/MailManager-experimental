@@ -65,15 +65,91 @@ class EmailContent:
 class DraftMetadata:
     """
     Normalized draft metadata returned by provider clients after creating a draft.
+
+    The ``body`` field carries plain-text content (D-31). It used to be
+    called ``body_html`` but the composer is a plain ``<textarea>`` and
+    both providers receive ``text/plain`` MIME, so the name now matches
+    the actual semantics. A future rich-text editor will introduce
+    ``body_format`` rather than reviving the HTML naming.
     """
     provider_draft_id: str
     to_recipients: list[str]
     cc_recipients: list[str]
     bcc_recipients: list[str]
     subject: str
-    body_html: str
+    body: str
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass
+class AttachmentMetadata:
+    """Normalised metadata for a single email attachment.
+
+    Returned by :py:meth:`EmailClient.list_message_attachments`. Only
+    contains metadata; the binary is fetched on demand via
+    :py:meth:`EmailClient.fetch_attachment_binary`.
+
+    ``part_id`` is populated for Gmail (stable per the API docs) and
+    is ``None`` for Outlook. ``provider_attachment_id`` is populated
+    for Outlook (the immutable ``attachment.id`` returned by Graph)
+    and is ``None`` for Gmail (Gmail's ``attachmentId`` is not declared
+    stable so we never persist it as a key — see core_guide.md).
+    Together they form the provider-specific cache key used by the
+    storage layer (D-06b-clave).
+    """
+    provider_message_id: str
+    part_id: str | None
+    provider_attachment_id: str | None
+    filename: str
+    mime_type: str
+    size: int
+    content_id: str | None
+    is_inline: bool
+    position: int
+
+
+@dataclass
+class AttachmentBinary:
+    """Decoded attachment binary returned by ``fetch_attachment_binary``."""
+    mime_type: str
+    filename: str
+    data: bytes
+    size: int
+
+
+@dataclass
+class DraftAttachmentInput:
+    """Input for ``send_draft_with_attachments``.
+
+    Carries everything needed to push a draft attachment to the provider
+    during the send flow: the binary, metadata and (for Outlook only)
+    the ``provider_attachment_id`` recorded by a previous partial-success
+    upload so a retry skips already-uploaded parts (D-27).
+    """
+    draft_attachment_id: str
+    filename: str
+    mime_type: str
+    data: bytes
+    size: int
+    position: int
+    content_id: str | None = None
+    is_inline: bool = False
+    provider_attachment_id: str | None = None
+
+
+@dataclass
+class AttachmentUploadResult:
+    """Per-attachment outcome of pushing draft attachments to the provider.
+
+    Returned alongside :py:class:`EmailMetadata` from
+    :py:meth:`EmailClient.send_draft_with_attachments`. Outlook populates
+    ``provider_attachment_id`` for each attachment that succeeded; Gmail
+    leaves it as ``None`` because the send is atomic and there is no
+    intermediate state to persist.
+    """
+    draft_attachment_id: str
+    provider_attachment_id: str | None
 
 
 class EmailClient(ABC):
@@ -140,11 +216,15 @@ class EmailClient(ABC):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Create a draft message at the provider. All fields may be empty
         (empty drafts are allowed). Returns normalized draft metadata.
+
+        ``body`` is plain text (D-31): both providers persist a
+        ``text/plain`` MIME at the provider so subsequent draft sends
+        can compose a clean ``multipart/mixed`` with attachments.
         """
 
     @abstractmethod
@@ -155,13 +235,17 @@ class EmailClient(ABC):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Replace an existing draft's content at the provider (full-field
         replace). All fields may be empty (empty drafts are accepted).
         Returns normalized draft metadata — timestamps are best-effort
         (providers may not return them on update).
+
+        ``body`` is plain text (D-31). The Outlook ``contentType`` is
+        ``"Text"`` and Gmail's MIME body is a single ``text/plain`` part
+        (no ``multipart/alternative`` wrapping a single part).
         """
 
     @abstractmethod
@@ -258,4 +342,96 @@ class EmailClient(ABC):
         Return a human-readable label for this account (for example,
         'personal_gmail', 'university_outlook', etc).
         This helps the manager know which account is which.
+        """
+
+    @abstractmethod
+    def list_message_attachments(
+        self,
+        provider_message_id: str,
+    ) -> tuple[list[AttachmentMetadata], dict[str, str]]:
+        """List downloadable attachments and resolved inline images for a message.
+
+        Returns ``(downloadable, cid_map)``:
+        - ``downloadable`` is the list of parts the user should see as
+          attachments per the strict inline-vs-attachment rule (D-13):
+          parts with ``Content-Disposition: attachment``, plus parts
+          marked inline whose ``Content-ID`` is NOT referenced by the
+          HTML body, plus parts that carry a ``filename`` without a
+          disposition.
+        - ``cid_map`` maps each ``Content-ID`` whose CID IS referenced
+          by the HTML body to a ``data:`` URL (base64-encoded inline
+          image). The HTML pipeline then substitutes ``cid:…`` refs in
+          the rendered body.
+
+        Implementations must populate ``part_id`` for Gmail and
+        ``provider_attachment_id`` for Outlook (with
+        ``Prefer: IdType="ImmutableId"`` per request).
+        """
+
+    @abstractmethod
+    def fetch_attachment_binary(
+        self,
+        provider_message_id: str,
+        attachment: AttachmentMetadata,
+    ) -> AttachmentBinary:
+        """Download the binary for a previously-listed attachment.
+
+        Implementations must:
+        - Retry transient errors up to 3 attempts with 1s/2s/4s backoff,
+          honouring ``Retry-After`` when present (D-16).
+        - Raise :py:class:`EmailAttachmentNotFound` on 404/410 (the
+          service marks ``unavailable_at`` on the metadata row, D-17).
+        - Raise :py:class:`EmailAttachmentDownloadFailed` on 403
+          (``detail['reason'] = 'forbidden'``) or persistent 5xx
+          (``detail['reason'] = 'unavailable'``) — services translate
+          these to 502 / 503 respectively.
+        """
+
+    @abstractmethod
+    def send_draft_with_attachments(
+        self,
+        provider_draft_id: str,
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
+        """Send a draft together with its locally-stored attachments (D-07, D-27).
+
+        Both providers persist drafts at the server with body and
+        recipients (set by ``create_draft`` / ``update_draft``); the
+        attachments live only locally until this call. The recipients
+        / subject / body parameters are passed because Gmail rebuilds
+        the MIME atomically (``drafts.send`` with a fresh
+        ``message.raw``) — Outlook does not need them on the wire but
+        the contract is uniform across providers.
+
+        Behaviour:
+
+        - **Gmail** — atomic. Builds ``multipart/mixed`` with
+          ``text/plain`` body + every attachment, picks
+          :py:class:`GmailSendStrategy` from the total MIME size,
+          calls ``drafts.send`` (or the resumable upload variant) once.
+          ``AttachmentUploadResult.provider_attachment_id`` is always
+          ``None`` — there is no intermediate state to persist. On
+          failure raises :py:class:`EmailAttachmentSendFailed` with
+          ``detail['failed_attachments']`` populated; nothing local
+          is mutated.
+
+        - **Outlook** — non-atomic. For each attachment with no
+          ``provider_attachment_id`` (not yet uploaded), picks
+          :py:class:`OutlookAttachmentStrategy` and uploads it via
+          ``POST /attachments`` (<3 MB) or ``createUploadSession`` +
+          chunked ``PUT`` (>=3 MB). Each successful upload yields an
+          :py:class:`AttachmentUploadResult` so the caller can persist
+          ``provider_attachment_id`` for partial-success resume (D-27).
+          After every attachment is in place, ``POST /messages/{id}/send``
+          finalises the send. Failure mid-flight raises
+          :py:class:`EmailAttachmentSendFailed` and the partial results
+          remain valid for a retry.
+
+        Implementations must apply ``Prefer: IdType="ImmutableId"`` to
+        every Outlook request that touches messages or attachments.
         """

@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from api.schemas.attachment import AttachmentMetadataOut
+
 
 class EmailSendRequest(BaseModel):
     """
@@ -115,14 +117,32 @@ class SpamResponse(BaseModel):
 
 
 class EmailContentOut(BaseModel):
-    """Full email body content."""
+    """Full email body content + downloadable attachment metadata.
+
+    The HTML body has already been pipelined through
+    ``email_html_pipeline.prepare_email_html`` (CSS sanitisation,
+    inline images resolved to ``data:`` URLs per D-13) so the frontend
+    can render it directly in a sandboxed iframe.
+
+    ``attachments`` lists every part the user should see as a
+    downloadable attachment — inline images that ARE referenced by the
+    body stay embedded as ``data:`` URLs and do NOT appear here.
+    """
 
     html_body: str | None = None
     text_body: str | None = None
+    attachments: list[AttachmentMetadataOut] = Field(default_factory=list)
 
 
 class EmailMetadataOut(BaseModel):
-    """Single email metadata item returned by the listing endpoint."""
+    """Single email metadata item returned by the listing endpoint.
+
+    ``has_attachments`` is the denormalised flag persisted on
+    ``email_metadata`` (D-09). With the chosen "B.lazy puro" strategy
+    it stays ``False`` until the user opens the email for the first
+    time and ``get_email_content`` populates ``email_attachments`` —
+    after that, the inbox icon (📎) appears for that row.
+    """
 
     provider_message_id: str
     account_id: str
@@ -133,3 +153,4 @@ class EmailMetadataOut(BaseModel):
     received_at: datetime
     is_read: bool
     box: str
+    has_attachments: bool = False

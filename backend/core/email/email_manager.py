@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 from typing import Any
-from .email_client import DraftMetadata, EmailClient, EmailContent, EmailMetadata, SpamMoveResult, SyncResult
+from .email_client import (
+    AttachmentBinary,
+    AttachmentMetadata,
+    AttachmentUploadResult,
+    DraftAttachmentInput,
+    DraftMetadata,
+    EmailClient,
+    EmailContent,
+    EmailMetadata,
+    SpamMoveResult,
+    SyncResult,
+)
 from .errors import (
     CoreError,
     EmailAccountNotFoundError,
@@ -247,15 +258,16 @@ class EmailManager:
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Create a draft using the client that matches the requested account label.
+        Body is plain text (D-31).
         """
         client = self._get_client_or_raise(account_label)
         try:
             return client.create_draft(
-                to_recipients, cc_recipients, bcc_recipients, subject, body_html,
+                to_recipients, cc_recipients, bcc_recipients, subject, body,
             )
         except CoreError:
             raise
@@ -272,20 +284,20 @@ class EmailManager:
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Update an existing draft using the client that matches the
         requested account label. Full-field replacement semantics — the
         caller passes every field; the provider overwrites the draft
-        with exactly those values.
+        with exactly those values. Body is plain text (D-31).
         """
         client = self._get_client_or_raise(account_label)
         try:
             return client.update_draft(
                 provider_draft_id,
                 to_recipients, cc_recipients, bcc_recipients,
-                subject, body_html,
+                subject, body,
             )
         except CoreError:
             raise
@@ -384,6 +396,76 @@ class EmailManager:
         except Exception as exc:
             raise EmailExternalAPIError(
                 f"Unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def list_message_attachments(
+        self,
+        account_label: str,
+        provider_message_id: str,
+    ) -> tuple[list[AttachmentMetadata], dict[str, str]]:
+        """List the downloadable attachments + inline cid_map for a message.
+
+        Delegates to the provider client's
+        :py:meth:`EmailClient.list_message_attachments`. Used by the
+        service layer in the cache-aside flow to populate
+        ``email_attachments`` (D-09) and resolve referenced ``cid:``
+        images for the rendered HTML (D-13).
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.list_message_attachments(provider_message_id)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected list_message_attachments error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def fetch_attachment_binary(
+        self,
+        account_label: str,
+        provider_message_id: str,
+        attachment: AttachmentMetadata,
+    ) -> AttachmentBinary:
+        """Download a single attachment binary for the given account."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.fetch_attachment_binary(provider_message_id, attachment)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected fetch_attachment_binary error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def send_draft_with_attachments(
+        self,
+        account_label: str,
+        provider_draft_id: str,
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
+        """Send a draft together with its locally-stored attachments (D-07, D-27)."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.send_draft_with_attachments(
+                provider_draft_id,
+                to_recipients,
+                cc_recipients,
+                bcc_recipients,
+                subject,
+                body,
+                attachments,
+            )
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected send_draft_with_attachments error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def get_last_errors(self) -> dict[str, Exception]:

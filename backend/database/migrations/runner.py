@@ -250,7 +250,11 @@ _DDL_STATEMENTS = [
             ON DELETE CASCADE ON UPDATE CASCADE
     );
     """,
-    # Migration 0012: drafts table for provider-first draft persistence
+    # Migration 0012 (+ 0022): drafts table for provider-first draft persistence.
+    # Fresh setups get the post-0022 column name (``body``) directly so
+    # repositories, queries, schemas and provider clients align with a single
+    # name. Migration 0022 renames ``body_html`` -> ``body`` for already-
+    # bootstrapped databases (handled below as an idempotent ALTER).
     """
     CREATE TABLE IF NOT EXISTS drafts (
         provider_draft_id VARCHAR(255) NOT NULL,
@@ -260,13 +264,31 @@ _DDL_STATEMENTS = [
         cc_recipients     TEXT[]       NOT NULL DEFAULT '{}',
         bcc_recipients    TEXT[]       NOT NULL DEFAULT '{}',
         subject           TEXT         NOT NULL DEFAULT '',
-        body_html         TEXT         NOT NULL DEFAULT '',
+        body              TEXT         NOT NULL DEFAULT '',
         created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
         updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
         PRIMARY KEY (provider_draft_id, account_id)
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_drafts_account_id ON drafts(account_id);",
+    # Migration 0022: rename drafts.body_html -> drafts.body. No-op on fresh
+    # databases (the inline CREATE TABLE above already uses the new name) but
+    # required for databases bootstrapped before this migration ran.
+    """
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'drafts' AND column_name = 'body_html'
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'drafts' AND column_name = 'body'
+        ) THEN
+            ALTER TABLE drafts RENAME COLUMN body_html TO body;
+        END IF;
+    END
+    $$;
+    """,
     # One-shot cache invalidations covering migrations 0014–0019. Each of
     # those migrations truncated ``email_content`` to drop HTML cached under
     # an older rendering pipeline (CSS inlining, ``cid:``/``data:`` images,
@@ -295,6 +317,106 @@ _DDL_STATEMENTS = [
     # CASCADE upgrade is applied above (and fresh setups already get the
     # final shape inline in the email_content CREATE TABLE).
     "UPDATE alembic_version SET version_num = '0021_email_content_fkey_on_update_cascade';",
+    # Migration 0022: stamp only — the body_html → body rename is applied above
+    # (and fresh setups already get the final shape inline in the drafts CREATE TABLE).
+    "UPDATE alembic_version SET version_num = '0022_rename_drafts_body_html_to_body';",
+    # Migration 0023: attachments tables and the has_attachments flag.
+    # ``email_attachments`` carries per-attachment metadata; ``email_attachment_blobs``
+    # holds the binary in BYTEA so SELECT * over metadata never accidentally pulls
+    # megabytes; ``draft_attachments`` holds composer-stage attachments locally
+    # until send/save (D-07 lazy push). The two partial unique indexes encode
+    # the asymmetry between providers (Gmail keys by part_id, Outlook by
+    # provider_attachment_id under ImmutableId).
+    """
+    CREATE TABLE IF NOT EXISTS email_attachments (
+        attachment_id            UUID PRIMARY KEY,
+        account_id               UUID NOT NULL,
+        provider_message_id      VARCHAR(255) NOT NULL,
+        part_id                  TEXT NULL,
+        provider_attachment_id   TEXT NULL,
+        filename                 TEXT NOT NULL,
+        mime_type                TEXT NOT NULL,
+        size                     BIGINT NOT NULL,
+        content_id               TEXT NULL,
+        is_inline                BOOLEAN NOT NULL DEFAULT FALSE,
+        position                 INT NOT NULL DEFAULT 0,
+        created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_accessed_at         TIMESTAMPTZ NULL,
+        unavailable_at           TIMESTAMPTZ NULL,
+        CONSTRAINT email_attachments_metadata_fkey
+            FOREIGN KEY (account_id, provider_message_id)
+            REFERENCES email_metadata (account_id, provider_message_id)
+            ON DELETE CASCADE
+            ON UPDATE CASCADE
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_email_attachments_message ON email_attachments (account_id, provider_message_id);",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_attachments_gmail
+        ON email_attachments (account_id, provider_message_id, part_id)
+        WHERE part_id IS NOT NULL;
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_attachments_outlook
+        ON email_attachments (account_id, provider_message_id, provider_attachment_id)
+        WHERE provider_attachment_id IS NOT NULL AND part_id IS NULL;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS email_attachment_blobs (
+        attachment_id        UUID PRIMARY KEY,
+        blob                 BYTEA NULL,
+        blob_storage_kind    TEXT NOT NULL DEFAULT 'db',
+        blob_ref             TEXT NULL,
+        fetched_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT email_attachment_blobs_attachment_fkey
+            FOREIGN KEY (attachment_id)
+            REFERENCES email_attachments (attachment_id)
+            ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS draft_attachments (
+        draft_attachment_id     UUID PRIMARY KEY,
+        account_id              UUID NOT NULL,
+        provider_draft_id       VARCHAR(255) NOT NULL,
+        filename                TEXT NOT NULL,
+        mime_type               TEXT NOT NULL,
+        size                    BIGINT NOT NULL,
+        content_id              TEXT NULL,
+        is_inline               BOOLEAN NOT NULL DEFAULT FALSE,
+        position                INT NOT NULL DEFAULT 0,
+        blob                    BYTEA NULL,
+        blob_storage_kind       TEXT NOT NULL DEFAULT 'db',
+        blob_ref                TEXT NULL,
+        provider_attachment_id  TEXT NULL,
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT draft_attachments_draft_fkey
+            FOREIGN KEY (account_id, provider_draft_id)
+            REFERENCES drafts (account_id, provider_draft_id)
+            ON DELETE CASCADE
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_draft_attachments_draft ON draft_attachments (account_id, provider_draft_id);",
+    "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS has_attachments BOOLEAN NOT NULL DEFAULT FALSE;",
+    "UPDATE alembic_version SET version_num = '0023_create_attachments_tables';",
+    # Migration 0024: invalidate email_content cache after the strict
+    # inline-vs-attachment split. Fresh bootstraps already have an empty
+    # email_content (TRUNCATE above), so this is a no-op for greenfield
+    # databases; for incremental upgrades the per-migration TRUNCATE in
+    # 0024 still runs via Alembic.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = '0024_invalidate_email_content_cache_attachments_split';",
+    # Migration 0025: composite index backing the drafts listing queries
+    # (filter by account_id, order by created_at DESC). Idempotent — fresh
+    # setups create it; pre-existing databases get it via the Alembic file.
+    "CREATE INDEX IF NOT EXISTS ix_drafts_account_created ON drafts (account_id, created_at DESC);",
+    "UPDATE alembic_version SET version_num = '0025_index_drafts_account_created';",
+    # Migration 0026: partial index backing the admin TTL purge over
+    # ``email_attachments.last_accessed_at``. Pure DDL, no cache invalidation.
+    "CREATE INDEX IF NOT EXISTS idx_email_attachments_last_accessed "
+    "ON email_attachments (last_accessed_at) "
+    "WHERE last_accessed_at IS NOT NULL;",
+    "UPDATE alembic_version SET version_num = '0026_index_email_attachments_last_accessed';",
 ]
 
 

@@ -877,7 +877,7 @@ def test_32_create_draft_gmail(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": subject,
-            "body_html": "<p>E2E test body</p>",
+            "body": "E2E test body",
         },
     )
     _assert_ok(response)
@@ -888,7 +888,7 @@ def test_32_create_draft_gmail(e2e_client):
     assert data["to_recipients"] == [SEND_RECIPIENT]
     assert data["cc_recipients"] == []
     assert data["bcc_recipients"] == []
-    assert data["body_html"] == "<p>E2E test body</p>"
+    assert data["body"] == "E2E test body"
     assert data["created_at"]
     assert data["updated_at"]
 
@@ -919,7 +919,7 @@ def test_33_create_draft_outlook(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": subject,
-            "body_html": "<p>E2E Outlook test body</p>",
+            "body": "E2E Outlook test body",
         },
     )
     _assert_ok(response)
@@ -930,7 +930,9 @@ def test_33_create_draft_outlook(e2e_client):
     assert data["to_recipients"] == [SEND_RECIPIENT]
     assert data["cc_recipients"] == []
     assert data["bcc_recipients"] == []
-    assert data["body_html"] == "<p>E2E Outlook test body</p>"
+    # Outlook normalises the plain-text body server-side (may add a
+    # trailing newline). Match by containment for resilience.
+    assert "E2E Outlook test body" in data["body"]
     assert data["created_at"]
     assert data["updated_at"]
 
@@ -976,7 +978,7 @@ def _find_local_draft(provider_draft_id: str, account_id: str) -> tuple | None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT subject, to_recipients, cc_recipients, bcc_recipients, body_html "
+                "SELECT subject, to_recipients, cc_recipients, bcc_recipients, body "
                 "FROM drafts "
                 "WHERE provider_draft_id = %s AND account_id = %s",
                 (provider_draft_id, account_id),
@@ -995,7 +997,7 @@ def test_34_sync_drafts_gmail_single_account(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>sync test</p>",
+            "body": "sync test",
         },
     )
     _assert_ok(create_resp)
@@ -1020,7 +1022,7 @@ def test_34_sync_drafts_gmail_single_account(e2e_client):
     assert db_subject == subject
     assert db_to == [SEND_RECIPIENT]
     assert db_cc == []
-    assert db_body == "<p>sync test</p>"
+    assert db_body == "sync test"
 
     _clear_local_drafts(GMAIL_ACCOUNT_ID)
 
@@ -1034,7 +1036,7 @@ def test_35_sync_drafts_gmail_mailbox(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>sync test</p>",
+            "body": "sync test",
         },
     )
     _assert_ok(create_resp)
@@ -1057,7 +1059,7 @@ def test_35_sync_drafts_gmail_mailbox(e2e_client):
     assert db_subject == subject
     assert db_to == [SEND_RECIPIENT]
     assert db_cc == []
-    assert db_body == "<p>sync test</p>"
+    assert db_body == "sync test"
 
     _clear_local_drafts(GMAIL_ACCOUNT_ID)
 
@@ -1071,7 +1073,7 @@ def test_36_sync_drafts_outlook_single_account(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>sync test</p>",
+            "body": "sync test",
         },
     )
     _assert_ok(create_resp)
@@ -1096,8 +1098,8 @@ def test_36_sync_drafts_outlook_single_account(e2e_client):
     assert db_subject == subject
     assert db_to == [SEND_RECIPIENT]
     assert db_cc == []
-    # Outlook wraps plain HTML in a full <html>/<body> structure, so body_html
-    # is not asserted byte-for-byte; presence is enough.
+    # Outlook may normalise the plain-text body server-side (trailing
+    # newline / whitespace tweaks); presence-only assertion is enough.
 
     _clear_local_drafts(OUTLOOK_ACCOUNT_ID)
 
@@ -1111,7 +1113,7 @@ def test_37_sync_drafts_outlook_mailbox(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>sync test</p>",
+            "body": "sync test",
         },
     )
     _assert_ok(create_resp)
@@ -1292,7 +1294,7 @@ def test_40_list_drafts_gmail(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>list test</p>",
+            "body": "list test",
         },
     )
     _assert_ok(create_resp)
@@ -1339,7 +1341,7 @@ def test_41_update_draft_gmail(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": initial_subject,
-            "body_html": "<p>E2E update initial</p>",
+            "body": "E2E update initial",
         },
     )
     _assert_ok(create_resp)
@@ -1356,7 +1358,7 @@ def test_41_update_draft_gmail(e2e_client):
                 "cc_recipients": [],
                 "bcc_recipients": [],
                 "subject": new_subject,
-                "body_html": "<p>E2E updated body</p>",
+                "body": "E2E updated body",
             },
         )
         _assert_ok(patch_resp)
@@ -1367,7 +1369,7 @@ def test_41_update_draft_gmail(e2e_client):
         assert data["cc_recipients"] == []
         assert data["bcc_recipients"] == []
         assert data["subject"] == new_subject
-        assert data["body_html"] == "<p>E2E updated body</p>"
+        assert data["body"] == "E2E updated body"
         assert data["created_at"] == original_created_at
         assert data["updated_at"] >= original_created_at
 
@@ -1376,7 +1378,7 @@ def test_41_update_draft_gmail(e2e_client):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT subject, body_html, to_recipients, created_at, updated_at "
+                    "SELECT subject, body, to_recipients, created_at, updated_at "
                     "FROM drafts "
                     "WHERE provider_draft_id = %s AND account_id = %s",
                     (provider_draft_id, GMAIL_ACCOUNT_ID),
@@ -1384,7 +1386,7 @@ def test_41_update_draft_gmail(e2e_client):
                 row = cur.fetchone()
             assert row is not None
             assert row[0] == new_subject
-            assert row[1] == "<p>E2E updated body</p>"
+            assert row[1] == "E2E updated body"
             assert row[2] == [SEND_RECIPIENT]
         finally:
             conn.close()
@@ -1413,7 +1415,7 @@ def test_42_update_draft_outlook(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": initial_subject,
-            "body_html": "<p>E2E update initial</p>",
+            "body": "E2E update initial",
         },
     )
     _assert_ok(create_resp)
@@ -1430,7 +1432,7 @@ def test_42_update_draft_outlook(e2e_client):
                 "cc_recipients": [],
                 "bcc_recipients": [],
                 "subject": new_subject,
-                "body_html": "<p>E2E updated body</p>",
+                "body": "E2E updated body",
             },
         )
         _assert_ok(patch_resp)
@@ -1441,9 +1443,9 @@ def test_42_update_draft_outlook(e2e_client):
         assert data["cc_recipients"] == []
         assert data["bcc_recipients"] == []
         assert data["subject"] == new_subject
-        # Outlook wraps plain HTML in a full <html>/<body> structure, so match
-        # by containment rather than equality (same pattern as tests 36/37).
-        assert "E2E updated body" in data["body_html"]
+        # Outlook may normalise the plain-text body server-side
+        # (trailing newline / whitespace tweaks) so match by containment.
+        assert "E2E updated body" in data["body"]
         assert data["created_at"] == original_created_at
         assert data["updated_at"] >= original_created_at
 
@@ -1452,7 +1454,7 @@ def test_42_update_draft_outlook(e2e_client):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT subject, body_html, to_recipients "
+                    "SELECT subject, body, to_recipients "
                     "FROM drafts "
                     "WHERE provider_draft_id = %s AND account_id = %s",
                     (provider_draft_id, OUTLOOK_ACCOUNT_ID),
@@ -1496,7 +1498,7 @@ def test_43_delete_draft_gmail(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>delete test</p>",
+            "body": "delete test",
         },
     )
     _assert_ok(create_resp)
@@ -1533,7 +1535,7 @@ def test_44_delete_draft_outlook(e2e_client):
         json={
             "to_recipients": [SEND_RECIPIENT],
             "subject": subject,
-            "body_html": "<p>delete test</p>",
+            "body": "delete test",
         },
     )
     _assert_ok(create_resp)
@@ -1578,7 +1580,7 @@ def test_45_send_draft_gmail(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": subject,
-            "body_html": "<p>E2E send draft test body</p>",
+            "body": "E2E send draft test body",
         },
     )
     _assert_ok(create_resp)
@@ -1631,7 +1633,7 @@ def test_46_send_draft_outlook(e2e_client):
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": subject,
-            "body_html": "<p>E2E send draft Outlook test body</p>",
+            "body": "E2E send draft Outlook test body",
         },
     )
     _assert_ok(create_resp)
@@ -1783,6 +1785,324 @@ def test_46d_email_content_outlook_hit(e2e_client, flow_state):
     row = _fetch_email_content_row(OUTLOOK_ACCOUNT_ID, msg_id)
     assert row is not None
     assert row[2].isoformat() == prev_fetched_at
+
+
+# ===================================================================
+# Section 5h: Draft attachments — local-only (D-07) end-to-end against
+# the real Gmail and Outlook test accounts.
+#
+# Each test creates a draft, drives the attachment lifecycle (POST →
+# GET-via-list → DELETE → 404 follow-up) in the SAME test (per
+# common_mistakes.md §1: simple follow-up assertions live with the
+# destructive action), and finally cleans up the local draft row. The
+# attachment endpoints never touch the provider so a Gmail and an
+# Outlook variant exercise the same code path; one of each is enough
+# coverage for the lifecycle, while the send-with-attachment tests
+# below exercise the per-provider upload strategies.
+# ===================================================================
+
+
+def _create_local_draft(e2e_client, mailbox_id: str, account_id: str, suffix: str) -> str:
+    """Create a draft used as the parent of attachment lifecycle tests.
+
+    Returns its ``provider_draft_id``. Caller is responsible for the
+    final ``DELETE FROM drafts`` cleanup in a ``finally`` block.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    response = e2e_client.post(
+        f"/mailboxes/{mailbox_id}/accounts/{account_id}/drafts",
+        json={
+            "to_recipients": [SEND_RECIPIENT],
+            "cc_recipients": [],
+            "bcc_recipients": [],
+            "subject": f"E2E attachments — {suffix} {ts}",
+            "body": f"E2E attachments parent draft {suffix}",
+        },
+    )
+    _assert_ok(response)
+    return response.json()["provider_draft_id"]
+
+
+def _delete_draft_row_locally(provider_draft_id: str, account_id: str) -> None:
+    """Best-effort cleanup of a draft row left over by a test failure."""
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM drafts WHERE provider_draft_id = %s AND account_id = %s",
+                (provider_draft_id, account_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_46e_draft_attachment_lifecycle_gmail(e2e_client):
+    """POST → list (via draft GET) → DELETE → 404 follow-up on Gmail."""
+    provider_draft_id = _create_local_draft(
+        e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID, "Gmail",
+    )
+    try:
+        upload = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments",
+            files={
+                "file": (
+                    "report.pdf",
+                    b"%PDF-1.4 fake pdf bytes for E2E",
+                    "application/pdf",
+                ),
+            },
+        )
+        _assert_ok(upload, expected=201)
+        body = upload.json()
+        attachment_id = body["draft_attachment_id"]
+        assert body["filename"] == "report.pdf"
+        assert body["mime_type"] == "application/pdf"
+        assert body["size"] > 0
+        assert body["position"] == 0
+        # D-07: provider untouched until send.
+        assert body["provider_attachment_id"] is None
+
+        list_resp = e2e_client.get(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/drafts?account_id={GMAIL_ACCOUNT_ID}",
+        )
+        _assert_ok(list_resp)
+        matching = [
+            d for d in list_resp.json()
+            if d["provider_draft_id"] == provider_draft_id
+        ]
+        assert matching, "Parent draft should be visible in GET /drafts"
+        attachments = matching[0].get("attachments") or []
+        assert any(
+            a["draft_attachment_id"] == attachment_id for a in attachments
+        ), "Uploaded attachment should appear in the draft's attachments list"
+
+        # Destructive action + follow-up 404 — common_mistakes.md §1.
+        delete_resp = e2e_client.delete(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments/{attachment_id}",
+        )
+        _assert_ok(delete_resp)
+        assert delete_resp.json() == {"status": "deleted"}
+
+        followup = e2e_client.delete(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments/{attachment_id}",
+        )
+        _assert_ok(followup, expected=404)
+        assert followup.json()["error"]["code"] == "draft_attachment_not_found"
+    finally:
+        _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)
+
+
+def test_46f_draft_attachment_lifecycle_outlook(e2e_client):
+    """Same flow on Outlook — verifies the local-only path is provider-agnostic."""
+    provider_draft_id = _create_local_draft(
+        e2e_client, OUTLOOK_MAILBOX_ID, OUTLOOK_ACCOUNT_ID, "Outlook",
+    )
+    try:
+        upload = e2e_client.post(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments",
+            files={
+                "file": (
+                    "notes.txt",
+                    b"E2E attachment payload - Outlook lifecycle test",
+                    "text/plain",
+                ),
+            },
+        )
+        _assert_ok(upload, expected=201)
+        body = upload.json()
+        attachment_id = body["draft_attachment_id"]
+        assert body["filename"] == "notes.txt"
+        assert body["mime_type"] == "text/plain"
+        assert body["provider_attachment_id"] is None
+
+        delete_resp = e2e_client.delete(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments/{attachment_id}",
+        )
+        _assert_ok(delete_resp)
+        assert delete_resp.json() == {"status": "deleted"}
+
+        followup = e2e_client.delete(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments/{attachment_id}",
+        )
+        _assert_ok(followup, expected=404)
+        assert followup.json()["error"]["code"] == "draft_attachment_not_found"
+    finally:
+        _delete_draft_row_locally(provider_draft_id, OUTLOOK_ACCOUNT_ID)
+
+
+def test_46g_draft_attachment_blocked_extension_rejected(e2e_client):
+    """The 400 ``attachment_blocked_extension`` envelope reaches a real client."""
+    provider_draft_id = _create_local_draft(
+        e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID, "Blocked",
+    )
+    try:
+        response = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments",
+            files={
+                "file": (
+                    "malware.exe",
+                    b"this is not a real exe - the extension is enough",
+                    "application/octet-stream",
+                ),
+            },
+        )
+        _assert_ok(response, expected=400)
+        assert response.json()["error"]["code"] == "attachment_blocked_extension"
+    finally:
+        _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)
+
+
+def test_46h_send_draft_with_attachment_gmail(e2e_client):
+    """Send a Gmail draft with one PDF attachment end-to-end (D-18 SIMPLE strategy)."""
+    provider_draft_id = _create_local_draft(
+        e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID, "Gmail send w/ attachment",
+    )
+    try:
+        upload = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments",
+            files={
+                "file": (
+                    "e2e-attachment.pdf",
+                    b"%PDF-1.4 e2e test bytes for send-with-attachment",
+                    "application/pdf",
+                ),
+            },
+        )
+        _assert_ok(upload, expected=201)
+
+        send_resp = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/send",
+        )
+        _assert_ok(send_resp)
+        data = send_resp.json()
+        assert data["status"] == "sent"
+        assert data["provider"] == "gmail"
+        assert data["provider_message_id"]
+        assert data["provider_message_id"] != provider_draft_id
+
+        # Provider-First + CASCADE delete: the local draft row and any
+        # draft_attachments must be gone after a successful send.
+        conn = _db_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM drafts WHERE provider_draft_id = %s AND account_id = %s",
+                    (provider_draft_id, GMAIL_ACCOUNT_ID),
+                )
+                assert cur.fetchone() is None
+                cur.execute(
+                    "SELECT COUNT(*) FROM draft_attachments "
+                    "WHERE provider_draft_id = %s AND account_id = %s",
+                    (provider_draft_id, GMAIL_ACCOUNT_ID),
+                )
+                assert cur.fetchone()[0] == 0
+        finally:
+            conn.close()
+    finally:
+        _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)
+
+
+def test_46i_send_draft_with_attachment_outlook(e2e_client):
+    """Send an Outlook draft with one small attachment (D-18 SIMPLE method-B)."""
+    provider_draft_id = _create_local_draft(
+        e2e_client, OUTLOOK_MAILBOX_ID, OUTLOOK_ACCOUNT_ID,
+        "Outlook send w/ attachment",
+    )
+    try:
+        upload = e2e_client.post(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/attachments",
+            files={
+                "file": (
+                    "e2e-outlook.txt",
+                    b"E2E Outlook send-with-attachment payload bytes",
+                    "text/plain",
+                ),
+            },
+        )
+        _assert_ok(upload, expected=201)
+
+        send_resp = e2e_client.post(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}"
+            f"/drafts/{provider_draft_id}/send",
+        )
+        _assert_ok(send_resp)
+        data = send_resp.json()
+        assert data["status"] == "sent"
+        assert data["provider"] == "outlook"
+        # Outlook keeps the draft id thanks to ImmutableId.
+        assert data["provider_message_id"] == provider_draft_id
+
+        conn = _db_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM drafts WHERE provider_draft_id = %s AND account_id = %s",
+                    (provider_draft_id, OUTLOOK_ACCOUNT_ID),
+                )
+                assert cur.fetchone() is None
+                cur.execute(
+                    "SELECT COUNT(*) FROM draft_attachments "
+                    "WHERE provider_draft_id = %s AND account_id = %s",
+                    (provider_draft_id, OUTLOOK_ACCOUNT_ID),
+                )
+                assert cur.fetchone()[0] == 0
+        finally:
+            conn.close()
+    finally:
+        _delete_draft_row_locally(provider_draft_id, OUTLOOK_ACCOUNT_ID)
+
+
+def test_46j_admin_purge_disabled_when_env_unset(e2e_client, monkeypatch):
+    """When ``ATTACHMENTS_PURGE_TOKEN`` is unset, /admin/attachments/purge is 503."""
+    # The fixture-level env var is not configured by default — the env
+    # may or may not have it. To make the assertion deterministic we
+    # actively unset it for the duration of this test.
+    monkeypatch.delenv("ATTACHMENTS_PURGE_TOKEN", raising=False)
+    response = e2e_client.post(
+        "/admin/attachments/purge",
+        headers={"X-Admin-Token": "anything"},
+    )
+    _assert_ok(response, expected=503)
+    assert response.json()["error"]["code"] == "purge_disabled"
+
+
+def test_46k_admin_purge_invalid_token_when_env_set(e2e_client, monkeypatch):
+    """With env set + wrong header → 401 ``invalid_admin_token``."""
+    monkeypatch.setenv("ATTACHMENTS_PURGE_TOKEN", "expected-token-value")
+    response = e2e_client.post(
+        "/admin/attachments/purge",
+        headers={"X-Admin-Token": "wrong-token"},
+    )
+    _assert_ok(response, expected=401)
+    assert response.json()["error"]["code"] == "invalid_admin_token"
+
+
+def test_46l_admin_purge_runs_when_token_matches(e2e_client, monkeypatch):
+    """With env set + correct header → 200 with purge stats payload."""
+    monkeypatch.setenv("ATTACHMENTS_PURGE_TOKEN", "expected-token-value")
+    response = e2e_client.post(
+        "/admin/attachments/purge",
+        headers={"X-Admin-Token": "expected-token-value"},
+    )
+    _assert_ok(response)
+    data = response.json()
+    assert "purged_count" in data
+    assert "freed_bytes" in data
+    assert isinstance(data["purged_count"], int)
+    assert isinstance(data["freed_bytes"], int)
+    assert data["purged_count"] >= 0
+    assert data["freed_bytes"] >= 0
 
 
 # ===================================================================

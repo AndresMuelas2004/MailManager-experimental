@@ -52,7 +52,7 @@ def _make_draft(provider_draft_id: str, *, subject: str = "S") -> DraftMetadata:
         cc_recipients=[],
         bcc_recipients=[],
         subject=subject,
-        body_html=f"<p>{provider_draft_id}</p>",
+        body=f"body for {provider_draft_id}",
         created_at=_SYNC_TS,
         updated_at=_SYNC_TS,
     )
@@ -123,7 +123,7 @@ def test_create_draft_happy_path_returns_draft(
             "cc_recipients": ["cc@example.com"],
             "bcc_recipients": [],
             "subject": "Integration draft",
-            "body_html": "<p>Hi</p>",
+            "body": "Hi",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -134,7 +134,7 @@ def test_create_draft_happy_path_returns_draft(
     assert body["cc_recipients"] == ["cc@example.com"]
     assert body["bcc_recipients"] == []
     assert body["subject"] == "Integration draft"
-    assert body["body_html"] == "<p>Hi</p>"
+    assert body["body"] == "Hi"
     assert "created_at" in body
     assert "updated_at" in body
 
@@ -151,7 +151,7 @@ def test_create_draft_persists_to_db(
             "cc_recipients": [],
             "bcc_recipients": [],
             "subject": "DB Check",
-            "body_html": "<b>ok</b>",
+            "body": "ok",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -159,7 +159,7 @@ def test_create_draft_persists_to_db(
     with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             "SELECT provider_draft_id, to_recipients, cc_recipients, bcc_recipients, "
-            "subject, body_html FROM drafts WHERE account_id = %s::uuid",
+            "subject, body FROM drafts WHERE account_id = %s::uuid",
             (aid,),
         )
         rows = cur.fetchall()
@@ -169,7 +169,7 @@ def test_create_draft_persists_to_db(
     assert row["cc_recipients"] == []
     assert row["bcc_recipients"] == []
     assert row["subject"] == "DB Check"
-    assert row["body_html"] == "<b>ok</b>"
+    assert row["body"] == "ok"
 
 
 def test_create_empty_draft_allowed(
@@ -181,21 +181,21 @@ def test_create_empty_draft_allowed(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["subject"] == ""
-    assert body["body_html"] == ""
+    assert body["body"] == ""
     assert body["to_recipients"] == []
     assert body["cc_recipients"] == []
     assert body["bcc_recipients"] == []
 
     with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT subject, body_html, to_recipients, cc_recipients, bcc_recipients "
+            "SELECT subject, body, to_recipients, cc_recipients, bcc_recipients "
             "FROM drafts WHERE account_id = %s::uuid",
             (aid,),
         )
         row = cur.fetchone()
     assert row is not None
     assert row["subject"] == ""
-    assert row["body_html"] == ""
+    assert row["body"] == ""
     assert row["to_recipients"] == []
     assert row["cc_recipients"] == []
     assert row["bcc_recipients"] == []
@@ -248,7 +248,7 @@ def _insert_draft(
     account_id: str,
     provider_draft_id: str,
     subject: str = "",
-    body_html: str = "",
+    body: str = "",
     to_recipients: list[str] | None = None,
     created_at: str | None = None,
 ) -> None:
@@ -263,7 +263,7 @@ def _insert_draft(
         sql = """
             INSERT INTO drafts (
                 provider_draft_id, account_id, to_recipients,
-                cc_recipients, bcc_recipients, subject, body_html
+                cc_recipients, bcc_recipients, subject, body
             ) VALUES (
                 %(pid)s, %(aid)s::uuid, %(tor)s,
                 %(ccr)s, %(bccr)s, %(subj)s, %(body)s
@@ -273,7 +273,7 @@ def _insert_draft(
         sql = """
             INSERT INTO drafts (
                 provider_draft_id, account_id, to_recipients,
-                cc_recipients, bcc_recipients, subject, body_html,
+                cc_recipients, bcc_recipients, subject, body,
                 created_at, updated_at
             ) VALUES (
                 %(pid)s, %(aid)s::uuid, %(tor)s,
@@ -291,7 +291,7 @@ def _insert_draft(
                 "ccr": [],
                 "bccr": [],
                 "subj": subject,
-                "body": body_html,
+                "body": body,
                 "ts": created_at,
             },
         )
@@ -510,7 +510,7 @@ def test_sync_drafts_replaces_stale_rows(
                 """
                 INSERT INTO drafts (
                     provider_draft_id, account_id, to_recipients,
-                    cc_recipients, bcc_recipients, subject, body_html
+                    cc_recipients, bcc_recipients, subject, body
                 ) VALUES (%s, %s::uuid, %s, %s, %s, %s, %s)
                 """,
                 (stale_id, aid, [], [], [], "stale", ""),
@@ -544,7 +544,7 @@ def test_sync_drafts_upserts_existing_rows(
             """
             INSERT INTO drafts (
                 provider_draft_id, account_id, to_recipients,
-                cc_recipients, bcc_recipients, subject, body_html
+                cc_recipients, bcc_recipients, subject, body
             ) VALUES (%s, %s::uuid, %s, %s, %s, %s, %s)
             """,
             ("existing1", aid, [], [], [], "old subject", "old body"),
@@ -559,13 +559,13 @@ def test_sync_drafts_upserts_existing_rows(
 
     with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT subject, body_html FROM drafts WHERE account_id = %s::uuid",
+            "SELECT subject, body FROM drafts WHERE account_id = %s::uuid",
             (aid,),
         )
         rows = cur.fetchall()
     assert len(rows) == 1
     assert rows[0]["subject"] == "new subject"
-    assert rows[0]["body_html"] == "<p>existing1</p>"
+    assert rows[0]["body"] == "body for existing1"
 
 
 def test_sync_drafts_account_not_found_returns_404(
@@ -661,7 +661,7 @@ def _update_payload(**overrides) -> dict:
         "cc_recipients": [],
         "bcc_recipients": [],
         "subject": "Updated",
-        "body_html": "<p>updated</p>",
+        "body": "updated",
     }
     base.update(overrides)
     return base
@@ -674,7 +674,7 @@ def test_update_draft_happy_path_returns_updated_draft(
     mid, aid = setup_mailbox_and_account(test_client)
     _insert_draft(
         isolated_db, account_id=aid, provider_draft_id="draft-update-1",
-        subject="original", body_html="<p>old</p>",
+        subject="original", body="old",
         to_recipients=["old@example.com"],
     )
 
@@ -683,7 +683,7 @@ def test_update_draft_happy_path_returns_updated_draft(
         json=_update_payload(
             to_recipients=["updated@example.com"],
             subject="Updated",
-            body_html="<p>new</p>",
+            body="new",
         ),
     )
     assert resp.status_code == 200, resp.text
@@ -694,7 +694,7 @@ def test_update_draft_happy_path_returns_updated_draft(
     assert body["cc_recipients"] == []
     assert body["bcc_recipients"] == []
     assert body["subject"] == "Updated"
-    assert body["body_html"] == "<p>new</p>"
+    assert body["body"] == "new"
 
 
 def test_update_draft_persists_to_db(
@@ -714,14 +714,14 @@ def test_update_draft_persists_to_db(
             cc_recipients=["cc@e.com"],
             bcc_recipients=["bcc@f.com"],
             subject="DB Check",
-            body_html="<b>ok</b>",
+            body="ok",
         ),
     )
     assert resp.status_code == 200, resp.text
 
     with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT to_recipients, cc_recipients, bcc_recipients, subject, body_html "
+            "SELECT to_recipients, cc_recipients, bcc_recipients, subject, body "
             "FROM drafts WHERE provider_draft_id = %s AND account_id = %s::uuid",
             ("draft-update-2", aid),
         )
@@ -731,7 +731,7 @@ def test_update_draft_persists_to_db(
     assert row["cc_recipients"] == ["cc@e.com"]
     assert row["bcc_recipients"] == ["bcc@f.com"]
     assert row["subject"] == "DB Check"
-    assert row["body_html"] == "<b>ok</b>"
+    assert row["body"] == "ok"
 
 
 def test_update_draft_preserves_created_at_refreshes_updated_at(
@@ -791,7 +791,7 @@ def test_update_draft_empty_body_allowed(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["subject"] == ""
-    assert body["body_html"] == ""
+    assert body["body"] == ""
     assert body["to_recipients"] == []
     assert body["cc_recipients"] == []
     assert body["bcc_recipients"] == []
@@ -987,7 +987,7 @@ def test_delete_draft_happy_path_returns_status_deleted(
     mid, aid = setup_mailbox_and_account(test_client)
     create_resp = test_client.post(
         _create_draft_url(mid, aid),
-        json={"subject": "To be deleted", "body_html": "<p>bye</p>"},
+        json={"subject": "To be deleted", "body": "bye"},
     )
     assert create_resp.status_code == 200, create_resp.text
     draft_id = create_resp.json()["provider_draft_id"]
@@ -1145,7 +1145,7 @@ def test_send_draft_happy_path(
     mid, aid = setup_mailbox_and_account(test_client)
     _insert_draft(
         isolated_db, account_id=aid, provider_draft_id="draft-send-1",
-        subject="send me", body_html="<p>send</p>",
+        subject="send me", body="send",
         to_recipients=["dest@example.com"],
     )
     resp = test_client.post(_send_draft_url(mid, aid, "draft-send-1"))
@@ -1199,13 +1199,19 @@ def test_send_draft_forbidden_403(
 def test_send_draft_provider_failure_502(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
-    """Provider send failure returns 502."""
+    """Provider send failure returns 502.
+
+    The send path now goes through ``send_draft_with_attachments`` even
+    when no attachments are present (the core method is the single entry
+    point for the unified flow), so the failure must be wired on that
+    method's exception kwarg.
+    """
     from core.email.errors import EmailExternalAPIError
 
     mid, aid = setup_mailbox_and_account(test_client)
     _insert_draft(
         isolated_db, account_id=aid, provider_draft_id="draft-send-fail",
-        subject="fail me", body_html="<p>fail</p>",
+        subject="fail me", body="fail",
     )
 
     def _build(accounts):
@@ -1216,7 +1222,9 @@ def test_send_draft_provider_failure_502(
             label = f"{mid_}__{aid_}"
             manager.add_client(FakeEmailClient(
                 label,
-                send_draft_exc=EmailExternalAPIError("Provider send failed."),
+                send_draft_with_attachments_exc=EmailExternalAPIError(
+                    "Provider send failed.",
+                ),
             ))
         return manager
 
@@ -1247,7 +1255,7 @@ def test_send_draft_silent_auth_failure_returns_409(
     mid, aid = setup_mailbox_and_account(test_client)
     _insert_draft(
         isolated_db, account_id=aid, provider_draft_id="draft-send-auth",
-        subject="auth fail", body_html="<p>auth</p>",
+        subject="auth fail", body="auth",
     )
 
     def _build(accounts):
@@ -1272,11 +1280,16 @@ def test_send_draft_silent_auth_failure_returns_409(
 def test_send_draft_provider_generic_exception_returns_502(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
-    """Provider RuntimeError (wrapped by EmailManager) returns 502."""
+    """Provider RuntimeError (wrapped by EmailManager) returns 502.
+
+    Failure injected via ``send_draft_with_attachments_exc`` because the
+    service now drives the send through that method as the single entry
+    point (D-07).
+    """
     mid, aid = setup_mailbox_and_account(test_client)
     _insert_draft(
         isolated_db, account_id=aid, provider_draft_id="draft-send-runtime",
-        subject="runtime fail", body_html="<p>runtime</p>",
+        subject="runtime fail", body="runtime",
     )
 
     def _build(accounts):
@@ -1287,7 +1300,7 @@ def test_send_draft_provider_generic_exception_returns_502(
             label = f"{mid_}__{aid_}"
             manager.add_client(FakeEmailClient(
                 label,
-                send_draft_exc=RuntimeError("boom"),
+                send_draft_with_attachments_exc=RuntimeError("boom"),
             ))
         return manager
 
@@ -1296,3 +1309,82 @@ def test_send_draft_provider_generic_exception_returns_502(
     resp = test_client.post(_send_draft_url(mid, aid, "draft-send-runtime"))
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "external_api_error"
+
+
+def test_send_draft_attachment_send_failed_persists_partial_results(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """D-27 partial-success persistence end-to-end.
+
+    Two draft attachments exist locally; the provider raises
+    ``EmailAttachmentSendFailed`` with one ``succeeded`` and one
+    ``failed_attachments`` entry. The service must:
+    1. Stamp the ``succeeded`` row's ``provider_attachment_id`` locally.
+    2. Re-raise the translated ``AttachmentSendFailed`` (502).
+    3. NOT touch the ``failed`` row's ``provider_attachment_id`` (stays NULL).
+    """
+    import uuid as _uuid
+    from core.email.errors import EmailAttachmentSendFailed
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft(
+        isolated_db, account_id=aid, provider_draft_id="draft-d27",
+        subject="d27", body="d27",
+    )
+
+    succeeded_id = str(_uuid.uuid4())
+    failed_id = str(_uuid.uuid4())
+    with isolated_db.cursor() as cur:
+        for att_id, fname in ((succeeded_id, "ok.pdf"), (failed_id, "broken.pdf")):
+            cur.execute(
+                "INSERT INTO draft_attachments "
+                "(draft_attachment_id, account_id, provider_draft_id, "
+                " filename, mime_type, size, content_id, is_inline, "
+                " position, provider_attachment_id, blob, "
+                " blob_storage_kind, blob_ref) "
+                "VALUES (%s, %s, 'draft-d27', %s, 'application/pdf', 3, "
+                "        NULL, false, 0, NULL, %s, 'db', NULL)",
+                (att_id, aid, fname, b"PDF"),
+            )
+
+    def _build(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            mid_ = str(acc.get("mailbox_id", ""))
+            aid_ = str(acc.get("account_id", ""))
+            label = f"{mid_}__{aid_}"
+            manager.add_client(FakeEmailClient(
+                label,
+                send_draft_with_attachments_exc=EmailAttachmentSendFailed(
+                    "Outlook failed mid-flight.",
+                    detail={
+                        "succeeded": [{
+                            "draft_attachment_id": succeeded_id,
+                            "provider_attachment_id": "graph-att-ok",
+                        }],
+                        "failed_attachments": [{
+                            "draft_attachment_id": failed_id,
+                            "filename": "broken.pdf",
+                            "reason": "provider_error",
+                        }],
+                    },
+                ),
+            ))
+        return manager
+
+    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+
+    resp = test_client.post(_send_draft_url(mid, aid, "draft-d27"))
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "attachment_send_failed"
+
+    # Verify the partial-success persistence stamped the succeeded row only.
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "SELECT draft_attachment_id, provider_attachment_id "
+            "FROM draft_attachments WHERE provider_draft_id = 'draft-d27' "
+            "ORDER BY filename",
+        )
+        rows = {str(r[0]): r[1] for r in cur.fetchall()}
+    assert rows[succeeded_id] == "graph-att-ok"
+    assert rows[failed_id] is None

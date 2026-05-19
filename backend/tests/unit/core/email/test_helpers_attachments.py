@@ -1,0 +1,373 @@
+"""
+Unit tests for the attachment-related helpers added in `core.email.helpers`:
+
+- ``sanitize_filename`` (D-20)
+- ``format_content_disposition`` (D-21)
+- ``pick_gmail_send_strategy`` / ``pick_outlook_attachment_strategy`` (D-18)
+- ``build_mime_with_attachments`` (D-31 + Gmail send path)
+- ``find_referenced_cids`` (D-13 strict inline-vs-attachment classification)
+- ``retry_with_backoff`` (D-16)
+"""
+
+from __future__ import annotations
+
+import urllib.parse
+from email import message_from_bytes, policy
+
+import pytest
+
+from core.email.helpers import (
+    GmailSendStrategy,
+    OutlookAttachmentStrategy,
+    build_mime_with_attachments,
+    find_referenced_cids,
+    format_content_disposition,
+    pick_gmail_send_strategy,
+    pick_outlook_attachment_strategy,
+    retry_with_backoff,
+    sanitize_filename,
+)
+
+
+# ── sanitize_filename ───────────────────────────────────────────────
+
+
+class TestSanitizeFilename:
+
+    def test_clean_name_passes_through(self):
+        assert sanitize_filename("report.pdf") == "report.pdf"
+
+    def test_replaces_path_separators(self):
+        assert sanitize_filename("foo/bar.pdf") == "foo-bar.pdf"
+        assert sanitize_filename("foo\\bar.pdf") == "foo-bar.pdf"
+
+    def test_replaces_windows_reserved_chars(self):
+        assert sanitize_filename('a:b?c*d<e>f|g"h.pdf') == "a-b-c-d-e-f-g-h.pdf"
+
+    def test_neutralises_path_traversal(self):
+        # ``..`` becomes ``-`` to neutralise traversal attempts (D-20).
+        assert ".." not in sanitize_filename("../../etc/passwd")
+
+    def test_replaces_control_chars(self):
+        assert sanitize_filename("a\x00b\x1fc.pdf") == "a-b-c.pdf"
+
+    def test_preserves_utf8_accents(self):
+        # D-20: legitimate UTF-8 must round-trip; slugifying would mangle
+        # legitimate non-ASCII filenames.
+        assert sanitize_filename("Información.pdf") == "Información.pdf"
+
+    def test_preserves_extension(self):
+        assert sanitize_filename("foo:bar.txt") == "foo-bar.txt"
+
+    @pytest.mark.parametrize("reserved", [
+        "CON.pdf", "PRN.txt", "AUX.log", "NUL.bin",
+        "COM1.dat", "COM9.dat", "LPT1.dat", "LPT9.dat",
+    ])
+    def test_prefixes_windows_reserved_names(self, reserved):
+        result = sanitize_filename(reserved)
+        assert result.startswith("_"), f"reserved name not prefixed: {result}"
+
+    def test_reserved_check_is_case_insensitive(self):
+        assert sanitize_filename("con.pdf").startswith("_")
+        assert sanitize_filename("Con.pdf").startswith("_")
+
+    def test_collision_resolution_appends_number(self):
+        result = sanitize_filename("report.pdf", existing=["report.pdf"])
+        assert result == "report (1).pdf"
+
+    def test_collision_resolution_increments(self):
+        result = sanitize_filename(
+            "report.pdf",
+            existing=["report.pdf", "report (1).pdf", "report (2).pdf"],
+        )
+        assert result == "report (3).pdf"
+
+    def test_collision_resolution_keeps_extension(self):
+        result = sanitize_filename("Foo.tar.gz", existing=["Foo.tar.gz"])
+        # Only the last extension is kept on collision; stem is everything before.
+        assert result.endswith(".gz")
+        assert " (1)" in result
+
+    def test_empty_input_returns_default(self):
+        assert sanitize_filename("") == "attachment"
+
+    def test_whitespace_only_input_falls_back_to_default(self):
+        assert sanitize_filename("   ") == "attachment"
+
+
+# ── format_content_disposition ─────────────────────────────────────
+
+
+class TestFormatContentDisposition:
+
+    def test_ascii_filename_emits_both_forms(self):
+        header = format_content_disposition("report.pdf")
+        assert 'attachment; filename="report.pdf"' in header
+        assert "filename*=UTF-8''report.pdf" in header
+
+    def test_utf8_filename_percent_encoded(self):
+        header = format_content_disposition("Información.pdf")
+        encoded = urllib.parse.quote("Información.pdf", safe="")
+        assert f"filename*=UTF-8''{encoded}" in header
+
+    def test_utf8_ascii_fallback_replaces_non_ascii(self):
+        header = format_content_disposition("Información.pdf")
+        # The legacy ASCII fallback must not contain the non-ASCII code points.
+        ascii_part = header.split(";")[1].strip()  # `filename="…"`
+        assert "ó" not in ascii_part
+
+    def test_empty_filename_falls_back_to_default(self):
+        header = format_content_disposition("")
+        assert 'filename="attachment"' in header
+        assert "filename*=UTF-8''attachment" in header
+
+
+# ── pick_gmail_send_strategy ───────────────────────────────────────
+
+
+class TestPickGmailSendStrategy:
+
+    def test_under_5mb_simple(self):
+        assert pick_gmail_send_strategy(0) is GmailSendStrategy.SIMPLE
+        assert pick_gmail_send_strategy(1) is GmailSendStrategy.SIMPLE
+        assert pick_gmail_send_strategy(5 * 1024 * 1024) is GmailSendStrategy.SIMPLE
+
+    def test_over_5mb_resumable(self):
+        assert pick_gmail_send_strategy(5 * 1024 * 1024 + 1) is GmailSendStrategy.RESUMABLE
+        assert pick_gmail_send_strategy(50 * 1024 * 1024) is GmailSendStrategy.RESUMABLE
+
+
+# ── pick_outlook_attachment_strategy ───────────────────────────────
+
+
+class TestPickOutlookAttachmentStrategy:
+
+    def test_under_3mb_simple(self):
+        assert pick_outlook_attachment_strategy(0) is OutlookAttachmentStrategy.SIMPLE
+        assert pick_outlook_attachment_strategy(3 * 1024 * 1024 - 1) is OutlookAttachmentStrategy.SIMPLE
+
+    def test_at_or_over_3mb_session(self):
+        # Boundary: the simple endpoint rejects payloads >= 3 MB so the
+        # cut-off must be inclusive on the upload-session side.
+        assert pick_outlook_attachment_strategy(3 * 1024 * 1024) is OutlookAttachmentStrategy.UPLOAD_SESSION
+        assert pick_outlook_attachment_strategy(10 * 1024 * 1024) is OutlookAttachmentStrategy.UPLOAD_SESSION
+
+
+# ── build_mime_with_attachments ────────────────────────────────────
+
+
+class TestBuildMimeWithAttachments:
+
+    def test_plain_text_body_no_attachments(self):
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="hi",
+            body="hola",
+            attachments=[],
+        )
+        msg = message_from_bytes(raw, policy=policy.default)
+        assert msg["To"] == "to@example.com"
+        assert msg["Subject"] == "hi"
+        # text/plain when there are no attachments — the body is the message itself.
+        body_part = msg
+        if msg.is_multipart():
+            body_part = next(p for p in msg.iter_parts() if p.get_content_type() == "text/plain")
+        assert body_part.get_content_type() == "text/plain"
+
+    def test_includes_attachment_with_correct_metadata(self):
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=["cc@example.com"],
+            bcc_recipients=["bcc@example.com"],
+            subject="subject",
+            body="body",
+            attachments=[
+                {
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf",
+                    "data": b"%PDF-1.4 fake",
+                },
+            ],
+        )
+        msg = message_from_bytes(raw, policy=policy.default)
+        assert msg["To"] == "to@example.com"
+        assert msg["Cc"] == "cc@example.com"
+        assert msg["Bcc"] == "bcc@example.com"
+        assert msg.is_multipart()
+        attachment_parts = [p for p in msg.iter_parts() if p.get_filename()]
+        assert len(attachment_parts) == 1
+        att = attachment_parts[0]
+        assert att.get_filename() == "report.pdf"
+        assert att.get_content_type() == "application/pdf"
+
+    def test_unknown_mime_type_falls_back_to_octet_stream(self):
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="s",
+            body="b",
+            attachments=[
+                {"filename": "blob.bin", "mime_type": None, "data": b"\x00\x01\x02"},
+            ],
+        )
+        msg = message_from_bytes(raw, policy=policy.default)
+        att = next(p for p in msg.iter_parts() if p.get_filename())
+        assert att.get_content_type() == "application/octet-stream"
+
+    def test_non_bytes_data_raises_email_attachment_send_failed(self):
+        # Per CLAUDE.md §3 rule 3 the helper must not leak a bare TypeError
+        # outside the core layer; the typed CoreError subclass carries a
+        # ``reason`` field that ``translate_core_error`` routes correctly.
+        from core.email.errors import EmailAttachmentSendFailed
+        with pytest.raises(EmailAttachmentSendFailed) as excinfo:
+            build_mime_with_attachments(
+                to_recipients=["to@example.com"],
+                cc_recipients=[],
+                bcc_recipients=[],
+                subject="s",
+                body="b",
+                attachments=[
+                    {"filename": "x.txt", "mime_type": "text/plain", "data": "string"},
+                ],
+            )
+        assert (excinfo.value.detail or {}).get("reason") == "invalid_attachment_data"
+
+    def test_text_plain_charset_is_utf8(self):
+        # D-31: body is text/plain; charset must declare UTF-8 so accents
+        # round-trip end-to-end through Gmail/Outlook.
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="s",
+            body="Atención: tildes",
+            attachments=[],
+        )
+        decoded = raw.decode("utf-8", errors="replace")
+        assert "utf-8" in decoded.lower()
+
+    def test_utf8_filename_round_trips(self):
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="s",
+            body="b",
+            attachments=[
+                {"filename": "Información.pdf", "mime_type": "application/pdf", "data": b"x"},
+            ],
+        )
+        msg = message_from_bytes(raw, policy=policy.default)
+        att = next(p for p in msg.iter_parts() if p.get_filename())
+        assert att.get_filename() == "Información.pdf"
+
+
+# ── find_referenced_cids ───────────────────────────────────────────
+
+
+class TestFindReferencedCids:
+
+    def test_extracts_from_src_attribute(self):
+        html = '<img src="cid:logo@x"><img src="cid:hero@y">'
+        assert find_referenced_cids(html) == {"logo@x", "hero@y"}
+
+    def test_extracts_from_background_attribute(self):
+        html = '<td background="cid:bg@x">x</td>'
+        assert "bg@x" in find_referenced_cids(html)
+
+    def test_extracts_from_url_func_in_style(self):
+        html = '<div style="background-image:url(cid:bg@x)">x</div>'
+        assert "bg@x" in find_referenced_cids(html)
+
+    def test_handles_angle_brackets_around_cid(self):
+        html = '<img src="cid:<logo@x>">'
+        assert "logo@x" in find_referenced_cids(html)
+
+    def test_empty_html_returns_empty_set(self):
+        assert find_referenced_cids("") == set()
+        assert find_referenced_cids(None) == set()
+
+    def test_ignores_non_cid_urls(self):
+        html = '<img src="https://example.com/logo.png">'
+        assert find_referenced_cids(html) == set()
+
+
+# ── retry_with_backoff ─────────────────────────────────────────────
+
+
+class TestRetryWithBackoff:
+
+    def test_returns_value_on_first_success(self):
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            return "ok"
+
+        result = retry_with_backoff(fn, attempts=3, sleep=lambda _s: None)
+        assert result == "ok"
+        assert calls["n"] == 1
+
+    def test_retries_retryable_then_succeeds(self):
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("network noise")
+            return "ok"
+
+        result = retry_with_backoff(fn, attempts=3, sleep=lambda _s: None)
+        assert result == "ok"
+        assert calls["n"] == 3
+
+    def test_propagates_non_retryable(self):
+        def fn():
+            raise ValueError("permanent")
+
+        with pytest.raises(ValueError):
+            retry_with_backoff(fn, attempts=3, sleep=lambda _s: None)
+
+    def test_raises_last_exc_after_exhausted_attempts(self):
+        def fn():
+            raise OSError("always fails")
+
+        with pytest.raises(OSError):
+            retry_with_backoff(fn, attempts=2, sleep=lambda _s: None)
+
+    def test_zero_attempts_raises_value_error(self):
+        with pytest.raises(ValueError):
+            retry_with_backoff(lambda: "ok", attempts=0, sleep=lambda _s: None)
+
+    def test_retry_after_extractor_overrides_default_delay(self):
+        sleeps: list[float] = []
+
+        def fn():
+            raise OSError("retry")
+
+        with pytest.raises(OSError):
+            retry_with_backoff(
+                fn,
+                attempts=3,
+                delays=(1.0, 2.0, 4.0),
+                retry_after_extractor=lambda _exc: 7.5,
+                sleep=lambda s: sleeps.append(s),
+            )
+        # All recorded sleeps must reflect the override, not the defaults.
+        assert all(s == 7.5 for s in sleeps), sleeps
+        assert len(sleeps) == 2  # attempts - 1 sleeps before final raise
+
+    def test_custom_is_retryable_predicate(self):
+        def fn():
+            raise RuntimeError("custom")
+
+        with pytest.raises(RuntimeError):
+            retry_with_backoff(
+                fn,
+                attempts=2,
+                is_retryable=lambda exc: isinstance(exc, RuntimeError),
+                sleep=lambda _s: None,
+            )

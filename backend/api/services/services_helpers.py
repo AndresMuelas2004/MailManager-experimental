@@ -25,6 +25,11 @@ from core.email import (
     CoreError,
     EmailAccountNotFoundError,
     EmailAccountRecordError,
+    EmailAttachmentBlockedByProvider,
+    EmailAttachmentDownloadFailed,
+    EmailAttachmentNotFound,
+    EmailAttachmentSendFailed,
+    EmailAttachmentTooLargeForProvider,
     EmailAuthError,
     EmailConfigError,
     EmailDuplicateAccountLabelError,
@@ -50,9 +55,17 @@ from api.errors.exceptions import (
     AccountMisconfigured,
     AccountNotConnected,
     AccountNotFound,
+    AccountTokensLoadError,
     ApiError,
     AppCredentialsInvalid,
+    AppCredentialsLoadError,
     AppCredentialsMissing,
+    AttachmentBlockedExtension,
+    AttachmentProviderForbidden,
+    AttachmentProviderUnavailable,
+    AttachmentSendFailed,
+    AttachmentTooLarge,
+    AttachmentUnavailable,
     CredentialFileError,
     DatabaseConnectionError,
     DatabaseMigrationError,
@@ -60,6 +73,7 @@ from api.errors.exceptions import (
     EnvVarError,
     ExternalAPIError,
     Forbidden,
+    MailboxLookupError,
     MailboxNotFound,
     RecipientsMissing,
     TokenDecryptionError,
@@ -107,6 +121,16 @@ _CORE_TO_API_MAP: list[tuple[type[CoreError], type[ApiError]]] = [
     (EmailDuplicateAccountLabelError, AccountMisconfigured),
     (EmailConfigError, AccountMisconfigured),
     (EmailRecipientsMissingError, RecipientsMissing),
+    # Attachment errors — listed before EmailExternalAPIError so they
+    # do not get caught by the generic external-API translation.
+    # AttachmentDownloadFailed splits 502/503 by reason in
+    # ``translate_core_error`` overrides below; the default here is
+    # 503 (provider unavailable).
+    (EmailAttachmentNotFound, AttachmentUnavailable),
+    (EmailAttachmentBlockedByProvider, AttachmentBlockedExtension),
+    (EmailAttachmentTooLargeForProvider, AttachmentTooLarge),
+    (EmailAttachmentSendFailed, AttachmentSendFailed),
+    (EmailAttachmentDownloadFailed, AttachmentProviderUnavailable),
     (EmailExternalAPIError, ExternalAPIError),
     (CoreError, ApiError),
 ]
@@ -166,8 +190,13 @@ def translate_auth_error(
                 detail["auth_code"] = exc.code
                 return api_type(exc.message, detail)
         # Unreachable when AuthError is in the map, but safe fallback.
-        return fallback(str(exc), {**(context or {}), "auth_code": exc.code})
-    return fallback(str(exc) or "Unexpected auth error.", context or {})
+        logger.warning("Unmapped AuthError subclass (%s): %s", type(exc).__name__, exc)
+        return fallback(
+            "Unexpected auth error.",
+            {**(context or {}), "auth_code": exc.code},
+        )
+    logger.warning("Non-AuthError passed to translate_auth_error (%s): %s", type(exc).__name__, exc)
+    return fallback("Unexpected auth error.", context or {})
 
 
 def translate_core_error(
@@ -181,8 +210,27 @@ def translate_core_error(
 
     If *exc* is a CoreError subclass the first matching entry in
     ``_CORE_TO_API_MAP`` is used.  Otherwise *fallback* is instantiated.
+
+    Attachment download failures carry a ``reason`` in ``detail`` that
+    further splits the mapping: ``forbidden`` becomes
+    :py:class:`AttachmentProviderForbidden` (HTTP 502), anything else
+    keeps the default :py:class:`AttachmentProviderUnavailable` (HTTP
+    503). This is the only place where ``detail`` influences the
+    chosen ApiError class — the rest of the mapping is purely typed.
     """
     if isinstance(exc, CoreError):
+        if isinstance(exc, EmailAttachmentDownloadFailed):
+            reason = (exc.detail or {}).get("reason")
+            api_class: type[ApiError] = (
+                AttachmentProviderForbidden
+                if reason == "forbidden"
+                else AttachmentProviderUnavailable
+            )
+            detail = dict(exc.detail or {})
+            if context:
+                detail = {**detail, **context}
+            detail["core_code"] = exc.code
+            return api_class(exc.message, detail)
         for core_type, api_type in _CORE_TO_API_MAP:
             if isinstance(exc, core_type):
                 detail = exc.detail if hasattr(exc, "detail") else {}
@@ -191,8 +239,13 @@ def translate_core_error(
                 detail["core_code"] = exc.code
                 return api_type(exc.message, detail)
         # Unreachable when CoreError is in the map, but safe fallback.
-        return fallback(str(exc), {**(context or {}), "core_code": exc.code})
-    return fallback(str(exc) or "Unexpected error.", context or {})
+        logger.warning("Unmapped CoreError subclass (%s): %s", type(exc).__name__, exc)
+        return fallback(
+            "Unexpected core error.",
+            {**(context or {}), "core_code": exc.code},
+        )
+    logger.warning("Non-CoreError passed to translate_core_error (%s): %s", type(exc).__name__, exc)
+    return fallback("Unexpected error.", context or {})
 
 
 def translate_database_error(
@@ -216,8 +269,13 @@ def translate_database_error(
                 detail["db_code"] = exc.code
                 return api_type(exc.message, detail)
         # Unreachable when DatabaseError is in the map, but safe fallback.
-        return fallback(str(exc), {**(context or {}), "db_code": exc.code})
-    return fallback(str(exc) or "Unexpected database error.", context or {})
+        logger.warning("Unmapped DatabaseError subclass (%s): %s", type(exc).__name__, exc)
+        return fallback(
+            "Unexpected database error.",
+            {**(context or {}), "db_code": exc.code},
+        )
+    logger.warning("Non-DatabaseError passed to translate_database_error (%s): %s", type(exc).__name__, exc)
+    return fallback("Unexpected database error.", context or {})
 
 
 
@@ -253,7 +311,7 @@ def ensure_mailbox_access(mailbox_id: str, user_id: str) -> dict[str, Any]:
         raise translate_database_error(exc) from exc
     except Exception as exc:
         logger.warning("Unexpected mailbox lookup error (%s): %s", type(exc).__name__, exc)
-        raise ApiError("Failed to look up mailbox.") from exc
+        raise MailboxLookupError("Failed to look up mailbox.") from exc
     if record is None:
         raise MailboxNotFound(f"Mailbox '{mailbox_id}' not found.")
     if record.get("owner_user_id") != user_id:
@@ -346,7 +404,7 @@ def load_wrapped_app_credentials(provider: str) -> dict[str, Any]:
         raise translate_database_error(exc) from exc
     except Exception as exc:
         logger.warning("Unexpected credentials load error (%s): %s", type(exc).__name__, exc)
-        raise ApiError("Failed to load app credentials.") from exc
+        raise AppCredentialsLoadError("Failed to load app credentials.") from exc
     payload = dict(credentials) if isinstance(credentials, dict) else {}
     if "client_secret" in payload:
         payload["client_secret"] = _wrap_secret(payload.get("client_secret"))
@@ -365,7 +423,7 @@ def load_wrapped_account_tokens(
         raise translate_database_error(exc) from exc
     except Exception as exc:
         logger.warning("Unexpected token load error (%s): %s", type(exc).__name__, exc)
-        raise ApiError("Failed to load account tokens.") from exc
+        raise AccountTokensLoadError("Failed to load account tokens.") from exc
     payload = dict(token_data) if isinstance(token_data, dict) else {}
     if "access_token" in payload:
         payload["access_token"] = _wrap_secret(payload.get("access_token"))
@@ -679,3 +737,37 @@ def parse_search_tokens(q: str | None) -> list[str]:
     if q is None:
         return []
     return [t for t in q.strip().split() if t][:_MAX_SEARCH_TOKENS]
+
+
+# ---------------------------------------------------------------------------
+# Attachment helpers
+# ---------------------------------------------------------------------------
+
+
+def recompute_has_attachments(
+    account_id: str,
+    provider_message_id: str,
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> None:
+    """Recalculate and persist ``email_metadata.has_attachments`` (D-09).
+
+    The single call site is the cache-miss branch of
+    ``get_email_content`` — after upserting the new ``email_attachments``
+    rows, this helper rewrites the denormalised flag so the inbox
+    listing reflects the discovery without an extra round trip. The
+    underlying SQL is idempotent (it derives the flag from the live
+    count of non-inline rows) so calling twice in a row is harmless.
+    """
+    try:
+        email_metadata_store.update_has_attachments(account_id, provider_message_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected has_attachments recompute error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise fallback(
+            "Failed to recompute has_attachments after attachment upsert."
+        ) from exc

@@ -61,6 +61,12 @@ Every trash-related batch method adds a **box-state precondition** directly in t
 - **`UPDATE ... RETURNING` yielding no row → `QueryError("Draft row to update not found.")`.** Defensive check for a race where another caller deleted the draft between the service's pre-check (`DraftStore.get`) and the update/delete. Without the explicit raise, the operation would silently succeed with a `None` return.
 - **`list_by_account` / `list_by_mailbox` / `get` return `[]` / `None` on malformed UUID** (`InvalidTextRepresentation`) so service code can treat "unknown account" as an empty result instead of a 500. `delete` intentionally does **not** have this guard — a malformed UUID there is a programming error and must surface.
 
+### `DraftStore.list_by_account` / `list_by_mailbox` co-aggregate `draft_attachments` in-query
+
+Both listing methods embed a correlated subquery (`json_agg` over `draft_attachments` ordered by `position`) and surface it as an `attachments` field on every returned dict. The field is **always** present and defaults to `[]` (never `NULL`) via `COALESCE`. The shared `_LIST_DRAFTS_SELECT` SQL fragment is the single source of shape — modifying it propagates to both variants.
+
+The `blob` column is **deliberately excluded** from the subquery. Adding it would silently turn the listing endpoint into a multi-MB-per-draft response. The bound is D-03 (≤25 attachments per draft), so the JSON payload stays predictable; the binaries flow through the dedicated `LIST_DRAFT_ATTACHMENTS_BY_DRAFT_WITH_BLOB` send-time path instead.
+
 ## `DraftStore.replace_all_for_account` — atomic upsert + delete-missing
 
 Single transaction:
@@ -70,10 +76,10 @@ Single transaction:
 
 Invalid `account_id` format raises `QueryError` (wrapped from `InvalidTextRepresentation`).
 
-## `drafts` table invariants (migration 0012)
+## `drafts` table invariants (migration 0012, renamed in 0022)
 
 - Recipients stored as `TEXT[] NOT NULL DEFAULT '{}'`. psycopg2 maps Python `list[str]` ↔ PostgreSQL `TEXT[]` transparently.
-- `subject` and `body_html` are `TEXT NOT NULL DEFAULT ''` — empty drafts are valid.
+- `subject` and `body` are `TEXT NOT NULL DEFAULT ''` — empty drafts are valid. The column was named `body_html` until migration 0022 renamed it to `body` (D-31): the historical composer was an HTML editor; the current composer is a plain `<textarea>` and both providers receive `text/plain` MIME, so the column matches the actual semantics. Every layer was rippled (queries, repository, schemas, provider clients, draft API parameters).
 - `created_at` / `updated_at` are `TIMESTAMPTZ NOT NULL DEFAULT now()`. The `DEFAULT now()` fires only for `INSERT_DRAFT` (which doesn't list these columns). `UPSERT_DRAFTS_BATCH` always passes them explicitly from provider-reported timestamps.
 
 ## `LIST_FILTERED` traps (email metadata search)
@@ -81,11 +87,69 @@ Invalid `account_id` format raises `QueryError` (wrapped from `InvalidTextRepres
 - **`unaccent` is a runtime dependency.** The query wraps both columns and the search pattern in `unaccent(lower(...))`. The function is provided by the `unaccent` PostgreSQL extension, enabled once via migration `0020_create_extension_unaccent`. Any environment that bypasses migrations (e.g. a manually restored DB dump) raises `function unaccent(text) does not exist` at query time, not at startup — extension state is checked lazily by the planner.
 - **`account_ids` MUST be cast to `uuid[]` in the SQL.** psycopg2 sends a Python `list[str]` as `text[]`, and `account_id = ANY(%(account_ids)s)` without the explicit `::uuid[]` cast raises `operator does not exist: uuid = text`. Removing the cast is silently fine for empty lists (the repository short-circuits before the query) and breaks the moment any account is supplied.
 
+## Attachment tables (migration 0023)
+
+### `email_attachments` — two partial unique indexes encode the provider key asymmetry
+
+Gmail rows key by `(account_id, provider_message_id, part_id) WHERE part_id IS NOT NULL`; Outlook rows key by `(account_id, provider_message_id, provider_attachment_id) WHERE provider_attachment_id IS NOT NULL AND part_id IS NULL`. A single null-tolerant compound index left Outlook rows colliding silently because `part_id` is always NULL there. `PgEmailAttachmentStore.upsert_batch` partitions input rows by which key they carry and runs **one `execute_values` per partition**, each targeting its own index by name in the `ON CONFLICT` clause. Mixed batches are supported but each row only resolves against its own index — do not collapse the two queries into one.
+
+### `email_attachments` composite FK carries `ON UPDATE CASCADE`
+
+The FK to `email_metadata(account_id, provider_message_id)` is `ON DELETE CASCADE` AND `ON UPDATE CASCADE`. The `ON UPDATE CASCADE` is load-bearing: Outlook rewrites `provider_message_id` on `move_to_trash` and spam moves, and the cascade propagates the rename into the attachment rows automatically. Without it, every Outlook move would orphan the attachments.
+
+### Two-table split — metadata vs blob
+
+`email_attachment_blobs` is a separate one-to-one table holding the binary in `BYTEA`. Two reasons: (1) `SELECT *` over the metadata never accidentally pulls megabytes; (2) the TTL purge can drop the blob while keeping the metadata row intact, so the listing endpoint's derived `is_downloaded` flag (`EXISTS` against the blob table) flips back to `false` and the next click re-fetches. Drafts use a single table (`draft_attachments`, blob column inline) because drafts are short-lived and bounded by 25 attachments per draft (D-03) — the two-table split would be over-engineering there.
+
+### `LIST_EMAIL_ATTACHMENTS_BY_MESSAGE` — `is_downloaded` is derived
+
+`is_downloaded` is computed via `EXISTS (SELECT 1 FROM email_attachment_blobs ...)`, never persisted. It survives TTL purges automatically. Do not add a column for it.
+
+### `GET_EMAIL_ATTACHMENT_FOR_DOWNLOAD` — ownership chain in SQL
+
+The download lookup JOINs `email_attachments → email_metadata → accounts → mailboxes` and filters on `mailboxes.owner_user_id`. The query is intentionally restrictive: a row that does not belong to the authenticated user collapses to "no row" and the service surfaces 404 (D-22). Do not relax this JOIN to "fast-path by attachment_id" — that opens UUID-guessing leakage.
+
+### `PURGE_EXPIRED_BLOBS` — `last_accessed_at IS NOT NULL` predicate
+
+The purge query filters on `a.last_accessed_at IS NOT NULL AND a.last_accessed_at < now() - INTERVAL '30 days'`. The `IS NOT NULL` half is non-obvious but load-bearing: a freshly-listed attachment that the user has never downloaded has `last_accessed_at = NULL`, and dropping the predicate would eagerly purge those blobs the moment the metadata row turned 30 days old — dropping a binary the user may still need. The flag is set by the `BackgroundTask` only on a successful stream.
+
+### `email_attachment_store.update_has_attachments` — the only writer of the denormalised flag
+
+`UPDATE_HAS_ATTACHMENTS` recomputes the column from `COUNT(*) WHERE is_inline=false` against `email_attachments` and is the only path that writes `has_attachments`. The flag must never be written freehand from a sync / trash / spam path — the B.lazy strategy (`docs/features/adjuntos.md` § 5) depends on it being driven solely by viewer activity. The query is idempotent.
+
+Unlike every other method on this repository (which silently returns `None` / `[]` on `psycopg2.errors.InvalidTextRepresentation`), `update_has_attachments` deliberately **raises** `QueryError` on a malformed UUID. Silence here would leave `has_attachments` permanently stale and break the B.lazy invariant invisibly; the caller MUST supply a valid `(account_id, provider_message_id)`.
+
+### `INSERT_DRAFT_ATTACHMENT` resolves `position` atomically inside the INSERT
+
+The statement embeds `COALESCE((SELECT MAX(position) + 1 FROM draft_attachments WHERE account_id=… AND provider_draft_id=…), 0)` as the value for the `position` column, so the read and the write run inside a single round trip. The earlier two-statement pattern (`NEXT_DRAFT_ATTACHMENT_POSITION` followed by a separate `INSERT`) was a TOCTOU race despite a code comment claiming atomicity — two concurrent uploads from different tabs read the same `MAX(position)` and inserted with the same value. The repository contract reflects this: callers MUST NOT pre-resolve `position`; any value supplied in the row dict is ignored.
+
+### `UPDATE_DRAFT_ATTACHMENT_PROVIDER_ID` adds `RETURNING` for D-27
+
+Without it, an UPDATE that touches zero rows (CASCADE delete races ahead of the partial-success persist) returns success silently. The repository checks `cur.fetchone()` and raises `QueryError` when the row is gone, so the service can surface the race instead of regressing the partial-success persistence contract to a no-op on retry.
+
+### `BATCH_UPDATE_DRAFT_ATTACHMENT_PROVIDER_IDS` — batch sibling, used on every Outlook send
+
+The single-row variant exists for callers that only have one pair (mostly tests). Every production caller (`send_draft` success path AND `_persist_partial_upload_results` failure path) goes through `batch_update_provider_attachment_ids` which uses positional `%s` + `execute_values` over a `VALUES (id, provider_id)` clause. The `RETURNING` slot lets the repository count actually-updated rows, so a CASCADE-deleted row is dropped silently — the caller is on the best-effort post-send hygiene path and reporting individual misses would require row-by-row state the batch helper deliberately avoids.
+
+### `UPSERT_EMAIL_ATTACHMENTS_*` — Gmail and Outlook are NOT symmetric
+
+Gmail's variant lists `provider_attachment_id = EXCLUDED.provider_attachment_id` in the `DO UPDATE SET` clause because the provider rotates that id every fetch — we must refresh the cached value. Outlook's variant deliberately omits it: `provider_attachment_id` is the conflict key on its partial unique index (`idx_email_attachments_outlook`), so updating it would change which row matches and break the upsert. Do not "DRY" the two queries into one; the asymmetry is correctness, not noise.
+
+### Blob row-shaping asymmetry between attachment repositories
+
+`PgDraftAttachmentStore._row_to_dict` calls `bytes(memoryview)` on the `blob` column so the service sees plain `bytes`. `PgEmailAttachmentStore._row_to_dict` does not — its callers (the StreamingResponse path) consume `memoryview` directly to avoid an extra copy on the hot path. If you ever extract a shared `_row_to_dict`, preserve this divergence behind a flag rather than collapsing it.
+
+### `DraftAttachmentStore.delete` returns `bool`, `DraftStore.delete` raises
+
+The two siblings disagree intentionally. The composer's remove flow tolerates a missing row (the user double-clicked the X, or the row already CASCADE-deleted) and treats the absence as success → 204 from the router. Drafts at the parent level need the harder contract because deleting a non-existent draft is a 404 the user must see. Don't normalise these two interfaces.
+
+There is also a **further asymmetry within `PgDraftAttachmentStore`** itself: `delete` swallows `InvalidTextRepresentation` and returns `False` (a malformed UUID is treated identically to a missing row — the remove flow is idempotent either way), but `update_provider_attachment_id` raises `QueryError` loudly on the same exception. Silence on the update path would break the D-27 partial-success persistence contract by causing a retry to re-upload an already-uploaded attachment. Do not normalise these two handlers.
+
 ## Extension
 
 ### Whenever a new Alembic migration is created
 
-**`migrations/runner.py` must be updated in the same change**: append the equivalent DDL to `_DDL_STATEMENTS` and advance the stamp at the bottom to the new migration name. Forgetting this silently breaks any environment that relies on the fallback runner (local setup without Alembic, some CI configurations). Data-only migrations also belong here — e.g. migration 0014 adds `TRUNCATE TABLE email_content;` immediately before the stamp line, and every subsequent `email_content`-invalidating migration follows the same shape (see `repository_guide.md` § "Email HTML rendering cache"). Pure DDL extensions (e.g. migration 0020 adds `CREATE EXTENSION IF NOT EXISTS unaccent;`) do **not** require a `TRUNCATE` — only schema changes that invalidate cached HTML do.
+**`migrations/runner.py` must be updated in the same change**: append the equivalent DDL to `_DDL_STATEMENTS` and advance the stamp at the bottom to the new migration name. Forgetting this silently breaks any environment that relies on the fallback runner (local setup without Alembic, some CI configurations). Data-only migrations also belong here — e.g. migration 0014 adds `TRUNCATE TABLE email_content;` immediately before the stamp line, and every subsequent `email_content`-invalidating migration follows the same shape (see `repository_guide.md` § "Email HTML rendering cache"). Pure DDL extensions (e.g. migration 0020 adds `CREATE EXTENSION IF NOT EXISTS unaccent;`, migration 0025 adds the composite index `ix_drafts_account_created` backing the drafts listing queries, migration 0026 adds the partial index `idx_email_attachments_last_accessed` backing the admin TTL purge) do **not** require a `TRUNCATE` — only schema changes that invalidate cached HTML do. Migration 0026 is the current head. Migration 0022 (drafts column rename) is exposed in the runner via an idempotent `DO $$ ... ALTER TABLE drafts RENAME COLUMN body_html TO body ... $$` block so a fresh bootstrap (which already creates the column under the new name) is a no-op while a partially-bootstrapped DB is brought up to date.
 
 ### Adding a new email provider
 

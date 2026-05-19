@@ -113,9 +113,13 @@ class TestTranslateCoreError:
         assert result.detail.get("core_code") == core_cls.code
 
     def test_non_core_error_uses_fallback(self):
+        # Phase 2.1 fix: the fallback message must be a generic literal,
+        # never ``str(exc)`` from an unknown exception (no client-facing
+        # leakage of raw library messages — see api/CLAUDE.md §9 rule 4).
         result = translate_core_error(RuntimeError("boom"))
         assert isinstance(result, ApiError)
-        assert "boom" in result.message
+        assert "boom" not in result.message
+        assert "core" in result.message.lower() or "unexpected" in result.message.lower()
 
     def test_custom_fallback(self):
         result = translate_core_error(RuntimeError("oops"), fallback=ExternalAPIError)
@@ -159,9 +163,11 @@ class TestTranslateDatabaseError:
         assert result.detail.get("db_code") == db_cls.code
 
     def test_non_database_error_uses_fallback(self):
+        # Phase 2.1 fix: see TestTranslateCoreError.test_non_core_error_uses_fallback.
         result = translate_database_error(RuntimeError("boom"))
         assert isinstance(result, ApiError)
-        assert "boom" in result.message
+        assert "boom" not in result.message
+        assert "database" in result.message.lower() or "unexpected" in result.message.lower()
 
     def test_context_propagation(self):
         exc = QueryError("query fail")
@@ -196,9 +202,11 @@ class TestTranslateAuthError:
         assert result.detail.get("auth_code") == auth_cls.code
 
     def test_non_auth_error_uses_fallback(self):
+        # Phase 2.1 fix: see TestTranslateCoreError.test_non_core_error_uses_fallback.
         result = translate_auth_error(RuntimeError("boom"))
         assert isinstance(result, ApiError)
-        assert "boom" in result.message
+        assert "boom" not in result.message
+        assert "auth" in result.message.lower() or "unexpected" in result.message.lower()
 
     def test_context_propagation(self):
         exc = AuthTokenInvalidError("invalid")

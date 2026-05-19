@@ -78,6 +78,38 @@ export const accountConnectResponseSchema = z.object({
 });
 export type AccountConnectResponse = z.infer<typeof accountConnectResponseSchema>;
 
+// Attachments — see decisionesTomadasAdjuntosFrontend.md §4.
+export const attachmentMetadataSchema = z.object({
+  attachment_id: z.string().uuid(),
+  filename: z.string(),
+  mime_type: z.string(),
+  size: z.number().int().nonnegative(),
+  is_downloaded: z.boolean(),
+  is_unavailable: z.boolean(),
+  position: z.number().int().nonnegative(),
+});
+export type AttachmentMetadata = z.infer<typeof attachmentMetadataSchema>;
+
+export const draftAttachmentMetadataSchema = z.object({
+  draft_attachment_id: z.string().uuid(),
+  filename: z.string(),
+  mime_type: z.string(),
+  size: z.number().int().nonnegative(),
+  position: z.number().int().nonnegative(),
+  provider_attachment_id: z.string().nullable(),
+});
+export type DraftAttachmentMetadata = z.infer<typeof draftAttachmentMetadataSchema>;
+
+export const draftAttachmentResponseSchema = draftAttachmentMetadataSchema;
+export type DraftAttachmentResponse = z.infer<typeof draftAttachmentResponseSchema>;
+
+export const failedAttachmentSchema = z.object({
+  draft_attachment_id: z.string(),
+  filename: z.string(),
+  reason: z.string(),
+});
+export type FailedAttachmentDetail = z.infer<typeof failedAttachmentSchema>;
+
 // Emails
 export const emailMetadataOutSchema = z.object({
   provider_message_id: z.string(),
@@ -89,6 +121,7 @@ export const emailMetadataOutSchema = z.object({
   received_at: z.string(),
   is_read: z.boolean(),
   box: z.string(),
+  has_attachments: z.boolean().default(false),
 });
 export type EmailMetadataOut = z.infer<typeof emailMetadataOutSchema>;
 
@@ -97,6 +130,7 @@ export const emailMetadataListSchema = z.array(emailMetadataOutSchema);
 export const emailContentOutSchema = z.object({
   html_body: z.string().nullable(),
   text_body: z.string().nullable(),
+  attachments: z.array(attachmentMetadataSchema).default([]),
 });
 export type EmailContentOut = z.infer<typeof emailContentOutSchema>;
 
@@ -160,13 +194,13 @@ export const spamResponseSchema = z.object({
 });
 export type SpamResponse = z.infer<typeof spamResponseSchema>;
 
-// Drafts
+// Drafts — body is plain text (D-31).
 export const draftCreateSchema = z.object({
   to_recipients: z.array(z.string()).optional(),
   cc_recipients: z.array(z.string()).optional(),
   bcc_recipients: z.array(z.string()).optional(),
   subject: z.string().optional(),
-  body_html: z.string().optional(),
+  body: z.string().optional(),
 });
 export type DraftCreate = z.infer<typeof draftCreateSchema>;
 
@@ -175,7 +209,7 @@ export const draftUpdateSchema = z.object({
   cc_recipients: z.array(z.string()).optional(),
   bcc_recipients: z.array(z.string()).optional(),
   subject: z.string().optional(),
-  body_html: z.string().optional(),
+  body: z.string().optional(),
 });
 export type DraftUpdate = z.infer<typeof draftUpdateSchema>;
 
@@ -186,9 +220,10 @@ export const draftOutSchema = z.object({
   cc_recipients: z.array(z.string()),
   bcc_recipients: z.array(z.string()),
   subject: z.string(),
-  body_html: z.string(),
+  body: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  attachments: z.array(draftAttachmentMetadataSchema).default([]),
 });
 export type DraftOut = z.infer<typeof draftOutSchema>;
 

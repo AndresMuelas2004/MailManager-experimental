@@ -677,7 +677,7 @@ def _draft_payload() -> dict:
         "cc_recipients": [],
         "bcc_recipients": [],
         "subject": "S",
-        "body_html": "<p>B</p>",
+        "body": "B",
     }
 
 
@@ -805,10 +805,10 @@ def _insert_draft_for_delete(isolated_db, *, account_id: str, draft_id: str = "d
         cur.execute(
             """
             INSERT INTO drafts (provider_draft_id, account_id, to_recipients,
-                                cc_recipients, bcc_recipients, subject, body_html)
+                                cc_recipients, bcc_recipients, subject, body)
             VALUES (%s, %s::uuid, %s, %s, %s, %s, %s)
             """,
-            (draft_id, account_id, ["a@b.com"], [], [], "S", "<p>B</p>"),
+            (draft_id, account_id, ["a@b.com"], [], [], "S", "B"),
         )
 
 

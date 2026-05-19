@@ -4,9 +4,10 @@ Drafts router — draft creation, listing and provider sync under a mailbox.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
-from api.routers.routers_helpers import require_session
+from api.routers.routers_helpers import enforce_multipart_size_limit, require_session
+from api.schemas.attachment import DraftAttachmentResponseOut
 from api.schemas.draft import DraftCreate, DraftOut, DraftSendOut, DraftsSyncResultOut, DraftUpdate
 from api.services import drafts_service
 
@@ -114,3 +115,47 @@ def delete_draft(
     Delete a draft at the provider and then from the local database.
     """
     return drafts_service.delete_draft(mailbox_id, account_id, draft_id, user_id)
+
+
+@router.post(
+    "/accounts/{account_id}/drafts/{provider_draft_id}/attachments",
+    response_model=DraftAttachmentResponseOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_multipart_size_limit)],
+)
+def add_draft_attachment(
+    mailbox_id: str,
+    account_id: str,
+    provider_draft_id: str,
+    file: UploadFile = File(...),
+    user_id: str = Depends(require_session),
+) -> DraftAttachmentResponseOut:
+    """Attach a file to an existing draft (D-07 lazy push, local only).
+
+    The provider is NOT contacted here — the attachment lives in
+    ``draft_attachments`` until the user clicks send. The endpoint
+    enforces the spec limits server-side as the second line of defence
+    even though the frontend pre-validates: D-04a (extension blocklist),
+    D-01 (per-file 25 MB), D-02 (cumulative 25 MB), D-03 (max 25
+    attachments). Bodies above 30 MB are rejected upstream by
+    ``enforce_multipart_size_limit`` (§5.4).
+    """
+    return drafts_service.add_draft_attachment(
+        mailbox_id, account_id, provider_draft_id, file, user_id,
+    )
+
+
+@router.delete(
+    "/accounts/{account_id}/drafts/{provider_draft_id}/attachments/{draft_attachment_id}",
+)
+def remove_draft_attachment(
+    mailbox_id: str,
+    account_id: str,
+    provider_draft_id: str,
+    draft_attachment_id: str,
+    user_id: str = Depends(require_session),
+) -> dict[str, str]:
+    """Remove an attachment from a draft (D-07, local only)."""
+    return drafts_service.remove_draft_attachment(
+        mailbox_id, account_id, provider_draft_id, draft_attachment_id, user_id,
+    )

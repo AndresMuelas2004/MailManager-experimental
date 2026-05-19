@@ -88,9 +88,79 @@ Outlook drafts are created with `Prefer: IdType="ImmutableId"` so the ID stays s
 
 `DraftSendOut.provider_message_id` differs from the draft ID on Gmail (Gmail creates a new Message when sending a draft) and equals it on Outlook (ImmutableId). Callers, tests and DB assertions must not assume equality. Both clients retry transient failures up to 3 total attempts (`_SEND_DRAFT_MAX_ATTEMPTS = 3`, `_SEND_DRAFT_RETRY_DELAY = 1.0`).
 
+### Send path goes through `send_draft_with_attachments` (NOT `send_draft`)
+
+Even drafts with zero attachments hit `EmailManager.send_draft_with_attachments`. The bare `send_draft` legacy path on the manager exists for older internal callers but the service no longer uses it. Tests asserting failure modes for the send must inject `send_draft_with_attachments_exc` on `FakeEmailClient` — see `tests/unit/unit_guide.md` for the trap.
+
+### `send_draft` D-27 success-path persistence (Outlook)
+
+When the Outlook send completes successfully but only AFTER one or more attachment uploads succeeded, the core layer returns `(EmailMetadata, list[AttachmentUploadResult])`. The service stamps `provider_attachment_id` on the local rows for the **succeeded** entries before deleting the draft (best-effort), so a hypothetical resend of the same draft would skip the already-uploaded ones. Gmail's atomic send returns an empty `AttachmentUploadResult` list because it has no per-attachment intermediate state to persist.
+
+The stamping uses `draft_attachment_store.batch_update_provider_attachment_ids(pairs)` (single round trip) rather than per-attachment `update_provider_attachment_id` calls. With D-03 capping at 25 attachments the round-trip difference is small, but the same helper is also used by `_persist_partial_upload_results` on the failure path (where the loop matters more for retry ergonomics) — keep both call sites on the batch helper to preserve the symmetry.
+
 ### Drafts sync — cap enforced in the client, not the service
 
 `manager.fetch_all_drafts` caps each account at `_DRAFTS_MAX_TOTAL = 100` most-recent drafts. The cap lives inside `GmailClient._list_all_draft_ids` (paginated batch-of-100 skeleton with `GMAIL_BATCH_MAX_WORKERS` workers, default 5, and 4 retries per batch) and inside `OutlookClient.fetch_drafts` (`$top=100&$orderby=lastModifiedDateTime desc` + 4 retries per page). The service never filters — if the user has >100 drafts, the newest 100 win silently and no `truncated` flag is surfaced.
+
+### Attachment endpoints — Provider-First exception
+
+`POST .../drafts/{id}/attachments` and `DELETE .../drafts/{id}/attachments/{attachment_id}` write **only** to the local `draft_attachments` table. They do NOT call the provider. The push to Gmail/Outlook happens during `send_draft` via `EmailManager.send_draft_with_attachments`. This is the single documented exception in the drafts surface to the Provider-First Rule (Trash's `delete_messages` is the other in the emails surface — see `core_guide.md`). The rationale (Gmail's full-MIME-rebuild on every `drafts.update` plus Outlook's 4-concurrent-requests cap) lives in `docs/features/adjuntos.md` § 6.9 — do not "fix" the asymmetry by uploading per-attachment.
+
+### `add_draft_attachment` — sanitised filename may differ from upload
+
+`sanitize_filename` runs against the existing-file list to resolve collisions: `report.pdf` uploaded twice resolves to `report (1).pdf` in the response. The frontend must read `response.filename` rather than echoing the local upload's filename — they can disagree by design. Path separators and reserved characters are also rewritten in place; the response is the source of truth for what got persisted.
+
+### `remove_draft_attachment` — ownership chain is Python, not SQL JOIN
+
+Unlike `download_email_attachment` (single SQL JOIN over `email_attachments → email_metadata → accounts → mailboxes`), the draft-attachment delete checks ownership in three Python steps: `ensure_mailbox_access`, `account_store.get`, then `draft_attachment_store.get` whose row carries `(account_id, provider_draft_id)` we compare against the path params. The asymmetry is intentional — the draft tree is shorter (no email_metadata in between) and the per-call DB hits are cheap on the bounded composer surface. A foreign attachment_id (someone else's draft) collapses to 404 `draft_attachment_not_found` at the final step; do NOT add a 403 branch.
+
+The two pre-delete lookup `except Exception` branches (account-lookup and draft-attachment-lookup) raise `AttachmentLookupError` (500), NOT `DraftDeleteError` — at this point no delete has been attempted, so reusing the draft-delete fallback would mislead the client about which step failed. `DraftDeleteError` stays reserved for the final `draft_attachment_store.delete` failure where the row was confirmed and the actual DELETE blew up.
+
+A concurrent delete from another tab is treated as success, not 404. When `draft_attachment_store.delete` returns falsy (the row was already gone), the service logs at INFO and returns `{"status": "deleted"}` — the ownership step already proved the user was entitled to remove this row, so the duplicate request is idempotent. Do NOT add a `DraftAttachmentNotFound` raise on falsy-return; only the *initial* lookup-not-found raises 404.
+
+### `attachments_routers.py` mounts two distinct routers
+
+`email_attachments_router` (cookie-session auth via `require_session`) and `admin_router` (env-var token via `X-Admin-Token`) live in the same file but are intentionally separate FastAPI routers. The session router carries the user-facing endpoints (download, attach, remove); the admin router carries the manual TTL purge endpoint (D-30). Adding a new admin endpoint to the wrong router silently bypasses the env-var gate. The admin router is included into the app **without** a session dependency — see `app.py` for the wiring.
+
+### `_collect_draft_attachment_inputs` — single round trip + concurrent-delete intent
+
+The helper calls `draft_attachment_store.list_by_draft_with_blob` once (single round trip including the binaries). With D-03 capping drafts at 25 attachments the payload is bounded. A `DraftAttachmentNotFound` raised here would mean a CASCADE delete won the race against the send — the service does not retry; it surfaces 404 because the user explicitly removed the attachment elsewhere.
+
+### `_draft_out_from_row` is the only correct constructor for `DraftOut`
+
+Endpoints that build `DraftOut` directly from a row (skipping the helper) ALWAYS produce `attachments=[]` because the row only carries the field when it came from the listing query (which json_aggregates the children) — the helper handles both cases (single-draft fallback fetch vs list-time pre-aggregated). Adding a new endpoint that returns `DraftOut`? Use `_draft_out_from_row(row)`; otherwise the composer reopens existing drafts with no chips visible.
+
+### `get_email_full_content` cache miss: persist BEFORE recompute is load-bearing
+
+The cache-miss branch first upserts the discovered attachments into `email_attachments`, THEN calls `recompute_has_attachments`. Inverting the order leaves `has_attachments=false` because the COUNT(*) subquery runs against an empty table. Failing to call `recompute` at all leaves the listing icon stale until the next purge cycle.
+
+### `enforce_multipart_size_limit` — fast 413 before body read
+
+`enforce_multipart_size_limit` (in `routers_helpers.py`) is wired as `Depends` on the multipart upload endpoint and rejects any request whose `Content-Length` header reports more than 30 MB with `RequestTooLarge` (413 `request_too_large`) **before** Starlette buffers the body. The 30 MB cap is a hard cushion above D-01's 25 MB per-file cap to absorb multipart boundary + headers overhead. Requests that omit `Content-Length` (chunked transfer encoding) fall through; Starlette's per-request memory cap catches abuses there. The dependency is **not** a substitute for the per-attachment / cumulative checks inside the service — those run after the body is read and apply D-01 / D-02 / D-03 / D-04a granularly.
+
+### Cache-aside attachment download — ownership chain in SQL
+
+`attachments_service.download_email_attachment` proves ownership inside a single SQL query (`email_attachments → email_metadata → accounts → mailboxes`) instead of layering Python-level checks. A row that does not match the authenticated `user_id` collapses into "not found" — the service raises `AttachmentNotFound` (404), **not** `Forbidden` (403). This is intentional: leaking the existence of foreign attachments via UUID guessing is a known anti-pattern (D-22). When `unavailable_at IS NOT NULL` (stamped on a previous provider 404/410), the endpoint short-circuits with `AttachmentUnavailable` (404 `attachment_unavailable`) before hitting the provider — the row is permanently dead until something replaces it.
+
+After the ownership JOIN the service runs an explicit `provider_message_id` cross-check: the path parameter must match `row["provider_message_id"]`. A mismatch raises `AttachmentNotFound` (404), not 403 — defence-in-depth against URL parameter manipulation where a valid `attachment_id` is paired with the wrong `provider_message_id` segment. The `attachment_id` UUID is unique enough on its own, but the explicit comparison closes the gap; do NOT remove or relax it.
+
+`mark_unavailable` on the provider 404/410 path is double-soft-failed: both the `DatabaseError` and the generic `Exception` branches inside the stamp call swallow their failure (logged but never raised). The function always raises `AttachmentUnavailable` afterwards regardless of whether the stamp succeeded — the user-visible 404 must NOT be masked by a DB write hiccup. Do NOT propagate errors from inside `mark_unavailable`; its purpose is a TTL/back-pressure hint, not a correctness guarantee.
+
+### `translate_core_error` — `EmailAttachmentDownloadFailed` splits by `detail.reason`
+
+The mapping list in `services_helpers._CORE_TO_API_MAP` is otherwise purely typed (one `CoreError` subclass → one `ApiError` subclass), but `EmailAttachmentDownloadFailed` is the single exception: the function inspects `detail['reason']` and routes `'forbidden'` to `AttachmentProviderForbidden` (502) and everything else to `AttachmentProviderUnavailable` (503). The classification mirrors D-17: 403 from the provider is "your scope/permissions changed, investigate" (502, do not auto-mark unavailable); persistent 5xx is "try again later" (503). The default mapping in the list points at `AttachmentProviderUnavailable` so a missing `reason` still resolves to a sensible status.
+
+### `AttachmentSendFailed.detail` — D-27 partial-success contract
+
+When Outlook fails mid-flight uploading attachments before the final `POST /messages/{id}/send`, the core layer raises `EmailAttachmentSendFailed` with `detail = {"failed_attachments": [...], "succeeded": [{"draft_attachment_id", "provider_attachment_id"}, ...]}`. `drafts_service._persist_partial_upload_results` reads the `succeeded` list and stamps each `provider_attachment_id` onto the local `draft_attachments` row **before** re-raising the translated `AttachmentSendFailed` (502). The next retry's call to `_collect_draft_attachment_inputs` then surfaces those rows with their `provider_attachment_id` populated, and the Outlook client skips them — that is the entire D-27 partial-success resume mechanism. Gmail's send is atomic, so its failure path leaves `succeeded` empty.
+
+### `recompute_has_attachments` — only writer of the denormalised flag
+
+`email_metadata.has_attachments` is updated **only** through `services_helpers.recompute_has_attachments`, which runs after the cache-miss branch of `get_email_full_content` upserts the discovered attachments. The underlying SQL (`UPDATE_HAS_ATTACHMENTS`) recomputes the flag from `COUNT(*) WHERE is_inline=false` against `email_attachments`, so the helper is idempotent. Do not write `has_attachments` from any other site (sync, trash, spam, drafts) — the B.lazy strategy depends on the flag being driven solely by viewer activity (see `docs/features/adjuntos.md` § 5).
+
+### `get_email_full_content` — attachment list read on cache hit too
+
+The endpoint reads `email_attachments` on **every** request, including cache hits. A previous TTL purge can wipe `email_attachment_blobs` while leaving the metadata rows intact; reading the list always keeps the response's `is_downloaded` flag honest. Skipping the read on cache hit would surface stale `is_downloaded=true` entries that 502 on click.
 
 ## Email content — HTML sanitization lives outside this file
 
@@ -108,6 +178,8 @@ All `ApiError` subclasses live in `api/errors/exceptions.py` and must be registe
 - **Register in the same commit.** An unregistered `ApiError` silently defaults to 500 and its `code` never reaches the client.
 - **Unique message per raise site.** The layer `CLAUDE.md` §7 is load-bearing: every `ApiError` raised directly by the service layer must carry a globally-unique `message`, so the message alone pinpoints the raise site. Especially important for the drafts services' outer safety nets (`DraftCreationError`, `DraftUpdateError`, `DraftDeleteError`, `DraftSendError`), where multiple `raise` statements in the same function would otherwise be indistinguishable.
 - **Status quirks worth remembering:** `DatabaseQueryError` is 503 (transient-from-the-caller perspective, retryable), not 500. `EmailListError` / `DraftListError` are 500 because a listing failure is the only place that specific operation can fail and there is no retry story. 409s (`EmailNotInTrash`, `AccountNotConnected`, `AccountConnectAuthError` is 401) encode state conflicts, not plain missing resources — do not downgrade them to 404 when reusing.
+- **Attachment internals (500):** `AttachmentLookupError`, `AttachmentInsertError`, `AttachmentListingError` cover the unexpected-internal-failure paths of `add_draft_attachment` / `remove_draft_attachment` (lookup-before-insert, the insert itself, the size/count pre-check listing). They mirror `DraftCreationError` semantics — "something went wrong on our side, not the provider's" — and exist so the response code identifies the failed step instead of collapsing every internal hiccup into a generic `DraftDeleteError` / `DraftCreationError`.
+- **Admin purge endpoint:** `PurgeDisabled` is **503**, not 401. The split with `InvalidAdminToken` (401) is intentional: 503 means "this deploy is not configured for purge" (env var unset), 401 means "your token is wrong". Collapsing the two into 401 would mask the deploy-config error behind a credential error and waste on-call time.
 
 ## Extension
 

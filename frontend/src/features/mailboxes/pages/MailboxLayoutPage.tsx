@@ -1,20 +1,40 @@
 import { useCallback } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
+import { Inbox, Send, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
+import type { ComponentType } from 'react';
 
-import { useAuth } from '../providers/AuthContext';
-import { useDraftComposerContext } from '../providers/DraftComposerContext';
-import useCurrentUser from '../../lib/hooks/useCurrentUser';
-import useMailboxList from '../../lib/hooks/useMailboxList';
-import Sidebar from '../../components/ui/Sidebar';
-import { MAILBOX_NAV_ITEMS } from './mailboxNavItems';
+import { useAuth } from '../../../app/providers/AuthContext';
+import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
+import Sidebar from '../../../components/ui/Sidebar';
+import DraftComposerHost from '../../drafts/components/DraftComposerHost';
+import useMailboxList from '../hooks/useMailboxList';
+
+// Inline because the array is mailbox-feature-only and the features layer's
+// "exactly three subdirs" rule (pages / hooks / components) does not allow a
+// dedicated constants file. Five entries are not worth a hop.
+const MAILBOX_NAV_ITEMS: Array<{
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  path: string;
+}> = [
+  { icon: Inbox, label: 'Bandeja unificada', path: 'inbox' },
+  { icon: Send, label: 'Enviados', path: 'sent' },
+  { icon: ShieldAlert, label: 'Spam', path: 'spam' },
+  { icon: FileEdit, label: 'Borradores', path: 'drafts' },
+  { icon: Trash2, label: 'Papelera de reciclaje', path: 'trash' },
+];
+
+export default function MailboxLayoutPage() {
+  const { mailboxId } = useParams<{ mailboxId: string }>();
+  if (!mailboxId) return null;
+  return <MailboxShell mailboxId={mailboxId} />;
+}
 
 function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const navigate = useNavigate();
-  const { logout } = useAuth();
-  const { openForNewEmail } = useDraftComposerContext();
-
+  const { logout, deleteCurrentUser } = useAuth();
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
-  const { deleteCurrentUser } = useCurrentUser();
+  const composer = useDraftComposerContext();
 
   const handleLogout = useCallback(async () => {
     await logout();
@@ -49,20 +69,14 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         navItems={MAILBOX_NAV_ITEMS}
         onMailboxSelect={handleMailboxSelect}
         onMailboxCreate={handleMailboxCreate}
-        onCompose={openForNewEmail}
+        onCompose={composer.openForNewEmail}
         onLogout={handleLogout}
         onDeleteAccount={handleDeleteAccount}
       />
       <div className="relative flex-1">
         <Outlet />
       </div>
+      <DraftComposerHost mailboxId={mailboxId} />
     </div>
   );
-}
-
-export default function MailboxLayout() {
-  const { mailboxId } = useParams<{ mailboxId: string }>();
-  if (!mailboxId) return null;
-
-  return <MailboxShell mailboxId={mailboxId} />;
 }

@@ -1,8 +1,8 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { createMailbox, listMailboxes } from '../../api/endpoints/mailboxes';
-import type { MailboxOut } from '../../api/types/dto';
+import { createMailbox, listMailboxes } from '../../../api/endpoints/mailboxes';
+import type { MailboxOut } from '../../../api/types/dto';
 
 export const MAILBOXES_QUERY_KEY = ['mailboxes'] as const;
 

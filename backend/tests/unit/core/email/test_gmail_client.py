@@ -1103,7 +1103,10 @@ class TestSendEmail:
         raw_bytes = base64.urlsafe_b64decode(body["raw"])
         raw_text = raw_bytes.decode("utf-8")
         assert "Test Subject" in raw_text
-        assert "Test Body" in raw_text
+        # The shared MIME builder (build_mime_with_attachments helper)
+        # encodes the body via base64 transfer-encoding to keep non-ASCII
+        # safe end-to-end, so the literal text is no longer visible inline.
+        assert "VGVzdCBCb2R5" in raw_text  # base64("Test Body")
         assert "a@b.com" in raw_text
 
     def test_returns_metadata_from_batch_fetch(self, client: GmailClient):
@@ -1790,7 +1793,38 @@ class TestFetchDrafts:
         assert draft.to_recipients == ["a@b.com", "c@d.com"]
         assert draft.cc_recipients == ["e@f.com"]
         assert draft.bcc_recipients == []
-        assert "body-d1" in draft.body_html
+        assert "body-d1" in draft.body
+
+    @pytest.mark.parametrize(
+        "raw_body,expected",
+        [
+            ("sync test\n", "sync test"),
+            ("sync test\r\n", "sync test"),
+            ("line1\nline2\n", "line1\nline2"),
+            ("no trailing", "no trailing"),
+            ("", ""),
+        ],
+    )
+    def test_parse_gmail_draft_strips_single_trailing_newline(
+        self, client: GmailClient, raw_body: str, expected: str,
+    ):
+        """Gmail's MIMEText serialization appends one trailing newline that
+        must be stripped on read so the body round-trips matching what the
+        user composed (and stays consistent with Outlook, which never adds
+        one)."""
+        response = {
+            "id": "d-nl",
+            "message": {
+                "id": "msg-d-nl",
+                "payload": {
+                    "headers": [{"name": "Subject", "value": "s"}],
+                    "mimeType": "text/plain",
+                    "body": {"data": _encode_body(raw_body)},
+                },
+            },
+        }
+        draft = client._parse_gmail_draft(response)
+        assert draft.body == expected
 
 
 # ── fetch_email_content + cid resolution ────────────────────────────
@@ -1988,3 +2022,222 @@ class TestExtractBodyFromPayloadCharset:
         }
         _, text_body = GmailClient._extract_body_from_payload(payload)
         assert text_body == "euro€"
+
+
+# ── fetch_attachment_binary (D-17 — error mapping) ──────────────────
+
+
+class TestGmailFetchAttachmentBinary:
+    def _make_http_error(self, status: int) -> Exception:
+        from googleapiclient.errors import HttpError
+        resp = MagicMock()
+        type(resp).status = status
+        return HttpError(resp=resp, content=b'{"error":{"message":"x"}}')
+
+    def _attachment(self):
+        from core.email.email_client import AttachmentMetadata
+        return AttachmentMetadata(
+            provider_message_id="msg-1",
+            part_id="1",
+            provider_attachment_id="att-1",
+            filename="img.png",
+            mime_type="image/png",
+            size=10,
+            content_id=None,
+            is_inline=False,
+            position=0,
+        )
+
+    def _stub_payload_and_service(
+        self,
+        client,
+        monkeypatch,
+        *,
+        raise_exc: Exception | None = None,
+        data_b64: str | None = None,
+    ):
+        # The real fetch_attachment_binary calls _fetch_message_payload
+        # first to resolve the live ``attachmentId`` for the cached
+        # ``part_id``. Stub the payload to expose that mapping; then
+        # stub the SDK's ``attachments.get(...).execute()`` chain.
+        payload = {
+            "id": "msg-1",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {
+                        "partId": "1",
+                        "mimeType": "image/png",
+                        "filename": "img.png",
+                        "headers": [
+                            {"name": "Content-Disposition", "value": "attachment; filename=img.png"},
+                        ],
+                        "body": {"attachmentId": "att-1", "size": 10},
+                    },
+                ],
+            },
+        }
+        monkeypatch.setattr(
+            client, "_fetch_message_payload", lambda mid: payload["payload"],
+        )
+        execute = MagicMock()
+        if raise_exc is not None:
+            execute.side_effect = raise_exc
+        else:
+            execute.return_value = {"data": data_b64 or ""}
+        chain = MagicMock()
+        chain.execute = execute
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.attachments.return_value.get.return_value = chain
+        return execute
+
+    def test_happy_path_returns_decoded_bytes(self, client, monkeypatch):
+        self._stub_payload_and_service(client, monkeypatch, data_b64="aGVsbG8=")
+        binary = client.fetch_attachment_binary("msg-1", self._attachment())
+        assert binary.data == b"hello"
+        assert binary.size == 5
+        assert binary.mime_type == "image/png"
+
+    def test_http_404_raises_attachment_not_found(self, client, monkeypatch):
+        from core.email.errors import EmailAttachmentNotFound
+        self._stub_payload_and_service(
+            client, monkeypatch, raise_exc=self._make_http_error(404),
+        )
+        with pytest.raises(EmailAttachmentNotFound):
+            client.fetch_attachment_binary("msg-1", self._attachment())
+
+    def test_http_403_raises_download_failed_with_forbidden_reason(self, client, monkeypatch):
+        from core.email.errors import EmailAttachmentDownloadFailed
+        self._stub_payload_and_service(
+            client, monkeypatch, raise_exc=self._make_http_error(403),
+        )
+        with pytest.raises(EmailAttachmentDownloadFailed) as exc_info:
+            client.fetch_attachment_binary("msg-1", self._attachment())
+        assert exc_info.value.detail.get("reason") == "forbidden"
+
+    def test_http_500_after_retry_exhaustion_raises_download_failed(self, client, monkeypatch):
+        from core.email.errors import EmailAttachmentDownloadFailed
+        self._stub_payload_and_service(
+            client, monkeypatch, raise_exc=self._make_http_error(500),
+        )
+        with pytest.raises(EmailAttachmentDownloadFailed) as exc_info:
+            client.fetch_attachment_binary("msg-1", self._attachment())
+        # 5xx maps to ``unavailable`` (transient provider — caller surfaces 503).
+        assert exc_info.value.detail.get("reason") == "unavailable"
+
+    def test_unknown_exception_after_retry_does_not_escape_untyped(self, client, monkeypatch):
+        # Phase 2.3 fix: a non-HttpError after retry exhaustion must be
+        # translated to ``EmailAttachmentDownloadFailed(reason="unavailable")``
+        # so the service layer can map it cleanly to a 503.
+        from core.email.errors import EmailAttachmentDownloadFailed
+        self._stub_payload_and_service(
+            client, monkeypatch, raise_exc=OSError("connection reset"),
+        )
+        with pytest.raises(EmailAttachmentDownloadFailed) as exc_info:
+            client.fetch_attachment_binary("msg-1", self._attachment())
+        assert exc_info.value.detail.get("reason") == "unavailable"
+
+
+# ── list_message_attachments ────────────────────────────────────────
+
+
+class TestGmailListMessageAttachments:
+    def test_returns_classification_tuple(self, client, monkeypatch):
+        # list_message_attachments composes _fetch_message_payload + the
+        # body extractor + _classify_attachments. Stubbing both internal
+        # helpers proves the wrapper keeps the (attachments, cid_map)
+        # tuple shape untouched (regression for the unified send refactor).
+        from core.email.email_client import AttachmentMetadata
+        sample = AttachmentMetadata(
+            provider_message_id="msg-1",
+            part_id="2",
+            provider_attachment_id=None,
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            size=512,
+            content_id=None,
+            is_inline=False,
+            position=0,
+        )
+        monkeypatch.setattr(
+            client, "_fetch_message_payload",
+            lambda mid: {"parts": [], "mimeType": "multipart/mixed"},
+        )
+        monkeypatch.setattr(
+            client, "_classify_attachments",
+            lambda payload, mid, html_body: ({"cid-x": "data:image/png;base64,YQ=="}, [sample]),
+        )
+        attachments, cid_map = client.list_message_attachments("msg-1")
+        assert attachments == [sample]
+        assert cid_map == {"cid-x": "data:image/png;base64,YQ=="}
+
+
+# ── send_draft_with_attachments ────────────────────────────────────
+
+
+class TestSendDraftWithAttachments:
+    """Cover the atomic Gmail send-with-attachments path (D-07, D-18, D-27)."""
+
+    def _setup_drafts_send_mock(self, client: GmailClient, response: dict | None = None):
+        mock_service = MagicMock()
+        client.service = mock_service
+        if response is None:
+            response = {"id": "sent-msg-1", "threadId": "th-1", "labelIds": ["SENT"]}
+        mock_service.users.return_value.drafts.return_value.send.return_value.execute.return_value = response
+        return mock_service
+
+    def _attachment_input(self, filename: str = "doc.pdf", data: bytes = b"PDF"):
+        from core.email.email_client import DraftAttachmentInput
+        return DraftAttachmentInput(
+            draft_attachment_id="local-1",
+            filename=filename,
+            mime_type="application/pdf",
+            data=data,
+            size=len(data),
+            position=0,
+            content_id=None,
+            is_inline=False,
+        )
+
+    def test_simple_strategy_calls_drafts_send_atomically(self, client: GmailClient):
+        mock_service = self._setup_drafts_send_mock(client)
+        with patch.object(client, "fetch_messages_metadata", return_value=[]):
+            metadata, uploads = client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "Subject", "Body",
+                [self._attachment_input()],
+            )
+        send_fn = mock_service.users.return_value.drafts.return_value.send
+        send_fn.assert_called_once()
+        # Atomic Gmail send returns no per-attachment intermediate state.
+        assert uploads == []
+        # The body wraps the existing draft id so Gmail replaces in-place.
+        body = send_fn.call_args[1]["body"]
+        assert body["id"] == "draft-1"
+        assert "raw" in body["message"]
+        assert metadata.box == "SENT"
+
+    def test_blocked_attachment_400_raises_blocked_by_provider(self, client: GmailClient):
+        from googleapiclient.errors import HttpError
+        from core.email.errors import EmailAttachmentBlockedByProvider
+
+        mock_resp = MagicMock()
+        mock_resp.status = 400
+        mock_resp.reason = "Attachment is invalid: not allowed"
+        http_err = HttpError(resp=mock_resp, content=b"blocked")
+
+        mock_service = self._setup_drafts_send_mock(client)
+        mock_service.users.return_value.drafts.return_value.send.return_value.execute.side_effect = http_err
+
+        with pytest.raises(EmailAttachmentBlockedByProvider):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "S", "B",
+                [self._attachment_input()],
+            )
+
+    def test_unauthenticated_raises(self, client: GmailClient):
+        client.service = None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "S", "B",
+                [self._attachment_input()],
+            )

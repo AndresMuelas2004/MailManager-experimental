@@ -175,6 +175,24 @@ class DraftSendError(ApiError):
     code = "draft_send_error"
 
 
+class MailboxLookupError(ApiError):
+    """Unexpected internal failure while resolving a mailbox by id."""
+
+    code = "mailbox_lookup_error"
+
+
+class AppCredentialsLoadError(ApiError):
+    """Unexpected internal failure while loading provider app credentials."""
+
+    code = "app_credentials_load_error"
+
+
+class AccountTokensLoadError(ApiError):
+    """Unexpected internal failure while loading account access/refresh tokens."""
+
+    code = "account_tokens_load_error"
+
+
 class MailboxOperationError(ApiError):
     code = "mailbox_operation_error"
 
@@ -189,3 +207,108 @@ class SessionOperationError(ApiError):
 
 class UserOperationError(ApiError):
     code = "user_operation_error"
+
+
+# ---------------------------------------------------------------------------
+# Attachment errors (D-01 to D-30, see decisionesTomadasAdjuntosBackend.md).
+# Each subclass corresponds to one user-visible failure mode of the
+# attachments feature; granularity is intentionally fine so the frontend
+# can render a precise message and the API status_map can route to the
+# right HTTP code.
+# ---------------------------------------------------------------------------
+
+
+class AttachmentNotFound(ApiError):
+    """The attachment row does not exist or does not belong to the user."""
+    code = "attachment_not_found"
+
+
+class AttachmentUnavailable(ApiError):
+    """The provider returned 404/410 for a previously-listed attachment (D-17)."""
+    code = "attachment_unavailable"
+
+
+class AttachmentTooLarge(ApiError):
+    """A single attachment exceeds the 25 MB per-file cap (D-01)."""
+    code = "attachment_too_large"
+
+
+class AttachmentBlockedExtension(ApiError):
+    """The attachment extension is in the canonical blocklist (D-04a)."""
+    code = "attachment_blocked_extension"
+
+
+class AttachmentLimitExceeded(ApiError):
+    """The draft already holds the maximum 25 attachments (D-03)."""
+    code = "attachment_limit_exceeded"
+
+
+class AttachmentMessageSizeExceeded(ApiError):
+    """The cumulative message size would exceed the 25 MB cap (D-02)."""
+    code = "attachment_message_size_exceeded"
+
+
+class AttachmentProviderForbidden(ApiError):
+    """Provider returned 403 for an attachment fetch (D-17).
+
+    Mapped to HTTP 502 — the user's session is fine, but the provider
+    does not allow this scope/permission. Likely a token degradation
+    that warrants investigation; the frontend renders a generic
+    "could not access the attachment" message.
+    """
+    code = "provider_forbidden"
+
+
+class AttachmentProviderUnavailable(ApiError):
+    """Provider failed with persistent 5xx after retries (D-17).
+
+    Mapped to HTTP 503 — the failure is presumed transient. The
+    frontend renders "try again in a few minutes" and the user can
+    retry; the metadata row stays valid (no ``unavailable_at`` stamp).
+    """
+    code = "provider_unavailable"
+
+
+class AttachmentSendFailed(ApiError):
+    """One or more draft attachments failed to upload before send (D-27)."""
+    code = "attachment_send_failed"
+
+
+class RequestTooLarge(ApiError):
+    """The multipart upload exceeded the 30 MB global cap (§5.4)."""
+    code = "request_too_large"
+
+
+class DraftAttachmentNotFound(ApiError):
+    """The targeted draft attachment row does not exist."""
+    code = "draft_attachment_not_found"
+
+
+class AttachmentLookupError(ApiError):
+    """Unexpected internal failure while resolving the draft / account row that
+    must precede an ``add_draft_attachment`` insert."""
+
+    code = "attachment_lookup_error"
+
+
+class AttachmentInsertError(ApiError):
+    """Unexpected internal failure while inserting a row into ``draft_attachments``."""
+
+    code = "attachment_insert_error"
+
+
+class AttachmentListingError(ApiError):
+    """Unexpected internal failure while listing attachments stored for a draft
+    (used during the size-cap pre-check before insert)."""
+
+    code = "attachment_listing_error"
+
+
+class PurgeDisabled(ApiError):
+    """The admin purge endpoint is disabled (no env-var token, D-30)."""
+    code = "purge_disabled"
+
+
+class InvalidAdminToken(ApiError):
+    """The X-Admin-Token header does not match the configured token (D-30)."""
+    code = "invalid_admin_token"

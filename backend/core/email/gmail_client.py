@@ -22,8 +22,26 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .email_client import DraftMetadata, EmailClient, EmailContent, EmailMetadata, LabelUpdate, SpamMoveResult, SyncResult
+from .email_client import (
+    AttachmentBinary,
+    AttachmentMetadata,
+    AttachmentUploadResult,
+    DraftAttachmentInput,
+    DraftMetadata,
+    EmailClient,
+    EmailContent,
+    EmailMetadata,
+    LabelUpdate,
+    SpamMoveResult,
+    SyncResult,
+)
 from .errors import (
+    CoreError,
+    EmailAttachmentBlockedByProvider,
+    EmailAttachmentDownloadFailed,
+    EmailAttachmentNotFound,
+    EmailAttachmentSendFailed,
+    EmailAttachmentTooLargeForProvider,
     EmailExternalAPIError,
     EmailInvalidCredentialsDataError,
     EmailMissingAppCredentialsError,
@@ -34,10 +52,15 @@ from .errors import (
     EmailRefreshFailedError,
 )
 from .helpers import (
+    GmailSendStrategy,
+    build_mime_with_attachments,
     decode_mime_body,
+    find_referenced_cids,
     http_error_detail,
     inline_cid_images,
     parse_expiry,
+    pick_gmail_send_strategy,
+    retry_with_backoff,
     unwrap_app_credentials,
     unwrap_user_tokens,
     wrap_account_tokens,
@@ -52,6 +75,23 @@ _INCREMENTAL_EVENT_THRESHOLD = 100
 _DRAFTS_MAX_TOTAL = 100
 _SEND_DRAFT_MAX_ATTEMPTS = 3
 _SEND_DRAFT_RETRY_DELAY = 1.0  # seconds
+# Decoupled from send retries on purpose — download failure modes (5xx,
+# 429 with Retry-After, transient connection drops) deserve their own
+# tuning even if today they happen to use the same value.
+_FETCH_ATTACHMENT_MAX_ATTEMPTS = 3
+
+# Resumable upload — Gmail requires chunks to be a multiple of 256 KB
+# (except the very last one). 4 MB matches the recommended default;
+# smaller would multiply the number of HTTP round trips needlessly.
+_GMAIL_RESUMABLE_CHUNK_SIZE = 4 * 1024 * 1024
+_GMAIL_RESUMABLE_UPLOAD_BASE = (
+    "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts/send?uploadType=resumable"
+)
+
+# Daily quota errors are NOT transient — Gmail throws them with
+# ``User-rate limit exceeded (Mail sending)`` and a short backoff is
+# unhelpful. Detect and raise immediately as a non-retryable failure.
+_GMAIL_DAILY_LIMIT_REASON_MARKER = "user-rate limit exceeded"
 
 
 def _parse_max_workers() -> int:
@@ -80,6 +120,23 @@ def _is_retryable(exception: Any) -> bool:
     return True
 
 
+def _is_send_retryable(exception: Any) -> bool:
+    """Send-path retry predicate.
+
+    Like :py:func:`_is_retryable` but additionally filters out the Gmail
+    daily quota 429 (``user-rate limit exceeded (mail sending)``), which
+    is documented as a hard wall — retrying it just burns budget. All
+    other 429 / 5xx / network failures remain retryable.
+    """
+    if not _is_retryable(exception):
+        return False
+    if isinstance(exception, HttpError):
+        status, reason = http_error_detail(exception)
+        if str(status) == "429" and _GMAIL_DAILY_LIMIT_REASON_MARKER in (reason or "").lower():
+            return False
+    return True
+
+
 def _log_skipped_messages(
     operation: str, skipped_ids: list[str], message_ids: list[str],
 ) -> None:
@@ -88,6 +145,151 @@ def _log_skipped_messages(
             "Gmail %s: %d/%d messages could not be fetched: %s",
             operation, len(skipped_ids), len(message_ids), skipped_ids[:10],
         )
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for the attachments flow.
+# Kept at module level so multiple methods (and potentially other Gmail-
+# specific callers) reuse them without bouncing through ``self``.
+# ---------------------------------------------------------------------------
+
+
+def _find_part_by_id(
+    payload: dict[str, Any], part_id: str,
+) -> dict[str, Any] | None:
+    """Locate a MIME part by ``partId`` in a Gmail message payload tree.
+
+    Gmail's ``partId`` is documented as immutable per part
+    (``adjuntos-gmail.md`` § 6.2). The walk is depth-first and returns
+    the first match; multipart wrappers are expanded transparently.
+    """
+    if (payload.get("partId") or "") == part_id:
+        return payload
+    for sub in payload.get("parts", []) or []:
+        found = _find_part_by_id(sub, part_id)
+        if found is not None:
+            return found
+    return None
+
+
+def _retry_after_seconds_from_http_error(exc: Exception) -> float | None:
+    """Extract ``Retry-After`` (seconds) from a Google ``HttpError``."""
+    if not isinstance(exc, HttpError):
+        return None
+    resp = getattr(exc, "resp", None)
+    if resp is None:
+        return None
+    raw = resp.get("retry-after") if hasattr(resp, "get") else None
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _is_attachment_download_retryable(exc: Exception) -> bool:
+    """Predicate for the attachment download retry loop (D-16).
+
+    Network noise is retryable. ``HttpError`` is retryable only on the
+    explicit set of transient status codes
+    (``429``/``500``/``502``/``503``/``504``). Permanent errors
+    (``400``/``401``/``403``/``404``/``410``) propagate immediately so
+    the caller can map them to the right ``EmailAttachment*`` class.
+    """
+    if isinstance(exc, OSError):
+        return True
+    if isinstance(exc, HttpError):
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        return status in _RETRYABLE_STATUS_CODES
+    return False
+
+
+def _raise_attachment_download_error(exc: HttpError) -> None:
+    """Translate an ``HttpError`` from an attachment fetch (D-17).
+
+    - ``404``/``410`` → :py:class:`EmailAttachmentNotFound` so the
+      service marks the metadata row ``unavailable_at``.
+    - ``403`` → :py:class:`EmailAttachmentDownloadFailed` with reason
+      ``forbidden`` (mapped to HTTP 502 by the API translator).
+    - Any other 4xx/5xx → :py:class:`EmailAttachmentDownloadFailed`
+      with reason ``unavailable`` (mapped to HTTP 503).
+    """
+    status, reason = http_error_detail(exc)
+    if str(status) in {"404", "410"}:
+        raise EmailAttachmentNotFound(
+            f"Gmail attachment fetch returned {status}: {reason}.",
+            {"reason": "missing"},
+        ) from exc
+    if str(status) == "403":
+        raise EmailAttachmentDownloadFailed(
+            f"Gmail attachment fetch forbidden (HTTP {status}: {reason}).",
+            {"reason": "forbidden"},
+        ) from exc
+    raise EmailAttachmentDownloadFailed(
+        f"Gmail attachment fetch failed (HTTP {status}: {reason}).",
+        {"reason": "unavailable"},
+    ) from exc
+
+
+def _failed_attachments_detail(
+    attachments: list[Any],
+    reason: str,
+) -> dict[str, Any]:
+    """Build the ``detail`` payload for :py:class:`EmailAttachmentSendFailed`.
+
+    Used by Gmail's atomic send: when the send fails, every attachment
+    is reported as failed (Gmail does not tell us per-attachment
+    granularity, the failure is over the whole MIME).
+    """
+    return {
+        "failed_attachments": [
+            {
+                "draft_attachment_id": getattr(att, "draft_attachment_id", ""),
+                "filename": getattr(att, "filename", ""),
+                "reason": reason,
+            }
+            for att in attachments
+        ]
+    }
+
+
+def _raise_send_with_attachments_error(
+    exc: HttpError, attachments: list[Any],
+) -> None:
+    """Translate an ``HttpError`` from ``drafts.send`` with attachments.
+
+    - ``400`` with reason text matching ``The attachment is invalid`` →
+      :py:class:`EmailAttachmentBlockedByProvider` (D-04a edge case).
+    - ``413`` → :py:class:`EmailAttachmentTooLargeForProvider` (the
+      tenant configured a smaller cap than D-01 / D-02).
+    - ``429`` with ``user-rate limit exceeded (mail sending)`` reason →
+      :py:class:`EmailAttachmentSendFailed` with reason ``daily_limit``
+      (the retry loop will not help; the user's daily quota is gone).
+    - Anything else → :py:class:`EmailAttachmentSendFailed` with the
+      raw HTTP detail.
+    """
+    status, reason = http_error_detail(exc)
+    reason_lc = (reason or "").lower()
+    if str(status) == "400" and "attachment is invalid" in reason_lc:
+        raise EmailAttachmentBlockedByProvider(
+            f"Gmail rejected the message because an attachment is blocked "
+            f"(HTTP {status}: {reason})."
+        ) from exc
+    if str(status) == "413":
+        raise EmailAttachmentTooLargeForProvider(
+            f"Gmail rejected the message as too large (HTTP {status}: {reason})."
+        ) from exc
+    if str(status) == "429" and _GMAIL_DAILY_LIMIT_REASON_MARKER in reason_lc:
+        raise EmailAttachmentSendFailed(
+            f"Gmail daily sending limit reached (HTTP {status}: {reason}).",
+            _failed_attachments_detail(attachments, "daily_limit"),
+        ) from exc
+    raise EmailAttachmentSendFailed(
+        f"Gmail send failed (HTTP {status}: {reason}).",
+        _failed_attachments_detail(attachments, "provider_error"),
+    ) from exc
 
 
 class GmailClient(EmailClient):
@@ -819,7 +1021,10 @@ class GmailClient(EmailClient):
 
         from email.mime.text import MIMEText
 
-        message = MIMEText(body)
+        # D-31: explicit text/plain (the composer is a plain <textarea>;
+        # both providers persist text/plain so MIME assembly with
+        # attachments stays consistent in send_draft_with_attachments).
+        message = MIMEText(body or "", "plain", "utf-8")
         message["to"] = ", ".join(recipients)
         message["subject"] = subject
 
@@ -897,7 +1102,7 @@ class GmailClient(EmailClient):
                 )
                 break
             except HttpError as exc:
-                if not _is_retryable(exc) or attempt == _SEND_DRAFT_MAX_ATTEMPTS:
+                if not _is_send_retryable(exc) or attempt == _SEND_DRAFT_MAX_ATTEMPTS:
                     status, reason = http_error_detail(exc)
                     raise EmailExternalAPIError(
                         f"Gmail failed to send draft (HTTP {status}: {reason})."
@@ -950,25 +1155,44 @@ class GmailClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
-    ) -> str:
-        """Build the base64url-encoded RFC 2822 message used by Gmail
-        drafts.create and drafts.update. Both endpoints accept the same
-        ``{"message": {"raw": ...}}`` body shape.
-        """
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
+        body: str,
+        attachments: list[DraftAttachmentInput] | None = None,
+    ) -> tuple[str, bytes]:
+        """Build the RFC 5322 message for Gmail drafts.create / drafts.update / drafts.send.
 
-        message = MIMEMultipart("alternative")
-        if to_recipients:
-            message["to"] = ", ".join(to_recipients)
-        if cc_recipients:
-            message["cc"] = ", ".join(cc_recipients)
-        if bcc_recipients:
-            message["bcc"] = ", ".join(bcc_recipients)
-        message["subject"] = subject or ""
-        message.attach(MIMEText(body_html or "", "html"))
-        return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        Returns ``(raw_b64url, raw_bytes)``:
+        - ``raw_b64url`` is the base64url-encoded form for the JSON
+          ``{"message": {"raw": ...}}`` body shape (drafts.create,
+          drafts.update, drafts.send simple path).
+        - ``raw_bytes`` is the unencoded MIME content used by the
+          resumable upload path (``message/rfc822`` body of the PUT).
+
+        Body is text/plain (D-31). Attachments are appended via
+        :py:func:`build_mime_with_attachments` which delegates to
+        Python's modern ``email.message.EmailMessage`` API and emits a
+        clean ``multipart/mixed`` (with a ``text/plain`` body part and
+        each attachment carrying ``Content-Disposition: attachment``,
+        RFC 2231 + RFC 2047 filename encoding).
+        """
+        attachment_payloads = [
+            {
+                "filename": att.filename,
+                "mime_type": att.mime_type,
+                "data": att.data,
+                "content_id": att.content_id,
+                "is_inline": att.is_inline,
+            }
+            for att in (attachments or [])
+        ]
+        raw_bytes = build_mime_with_attachments(
+            to_recipients=to_recipients,
+            cc_recipients=cc_recipients,
+            bcc_recipients=bcc_recipients,
+            subject=subject or "",
+            body=body or "",
+            attachments=attachment_payloads,
+        )
+        return base64.urlsafe_b64encode(raw_bytes).decode("utf-8"), raw_bytes
 
     def create_draft(
         self,
@@ -976,17 +1200,19 @@ class GmailClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Create a draft in Gmail via users().drafts().create(). All fields
-        may be empty; Gmail accepts empty drafts.
+        may be empty; Gmail accepts empty drafts. The body is sent as
+        ``text/plain`` (D-31). Attachments are NOT pushed here — they
+        are attached during ``send_draft_with_attachments`` (D-07).
         """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail create_draft requires authentication.")
 
-        raw_message = self._build_draft_raw_message(
-            to_recipients, cc_recipients, bcc_recipients, subject, body_html,
+        raw_message, _ = self._build_draft_raw_message(
+            to_recipients, cc_recipients, bcc_recipients, subject, body,
         )
 
         try:
@@ -1014,7 +1240,7 @@ class GmailClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=now,
             updated_at=now,
         )
@@ -1026,19 +1252,20 @@ class GmailClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Update an existing Gmail draft via users().drafts().update().
         Full-field replacement — Gmail overwrites the entire draft with
         the new MIME message. The Gmail ``draft.id`` is preserved (the
         inner ``message.id`` may change, but we do not store it).
+        Body is sent as ``text/plain`` (D-31).
         """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail update_draft requires authentication.")
 
-        raw_message = self._build_draft_raw_message(
-            to_recipients, cc_recipients, bcc_recipients, subject, body_html,
+        raw_message, _ = self._build_draft_raw_message(
+            to_recipients, cc_recipients, bcc_recipients, subject, body,
         )
 
         try:
@@ -1069,7 +1296,7 @@ class GmailClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=now,
             updated_at=now,
         )
@@ -1214,7 +1441,22 @@ class GmailClient(EmailClient):
         to_recipients = _parse_addrs(_header("To"))
         cc_recipients = _parse_addrs(_header("Cc"))
         bcc_recipients = _parse_addrs(_header("Bcc"))
-        body_html = self._extract_html_body(payload)
+        # D-31: prefer text/plain. Drafts created/updated by the app
+        # always carry text/plain at the provider; legacy drafts that
+        # still have an HTML part fall through to ``html_body`` as a
+        # best-effort string (the user can re-edit the body in the
+        # composer if it shows tags — out-of-scope MVP).
+        html_body, text_body = self._extract_body_from_payload(payload)
+        body = text_body if text_body is not None else (html_body or "")
+        # Gmail's MIMEText serialization (used in create_draft / update_draft)
+        # appends a single trailing newline that Gmail echoes back verbatim.
+        # Strip exactly one terminator so the round-tripped body matches what
+        # the user composed — Outlook returns body.content as-is, so this
+        # keeps cross-provider behaviour consistent.
+        if body.endswith("\r\n"):
+            body = body[:-2]
+        elif body.endswith("\n"):
+            body = body[:-1]
 
         now = datetime.now(timezone.utc)
         return DraftMetadata(
@@ -1223,41 +1465,10 @@ class GmailClient(EmailClient):
             cc_recipients=cc_recipients,
             bcc_recipients=bcc_recipients,
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=now,
             updated_at=now,
         )
-
-    def _extract_html_body(self, payload: dict[str, Any]) -> str:
-        """Walk message parts to find text/html (fallback to text/plain).
-
-        Gmail stores the body base64url-encoded inside payload.body.data
-        (leaf parts only) or nested inside payload.parts (multipart).
-        """
-        def _decode(part: dict[str, Any]) -> str:
-            data = (part.get("body") or {}).get("data") or ""
-            if not data:
-                return ""
-            padding = "=" * (-len(data) % 4)
-            try:
-                return base64.urlsafe_b64decode(data + padding).decode("utf-8", errors="replace")
-            except (binascii.Error, UnicodeDecodeError) as exc:
-                logger.debug("Gmail draft body decode failed: %s", exc)
-                return ""
-
-        def _walk(part: dict[str, Any], *, prefer_html: bool) -> str:
-            mime_type = (part.get("mimeType") or "").lower()
-            if prefer_html and mime_type == "text/html":
-                return _decode(part)
-            if not prefer_html and mime_type == "text/plain":
-                return _decode(part)
-            for sub in part.get("parts") or []:
-                found = _walk(sub, prefer_html=prefer_html)
-                if found:
-                    return found
-            return ""
-
-        return _walk(payload, prefer_html=True) or _walk(payload, prefer_html=False)
 
     def delete_messages(self, message_ids: list[str]) -> list[str]:
         if self.service is None:
@@ -1504,9 +1715,48 @@ class GmailClient(EmailClient):
         return all_updated
 
     def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single Gmail message."""
+        """Fetch the full body content for a single Gmail message.
+
+        Inlines referenced ``cid:…`` images as ``data:`` URLs (D-13 strict:
+        only CIDs actually referenced by the HTML body are inlined; the
+        rest are reported separately via :py:meth:`list_message_attachments`
+        as downloadable attachments).
+        """
+        payload = self._fetch_message_payload(provider_message_id)
+        html_body, text_body = self._extract_body_from_payload(payload)
+        if html_body:
+            cid_map, _ = self._classify_attachments(payload, provider_message_id, html_body)
+            if cid_map:
+                html_body = inline_cid_images(html_body, cid_map)
+        return EmailContent(html_body=html_body, text_body=text_body)
+
+    def list_message_attachments(
+        self,
+        provider_message_id: str,
+    ) -> tuple[list[AttachmentMetadata], dict[str, str]]:
+        """List downloadable attachments + inline cid_map for a Gmail message.
+
+        Single ``messages.get(format=FULL)`` call (cuota: 20 units). The
+        same MIME walk that resolves inline ``cid:`` references also
+        identifies parts that should be presented to the user as
+        downloadable attachments under the strict D-13 rule.
+        """
+        payload = self._fetch_message_payload(provider_message_id)
+        html_body, _ = self._extract_body_from_payload(payload)
+        cid_map, attachments = self._classify_attachments(
+            payload, provider_message_id, html_body,
+        )
+        return attachments, cid_map
+
+    def _fetch_message_payload(self, provider_message_id: str) -> dict[str, Any]:
+        """``messages.get(format=FULL)`` with the standard error wrapping.
+
+        Used by both ``fetch_email_content`` and
+        ``list_message_attachments`` so both methods share the same
+        retry/error semantics and we do not duplicate the boilerplate.
+        """
         if self.service is None:
-            raise EmailNotAuthenticatedError("Gmail fetch_email_content requires authentication.")
+            raise EmailNotAuthenticatedError("Gmail messages.get requires authentication.")
         try:
             response = (
                 self.service.users()
@@ -1517,99 +1767,560 @@ class GmailClient(EmailClient):
         except HttpError as exc:
             status, reason = http_error_detail(exc)
             raise EmailExternalAPIError(
-                f"Gmail failed to fetch email content (HTTP {status}: {reason})."
+                f"Gmail failed to fetch message {provider_message_id} "
+                f"(HTTP {status}: {reason})."
             ) from exc
         except Exception as exc:
             raise EmailExternalAPIError(
-                f"Gmail unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
+                f"Gmail unexpected messages.get error ({type(exc).__name__}): {exc}"
             ) from exc
-        payload = response.get("payload", {})
-        html_body, text_body = self._extract_body_from_payload(payload)
-        if html_body:
-            cid_map = self._extract_cid_attachments(payload, provider_message_id)
-            if cid_map:
-                html_body = inline_cid_images(html_body, cid_map)
-        return EmailContent(html_body=html_body, text_body=text_body)
+        return response.get("payload", {}) or {}
 
-    def _extract_cid_attachments(
-        self, payload: dict[str, Any], provider_message_id: str,
-    ) -> dict[str, str]:
-        """Collect ``Content-ID → data URL`` map from inline image parts.
+    @staticmethod
+    def _header_value(part: dict[str, Any], name: str) -> str | None:
+        """Return the first header value matching ``name`` (case-insensitive)."""
+        for header in part.get("headers", []) or []:
+            if (header.get("name") or "").lower() == name.lower():
+                value = (header.get("value") or "").strip()
+                return value or None
+        return None
 
-        Walks the MIME tree looking for ``image/*`` parts with a Content-ID
-        header. When the part carries ``body.data`` inline it is decoded
-        directly; otherwise the attachment is fetched via
-        ``attachments().get()`` using the referenced ``attachmentId``.
-        Per-image failures soft-fallback to skipping the CID (the HTML will
-        keep the original ``cid:`` reference — a broken inline image is
-        better than losing the whole email).
-        """
-        cid_map: dict[str, str] = {}
-
-        def _content_id(part: dict[str, Any]) -> str | None:
-            for header in part.get("headers", []) or []:
-                if (header.get("name") or "").lower() == "content-id":
-                    raw = (header.get("value") or "").strip()
-                    if raw:
-                        return raw.strip("<>").strip()
+    @classmethod
+    def _content_id(cls, part: dict[str, Any]) -> str | None:
+        raw = cls._header_value(part, "Content-ID")
+        if raw is None:
             return None
+        return raw.strip("<>").strip() or None
+
+    @classmethod
+    def _content_disposition(cls, part: dict[str, Any]) -> str | None:
+        """Return the ``Content-Disposition`` value (``inline`` / ``attachment``)
+        in lowercase, or ``None`` when the header is absent."""
+        raw = cls._header_value(part, "Content-Disposition")
+        if raw is None:
+            return None
+        first_token = raw.split(";", 1)[0].strip().lower()
+        return first_token or None
+
+    def _classify_attachments(
+        self,
+        payload: dict[str, Any],
+        provider_message_id: str,
+        html_body: str | None,
+    ) -> tuple[dict[str, str], list[AttachmentMetadata]]:
+        """Walk the MIME tree applying the D-13 strict inline-vs-attachment rule.
+
+        Returns ``(cid_map, attachments)``:
+        - ``cid_map`` covers parts whose ``Content-ID`` is referenced by
+          ``html_body`` via ``cid:`` (HTML attribute or CSS ``url(cid:…)``).
+          For these parts the binary is fetched inline (or decoded from
+          ``body.data`` when present) and emitted as a ``data:`` URL.
+          Per-image failures soft-fallback to skipping the CID — broken
+          inline image is better than losing the whole email.
+        - ``attachments`` covers everything else the user should see as
+          a downloadable attachment: ``Content-Disposition: attachment``,
+          parts with a ``filename`` regardless of disposition, and
+          inline-marked parts whose CID is NOT referenced by the body
+          (D-13 strict — these must surface as downloadables instead of
+          being silently lost).
+        """
+        referenced_cids = find_referenced_cids(html_body)
+        cid_map: dict[str, str] = {}
+        attachments: list[AttachmentMetadata] = []
+        position_counter = 0
+
+        def _is_text_body_part(part: dict[str, Any]) -> bool:
+            """text/plain or text/html parts that are the message body."""
+            mime_type = (part.get("mimeType") or "").lower()
+            if mime_type not in ("text/plain", "text/html"):
+                return False
+            disposition = self._content_disposition(part)
+            filename = part.get("filename") or ""
+            # If a text/* part declares attachment disposition or carries a
+            # filename, treat it as an attachment (rare but happens on
+            # forwarded transcripts).
+            return disposition != "attachment" and not filename
 
         def _walk(part: dict[str, Any]) -> None:
-            mime_type = (part.get("mimeType") or "").lower()
-            if mime_type.startswith("multipart/"):
+            nonlocal position_counter
+            mime_type = (part.get("mimeType") or "")
+            if mime_type.lower().startswith("multipart/"):
                 for sub in part.get("parts", []) or []:
                     _walk(sub)
                 return
-            if not mime_type.startswith("image/"):
+            if _is_text_body_part(part):
                 return
-            cid = _content_id(part)
-            if not cid:
-                return
+
+            cid = self._content_id(part)
+            disposition = self._content_disposition(part)
+            filename = (part.get("filename") or "").strip()
             body = part.get("body") or {}
-            data_b64url = body.get("data")
-            try:
-                if data_b64url:
-                    raw_bytes = base64.urlsafe_b64decode(data_b64url + "==")
-                else:
-                    attachment_id = body.get("attachmentId")
-                    if not attachment_id:
-                        return
-                    attachment = (
-                        self.service.users()
-                        .messages()
-                        .attachments()
-                        .get(userId="me", messageId=provider_message_id, id=attachment_id)
-                        .execute()
-                    )
-                    attachment_data = attachment.get("data")
-                    if not attachment_data:
-                        return
-                    raw_bytes = base64.urlsafe_b64decode(attachment_data + "==")
-            except HttpError as exc:
-                status, reason = http_error_detail(exc)
-                logger.warning(
-                    "Gmail inline image fetch failed for cid=%s (HTTP %s: %s)",
-                    cid, status, reason,
+            size = int(body.get("size") or 0)
+            part_id = part.get("partId")
+
+            is_inline_marked = (
+                disposition == "inline"
+                or (mime_type.lower().startswith("image/") and cid is not None)
+            )
+            referenced = bool(cid and cid in referenced_cids)
+
+            if is_inline_marked and referenced:
+                # D-13: inline + referenced → resolve to data: URL.
+                self._populate_cid_map(
+                    part, mime_type, cid, body, provider_message_id, cid_map,
                 )
                 return
-            except (binascii.Error, UnicodeDecodeError) as exc:
-                logger.warning("Gmail inline image decode failed for cid=%s: %s", cid, exc)
+
+            # Skip parts that carry no usable identity at all (no filename,
+            # no disposition, no content_id) — those are not attachments
+            # the user can see.
+            if not filename and disposition is None and not cid:
                 return
-            except Exception as exc:
-                logger.warning(
-                    "Gmail inline image unexpected error for cid=%s (%s): %s",
-                    cid, type(exc).__name__, exc,
+
+            attachments.append(
+                AttachmentMetadata(
+                    provider_message_id=provider_message_id,
+                    part_id=str(part_id) if part_id else None,
+                    provider_attachment_id=None,
+                    filename=filename or (cid or "attachment"),
+                    mime_type=mime_type or "application/octet-stream",
+                    size=size,
+                    content_id=cid,
+                    is_inline=is_inline_marked,
+                    position=position_counter,
                 )
-                return
-            data_url = f"data:{mime_type};base64,{base64.b64encode(raw_bytes).decode('ascii')}"
-            cid_map[cid] = data_url
+            )
+            position_counter += 1
 
         if "parts" in payload:
             for part in payload["parts"]:
                 _walk(part)
         else:
             _walk(payload)
-        return cid_map
+        return cid_map, attachments
+
+    def _populate_cid_map(
+        self,
+        part: dict[str, Any],
+        mime_type: str,
+        cid: str,
+        body: dict[str, Any],
+        provider_message_id: str,
+        cid_map: dict[str, str],
+    ) -> None:
+        """Resolve a referenced inline image to a data: URL (soft fallback).
+
+        Tries ``body.data`` first (Gmail returns small parts inline) and
+        falls back to ``attachments().get()`` when the binary lives on a
+        separate ``attachmentId``. Per-image failures log a warning and
+        skip the CID — the HTML keeps the ``cid:`` reference and the
+        client renders a broken-image icon, which is still better than
+        losing the whole email.
+        """
+        data_b64url = body.get("data")
+        try:
+            if data_b64url:
+                raw_bytes = base64.urlsafe_b64decode(data_b64url + "==")
+            else:
+                attachment_id = body.get("attachmentId")
+                if not attachment_id:
+                    return
+                attachment = (
+                    self.service.users()
+                    .messages()
+                    .attachments()
+                    .get(userId="me", messageId=provider_message_id, id=attachment_id)
+                    .execute()
+                )
+                attachment_data = attachment.get("data")
+                if not attachment_data:
+                    return
+                raw_bytes = base64.urlsafe_b64decode(attachment_data + "==")
+        except HttpError as exc:
+            status, reason = http_error_detail(exc)
+            logger.warning(
+                "Gmail inline image fetch failed for cid=%s (HTTP %s: %s)",
+                cid, status, reason,
+            )
+            return
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            logger.warning("Gmail inline image decode failed for cid=%s: %s", cid, exc)
+            return
+        except Exception as exc:
+            logger.warning(
+                "Gmail inline image unexpected error for cid=%s (%s): %s",
+                cid, type(exc).__name__, exc,
+            )
+            return
+        cid_map[cid] = (
+            f"data:{mime_type};base64,"
+            f"{base64.b64encode(raw_bytes).decode('ascii')}"
+        )
+
+    def fetch_attachment_binary(
+        self,
+        provider_message_id: str,
+        attachment: AttachmentMetadata,
+    ) -> AttachmentBinary:
+        """Download a Gmail attachment binary on demand.
+
+        The cache key is ``(account_id, provider_message_id, part_id)``
+        (D-06b-clave). To resolve ``part_id`` -> Gmail's transient
+        ``attachmentId`` we re-fetch the message tree and locate the
+        matching part. Gmail's ``attachmentId`` is documented as transient
+        (see ``adjuntos-gmail.md`` § 6.3 and core_guide.md), so we never
+        persist it; we re-discover it on every fetch.
+        """
+        if self.service is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail fetch_attachment_binary requires authentication."
+            )
+        if not attachment.part_id:
+            raise EmailAttachmentNotFound(
+                "Gmail attachment is missing part_id; cannot resolve attachmentId."
+            )
+
+        payload = self._fetch_message_payload(provider_message_id)
+        located = _find_part_by_id(payload, attachment.part_id)
+        if located is None:
+            raise EmailAttachmentNotFound(
+                f"Gmail attachment part_id={attachment.part_id} not found in message "
+                f"{provider_message_id}."
+            )
+
+        body = located.get("body") or {}
+        data_b64url = body.get("data")
+        attachment_api_id = body.get("attachmentId")
+
+        def _fetch() -> bytes:
+            if data_b64url:
+                return base64.urlsafe_b64decode(data_b64url + "==")
+            if not attachment_api_id:
+                raise EmailAttachmentNotFound(
+                    f"Gmail part {attachment.part_id} has neither inline data nor attachmentId."
+                )
+            try:
+                response = (
+                    self.service.users()
+                    .messages()
+                    .attachments()
+                    .get(
+                        userId="me",
+                        messageId=provider_message_id,
+                        id=attachment_api_id,
+                    )
+                    .execute()
+                )
+            except HttpError as exc:
+                _raise_attachment_download_error(exc)
+            payload_data = response.get("data") or ""
+            try:
+                return base64.urlsafe_b64decode(payload_data + "==")
+            except (binascii.Error, UnicodeDecodeError) as decode_exc:
+                raise EmailAttachmentDownloadFailed(
+                    f"Gmail attachment {attachment.part_id} returned undecodable data.",
+                    {"reason": "unavailable"},
+                ) from decode_exc
+
+        try:
+            data = retry_with_backoff(
+                _fetch,
+                attempts=_FETCH_ATTACHMENT_MAX_ATTEMPTS,
+                is_retryable=_is_attachment_download_retryable,
+                retry_after_extractor=_retry_after_seconds_from_http_error,
+            )
+        except HttpError as exc:
+            # Reach this branch when retry_with_backoff propagates the
+            # final HttpError (non-retryable from the start). Translate.
+            _raise_attachment_download_error(exc)
+        except CoreError:
+            # ``_fetch`` already converted decode failures into
+            # EmailAttachmentDownloadFailed — re-raise without re-wrapping.
+            raise
+        except Exception as exc:
+            # Connection drops, OSError, URLError after retry exhaustion,
+            # or any other untyped failure must not escape as raw — D-17
+            # contract says the user gets ``provider_unavailable``.
+            raise EmailAttachmentDownloadFailed(
+                f"Gmail attachment {attachment.part_id} download failed unexpectedly "
+                f"({type(exc).__name__}).",
+                {"reason": "unavailable"},
+            ) from exc
+        return AttachmentBinary(
+            mime_type=attachment.mime_type or "application/octet-stream",
+            filename=attachment.filename,
+            data=data,
+            size=len(data),
+        )
+
+    def send_draft_with_attachments(
+        self,
+        provider_draft_id: str,
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
+        """Atomic Gmail draft send with attachments (D-07, D-18).
+
+        Builds a fresh ``multipart/mixed`` MIME with body + attachments
+        and replaces the provider draft contents in a single
+        ``drafts.send`` call (or its resumable upload variant when the
+        total payload exceeds 5 MB). Gmail does not support partial
+        attachment state on drafts, so the result list never reports
+        provider_attachment_ids — Gmail's send is atomic.
+
+        On success returns the sent ``EmailMetadata`` and an empty
+        upload result list. On a non-retryable failure raises
+        :py:class:`EmailAttachmentSendFailed` (or
+        :py:class:`EmailAttachmentBlockedByProvider` /
+        :py:class:`EmailAttachmentTooLargeForProvider` for specific
+        provider-side rejections).
+        """
+        if self.service is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail send_draft_with_attachments requires authentication."
+            )
+
+        raw_b64url, raw_bytes = self._build_draft_raw_message(
+            to_recipients, cc_recipients, bcc_recipients, subject, body, attachments,
+        )
+        strategy = pick_gmail_send_strategy(len(raw_bytes))
+
+        if strategy is GmailSendStrategy.SIMPLE:
+            response = self._send_draft_simple(provider_draft_id, raw_b64url, attachments)
+        else:
+            response = self._send_draft_resumable(
+                provider_draft_id, raw_b64url, raw_bytes, attachments,
+            )
+
+        message_id = response.get("id", "") if isinstance(response, dict) else ""
+        return self._build_sent_metadata(message_id, response, subject), []
+
+    def _send_draft_simple(
+        self,
+        provider_draft_id: str,
+        raw_b64url: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> dict[str, Any]:
+        """``drafts.send`` with the metadata body shape (<= 5 MB total MIME)."""
+        for attempt in range(1, _SEND_DRAFT_MAX_ATTEMPTS + 1):
+            try:
+                return (
+                    self.service.users()
+                    .drafts()
+                    .send(
+                        userId="me",
+                        body={
+                            "id": provider_draft_id,
+                            "message": {"raw": raw_b64url},
+                        },
+                    )
+                    .execute()
+                )
+            except HttpError as exc:
+                if attempt == _SEND_DRAFT_MAX_ATTEMPTS or not _is_send_retryable(exc):
+                    _raise_send_with_attachments_error(exc, attachments)
+                logger.warning(
+                    "Gmail drafts.send simple attempt %d/%d failed, retrying: %s",
+                    attempt, _SEND_DRAFT_MAX_ATTEMPTS, exc,
+                )
+                time.sleep(_SEND_DRAFT_RETRY_DELAY * attempt)
+            except Exception as exc:
+                raise EmailAttachmentSendFailed(
+                    f"Gmail unexpected drafts.send error ({type(exc).__name__}): {exc}",
+                    _failed_attachments_detail(attachments, "unexpected"),
+                ) from exc
+        raise EmailAttachmentSendFailed(
+            "Gmail drafts.send simple exhausted retries without a response.",
+            _failed_attachments_detail(attachments, "exhausted"),
+        )
+
+    def _send_draft_resumable(
+        self,
+        provider_draft_id: str,
+        raw_b64url: str,
+        raw_bytes: bytes,
+        attachments: list[DraftAttachmentInput],
+    ) -> dict[str, Any]:
+        """Resumable upload path for >5 MB total MIME payloads.
+
+        Initiates the session, streams the content in 4 MB chunks (each
+        a multiple of 256 KB except the last), and parses the final 201
+        response into the same shape returned by ``drafts.send``. On
+        unrecoverable failure raises :py:class:`EmailAttachmentSendFailed`.
+        """
+        if self._credentials is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail resumable send requires refreshed credentials."
+            )
+
+        # Step 1: initiate the resumable session. The body is a Draft
+        # JSON referencing the existing draft id; the binary is uploaded
+        # separately via PUT chunks.
+        init_body = {
+            "id": provider_draft_id,
+            "message": {"raw": raw_b64url},
+        }
+        try:
+            init_response = self._http_request(
+                "POST",
+                _GMAIL_RESUMABLE_UPLOAD_BASE,
+                headers={
+                    "Content-Type": "application/json; charset=UTF-8",
+                    "X-Upload-Content-Type": "message/rfc822",
+                    "X-Upload-Content-Length": str(len(raw_bytes)),
+                },
+                body=init_body,
+            )
+        except Exception as exc:
+            raise EmailAttachmentSendFailed(
+                f"Gmail resumable session init failed ({type(exc).__name__}): {exc}",
+                _failed_attachments_detail(attachments, "session_init"),
+            ) from exc
+
+        upload_uri = (init_response.get("headers", {}) or {}).get("location") or (
+            init_response.get("headers", {}) or {}
+        ).get("Location")
+        if not upload_uri:
+            raise EmailAttachmentSendFailed(
+                "Gmail resumable session init returned no Location header.",
+                _failed_attachments_detail(attachments, "session_init"),
+            )
+
+        # Step 2: PUT chunks. Single PUT when payload fits in one chunk.
+        total = len(raw_bytes)
+        offset = 0
+        while offset < total:
+            chunk_end = min(offset + _GMAIL_RESUMABLE_CHUNK_SIZE, total) - 1
+            chunk = raw_bytes[offset : chunk_end + 1]
+            headers = {
+                "Content-Type": "message/rfc822",
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {offset}-{chunk_end}/{total}",
+            }
+            try:
+                response = self._http_request(
+                    "PUT", upload_uri, headers=headers, body_bytes=chunk,
+                )
+            except Exception as exc:
+                raise EmailAttachmentSendFailed(
+                    f"Gmail resumable PUT chunk failed ({type(exc).__name__}): {exc}",
+                    _failed_attachments_detail(attachments, "chunk_put"),
+                ) from exc
+            status = response.get("status", 0)
+            if status in (200, 201):
+                return response.get("json", {}) or {}
+            if status == 308:
+                # Continue with the next chunk past the server's confirmed range.
+                range_header = (response.get("headers", {}) or {}).get("range") or ""
+                _, _, end_str = range_header.rpartition("-")
+                try:
+                    offset = int(end_str) + 1
+                except ValueError:
+                    offset = chunk_end + 1
+                continue
+            raise EmailAttachmentSendFailed(
+                f"Gmail resumable PUT returned unexpected status {status}.",
+                _failed_attachments_detail(attachments, "chunk_status"),
+            )
+
+        raise EmailAttachmentSendFailed(
+            "Gmail resumable upload completed without a 201 final response.",
+            _failed_attachments_detail(attachments, "no_final"),
+        )
+
+    def _http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
+        body_bytes: bytes | None = None,
+    ) -> dict[str, Any]:
+        """Authenticated HTTP request bypassing the discovery service.
+
+        Used for the resumable upload flow where the discovery client
+        does not directly expose the ``/upload/...`` URI. Re-uses the
+        same ``Credentials`` already refreshed by ``authenticate_silent``,
+        so no extra token logic lives here.
+        """
+        import json as _json
+
+        if self._credentials is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail _http_request requires refreshed credentials."
+            )
+        http = google_auth_httplib2.AuthorizedHttp(
+            self._credentials, http=httplib2.Http()
+        )
+        outbound_headers = dict(headers or {})
+        if body is not None and body_bytes is None:
+            payload_str = _json.dumps(body)
+            payload = payload_str.encode("utf-8")
+        else:
+            payload = body_bytes or b""
+        response, content = http.request(
+            url,
+            method=method,
+            body=payload,
+            headers=outbound_headers,
+        )
+        status = int(response.status) if response is not None else 0
+        # httplib2 lowercases header names; preserve the original-case
+        # ``Location`` lookup in callers via ``.get(...) or .get(...)``.
+        json_payload: dict[str, Any] = {}
+        if content:
+            try:
+                json_payload = _json.loads(content.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                json_payload = {}
+        return {"status": status, "headers": dict(response or {}), "json": json_payload}
+
+    def _build_sent_metadata(
+        self,
+        message_id: str,
+        response: dict[str, Any],
+        subject: str,
+    ) -> EmailMetadata:
+        """Best-effort metadata enrichment for a freshly-sent message.
+
+        Re-uses the same fallback-to-minimal-metadata pattern as
+        ``send_email`` and ``send_draft`` so all three send paths emit
+        a consistent ``EmailMetadata`` shape regardless of how the
+        upstream call returned.
+        """
+        if message_id:
+            try:
+                fetched = self.fetch_messages_metadata([message_id])
+                if fetched:
+                    result = fetched[0]
+                    if not result.subject:
+                        result.subject = subject
+                    if not result.from_email:
+                        result.from_email = self._fetch_sender_email()
+                    if not result.from_name:
+                        result.from_name = result.from_email
+                    return result
+            except Exception as exc:
+                logger.warning(
+                    "Gmail failed to fetch metadata for sent message %s (%s): %s",
+                    message_id, type(exc).__name__, exc,
+                )
+        sender_email = self._fetch_sender_email()
+        return EmailMetadata(
+            provider_message_id=message_id,
+            thread_id=response.get("threadId") or "" if isinstance(response, dict) else "",
+            from_email=sender_email,
+            from_name=sender_email,
+            subject=subject,
+            received_at=datetime.now(timezone.utc),
+            is_read=True,
+            box="SENT",
+        )
 
     @staticmethod
     def _extract_body_from_payload(payload: dict[str, Any]) -> tuple[str | None, str | None]:

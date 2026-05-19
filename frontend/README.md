@@ -56,7 +56,7 @@ src/
 |   `-- types/         # DTOs mirroring backend schemas
 |-- app/
 |   |-- layout/        # RootLayout, MailboxLayout, mailboxNavItems
-|   |-- providers/     # AuthProvider, DraftComposerGlobalProvider, draftComposer/
+|   |-- providers/     # AuthProvider, DraftComposerProvider, MailboxContextProvider, AuthLayoutProvider
 |   `-- routes/        # router.tsx, RequireAuth
 |-- components/
 |   |-- common/        # domain-agnostic primitives (Spinner, Modal, Checkbox, ConfirmPopover)
@@ -71,7 +71,7 @@ src/
 |   |-- formatters.ts  # formatDate, resolveAccount, buildAccountMap
 |   |-- providers.ts   # PROVIDER_META, getProviderMeta, isGenericLabel
 |   |-- types.ts       # EmailBox, ComposerMode
-|   `-- hooks/         # useAsync, useSelection, useCacheThenSync, useMailboxList, useCurrentUser
+|   `-- hooks/         # generic hooks (useSelection, useDownloadQueue, …); per-feature hooks live under features/<name>/hooks/
 |-- styles/
 `-- main.tsx
 ```

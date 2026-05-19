@@ -529,7 +529,7 @@ def test_create_draft_database_query_error_returns_503(
     monkeypatch.setattr(drafts_service.draft_store, "create", _raise)
     resp = test_client.post(
         f"{_MAILBOX_URL}/{mid}/accounts/{aid}/drafts",
-        json={"subject": "S", "body_html": "<p>b</p>"},
+        json={"subject": "S", "body": "b"},
     )
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "database_query_error"

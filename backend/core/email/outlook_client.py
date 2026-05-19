@@ -10,8 +10,24 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .email_client import DraftMetadata, EmailClient, EmailContent, EmailMetadata, LabelUpdate, SpamMoveResult, SyncResult
+from .email_client import (
+    AttachmentBinary,
+    AttachmentMetadata,
+    AttachmentUploadResult,
+    DraftAttachmentInput,
+    DraftMetadata,
+    EmailClient,
+    EmailContent,
+    EmailMetadata,
+    LabelUpdate,
+    SpamMoveResult,
+    SyncResult,
+)
 from .errors import (
+    EmailAttachmentDownloadFailed,
+    EmailAttachmentNotFound,
+    EmailAttachmentSendFailed,
+    EmailAttachmentTooLargeForProvider,
     EmailExternalAPIError,
     EmailMissingAppCredentialsError,
     EmailMissingRefreshTokenError,
@@ -22,8 +38,11 @@ from .errors import (
     EmailRefreshFailedError,
 )
 from .helpers import (
+    OutlookAttachmentStrategy,
+    find_referenced_cids,
     inline_cid_images,
     parse_expiry,
+    pick_outlook_attachment_strategy,
     unwrap_app_credentials,
     unwrap_user_tokens,
     wrap_account_tokens,
@@ -50,6 +69,18 @@ _DRAFTS_MAX_TOTAL = 100
 _SEND_DRAFT_MAX_ATTEMPTS = 3
 _SEND_DRAFT_RETRY_DELAY = 1.0  # seconds
 
+# All attachment-touching calls send this header per request — see
+# repository_guide.md and adjuntos-outlook.md § 6.1. Without it, Graph
+# may interpret the path id as a mutable folder-scoped id and our
+# stored ImmutableId lookups fail.
+_PREFER_IMMUTABLE_HEADERS: dict[str, str] = {"Prefer": 'IdType="ImmutableId"'}
+
+# createUploadSession / chunked PUT settings — see § 8.1 of the Outlook
+# attachments doc. 4 MB is the recommended chunk size; smaller chunks
+# multiply HTTP round trips, larger chunks waste bandwidth on retries.
+_OUTLOOK_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+_OUTLOOK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,subject,receivedDateTime,isRead,parentFolderId"
 )
@@ -67,6 +98,79 @@ _BOX_TO_FOLDER: dict[str, str] = {
     "SENT": "sentitems",
     "SPAM": "junkemail",
 }
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for the attachments flow.
+# Kept at module level so they stay testable without instantiating a
+# full ``OutlookClient`` and reusable across multiple methods (chunk
+# uploads, downloads, send orchestration).
+# ---------------------------------------------------------------------------
+
+
+def _retry_after_seconds(headers: dict[str, str] | None) -> float | None:
+    """Extract ``Retry-After`` (seconds) from a Graph response header dict.
+
+    Both 429 and (occasionally) 503 carry this header. Outlook on Graph
+    confirms it is the only way to know how long to wait —
+    ``Rate-Limit-*`` headers are absent on Graph (see
+    ``adjuntos-outlook.md`` § 5.4).
+    """
+    if not headers:
+        return None
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _extract_attachment_id_from_location(location: str) -> str | None:
+    """Pull the attachment id out of a ``createUploadSession`` final Location.
+
+    The terminal 201 response carries a header like
+    ``Location: https://outlook.office.com/api/v2.0/Users('...')/Messages('...')/Attachments('AAMk...=')``.
+    The id is the substring between ``Attachments('`` and ``')`` —
+    encoded base64-like and case-sensitive (per immutable-id guidance).
+    Returns ``None`` if the format is unexpected so the caller can raise
+    a clear error rather than silently using a malformed id.
+    """
+    if not location:
+        return None
+    marker = "Attachments('"
+    idx = location.find(marker)
+    if idx < 0:
+        return None
+    start = idx + len(marker)
+    end = location.find("')", start)
+    if end < 0:
+        return None
+    candidate = location[start:end].strip()
+    return candidate or None
+
+
+def _classify_send_failure_reason(error_text: str) -> str:
+    """Map a Graph error string to a stable ``failed_attachments.reason``.
+
+    Service-layer translation depends on this label: ``forbidden``
+    surfaces as ``provider_forbidden`` (502), ``unavailable`` /
+    ``provider_error`` surface as ``provider_unavailable`` (503),
+    ``too_large`` surfaces as ``attachment_too_large_for_provider``
+    (413). Anything we cannot classify falls back to ``provider_error``.
+    """
+    text = (error_text or "").lower()
+    if "403" in text or "forbidden" in text:
+        return "forbidden"
+    if "413" in text or "too large" in text or "ErrorAttachmentSizeShouldNotBeLessThanMinimumSize".lower() in text:
+        return "too_large"
+    if "429" in text:
+        return "throttled"
+    if "5" in text and ("503" in text or "502" in text or "504" in text or "unavailable" in text):
+        return "unavailable"
+    return "provider_error"
 
 
 class OutlookClient(EmailClient):
@@ -221,9 +325,21 @@ class OutlookClient(EmailClient):
                     f"Outlook unexpected OAuth callback error ({type(exc).__name__}): {exc}"
                 ) from exc
         finally:
-            server.shutdown()
-            server.server_close()
-            server_thread.join(timeout=2)
+            # Cleanup must never mask the primary exception. Each step is
+            # wrapped so a stuck shutdown / close / join is logged but does
+            # not replace whatever raised inside the ``try`` above.
+            try:
+                server.shutdown()
+            except Exception as cleanup_exc:
+                logger.warning("Outlook auth callback server shutdown failed: %s", cleanup_exc)
+            try:
+                server.server_close()
+            except Exception as cleanup_exc:
+                logger.warning("Outlook auth callback server close failed: %s", cleanup_exc)
+            try:
+                server_thread.join(timeout=2)
+            except Exception as cleanup_exc:
+                logger.warning("Outlook auth callback thread join failed: %s", cleanup_exc)
 
         if callback_result.get("error"):
             error = str(callback_result.get("error") or "").strip()
@@ -699,16 +815,21 @@ class OutlookClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> dict[str, Any]:
         """Build the Graph Message payload used by both create_draft
         (POST /me/messages) and update_draft (PATCH /me/messages/{id}).
         Both endpoints accept the same shape; update semantically replaces
         every listed field with the new value.
+
+        Body is sent as ``text/plain`` (D-31). The composer is a plain
+        ``<textarea>`` and Gmail is now also configured for text/plain;
+        keeping both providers symmetric simplifies the MIME assembly
+        in ``send_draft_with_attachments``.
         """
         return {
             "subject": subject or "",
-            "body": {"contentType": "HTML", "content": body_html or ""},
+            "body": {"contentType": "Text", "content": body or ""},
             "toRecipients": [{"emailAddress": {"address": r}} for r in to_recipients],
             "ccRecipients": [{"emailAddress": {"address": r}} for r in cc_recipients],
             "bccRecipients": [{"emailAddress": {"address": r}} for r in bcc_recipients],
@@ -720,7 +841,7 @@ class OutlookClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Create a draft in Outlook via POST /me/messages.
@@ -735,7 +856,7 @@ class OutlookClient(EmailClient):
             raise EmailNotAuthenticatedError("Outlook create_draft requires authentication.")
 
         payload = self._build_draft_graph_payload(
-            to_recipients, cc_recipients, bcc_recipients, subject, body_html,
+            to_recipients, cc_recipients, bcc_recipients, subject, body,
         )
 
         try:
@@ -743,7 +864,7 @@ class OutlookClient(EmailClient):
                 "POST",
                 f"{GRAPH_BASE_URL}/me/messages",
                 body=payload,
-                extra_headers={"Prefer": 'IdType="ImmutableId"'},
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
         except EmailExternalAPIError:
             raise
@@ -762,7 +883,7 @@ class OutlookClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -774,7 +895,7 @@ class OutlookClient(EmailClient):
         cc_recipients: list[str],
         bcc_recipients: list[str],
         subject: str,
-        body_html: str,
+        body: str,
     ) -> DraftMetadata:
         """
         Update an existing Outlook draft via PATCH /me/messages/{id}.
@@ -789,7 +910,7 @@ class OutlookClient(EmailClient):
             raise EmailNotAuthenticatedError("Outlook update_draft requires authentication.")
 
         payload = self._build_draft_graph_payload(
-            to_recipients, cc_recipients, bcc_recipients, subject, body_html,
+            to_recipients, cc_recipients, bcc_recipients, subject, body,
         )
 
         try:
@@ -797,7 +918,7 @@ class OutlookClient(EmailClient):
                 "PATCH",
                 f"{GRAPH_BASE_URL}/me/messages/{urllib.parse.quote(provider_draft_id, safe='')}",
                 body=payload,
-                extra_headers={"Prefer": 'IdType="ImmutableId"'},
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
         except EmailExternalAPIError:
             raise
@@ -816,7 +937,7 @@ class OutlookClient(EmailClient):
             cc_recipients=list(cc_recipients),
             bcc_recipients=list(bcc_recipients),
             subject=subject,
-            body_html=body_html,
+            body=body,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -836,7 +957,7 @@ class OutlookClient(EmailClient):
             self._graph_request(
                 "DELETE",
                 f"{GRAPH_BASE_URL}/me/messages/{urllib.parse.quote(provider_draft_id, safe='')}",
-                extra_headers={"Prefer": 'IdType="ImmutableId"'},
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
         except EmailExternalAPIError:
             raise
@@ -865,7 +986,7 @@ class OutlookClient(EmailClient):
             try:
                 self._graph_request(
                     "POST", url,
-                    extra_headers={"Prefer": 'IdType="ImmutableId"'},
+                    extra_headers=_PREFER_IMMUTABLE_HEADERS,
                 )
                 break
             except EmailExternalAPIError:
@@ -968,7 +1089,7 @@ class OutlookClient(EmailClient):
             try:
                 return self._graph_request(
                     "GET", url,
-                    extra_headers={"Prefer": 'IdType="ImmutableId"'},
+                    extra_headers=_PREFER_IMMUTABLE_HEADERS,
                 )
             except EmailExternalAPIError as exc:
                 last_exc = exc
@@ -993,12 +1114,17 @@ class OutlookClient(EmailClient):
         """Convert a Graph Message JSON into DraftMetadata.
 
         Extracts address fields from the ``emailAddress.address`` sub-keys
-        and parses createdDateTime / lastModifiedDateTime ISO strings.
+        and parses ``createdDateTime`` / ``lastModifiedDateTime`` via the
+        shared :py:meth:`_parse_graph_datetime` helper. The body is read
+        from ``body.content`` regardless of ``contentType`` — legacy
+        drafts created before D-31 might still come back as ``HTML`` and
+        we surface them as-is so the user can edit them; new drafts
+        carry ``Text`` and the content is plain (D-31).
         """
         provider_draft_id = str(msg.get("id") or "")
         subject = msg.get("subject") or ""
         body_section = msg.get("body") or {}
-        body_html = body_section.get("content") or ""
+        body_text = body_section.get("content") or ""
 
         def _addrs(key: str) -> list[str]:
             out: list[str] = []
@@ -1008,24 +1134,15 @@ class OutlookClient(EmailClient):
                     out.append(str(address))
             return out
 
-        def _parse_dt(value: Any) -> datetime:
-            if isinstance(value, str) and value:
-                try:
-                    raw = value[:-1] + "+00:00" if value.endswith("Z") else value
-                    return datetime.fromisoformat(raw)
-                except ValueError:
-                    pass
-            return datetime.now(timezone.utc)
-
         return DraftMetadata(
             provider_draft_id=provider_draft_id,
             to_recipients=_addrs("toRecipients"),
             cc_recipients=_addrs("ccRecipients"),
             bcc_recipients=_addrs("bccRecipients"),
             subject=subject,
-            body_html=body_html,
-            created_at=_parse_dt(msg.get("createdDateTime")),
-            updated_at=_parse_dt(msg.get("lastModifiedDateTime")),
+            body=body_text,
+            created_at=self._parse_graph_datetime(msg.get("createdDateTime")),
+            updated_at=self._parse_graph_datetime(msg.get("lastModifiedDateTime")),
         )
 
     def delete_messages(self, message_ids: list[str]) -> list[str]:
@@ -1104,8 +1221,14 @@ class OutlookClient(EmailClient):
             try:
                 self._graph_request("PATCH", f"{GRAPH_BASE_URL}/me/messages/{urllib.parse.quote(msg_id, safe='')}", body={"isRead": is_read})
                 updated.append(msg_id)
-            except EmailExternalAPIError:
-                pass  # 404 or other → skip silently (message may not exist)
+            except EmailExternalAPIError as exc:
+                # Best-effort: a single bad id (deleted server-side, etc.)
+                # must not abort the whole batch. Log so silent failures are
+                # observable, mirroring the behaviour of ``move_to_trash`` /
+                # ``restore_from_trash``.
+                logger.warning(
+                    "Outlook update_read_status skipped message %s: %s", msg_id, exc,
+                )
         return updated
 
     # ------------------------------------------------------------------
@@ -1141,8 +1264,10 @@ class OutlookClient(EmailClient):
                 )
                 new_id = response.get("id", msg_id)
                 results.append(SpamMoveResult(old_id=msg_id, new_id=new_id))
-            except EmailExternalAPIError:
-                pass  # 404 or other → skip silently
+            except EmailExternalAPIError as exc:
+                logger.warning(
+                    "Outlook spam-move failed for message %s: %s", msg_id, exc
+                )
         return results
 
     def verify_message_existence(self, message_ids: list[str]) -> list[str]:
@@ -1156,12 +1281,21 @@ class OutlookClient(EmailClient):
             try:
                 self._graph_request("GET", url)
                 existing.append(msg_id)
-            except EmailExternalAPIError:
-                pass  # 404 or other error = not found
+            except EmailExternalAPIError as exc:
+                logger.warning(
+                    "Outlook verify_message_existence failed for message %s: %s",
+                    msg_id, exc,
+                )
         return existing
 
     def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single Outlook message."""
+        """Fetch the full body content for a single Outlook message.
+
+        Inlines referenced ``cid:…`` images as ``data:`` URLs (D-13
+        strict: only CIDs actually referenced by the HTML body are
+        inlined; the rest surface via :py:meth:`list_message_attachments`
+        as downloadable attachments).
+        """
         if self._access_token is None:
             raise EmailNotAuthenticatedError("Outlook fetch_email_content requires authentication.")
         try:
@@ -1169,6 +1303,7 @@ class OutlookClient(EmailClient):
             response = self._graph_request(
                 "GET",
                 f"{GRAPH_BASE_URL}/me/messages/{escaped_id}?$select=body,hasAttachments",
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
             body = response.get("body", {})
             content_type = body.get("contentType", "").lower()
@@ -1176,7 +1311,7 @@ class OutlookClient(EmailClient):
             if content_type != "html":
                 return EmailContent(html_body=None, text_body=content)
             if content and response.get("hasAttachments"):
-                cid_map = self._fetch_inline_image_cids(escaped_id)
+                cid_map, _ = self._classify_attachments(escaped_id, content)
                 if cid_map:
                     content = inline_cid_images(content, cid_map)
             return EmailContent(html_body=content, text_body=None)
@@ -1187,41 +1322,477 @@ class OutlookClient(EmailClient):
                 f"Outlook unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
             ) from exc
 
-    def _fetch_inline_image_cids(self, escaped_message_id: str) -> dict[str, str]:
-        """Return a ``Content-ID → data URL`` map for inline image attachments.
+    def list_message_attachments(
+        self,
+        provider_message_id: str,
+    ) -> tuple[list[AttachmentMetadata], dict[str, str]]:
+        """List downloadable attachments + inline cid_map for an Outlook message.
 
-        Graph does not resolve ``cid:`` automatically. Inline images come as
-        separate attachments flagged ``isInline=true`` with a ``contentId``
-        populated and ``contentBytes`` already in standard base64. Failures
-        soft-fallback to an empty map / partial map — a broken inline image
-        is better than losing the whole email.
+        Single ``GET /me/messages/{id}`` (with body) plus ``GET .../attachments``
+        — the body call is needed only to compute referenced CIDs (D-13).
+        We could in theory share the call with ``fetch_email_content`` but
+        in the cache-aside flow the service invokes both; the duplication
+        is bounded (two cheap GETs) and the call sites stay simple.
         """
-        cid_map: dict[str, str] = {}
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook list_message_attachments requires authentication."
+            )
+        escaped_id = urllib.parse.quote(provider_message_id, safe="")
+        try:
+            body_response = self._graph_request(
+                "GET",
+                f"{GRAPH_BASE_URL}/me/messages/{escaped_id}?$select=body",
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+        except EmailExternalAPIError:
+            raise
+        body_section = body_response.get("body") or {}
+        html_body = (
+            body_section.get("content")
+            if (body_section.get("contentType") or "").lower() == "html"
+            else None
+        )
+        cid_map, downloadable = self._classify_attachments(
+            escaped_id, html_body, provider_message_id=provider_message_id,
+        )
+        return downloadable, cid_map
+
+    def _classify_attachments(
+        self,
+        escaped_message_id: str,
+        html_body: str | None,
+        *,
+        provider_message_id: str | None = None,
+    ) -> tuple[dict[str, str], list[AttachmentMetadata]]:
+        """Walk Outlook's attachment list applying the D-13 strict rule.
+
+        Returns ``(cid_map, downloadable)`` — the same shape as Gmail's
+        ``_classify_attachments`` so the service code is symmetrical:
+        - ``cid_map`` holds inline images whose ``contentId`` IS
+          referenced by ``html_body``.
+        - ``downloadable`` lists every other attachment the user should
+          see (``isInline=false`` or inline-marked-but-unreferenced).
+
+        The Outlook ``attachment.id`` is used as ``provider_attachment_id``
+        because the call sends ``Prefer: IdType="ImmutableId"`` per
+        request (the cache key per D-06b-clave is stable while the
+        message stays in the same mailbox).
+        """
         try:
             response = self._graph_request(
                 "GET",
                 f"{GRAPH_BASE_URL}/me/messages/{escaped_message_id}/attachments"
-                "?$select=contentType,contentBytes,contentId,isInline",
+                "?$select=id,name,contentType,contentBytes,size,contentId,isInline",
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
         except EmailExternalAPIError as exc:
-            logger.warning("Outlook inline attachments fetch failed: %s", exc)
-            return cid_map
+            # Intentional best-effort: an attachments listing failure must
+            # not abort the whole content fetch. Returning empty lists
+            # produces a body with no inline images and no attachments
+            # listed — the user sees the message text, and a retry of the
+            # content endpoint will pick the lists up once Graph recovers.
+            logger.warning("Outlook attachments fetch failed: %s", exc)
+            return {}, []
         except Exception as exc:
+            # Same best-effort path for any unexpected failure (parse error,
+            # Graph schema drift, etc.). Logged with the type so silent
+            # regressions remain observable.
             logger.warning(
-                "Outlook inline attachments unexpected error (%s): %s",
+                "Outlook attachments unexpected error (%s): %s",
                 type(exc).__name__, exc,
             )
-            return cid_map
+            return {}, []
+
+        referenced_cids = find_referenced_cids(html_body)
+        cid_map: dict[str, str] = {}
+        downloadable: list[AttachmentMetadata] = []
+        position_counter = 0
+
         for attachment in response.get("value") or []:
-            if not attachment.get("isInline"):
+            odata_type = (attachment.get("@odata.type") or "").lower()
+            if odata_type and "fileattachment" not in odata_type:
+                # Item / reference attachments are surfaced as
+                # downloadables for completeness; binary fetch for
+                # referenceAttachment is out-of-scope MVP (returns 405
+                # at the provider). The user sees them in the list with
+                # the provider's declared mime/size.
+                pass
+            cid_raw = (attachment.get("contentId") or "").strip().strip("<>").strip() or None
+            content_type = (attachment.get("contentType") or "").lower() or "application/octet-stream"
+            content_bytes_b64 = attachment.get("contentBytes")
+            is_inline = bool(attachment.get("isInline"))
+            attachment_id = str(attachment.get("id") or "")
+            size = int(attachment.get("size") or 0)
+            name = attachment.get("name") or "attachment"
+
+            if (
+                is_inline
+                and cid_raw
+                and cid_raw in referenced_cids
+                and content_bytes_b64
+                and content_type.startswith("image/")
+            ):
+                cid_map[cid_raw] = f"data:{content_type};base64,{content_bytes_b64}"
                 continue
-            cid = (attachment.get("contentId") or "").strip().strip("<>").strip()
-            content_type = (attachment.get("contentType") or "").lower()
-            content_bytes = attachment.get("contentBytes")
-            if not cid or not content_bytes or not content_type.startswith("image/"):
+
+            downloadable.append(
+                AttachmentMetadata(
+                    provider_message_id=provider_message_id or "",
+                    part_id=None,
+                    provider_attachment_id=attachment_id or None,
+                    filename=str(name),
+                    mime_type=content_type,
+                    size=size,
+                    content_id=cid_raw,
+                    is_inline=is_inline,
+                    position=position_counter,
+                )
+            )
+            position_counter += 1
+
+        return cid_map, downloadable
+
+    def fetch_attachment_binary(
+        self,
+        provider_message_id: str,
+        attachment: AttachmentMetadata,
+    ) -> AttachmentBinary:
+        """Download a single Outlook attachment binary on demand.
+
+        Uses ``GET /me/messages/{id}/attachments/{att}/$value`` to skip
+        the base64 round-trip (recommended in
+        ``adjuntos-outlook.md`` § 4.5). Retries transient errors up to 3
+        attempts with 1s/2s/4s backoff, honouring ``Retry-After`` when
+        Graph emits it. Maps 404/410 to :py:class:`EmailAttachmentNotFound`
+        and 403 to :py:class:`EmailAttachmentDownloadFailed` with reason
+        ``forbidden`` (D-17).
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook fetch_attachment_binary requires authentication."
+            )
+        if not attachment.provider_attachment_id:
+            raise EmailAttachmentNotFound(
+                "Outlook attachment is missing provider_attachment_id; cannot resolve $value."
+            )
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages/"
+            f"{urllib.parse.quote(provider_message_id, safe='')}/attachments/"
+            f"{urllib.parse.quote(attachment.provider_attachment_id, safe='')}/$value"
+        )
+        for attempt, delay in enumerate(_OUTLOOK_RETRY_DELAYS_SECONDS, start=1):
+            status, headers, payload = self._graph_request_raw(
+                "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+            if 200 <= status < 300:
+                return AttachmentBinary(
+                    mime_type=attachment.mime_type or "application/octet-stream",
+                    filename=attachment.filename,
+                    data=payload or b"",
+                    size=len(payload or b""),
+                )
+            if status in (404, 410):
+                raise EmailAttachmentNotFound(
+                    f"Outlook attachment {attachment.provider_attachment_id} returned {status}.",
+                    {"reason": "missing"},
+                )
+            if status == 403:
+                raise EmailAttachmentDownloadFailed(
+                    f"Outlook attachment fetch forbidden (HTTP {status}).",
+                    {"reason": "forbidden"},
+                )
+            if status not in (429, 500, 502, 503, 504) or attempt == len(_OUTLOOK_RETRY_DELAYS_SECONDS):
+                raise EmailAttachmentDownloadFailed(
+                    f"Outlook attachment fetch failed (HTTP {status}).",
+                    {"reason": "unavailable"},
+                )
+            retry_after = _retry_after_seconds(headers)
+            time.sleep(retry_after if retry_after is not None else delay)
+        raise EmailAttachmentDownloadFailed(
+            "Outlook attachment fetch exhausted retries without a final response.",
+            {"reason": "unavailable"},
+        )
+
+    def send_draft_with_attachments(
+        self,
+        provider_draft_id: str,
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+        attachments: list[DraftAttachmentInput],
+    ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
+        """Push attachments to the provider draft and send (D-07, D-18, D-27).
+
+        For every attachment without ``provider_attachment_id`` (not yet
+        uploaded), pick a strategy via
+        :py:func:`pick_outlook_attachment_strategy` and upload it. Each
+        successful upload is added to the result list so the caller can
+        persist ``provider_attachment_id`` immediately — that lets a
+        retry skip already-uploaded parts (D-27).
+
+        After every attachment is in place, ``POST /messages/{id}/send``
+        finalises the send. Failure mid-flight raises
+        :py:class:`EmailAttachmentSendFailed` with the failed
+        attachments listed; the partial upload results returned BEFORE
+        the failure remain valid for resume.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook send_draft_with_attachments requires authentication."
+            )
+
+        upload_results: list[AttachmentUploadResult] = []
+        failed: list[dict[str, Any]] = []
+        for att in attachments:
+            if att.provider_attachment_id:
+                # Already at the provider from a prior partial-success run.
+                upload_results.append(
+                    AttachmentUploadResult(
+                        draft_attachment_id=att.draft_attachment_id,
+                        provider_attachment_id=att.provider_attachment_id,
+                    )
+                )
                 continue
-            cid_map[cid] = f"data:{content_type};base64,{content_bytes}"
-        return cid_map
+            strategy = pick_outlook_attachment_strategy(att.size or len(att.data))
+            try:
+                if strategy is OutlookAttachmentStrategy.SIMPLE:
+                    new_id = self._upload_attachment_simple(provider_draft_id, att)
+                else:
+                    new_id = self._upload_attachment_via_session(provider_draft_id, att)
+            except EmailExternalAPIError as exc:
+                failed.append({
+                    "draft_attachment_id": att.draft_attachment_id,
+                    "filename": att.filename,
+                    "reason": _classify_send_failure_reason(str(exc)),
+                })
+                continue
+            upload_results.append(
+                AttachmentUploadResult(
+                    draft_attachment_id=att.draft_attachment_id,
+                    provider_attachment_id=new_id,
+                )
+            )
+
+        if failed:
+            raise EmailAttachmentSendFailed(
+                "Outlook failed to upload one or more attachments before send.",
+                {"failed_attachments": failed, "succeeded": [
+                    {"draft_attachment_id": r.draft_attachment_id,
+                     "provider_attachment_id": r.provider_attachment_id}
+                    for r in upload_results
+                ]},
+            )
+
+        # All attachments are in place — fire the send.
+        send_url = (
+            f"{GRAPH_BASE_URL}/me/messages/"
+            f"{urllib.parse.quote(provider_draft_id, safe='')}/send"
+        )
+        last_exc: EmailExternalAPIError | None = None
+        for attempt in range(1, _SEND_DRAFT_MAX_ATTEMPTS + 1):
+            try:
+                self._graph_request(
+                    "POST", send_url,
+                    extra_headers=_PREFER_IMMUTABLE_HEADERS,
+                )
+                last_exc = None
+                break
+            except EmailExternalAPIError as exc:
+                last_exc = exc
+                if attempt == _SEND_DRAFT_MAX_ATTEMPTS:
+                    break
+                logger.warning(
+                    "Outlook send_draft_with_attachments attempt %d/%d failed, retrying.",
+                    attempt, _SEND_DRAFT_MAX_ATTEMPTS,
+                )
+                time.sleep(_SEND_DRAFT_RETRY_DELAY * attempt)
+        if last_exc is not None:
+            raise EmailAttachmentSendFailed(
+                f"Outlook send after attachments failed: {last_exc}",
+                {"failed_attachments": [], "succeeded": [
+                    {"draft_attachment_id": r.draft_attachment_id,
+                     "provider_attachment_id": r.provider_attachment_id}
+                    for r in upload_results
+                ]},
+            ) from last_exc
+
+        return self._build_outlook_sent_metadata(provider_draft_id), upload_results
+
+    def _upload_attachment_simple(
+        self, provider_draft_id: str, attachment: DraftAttachmentInput,
+    ) -> str:
+        """Upload a small attachment via ``POST /messages/{id}/attachments``.
+
+        Outlook's ``contentBytes`` is base64 standard (RFC 4648 with
+        ``+``/``/``), NOT base64url like Gmail. Mixing them produces
+        silently-corrupt binaries — see ``adjuntos-outlook.md`` § 14.
+        """
+        body_payload = {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": attachment.filename,
+            "contentType": attachment.mime_type or "application/octet-stream",
+            "contentBytes": base64.b64encode(attachment.data).decode("ascii"),
+            "isInline": attachment.is_inline,
+        }
+        if attachment.content_id:
+            body_payload["contentId"] = attachment.content_id
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages/"
+            f"{urllib.parse.quote(provider_draft_id, safe='')}/attachments"
+        )
+        response = self._graph_request(
+            "POST", url, body=body_payload, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+        )
+        new_id = str(response.get("id") or "")
+        if not new_id:
+            raise EmailExternalAPIError(
+                "Outlook POST /attachments returned no id."
+            )
+        return new_id
+
+    def _upload_attachment_via_session(
+        self, provider_draft_id: str, attachment: DraftAttachmentInput,
+    ) -> str:
+        """Upload a >=3 MB attachment via ``createUploadSession`` + chunked PUTs.
+
+        - The session URL points to ``outlook.office.com`` and is
+          pre-authenticated; chunk PUTs MUST omit ``Authorization``.
+        - Chunks are 4 MB max (recommendation; not a hard limit).
+        - The terminal ``201`` response carries the ``Location`` header
+          whose last URL segment is ``Attachments('<id>')``; that ``id``
+          is what callers use against Graph endpoints.
+        """
+        size = attachment.size or len(attachment.data)
+        init_body = {
+            "AttachmentItem": {
+                "attachmentType": "file",
+                "name": attachment.filename,
+                "size": size,
+                "contentType": attachment.mime_type or "application/octet-stream",
+                "isInline": attachment.is_inline,
+            }
+        }
+        if attachment.content_id:
+            init_body["AttachmentItem"]["contentId"] = attachment.content_id
+        session_url = (
+            f"{GRAPH_BASE_URL}/me/messages/"
+            f"{urllib.parse.quote(provider_draft_id, safe='')}/attachments/createUploadSession"
+        )
+        session = self._graph_request(
+            "POST", session_url, body=init_body,
+            extra_headers=_PREFER_IMMUTABLE_HEADERS,
+        )
+        upload_url = str(session.get("uploadUrl") or "")
+        if not upload_url:
+            raise EmailExternalAPIError(
+                "Outlook createUploadSession returned no uploadUrl."
+            )
+
+        offset = 0
+        location: str | None = None
+        while offset < size:
+            end = min(offset + _OUTLOOK_UPLOAD_CHUNK_SIZE, size) - 1
+            chunk = attachment.data[offset : end + 1]
+            for attempt, delay in enumerate(_OUTLOOK_RETRY_DELAYS_SECONDS, start=1):
+                status, headers, _ = self._upload_chunk_put(
+                    upload_url, chunk, offset, end, size,
+                )
+                if status in (200, 201):
+                    if status == 201:
+                        location = (headers.get("Location") or headers.get("location"))
+                    offset = end + 1
+                    break
+                if status not in (429, 500, 502, 503, 504) or attempt == len(_OUTLOOK_RETRY_DELAYS_SECONDS):
+                    raise EmailExternalAPIError(
+                        f"Outlook upload session PUT failed (HTTP {status})."
+                    )
+                retry_after = _retry_after_seconds(headers)
+                time.sleep(retry_after if retry_after is not None else delay)
+
+        if not location:
+            raise EmailExternalAPIError(
+                "Outlook upload session ended without a final Location header."
+            )
+        new_id = _extract_attachment_id_from_location(location)
+        if not new_id:
+            raise EmailExternalAPIError(
+                f"Outlook upload session Location did not contain an attachment id: {location}"
+            )
+        return new_id
+
+    def _upload_chunk_put(
+        self,
+        upload_url: str,
+        chunk: bytes,
+        start: int,
+        end: int,
+        total: int,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Single PUT chunk for createUploadSession.
+
+        ``upload_url`` carries an embedded auth token in its query
+        string; we MUST NOT add ``Authorization`` here. Returns
+        ``(status_code, response_headers, body_bytes)``.
+        """
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(chunk)),
+            "Content-Range": f"bytes {start}-{end}/{total}",
+        }
+        req = urllib.request.Request(
+            upload_url, data=chunk, headers=headers, method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                return (
+                    int(response.status),
+                    dict(response.headers),
+                    response.read(),
+                )
+        except urllib.error.HTTPError as exc:
+            return (int(exc.code), dict(exc.headers or {}), exc.read())
+        except urllib.error.URLError as exc:
+            raise EmailExternalAPIError(
+                f"Outlook upload chunk PUT URL error: {exc.reason}"
+            ) from exc
+
+    def _build_outlook_sent_metadata(self, provider_draft_id: str) -> EmailMetadata:
+        """Best-effort metadata for a freshly-sent message (Outlook).
+
+        With ImmutableId, the message id is preserved across the send
+        transition, so we can reuse ``fetch_messages_metadata`` against
+        the same id. Mirrors the existing pattern in ``send_draft``.
+        """
+        try:
+            fetched = self.fetch_messages_metadata([provider_draft_id])
+            if fetched:
+                result = fetched[0]
+                if not result.from_email or not result.from_name:
+                    profile_email, profile_name = self._fetch_sender_profile()
+                    if not result.from_email:
+                        result.from_email = profile_email
+                    if not result.from_name:
+                        result.from_name = profile_name or profile_email
+                return result
+        except Exception as exc:
+            logger.warning(
+                "Outlook failed to fetch metadata for sent draft %s (%s): %s",
+                provider_draft_id, type(exc).__name__, exc,
+            )
+        profile_email, profile_name = self._fetch_sender_profile()
+        return EmailMetadata(
+            provider_message_id=provider_draft_id,
+            thread_id="",
+            from_email=profile_email,
+            from_name=profile_name or profile_email,
+            subject="",
+            received_at=datetime.now(timezone.utc),
+            is_read=True,
+            box="SENT",
+        )
 
     def get_account_label(self) -> str:
         """
@@ -1393,7 +1964,7 @@ class OutlookClient(EmailClient):
         *,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Make an authenticated request to Microsoft Graph API."""
+        """Make an authenticated JSON request to Microsoft Graph API."""
         headers: dict[str, str] = {
             "Authorization": f"Bearer {self._access_token}",
         }
@@ -1429,4 +2000,44 @@ class OutlookClient(EmailClient):
             raise EmailExternalAPIError(
                 f"Outlook failed Graph API request ({type(exc).__name__}): {exc}"
             ) from exc
+
+    def _graph_request_raw(
+        self,
+        method: str,
+        url: str,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Authenticated Graph request returning raw status + headers + bytes.
+
+        Used by ``fetch_attachment_binary`` to read ``/$value`` (binary
+        body, not JSON). Errors do not raise from this method — the
+        caller drives retry / classification per status.
+        """
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {self._access_token}",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        req = urllib.request.Request(url, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                return (
+                    int(response.status),
+                    dict(response.headers),
+                    response.read(),
+                )
+        except urllib.error.HTTPError as exc:
+            return (int(exc.code), dict(exc.headers or {}), exc.read())
+        except urllib.error.URLError as exc:
+            # Convert connection-level failures (DNS, timeout, refused) to a
+            # synthetic 503 so the caller's retry loop treats them the same
+            # as a transient provider 5xx (D-16). Without this, the retry
+            # loop in ``fetch_attachment_binary`` only matches by status
+            # code and a network failure would skip retries entirely.
+            logger.warning(
+                "Outlook Graph raw request network error (treated as 503): %s",
+                exc.reason,
+            )
+            return (503, {}, b"")
 

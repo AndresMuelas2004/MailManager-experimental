@@ -485,7 +485,7 @@ def test_create_draft_on_foreign_mailbox_forbidden(test_client, isolated_db):
         json={
             "to_recipients": ["a@b.com"],
             "subject": "x",
-            "body_html": "x",
+            "body": "x",
         },
     )
     assert resp.status_code == 403

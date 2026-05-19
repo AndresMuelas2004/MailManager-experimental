@@ -1,0 +1,484 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { listAccounts } from '../../../api/endpoints/accounts';
+import type {
+  AccountOut,
+  DraftOut,
+  FailedAttachmentDetail,
+} from '../../../api/types/dto';
+import type { UiError } from '../../../api/client/errors';
+import type { ComposerMode } from '../../../lib/types';
+import useComposerForm from './useComposerForm';
+import useComposerAttachments, {
+  type AttachmentChip,
+  type AttachmentTarget,
+} from './useComposerAttachments';
+import useDraftPersistence from './useDraftPersistence';
+
+type OpenNewDraftArgs = {
+  accountId?: string;
+};
+
+type UseDraftComposerReturn = {
+  open: boolean;
+  mode: ComposerMode | null;
+  accounts: AccountOut[];
+  accountId: string;
+  setAccountId: (id: string) => void;
+  to: string;
+  setTo: (v: string) => void;
+  cc: string;
+  setCc: (v: string) => void;
+  bcc: string;
+  setBcc: (v: string) => void;
+  subject: string;
+  setSubject: (v: string) => void;
+  body: string;
+  setBody: (v: string) => void;
+  sending: boolean;
+  saving: boolean;
+  error: UiError | null;
+  canSendEmail: boolean;
+  canSaveDraft: boolean;
+  canSendDraft: boolean;
+  openForNewEmail: () => void;
+  openForNewDraft: (args?: OpenNewDraftArgs) => void;
+  openForEditDraft: (draft: DraftOut) => void;
+  closeWithX: () => void;
+  confirmCloseSave: () => Promise<void>;
+  confirmCloseDiscard: () => Promise<void>;
+  cancelClose: () => void;
+  handleSendEmail: () => Promise<void>;
+  handleSaveDraft: () => Promise<void>;
+  handleSendDraft: () => Promise<void>;
+  setRefreshCallback: (fn: (() => void | Promise<void>) | null) => void;
+  // Attachments
+  attachmentsEnabled: boolean;
+  accountSelectorLocked: boolean;
+  attachmentChips: AttachmentChip[];
+  attachmentTotalSize: number;
+  addAttachmentFiles: (files: File[]) => void;
+  removeAttachmentChip: (chipId: string) => void;
+  // Close-confirmation dialog (D-28)
+  closeDialogOpen: boolean;
+  // Send-failed dialog (D-27)
+  sendFailedOpen: boolean;
+  failedAttachments: FailedAttachmentDetail[];
+  retrySend: () => Promise<void>;
+  removeFailedAndRetrySend: () => Promise<void>;
+  closeSendFailedDialog: () => void;
+};
+
+export default function useDraftComposer(mailboxId: string | null): UseDraftComposerReturn {
+  const [mode, setMode] = useState<ComposerMode | null>(null);
+  const [accounts, setAccounts] = useState<AccountOut[]>([]);
+  const [providerDraftId, setProviderDraftIdState] = useState<string | null>(null);
+  const [refreshCallback, setRefreshCallbackState] = useState<(() => void | Promise<void>) | null>(
+    null,
+  );
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [sendFailedOpen, setSendFailedOpen] = useState(false);
+  const [failedAttachments, setFailedAttachments] = useState<FailedAttachmentDetail[]>([]);
+  const form = useComposerForm();
+  const attachments = useComposerAttachments();
+  const persistence = useDraftPersistence();
+  const creatingDraftRef = useRef<Promise<string> | null>(null);
+  const pendingFilesRef = useRef<File[]>([]);
+
+  const buildAttachmentTarget = useCallback((): AttachmentTarget | null => {
+    if (!mailboxId || !form.accountId || !providerDraftId) return null;
+    return { mailboxId, accountId: form.accountId, providerDraftId };
+  }, [mailboxId, form.accountId, providerDraftId]);
+
+  const setRefreshCallback = useCallback((fn: (() => void | Promise<void>) | null) => {
+    setRefreshCallbackState(() => fn);
+  }, []);
+
+  const triggerRefresh = useCallback(async () => {
+    if (refreshCallback) {
+      try {
+        await refreshCallback();
+      } catch {
+        // refresh failures are non-fatal for the composer flow
+      }
+    }
+  }, [refreshCallback]);
+
+  const resetAll = useCallback(() => {
+    form.reset();
+    attachments.reset();
+    persistence.setError(null);
+    persistence.setProviderDraftId(null);
+    setProviderDraftIdState(null);
+    setCloseDialogOpen(false);
+    setSendFailedOpen(false);
+    setFailedAttachments([]);
+    creatingDraftRef.current = null;
+    pendingFilesRef.current = [];
+  }, [form, attachments, persistence]);
+
+  const loadAccountsIfNeeded = useCallback(async () => {
+    if (!mailboxId) return accounts;
+    if (accounts.length > 0) return accounts;
+    try {
+      const accs = await listAccounts(mailboxId);
+      setAccounts(accs);
+      return accs;
+    } catch {
+      return [] as AccountOut[];
+    }
+  }, [accounts, mailboxId]);
+
+  const openForNewEmail = useCallback(() => {
+    if (!mailboxId) return;
+    resetAll();
+    setMode('new_email');
+    loadAccountsIfNeeded().then((accs) => {
+      if (accs.length > 0 && !form.accountId) {
+        form.setAccountId(accs[0].account_id);
+      }
+    });
+  }, [form, loadAccountsIfNeeded, mailboxId, resetAll]);
+
+  const openForNewDraft = useCallback(
+    (args?: OpenNewDraftArgs) => {
+      if (!mailboxId) return;
+      resetAll();
+      setMode('new_draft');
+      const preset = args?.accountId;
+      loadAccountsIfNeeded().then((accs) => {
+        if (preset && accs.some((a) => a.account_id === preset)) {
+          form.setAccountId(preset);
+        } else if (accs.length > 0) {
+          form.setAccountId(accs[0].account_id);
+        }
+      });
+    },
+    [form, loadAccountsIfNeeded, mailboxId, resetAll],
+  );
+
+  const openForEditDraft = useCallback(
+    (draft: DraftOut) => {
+      if (!mailboxId) return;
+      resetAll();
+      setMode('edit_draft');
+      form.seedFromDraft(draft);
+      attachments.seedFromDraft(draft.attachments);
+      setProviderDraftIdState(draft.provider_draft_id);
+      persistence.setProviderDraftId(draft.provider_draft_id);
+      loadAccountsIfNeeded();
+    },
+    [attachments, form, loadAccountsIfNeeded, mailboxId, persistence, resetAll],
+  );
+
+  const close = useCallback(() => {
+    setMode(null);
+    resetAll();
+  }, [resetAll]);
+
+  const handleSendEmail = useCallback(async () => {
+    if (!mailboxId || !form.accountId) return;
+    const recipients = form.parseRecipients(form.to);
+    if (recipients.length === 0) return;
+    let ok: boolean;
+    if (providerDraftId !== null) {
+      ok = await persistence.sendDraftNow(
+        mailboxId,
+        form.accountId,
+        providerDraftId,
+        form.buildDraftPayload(),
+      );
+    } else {
+      ok = await persistence.sendEmailNow(
+        mailboxId,
+        form.accountId,
+        recipients,
+        form.subject,
+        form.body,
+      );
+    }
+    if (ok) {
+      close();
+      await triggerRefresh();
+    }
+  }, [close, form, mailboxId, persistence, providerDraftId, triggerRefresh]);
+
+  const handleSaveDraft = useCallback(async () => {
+    if (!mailboxId || !form.accountId) return;
+    const ok = await persistence.saveDraftNow(mailboxId, form.accountId, form.buildDraftPayload());
+    if (ok) {
+      close();
+      await triggerRefresh();
+    }
+  }, [close, form, mailboxId, persistence, triggerRefresh]);
+
+  const sendDraftCore = useCallback(async (): Promise<boolean> => {
+    if (!mailboxId || !form.accountId || !providerDraftId) return false;
+    const payloadIfDirty = form.isDirty() ? form.buildDraftPayload() : null;
+    try {
+      const ok = await persistence.sendDraftNow(
+        mailboxId,
+        form.accountId,
+        providerDraftId,
+        payloadIfDirty,
+      );
+      return ok;
+    } catch (error) {
+      // The persistence helper currently swallows errors and reports
+      // ``ok === false`` plus ``persistence.error``. If a future
+      // refactor surfaces ``attachment_send_failed`` as a thrown
+      // ApiError with ``detail.failed_attachments``, this catch block
+      // routes it into the dialog flow (D-27).
+      const apiError = error as { detail?: { failed_attachments?: FailedAttachmentDetail[] } };
+      const list = apiError?.detail?.failed_attachments;
+      if (Array.isArray(list)) {
+        setFailedAttachments(list);
+        setSendFailedOpen(true);
+      }
+      return false;
+    }
+  }, [form, mailboxId, persistence, providerDraftId]);
+
+  const handleSendDraft = useCallback(async () => {
+    const ok = await sendDraftCore();
+    if (ok) {
+      close();
+      await triggerRefresh();
+    } else if (
+      persistence.error &&
+      persistence.error.code === 'attachment_send_failed' &&
+      !sendFailedOpen
+    ) {
+      // Persistence layer surfaced the failure but did not open the
+      // dialog (no detail propagation through the legacy path); show
+      // a simple error in the composer body. The dialog requires a
+      // typed payload that the legacy ``sendDraftNow`` does not yet
+      // expose; tracked as future work (D-27 polish).
+      setFailedAttachments([]);
+      setSendFailedOpen(true);
+    }
+  }, [close, persistence.error, sendDraftCore, sendFailedOpen, triggerRefresh]);
+
+  const retrySend = useCallback(async () => {
+    const ok = await sendDraftCore();
+    if (ok) {
+      setSendFailedOpen(false);
+      setFailedAttachments([]);
+      close();
+      await triggerRefresh();
+    }
+  }, [close, sendDraftCore, triggerRefresh]);
+
+  const removeFailedAndRetrySend = useCallback(async () => {
+    const target = buildAttachmentTarget();
+    if (!target) return;
+    // Best-effort: drop the failed chips from the local list AND from
+    // the backend, then retry the send.
+    for (const failed of failedAttachments) {
+      try {
+        await attachments.removeChip(failed.draft_attachment_id, target);
+      } catch {
+        // continue removing the rest
+      }
+    }
+    await retrySend();
+  }, [attachments, buildAttachmentTarget, failedAttachments, retrySend]);
+
+  const closeSendFailedDialog = useCallback(() => {
+    setSendFailedOpen(false);
+    setFailedAttachments([]);
+  }, []);
+
+  const closeWithX = useCallback(() => {
+    const currentMode = mode;
+
+    // D-28: pending changes (form fields or unsynced attachments)
+    // must trigger the explicit save / discard / cancel dialog.
+    const dirtyForm =
+      currentMode === 'new_email' || currentMode === 'new_draft'
+        ? form.hasAnyContent()
+        : currentMode === 'edit_draft'
+          ? form.isDirty()
+          : false;
+    const dirtyAttachments =
+      attachments.chips.length > 0 &&
+      (currentMode !== 'new_email' || providerDraftId !== null);
+
+    if (dirtyForm || dirtyAttachments) {
+      setCloseDialogOpen(true);
+      return;
+    }
+    close();
+  }, [attachments.chips.length, close, form, mode, providerDraftId]);
+
+  const confirmCloseSave = useCallback(async () => {
+    setCloseDialogOpen(false);
+    if (!mailboxId || !form.accountId) {
+      close();
+      return;
+    }
+    try {
+      await persistence.persistDraft(mailboxId, form.accountId, form.buildDraftPayload());
+      await triggerRefresh();
+    } catch {
+      // Surface error in the composer body via persistence.error; do
+      // not close so the user can react.
+      return;
+    }
+    close();
+  }, [close, form, mailboxId, persistence, triggerRefresh]);
+
+  const confirmCloseDiscard = useCallback(async () => {
+    setCloseDialogOpen(false);
+    // For an existing draft, the safest discard is a real DELETE on
+    // the provider — that wipes ``draft_attachments`` via CASCADE too.
+    if (mailboxId && form.accountId && providerDraftId) {
+      try {
+        const { deleteDraft } = await import('../../../api/endpoints/drafts');
+        await deleteDraft(mailboxId, form.accountId, providerDraftId);
+      } catch {
+        // best-effort; the local draft will linger until next sync
+      }
+    }
+    await triggerRefresh();
+    close();
+  }, [close, form.accountId, mailboxId, providerDraftId, triggerRefresh]);
+
+  const cancelClose = useCallback(() => {
+    setCloseDialogOpen(false);
+  }, []);
+
+  const canSendEmail =
+    mode === 'new_email' &&
+    form.accountId.length > 0 &&
+    form.parseRecipients(form.to).length > 0 &&
+    !persistence.sending;
+
+  const canSaveDraft =
+    (mode === 'new_draft' || mode === 'edit_draft') &&
+    form.accountId.length > 0 &&
+    !persistence.saving;
+
+  const canSendDraft =
+    mode === 'edit_draft' &&
+    form.accountId.length > 0 &&
+    providerDraftId !== null &&
+    form.parseRecipients(form.to).length > 0 &&
+    !persistence.sending;
+
+  const attachmentsEnabled = mode !== null && form.accountId !== '';
+  const accountSelectorLocked = mode === 'edit_draft' || providerDraftId !== null;
+
+  const ensureBootstrappedTarget = useCallback(async (): Promise<AttachmentTarget | null> => {
+    if (!mailboxId || !form.accountId) return null;
+    if (providerDraftId !== null) {
+      return { mailboxId, accountId: form.accountId, providerDraftId };
+    }
+    if (creatingDraftRef.current) {
+      const id = await creatingDraftRef.current;
+      return { mailboxId, accountId: form.accountId, providerDraftId: id };
+    }
+    const promise = persistence
+      .ensureProviderDraftId(mailboxId, form.accountId, form.buildDraftPayload())
+      .then((id) => {
+        setProviderDraftIdState(id);
+        return id;
+      });
+    creatingDraftRef.current = promise;
+    try {
+      const id = await promise;
+      return { mailboxId, accountId: form.accountId, providerDraftId: id };
+    } finally {
+      creatingDraftRef.current = null;
+    }
+  }, [form, mailboxId, persistence, providerDraftId]);
+
+  const addAttachmentFiles = useCallback(
+    (files: File[]) => {
+      if (!mailboxId) return;
+      if (!form.accountId) {
+        pendingFilesRef.current = [...pendingFilesRef.current, ...files];
+        return;
+      }
+      ensureBootstrappedTarget()
+        .then((target) => {
+          if (!target) return;
+          attachments.addFiles(files, target);
+        })
+        .catch(() => {
+          // ensureProviderDraftId already routed the error to persistence.error
+        });
+    },
+    [attachments, ensureBootstrappedTarget, form.accountId, mailboxId],
+  );
+
+  const removeAttachmentChip = useCallback(
+    (chipId: string) => {
+      const target = buildAttachmentTarget();
+      if (!target) return;
+      attachments.removeChip(chipId, target).catch(() => {});
+    },
+    [attachments, buildAttachmentTarget],
+  );
+
+  useEffect(() => {
+    if (!mailboxId || !form.accountId || pendingFilesRef.current.length === 0) return;
+    const pending = pendingFilesRef.current;
+    pendingFilesRef.current = [];
+    addAttachmentFiles(pending);
+  }, [mailboxId, form.accountId, addAttachmentFiles]);
+
+  useEffect(() => {
+    if (mode === null) {
+      pendingFilesRef.current = [];
+      creatingDraftRef.current = null;
+    }
+  }, [mode]);
+
+  return {
+    open: mode !== null,
+    mode,
+    accounts,
+    accountId: form.accountId,
+    setAccountId: form.setAccountId,
+    to: form.to,
+    setTo: form.setTo,
+    cc: form.cc,
+    setCc: form.setCc,
+    bcc: form.bcc,
+    setBcc: form.setBcc,
+    subject: form.subject,
+    setSubject: form.setSubject,
+    body: form.body,
+    setBody: form.setBody,
+    sending: persistence.sending,
+    saving: persistence.saving,
+    error: persistence.error,
+    canSendEmail,
+    canSaveDraft,
+    canSendDraft,
+    openForNewEmail,
+    openForNewDraft,
+    openForEditDraft,
+    closeWithX,
+    confirmCloseSave,
+    confirmCloseDiscard,
+    cancelClose,
+    handleSendEmail,
+    handleSaveDraft,
+    handleSendDraft,
+    setRefreshCallback,
+    attachmentsEnabled,
+    accountSelectorLocked,
+    attachmentChips: attachments.chips,
+    attachmentTotalSize: attachments.totalSize,
+    addAttachmentFiles,
+    removeAttachmentChip,
+    closeDialogOpen,
+    sendFailedOpen,
+    failedAttachments,
+    retrySend,
+    removeFailedAndRetrySend,
+    closeSendFailedDialog,
+  };
+}

@@ -5,6 +5,7 @@ Service layer for email operations.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ from api.schemas.email import (
 )
 from core.email.email_client import SyncResult
 from core.email.email_manager import EmailManager
+from api.schemas.attachment import AttachmentMetadataOut
 from api.services.services_helpers import (
     build_manager_for_accounts,
     delete_email_metadata_batch,
@@ -60,6 +62,7 @@ from api.services.services_helpers import (
     persist_email_content,
     persist_email_metadata_batch,
     raise_on_silent_auth_errors,
+    recompute_has_attachments,
     restore_from_trash_batch,
     restore_from_trash_discovered_batch,
     sanitize_email_html,
@@ -71,7 +74,12 @@ from api.services.services_helpers import (
     update_email_spam_status_batch,
     update_sync_cursor,
 )
-from database import account_store, email_metadata_store, DatabaseError
+from database import (
+    account_store,
+    email_attachment_store,
+    email_metadata_store,
+    DatabaseError,
+)
 
 
 def _reconcile_ghost_emails(
@@ -223,6 +231,14 @@ def sync_email_metadata(
             results = manager.fetch_all_email_metadata(sync_cursors)
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailFetchError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected failure fetching all email metadata (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailFetchError(
+                "Unexpected failure fetching all email metadata."
+            ) from exc
 
         raise_on_silent_auth_errors(manager.get_last_errors(), fallback=EmailFetchError)
 
@@ -767,6 +783,7 @@ def list_emails(
             received_at=row["received_at"],
             is_read=row["is_read"],
             box=row["box"],
+            has_attachments=bool(row.get("has_attachments", False)),
         )
         for row in rows
     ]
@@ -822,7 +839,16 @@ def get_email_full_content(
 
     row = get_email_content(account_id, provider_message_id, fallback=EmailContentFetchError)
     if row is not None:
-        return EmailContentOut(html_body=row["html_body"], text_body=row["text_body"])
+        # Cache hit on the HTML body; the email_attachments table is the
+        # source of truth for the attachment list (D-13). Reading it
+        # always (not only on miss) keeps the response consistent if a
+        # TTL purge later wiped the blobs but kept the metadata rows.
+        attachments_out = _load_email_attachments_out(account_id, provider_message_id)
+        return EmailContentOut(
+            html_body=row["html_body"],
+            text_body=row["text_body"],
+            attachments=attachments_out,
+        )
 
     try:
         auth_payloads, label_lookup = _build_auth_context([account], mailbox_id)
@@ -839,6 +865,17 @@ def get_email_full_content(
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
 
+        # D-06 + D-13 cache miss: discover attachments at the same time
+        # as the body. The provider call is one round trip more than
+        # before but keeps the user-visible UX consistent (icon clip
+        # appears on next refresh).
+        try:
+            metadata_list, _cid_map = manager.list_message_attachments(
+                account_label, provider_message_id,
+            )
+        except CoreError as exc:
+            raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
+
         sanitized_html = sanitize_email_html(content.html_body) if content.html_body else None
 
         try:
@@ -849,7 +886,23 @@ def get_email_full_content(
                 account_id, type(exc).__name__, exc,
             )
 
-        return EmailContentOut(html_body=sanitized_html, text_body=content.text_body)
+        _persist_attachment_metadata(account_id, provider_message_id, metadata_list)
+        try:
+            recompute_has_attachments(
+                account_id, provider_message_id, fallback=EmailContentFetchError,
+            )
+        except Exception as exc:
+            logger.warning(
+                "has_attachments recompute failed for account '%s' (%s): %s",
+                account_id, type(exc).__name__, exc,
+            )
+
+        attachments_out = _load_email_attachments_out(account_id, provider_message_id)
+        return EmailContentOut(
+            html_body=sanitized_html,
+            text_body=content.text_body,
+            attachments=attachments_out,
+        )
     except ApiError:
         raise
     except Exception as exc:
@@ -858,3 +911,79 @@ def get_email_full_content(
             type(exc).__name__, exc,
         )
         raise EmailContentFetchError("Failed to fetch email content.") from exc
+
+
+def _persist_attachment_metadata(
+    account_id: str,
+    provider_message_id: str,
+    metadata_list: list[Any],
+) -> None:
+    """Upsert the discovered attachment list into ``email_attachments`` (D-09).
+
+    Soft-fail on persistence: a transient DB error here would block the
+    user from reading the body just because the list could not be
+    cached. The next ``get_email_content`` call (cache miss again on
+    the body side) will retry.
+    """
+    if not metadata_list:
+        return
+    rows = [
+        {
+            "attachment_id": str(uuid.uuid4()),
+            "account_id": account_id,
+            "provider_message_id": provider_message_id,
+            "part_id": meta.part_id,
+            "provider_attachment_id": meta.provider_attachment_id,
+            "filename": meta.filename,
+            "mime_type": meta.mime_type,
+            "size": meta.size,
+            "content_id": meta.content_id,
+            "is_inline": meta.is_inline,
+            "position": meta.position,
+        }
+        for meta in metadata_list
+    ]
+    try:
+        email_attachment_store.upsert_batch(rows)
+    except DatabaseError as exc:
+        logger.warning(
+            "Attachment metadata upsert failed (%s): %s",
+            type(exc).__name__, exc,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Unexpected attachment metadata upsert error (%s): %s",
+            type(exc).__name__, exc,
+        )
+
+
+def _load_email_attachments_out(
+    account_id: str, provider_message_id: str,
+) -> list[AttachmentMetadataOut]:
+    """List ``email_attachments`` rows mapped to the API output schema.
+
+    Used both at cache hit and after a fresh upsert so the returned
+    list always carries the derived ``is_downloaded`` flag (true iff a
+    blob row exists). Soft-fails to an empty list — the user still
+    sees the email body even if the metadata read hiccups.
+    """
+    try:
+        rows = email_attachment_store.list_by_message(account_id, provider_message_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to list email attachments for content view (%s): %s",
+            type(exc).__name__, exc,
+        )
+        return []
+    return [
+        AttachmentMetadataOut(
+            attachment_id=str(row["attachment_id"]),
+            filename=str(row.get("filename") or "attachment"),
+            mime_type=str(row.get("mime_type") or "application/octet-stream"),
+            size=int(row.get("size") or 0),
+            is_downloaded=bool(row.get("is_downloaded", False)),
+            is_unavailable=row.get("unavailable_at") is not None,
+            position=int(row.get("position") or 0),
+        )
+        for row in rows
+    ]

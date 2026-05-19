@@ -1,0 +1,236 @@
+import { useCallback, useRef, useState } from 'react';
+
+import {
+  addDraftAttachment,
+  removeDraftAttachment,
+} from '../../../api/endpoints/attachments';
+import {
+  humaniseAttachmentError,
+  validateFileForUpload,
+  type ValidationResult,
+} from '../../../lib/attachments';
+import { toUiError, type UiError } from '../../../api/client/errors';
+import type { DraftAttachmentMetadata } from '../../../api/types/dto';
+
+export type ChipStatus = 'uploading' | 'uploaded' | 'failed';
+
+export type AttachmentChip = {
+  id: string;                    // 'tmp-XYZ' while uploading, then real uuid
+  filename: string;
+  mimeType: string;
+  size: number;
+  position: number;
+  status: ChipStatus;
+  progress?: number;
+  error?: UiError;
+  abortController?: AbortController;
+  providerAttachmentId: string | null;
+};
+
+export type AttachmentTarget = {
+  mailboxId: string;
+  accountId: string;
+  providerDraftId: string;
+};
+
+export type UseComposerAttachmentsReturn = {
+  chips: AttachmentChip[];
+  totalSize: number;
+  count: number;
+  isUploading: boolean;
+  hasFailedChips: boolean;
+  reset: () => void;
+  seedFromDraft: (initial: DraftAttachmentMetadata[]) => void;
+  addFiles: (files: File[], target: AttachmentTarget) => void;
+  removeChip: (chipId: string, target: AttachmentTarget) => Promise<void>;
+};
+
+let nanoidCounter = 0;
+function tmpId(): string {
+  nanoidCounter += 1;
+  return `tmp-${Date.now().toString(36)}-${nanoidCounter}`;
+}
+
+/**
+ * Composer attachments orchestrator (D-25).
+ *
+ * Owns the chip state, runs client-side validation (D-01..D-04a),
+ * uploads via ``addDraftAttachment`` with real upload progress, and
+ * exposes a flat API the composer renders.
+ */
+export default function useComposerAttachments(): UseComposerAttachmentsReturn {
+  const [chips, setChips] = useState<AttachmentChip[]>([]);
+  const chipsRef = useRef<AttachmentChip[]>([]);
+  chipsRef.current = chips;
+
+  const totalSize = chips.reduce((sum, chip) => sum + chip.size, 0);
+  const count = chips.length;
+  const isUploading = chips.some((chip) => chip.status === 'uploading');
+  const hasFailedChips = chips.some((chip) => chip.status === 'failed');
+
+  const updateChip = useCallback((id: string, patch: Partial<AttachmentChip>) => {
+    setChips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
+
+  const removeChipLocal = useCallback((id: string) => {
+    setChips((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  const reset = useCallback(() => {
+    chipsRef.current.forEach((chip) => {
+      if (chip.status === 'uploading' && chip.abortController) {
+        chip.abortController.abort();
+      }
+    });
+    setChips([]);
+  }, []);
+
+  const seedFromDraft = useCallback((initial: DraftAttachmentMetadata[]) => {
+    setChips(
+      initial.map((meta) => ({
+        id: meta.draft_attachment_id,
+        filename: meta.filename,
+        mimeType: meta.mime_type,
+        size: meta.size,
+        position: meta.position,
+        status: 'uploaded',
+        providerAttachmentId: meta.provider_attachment_id,
+      })),
+    );
+  }, []);
+
+  const addFiles = useCallback(
+    (files: File[], target: AttachmentTarget) => {
+      let runningTotal = chipsRef.current.reduce((sum, c) => sum + c.size, 0);
+      let runningCount = chipsRef.current.length;
+      const accepted: { file: File; chipId: string; reservedSize: number }[] = [];
+
+      for (const file of files) {
+        const validation: ValidationResult = validateFileForUpload(
+          file,
+          runningTotal,
+          runningCount,
+        );
+        if (!validation.ok) {
+          const failedId = tmpId();
+          setChips((prev) => [
+            ...prev,
+            {
+              id: failedId,
+              filename: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              size: file.size,
+              position: prev.length,
+              status: 'failed',
+              error: { message: validation.message, code: validation.reason },
+              providerAttachmentId: null,
+            },
+          ]);
+          // Auto-clear after 3s so the toast-like chip does not linger.
+          setTimeout(() => removeChipLocal(failedId), 3000);
+          continue;
+        }
+        runningTotal += file.size;
+        runningCount += 1;
+        const chipId = tmpId();
+        const controller = new AbortController();
+        accepted.push({ file, chipId, reservedSize: file.size });
+        setChips((prev) => [
+          ...prev,
+          {
+            id: chipId,
+            filename: file.name,
+            mimeType: file.type || 'application/octet-stream',
+            size: file.size,
+            position: prev.length,
+            status: 'uploading',
+            progress: 0,
+            abortController: controller,
+            providerAttachmentId: null,
+          },
+        ]);
+      }
+
+      accepted.forEach(({ file, chipId }) => {
+        const controller = chipsRef.current.find((c) => c.id === chipId)?.abortController;
+        addDraftAttachment(target.mailboxId, target.accountId, target.providerDraftId, file, {
+          onProgress: (pct) => updateChip(chipId, { progress: pct }),
+          signal: controller?.signal,
+        })
+          .then((response) => {
+            updateChip(chipId, {
+              id: response.draft_attachment_id,
+              filename: response.filename,
+              mimeType: response.mime_type,
+              size: response.size,
+              position: response.position,
+              status: 'uploaded',
+              progress: undefined,
+              abortController: undefined,
+              providerAttachmentId: response.provider_attachment_id,
+            });
+          })
+          .catch((error) => {
+            const ui = toUiError(error);
+            const message = humaniseAttachmentError(ui.code, undefined) ?? ui.message;
+            updateChip(chipId, {
+              status: 'failed',
+              error: { message, code: ui.code },
+              progress: undefined,
+              abortController: undefined,
+            });
+            setTimeout(() => removeChipLocal(chipId), 3000);
+          });
+      });
+    },
+    [removeChipLocal, updateChip],
+  );
+
+  const removeChip = useCallback(
+    async (chipId: string, target: AttachmentTarget) => {
+      const chip = chipsRef.current.find((c) => c.id === chipId);
+      if (!chip) return;
+      if (chip.status === 'uploading') {
+        chip.abortController?.abort();
+        removeChipLocal(chipId);
+        return;
+      }
+      // Optimistic UI: remove first, restore on failure.
+      removeChipLocal(chipId);
+      try {
+        await removeDraftAttachment(
+          target.mailboxId,
+          target.accountId,
+          target.providerDraftId,
+          chip.id,
+        );
+      } catch (error) {
+        const ui = toUiError(error);
+        // Restore the chip with an error annotation so the user knows
+        // the deletion did not stick.
+        setChips((prev) => [
+          ...prev,
+          {
+            ...chip,
+            status: 'failed',
+            error: { message: ui.message, code: ui.code },
+          },
+        ]);
+        setTimeout(() => removeChipLocal(chip.id), 3000);
+      }
+    },
+    [removeChipLocal],
+  );
+
+  return {
+    chips,
+    totalSize,
+    count,
+    isUploading,
+    hasFailedChips,
+    reset,
+    seedFromDraft,
+    addFiles,
+    removeChip,
+  };
+}

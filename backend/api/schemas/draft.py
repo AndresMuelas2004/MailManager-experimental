@@ -8,18 +8,23 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from api.schemas.attachment import DraftAttachmentMetadataOut
+
 
 class DraftCreate(BaseModel):
     """
     Request model for creating a draft. All fields are optional —
     empty drafts are allowed (matches Gmail/Outlook native behavior).
+
+    ``body`` is plain text (D-31): the composer is a plain ``<textarea>``
+    and both providers persist the draft as ``text/plain``.
     """
 
     to_recipients: list[str] = Field(default_factory=list)
     cc_recipients: list[str] = Field(default_factory=list)
     bcc_recipients: list[str] = Field(default_factory=list)
     subject: str = ""
-    body_html: str = ""
+    body: str = ""
 
 
 class DraftUpdate(BaseModel):
@@ -34,12 +39,16 @@ class DraftUpdate(BaseModel):
     cc_recipients: list[str] = Field(default_factory=list)
     bcc_recipients: list[str] = Field(default_factory=list)
     subject: str = ""
-    body_html: str = ""
+    body: str = ""
 
 
 class DraftOut(BaseModel):
     """
     Response model for a persisted draft.
+
+    ``attachments`` carries the local-only attachment list (D-07 lazy
+    push). The composer hydrates its chip list from this field when
+    reopening an existing draft.
     """
 
     provider_draft_id: str
@@ -48,9 +57,10 @@ class DraftOut(BaseModel):
     cc_recipients: list[str]
     bcc_recipients: list[str]
     subject: str
-    body_html: str
+    body: str
     created_at: datetime
     updated_at: datetime
+    attachments: list[DraftAttachmentMetadataOut] = Field(default_factory=list)
 
 
 class DraftsAccountSyncDetail(BaseModel):

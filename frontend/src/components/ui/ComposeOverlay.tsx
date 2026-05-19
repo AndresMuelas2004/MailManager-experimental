@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { Send, X, ChevronDown, Save } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Paperclip, Save, Send, X, ChevronDown } from 'lucide-react';
 
 import Spinner from '../common/Spinner';
+import AttachmentChip, { type ComposerAttachmentChipDisplay } from './AttachmentChip';
 import { getProviderMeta } from '../../lib/providers';
+import { MAX_MESSAGE_SIZE, formatBytes } from '../../lib/attachments';
 import type { ComposerMode } from '../../lib/types';
 import type { UiError } from '../../api/client/errors';
 import type { AccountOut } from '../../api/types/dto';
@@ -37,6 +39,20 @@ type Props = {
   onSaveDraft: () => void;
   onSendDraft: () => void;
   onClose: () => void;
+  // Attachments — D-25. ``attachmentsEnabled`` is true while the
+  // composer is open with an account selected, in any of the three
+  // modes. The first attached file in ``new_email`` / ``new_draft``
+  // bootstraps a silent draft on the provider so subsequent uploads
+  // have a real ``provider_draft_id`` to bind to (handled in the hook).
+  // ``accountSelectorLocked`` mirrors that bootstrap: once a draft
+  // exists, the account dropdown is disabled to avoid orphaning the
+  // attachments on the original account.
+  attachmentsEnabled: boolean;
+  accountSelectorLocked: boolean;
+  attachmentChips: ComposerAttachmentChipDisplay[];
+  attachmentTotalSize: number;
+  onAddFiles: (files: File[]) => void;
+  onRemoveAttachment: (chipId: string) => void;
 };
 
 const TITLE_BY_MODE: Record<ComposerMode, string> = {
@@ -70,9 +86,42 @@ export default function ComposeOverlay({
   onSaveDraft,
   onSendDraft,
   onClose,
+  attachmentsEnabled,
+  accountSelectorLocked,
+  attachmentChips,
+  attachmentTotalSize,
+  onAddFiles,
+  onRemoveAttachment,
 }: Props) {
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [ccBccOpen, setCcBccOpen] = useState(() => cc.trim().length > 0 || bcc.trim().length > 0);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    if (attachmentsEnabled) setDragActive(true);
+  };
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget === e.target) setDragActive(false);
+  };
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    setDragActive(false);
+    if (!attachmentsEnabled) return;
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length > 0) onAddFiles(files);
+  };
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) onAddFiles(files);
+    // Reset so picking the same file twice in a row still triggers onChange.
+    e.target.value = '';
+  };
+
+  const sizeOverLimit = attachmentTotalSize > MAX_MESSAGE_SIZE;
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId);
   const accountLabel = (a: ComposeAccount) => a.email_address ?? a.display_label;
@@ -83,7 +132,17 @@ export default function ComposeOverlay({
   const showSendDraft = mode === 'edit_draft';
 
   return (
-    <div className="fixed right-6 bottom-0 z-50 flex w-[400px] flex-col rounded-t-2xl border border-zinc-200 bg-white shadow-xl">
+    <div
+      className="fixed right-6 bottom-0 z-50 flex w-[400px] flex-col rounded-t-2xl border border-zinc-200 bg-white shadow-xl"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragActive && attachmentsEnabled ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-t-2xl border-2 border-dashed border-blue-400 bg-blue-50/80 text-[14px] font-medium text-blue-700">
+          Suelta el archivo para adjuntarlo
+        </div>
+      ) : null}
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
         <h3 className="text-base font-semibold text-zinc-900">{title}</h3>
         <button
@@ -149,13 +208,13 @@ export default function ComposeOverlay({
           <button
             type="button"
             onClick={() => setSelectorOpen((v) => !v)}
-            disabled={mode === 'edit_draft'}
+            disabled={accountSelectorLocked}
             className="flex h-10 items-center justify-between rounded-[10px] bg-zinc-100 px-3 text-sm text-zinc-900 disabled:opacity-70"
           >
             <span>{selectedAccount ? accountLabel(selectedAccount) : 'Selecciona una cuenta'}</span>
-            {mode !== 'edit_draft' && <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            {!accountSelectorLocked && <ChevronDown className="h-4 w-4 text-zinc-500" />}
           </button>
-          {selectorOpen && mode !== 'edit_draft' && (
+          {selectorOpen && !accountSelectorLocked && (
             <div className="absolute top-full left-0 z-10 mt-1 w-full rounded-[10px] border border-zinc-200 bg-white py-1 shadow-lg">
               {accounts.map((a) => (
                 <button
@@ -191,6 +250,18 @@ export default function ComposeOverlay({
           />
         </div>
 
+        {attachmentsEnabled && attachmentChips.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {attachmentChips.map((chip) => (
+              <AttachmentChip
+                key={chip.id}
+                chip={chip}
+                onRemove={() => onRemoveAttachment(chip.id)}
+              />
+            ))}
+          </div>
+        ) : null}
+
         <div className="flex flex-1 flex-col gap-1.5">
           <label className="text-sm font-medium text-zinc-900">Mensaje</label>
           <textarea
@@ -203,6 +274,35 @@ export default function ComposeOverlay({
         </div>
 
         {error && <p className="text-center text-sm text-red-600">{error.message}</p>}
+
+        {attachmentsEnabled ? (
+          <div className="flex items-center justify-between text-[12px]">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <Paperclip className="h-4 w-4" />
+              <span>Adjuntar</span>
+            </button>
+            <span
+              className={[
+                'tabular-nums',
+                sizeOverLimit ? 'text-red-600 font-medium' : 'text-zinc-500',
+              ].join(' ')}
+              aria-label="Tamaño total del mensaje"
+            >
+              {formatBytes(attachmentTotalSize)} / 25 MB
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileInputChange}
+            />
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-2">
           {showSendEmail && (

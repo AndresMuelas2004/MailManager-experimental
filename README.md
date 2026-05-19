@@ -13,6 +13,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Draft update that replaces draft content at the provider (PATCH, Provider-First).
 - Draft deletion at the provider with local cleanup (Provider-First Rule).
 - Draft synchronization pulls the most recent drafts from every connected account into the local database (capped at 100 per account).
+- Attachments support across received emails (cache-aside download) and outgoing drafts (lazy push, atomic Gmail send / partial-resume Outlook send).
 - Batch read/unread status management across accounts.
 - Trash management: move emails to trash, permanently delete, or restore.
 - Spam operations: move to spam and restore from spam with cross-provider support.
@@ -196,6 +197,7 @@ docker compose down -v   # stop and delete database volume
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. |
+| `ATTACHMENTS_PURGE_TOKEN` | No | Bearer token for the `POST /admin/attachments/purge` maintenance endpoint. When unset, the endpoint replies 503 `purge_disabled` instead of 401 (deploy is intentionally not configured for this operation). |
 
 ### Frontend environment variables
 
@@ -238,8 +240,9 @@ Emails:
 - `POST /mailboxes/{mailbox_id}/emails/move-to-trash`
 - `POST /mailboxes/{mailbox_id}/emails/spam`
 - `POST /mailboxes/{mailbox_id}/emails/restore-from-spam`
-- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `limit` (default 200, max 500), `offset` (default 0).
-- `GET /mailboxes/{mailbox_id}/emails/{provider_message_id}/content` — Required query param: `account_id`.
+- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `limit` (default 200, max 500), `offset` (default 0). Each row carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`).
+- `GET /mailboxes/{mailbox_id}/emails/{provider_message_id}/content` — Required query param: `account_id`. Response includes `attachments[]` (the strict D-13 split between inline images embedded in the body and downloadable parts).
+- `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/attachments/{attachment_id}` — Streams a single attachment binary with `Content-Disposition: attachment` (forced download, never inline). Cache-aside: served from local cache or fetched from the provider on miss.
 
 Drafts:
 
@@ -247,8 +250,11 @@ Drafts:
 - `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}` — Replace an existing draft's content at the provider (full-field replacement) and persist the new values locally. Provider-First with a pre-check: the draft must exist in the local DB (404 `draft_not_found` otherwise) before any provider call. Gmail uses `users().drafts().update()`; Outlook uses `PATCH /me/messages/{id}` with `Prefer: IdType="ImmutableId"` repeated on every call. `created_at` is preserved; `updated_at` is refreshed.
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{draft_id}` — Delete a draft at the provider and remove the local row (Provider-First). Returns `{"status": "deleted"}`.
 - `POST /mailboxes/{mailbox_id}/drafts/sync` — Fetch the most recent drafts from the provider(s) into the local database (full replace per account, capped at 100 drafts per account most recent by date). Optional query param `account_id`: when provided, syncs only that account; when omitted, syncs every account in the mailbox. Gmail uses parallel batched `drafts.get` calls (workers configurable via `GMAIL_BATCH_MAX_WORKERS`, default 5); Outlook uses `$top=100` + `$orderby=lastModifiedDateTime desc` paginated fetch with per-page retries.
-- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/send` — Send an existing draft at the provider and remove it from local storage. Provider-First with 3-attempt retry in the client layer. On success: deletes the local `drafts` row and persists the sent email metadata to `email_metadata` (both best-effort). Gmail returns a new `message_id`; Outlook keeps the same ID (ImmutableId).
-- `GET /mailboxes/{mailbox_id}/drafts` — List drafts for the mailbox (DB-only, no provider calls). Optional query param `account_id`: when provided, returns drafts of that account; when omitted, returns the unified view across all accounts in the mailbox. Ordered by `created_at DESC`.
+- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/send` — Send an existing draft at the provider and remove it from local storage. Provider-First with 3-attempt retry in the client layer. On success: deletes the local `drafts` row and persists the sent email metadata to `email_metadata` (both best-effort). Gmail returns a new `message_id`; Outlook keeps the same ID (ImmutableId). Pushes any locally-stored draft attachments to the provider as part of the send (atomic for Gmail, non-atomic for Outlook with D-27 partial-resume).
+- `GET /mailboxes/{mailbox_id}/drafts` — List drafts for the mailbox (DB-only, no provider calls). Optional query param `account_id`: when provided, returns drafts of that account; when omitted, returns the unified view across all accounts in the mailbox. Ordered by `created_at DESC`. `DraftOut.body` is plain text (was `body_html` before D-31); each draft carries `attachments[]`.
+- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments` — Multipart upload (`file` field). Local-only (D-07 lazy push) — the provider draft is not touched; the bytes live in `draft_attachments` until Save/Send. Server-side validation: extension blocklist (D-04a), 25 MB per-file (D-01), 25 MB cumulative per draft (D-02), max 25 attachments per draft (D-03). Multipart bodies > 30 MB are rejected upstream as 413 `request_too_large`.
+- `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments/{draft_attachment_id}` — Local-only removal of a draft attachment row.
+- `POST /admin/attachments/purge` — Admin maintenance endpoint that drops `email_attachment_blobs` rows whose `email_attachments.last_accessed_at` is older than 30 days (TTL purge, D-15). Requires the `X-Admin-Token` header to match the `ATTACHMENTS_PURGE_TOKEN` env var; 503 `purge_disabled` when the env var is unset, 401 `invalid_admin_token` when set but the header is missing/wrong.
 
 Auth:
 
@@ -317,6 +323,19 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `draft_update_error` — 502
 - `draft_delete_error` — 502
 - `draft_sync_error` — 502
+- `attachment_not_found` — 404
+- `attachment_unavailable` — 404
+- `draft_attachment_not_found` — 404
+- `attachment_blocked_extension` — 400
+- `attachment_limit_exceeded` — 400
+- `attachment_message_size_exceeded` — 400
+- `attachment_too_large` — 413
+- `request_too_large` — 413
+- `attachment_send_failed` — 502 (`detail.failed_attachments[]` + `detail.succeeded[]` for D-27 resume)
+- `provider_forbidden` — 502 (provider rejected the attachment fetch with 403)
+- `provider_unavailable` — 503 (provider 5xx persistent after retries)
+- `purge_disabled` — 503
+- `invalid_admin_token` — 401
 
 ## Testing
 

@@ -101,3 +101,57 @@ class EmailRecipientsMissingError(EmailError):
 class EmailExternalAPIError(EmailError):
     code = "email_external_api_error"
     default_message = "External API call failed."
+
+
+class EmailAttachmentNotFound(EmailError):
+    """Provider returned 404/410 for an attachment fetch — D-17."""
+    code = "email_attachment_not_found"
+    default_message = "Attachment is no longer available at the provider."
+
+
+class EmailAttachmentDownloadFailed(EmailError):
+    """Generic attachment download failure (provider 5xx, 403, network).
+
+    The ``detail`` dict carries a ``reason`` of ``"forbidden"`` (provider
+    403, suggests scope/permission issue) or ``"unavailable"`` (provider
+    5xx persistent or network noise after retries) — services translate
+    each into a different HTTP status (502 vs 503).
+    """
+    code = "email_attachment_download_failed"
+    default_message = "Attachment download from the provider failed."
+
+
+class EmailAttachmentTooLargeForProvider(EmailError):
+    """Provider rejected an attachment as exceeding its size limit.
+
+    The local D-01/D-02 limits should have caught this earlier; this
+    error covers the edge case where a tenant configures a smaller
+    limit than the application defaults to.
+    """
+    code = "email_attachment_too_large_for_provider"
+    default_message = "Attachment exceeds the provider's per-message size limit."
+
+
+class EmailAttachmentBlockedByProvider(EmailError):
+    """Gmail rejected an attachment via ``400 The attachment is invalid``.
+
+    The local blocklist (D-04a) should have caught this earlier; this
+    error covers divergence between the canonical app list and the
+    provider's actual filter.
+    """
+    code = "email_attachment_blocked_by_provider"
+    default_message = "Attachment was blocked by the provider's content filter."
+
+
+class EmailAttachmentSendFailed(EmailError):
+    """One or more attachments failed to upload during ``send_draft`` (D-27).
+
+    The ``detail`` dict carries ``failed_attachments`` — a list of
+    ``{draft_attachment_id, filename, reason}`` records identifying
+    which attachments could not be uploaded. The send has NOT been
+    issued; the local draft is intact and (Outlook only) any
+    attachments that succeeded before the failure carry a populated
+    ``provider_attachment_id`` so a retry skips them.
+    """
+    code = "email_attachment_send_failed"
+    default_message = "One or more attachments failed to upload during send."

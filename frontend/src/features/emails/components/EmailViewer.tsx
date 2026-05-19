@@ -3,8 +3,10 @@ import { useEffect, useRef } from 'react';
 import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
 import useEmailContent from '../hooks/useEmailContent';
+import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
+import AttachmentCard from './AttachmentCard';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
-import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
+import type { AttachmentMetadata, EmailMetadataOut, AccountOut } from '../../../api/types/dto';
 
 type Props = {
   mailboxId: string;
@@ -12,6 +14,7 @@ type Props = {
   accounts: AccountOut[];
   onClose: () => void;
   onRead: (email: EmailMetadataOut) => Promise<void>;
+  downloader: UseAttachmentDownloaderReturn;
 };
 
 function escapeHtml(value: string): string {
@@ -27,7 +30,14 @@ function wrapHtmlEmail(html: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#18181b;background:#fff;overflow:auto}body{padding:16px}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
 }
 
-export default function EmailViewer({ mailboxId, email, accounts, onClose, onRead }: Props) {
+export default function EmailViewer({
+  mailboxId,
+  email,
+  accounts,
+  onClose,
+  onRead,
+  downloader,
+}: Props) {
   const { content, loading, error } = useEmailContent(mailboxId, {
     account_id: email.account_id,
     provider_message_id: email.provider_message_id,
@@ -111,7 +121,47 @@ export default function EmailViewer({ mailboxId, email, accounts, onClose, onRea
           </div>
         )}
       </div>
-      <div className="flex flex-1 flex-col overflow-auto bg-white">{body}</div>
+      <div className="flex flex-1 flex-col overflow-auto bg-white">
+        {body}
+        <AttachmentsList
+          attachments={content?.attachments ?? []}
+          downloader={downloader}
+        />
+      </div>
     </Modal>
+  );
+}
+
+type AttachmentsListProps = {
+  attachments: AttachmentMetadata[];
+  downloader: UseAttachmentDownloaderReturn;
+};
+
+function AttachmentsList({ attachments, downloader }: AttachmentsListProps) {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="border-t border-zinc-200 px-6 py-4">
+      <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-zinc-500">
+        Adjuntos ({attachments.length})
+      </h3>
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {attachments.map((attachment) => {
+          const status = downloader.status(attachment.attachment_id);
+          return (
+            <li key={attachment.attachment_id}>
+              <AttachmentCard
+                attachment={attachment}
+                status={status}
+                onDownload={() => downloader.start(attachment.attachment_id)}
+                onCancel={() => downloader.cancel(attachment.attachment_id)}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

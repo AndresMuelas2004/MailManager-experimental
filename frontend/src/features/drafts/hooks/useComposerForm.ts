@@ -18,7 +18,7 @@ export type DraftPayload = {
   cc_recipients: string[];
   bcc_recipients: string[];
   subject: string;
-  body_html: string;
+  body: string;
 };
 
 export type UseComposerFormReturn = {
@@ -93,14 +93,14 @@ export default function useComposerForm(): UseComposerFormReturn {
     setCc(initialCc);
     setBcc(initialBcc);
     setSubject(draft.subject);
-    setBody(draft.body_html);
+    setBody(draft.body);
     snapshotRef.current = {
       accountId: draft.account_id,
       to: initialTo,
       cc: initialCc,
       bcc: initialBcc,
       subject: draft.subject,
-      body: draft.body_html,
+      body: draft.body,
     };
   }, []);
 
@@ -133,7 +133,7 @@ export default function useComposerForm(): UseComposerFormReturn {
       cc_recipients: parseRecipientsImpl(cc),
       bcc_recipients: parseRecipientsImpl(bcc),
       subject,
-      body_html: body,
+      body,
     }),
     [to, cc, bcc, subject, body],
   );

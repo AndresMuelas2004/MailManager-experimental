@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Paperclip, RefreshCw } from 'lucide-react';
 
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
 import Spinner from '../../../components/common/Spinner';
@@ -127,8 +127,14 @@ export default function EmailTable({
               <div className={`w-[170px] truncate text-xs ${weight} text-zinc-900`}>
                 {email.from_email}
               </div>
-              <div className={`flex-1 truncate text-[13px] ${weight} text-zinc-900`}>
-                {email.subject ?? '(Sin asunto)'}
+              <div className={`flex-1 flex items-center gap-1.5 truncate text-[13px] ${weight} text-zinc-900`}>
+                {email.has_attachments ? (
+                  <Paperclip
+                    className="h-3.5 w-3.5 shrink-0 text-zinc-500"
+                    aria-label="Tiene adjuntos"
+                  />
+                ) : null}
+                <span className="truncate">{email.subject ?? '(Sin asunto)'}</span>
               </div>
               <div className={`w-16 text-right text-xs ${weight} text-zinc-900`}>
                 {formatDate(email.received_at)}

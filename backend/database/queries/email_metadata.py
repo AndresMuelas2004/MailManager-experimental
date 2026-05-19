@@ -4,6 +4,13 @@ Email metadata SQL statements.
 
 from __future__ import annotations
 
+# NOTE: ``has_attachments`` is intentionally NOT in the column list nor in
+# the ``DO UPDATE SET`` clause. The flag follows the **B.lazy** strategy
+# (D-09): metadata sync paths leave it at its current value (defaults to
+# FALSE on INSERT) and ``recompute_has_attachments`` writes it later, on
+# the cache-miss branch of ``get_email_content`` once the attachments are
+# discovered. Adding it here would silently override that helper and reset
+# the flag on every sync — do not.
 UPSERT_EMAIL_METADATA_BATCH = """
     INSERT INTO email_metadata
         (provider_message_id, account_id, thread_id, from_email, from_name,
@@ -45,7 +52,12 @@ UPDATE_READ_STATUS_BATCH = """
        AND em.account_id          = v.account_id::UUID
 """
 
-UPDATE_SPAM_STATUS_BATCH = """
+# Rewrites BOTH ``provider_message_id`` and ``box`` because Outlook
+# reassigns its message id when a message is moved between Spam <-> Inbox
+# (the new id replaces the old one and we cascade the change through
+# ON UPDATE CASCADE). Hence the ``MOVE`` verb in the constant name —
+# the operation is a spam-folder move, not a status flag flip.
+MOVE_SPAM_BATCH = """
     UPDATE email_metadata AS em
        SET provider_message_id = v.new_message_id,
            box                 = v.new_box
@@ -76,6 +88,13 @@ MARK_AS_DELETED_BATCH = """
       AND box = 'TRASH'
 """
 
+# NOTE: ``RESTORE_FROM_TRASH_BATCH`` and ``RESTORE_FROM_TRASH_DISCOVERED_BATCH``
+# are intentionally separate. Their value-shapes differ (3-tuple vs
+# 4-tuple); merging them with ``COALESCE(v.discovered_box, em.previous_box,
+# 'ALL_MAIL')`` would force every caller to construct uniform 4-tuples,
+# rippling through unrelated services. The duplication here is bounded and
+# the divergence in source-of-truth for the destination box (previous_box
+# vs provider-discovered) is the actual reason both exist.
 RESTORE_FROM_TRASH_BATCH = """
     UPDATE email_metadata AS em
     SET provider_message_id = v.new_message_id::VARCHAR,
@@ -111,9 +130,15 @@ MOVE_TO_TRASH_BATCH = """
 
 # {search_predicate} is a Python str.format() slot populated by PgEmailMetadataStore.list_filtered.
 # It expands to either an empty string or " AND (...)" — only parameterized clauses (%(name)s) belong inside.
+#
+# INVARIANT: NOTHING outside this module may inject text into the slot. The
+# repository builds the predicate from a fixed set of hardcoded SQL fragments
+# matched against trusted column whitelists; any future caller that wants a
+# new predicate must extend the whitelist there, not pass a string here.
+# Allowing arbitrary text would be a SQL injection vector.
 LIST_FILTERED = """
     SELECT provider_message_id, account_id, thread_id, from_email, from_name,
-           subject, received_at, is_read, box
+           subject, received_at, is_read, box, has_attachments
     FROM email_metadata
     WHERE account_id = ANY(%(account_ids)s::uuid[])
       AND box = %(box)s
@@ -128,4 +153,22 @@ EXISTS_BY_MESSAGE_ID = """
     WHERE provider_message_id = %(provider_message_id)s
       AND account_id = %(account_id)s
     LIMIT 1
+"""
+
+# Recompute has_attachments from email_attachments (D-09). The
+# subquery counts non-inline rows; ``COUNT(*) > 0`` is true if and
+# only if at least one downloadable attachment row exists. Idempotent
+# — calling it twice in a row is a no-op. The single helper
+# (``recompute_has_attachments``) is the only writer to this column.
+UPDATE_HAS_ATTACHMENTS = """
+    UPDATE email_metadata AS em
+    SET has_attachments = (
+        SELECT COUNT(*) > 0
+        FROM email_attachments a
+        WHERE a.account_id          = em.account_id
+          AND a.provider_message_id = em.provider_message_id
+          AND a.is_inline           = FALSE
+    )
+    WHERE em.account_id          = %(account_id)s
+      AND em.provider_message_id = %(provider_message_id)s
 """
