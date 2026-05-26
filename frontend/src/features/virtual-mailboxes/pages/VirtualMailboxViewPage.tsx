@@ -1,0 +1,186 @@
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+
+import EmailTable from '../../emails/components/EmailTable';
+import ViewerMount from '../../emails/components/ViewerMount';
+import SearchInput from '../../emails/components/SearchInput';
+import useEmailViewer from '../../emails/hooks/useEmailViewer';
+import useBulkBar from '../../emails/hooks/useBulkBar';
+import useDebounce from '../../emails/hooks/useDebounce';
+import useFavorite from '../../emails/hooks/useFavorite';
+import useVirtualMailbox from '../hooks/useVirtualMailbox';
+import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
+import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
+import type { EmailMetadataOut } from '../../../api/types/dto';
+
+const SEARCH_DEBOUNCE_MS = 300;
+const MIN_SEARCH_LENGTH = 2;
+
+export default function VirtualMailboxViewPage() {
+  const { mailboxId, virtualMailboxId } = useParams<{
+    mailboxId: string;
+    virtualMailboxId: string;
+  }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawQ = searchParams.get('q') ?? '';
+  const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
+  const { record, error: loadError } = useVirtualMailbox(virtualMailboxId ?? '');
+
+  const { emails, accounts, loading, error, refresh } = useVirtualMailboxEmails(
+    virtualMailboxId!,
+    mailboxId!,
+    debouncedQ,
+  );
+
+  // Bulk actions on a virtual mailbox view still operate on real emails
+  // — the underlying email is a real provider message in a real
+  // account. The same useBulkBar hook works because it keys by
+  // (account_id, provider_message_id), which both views surface
+  // identically. The visible "box" passed in is informational only
+  // (controls which bulk actions are exposed); ALL_MAIL is the safest
+  // baseline.
+  const { selection, bulkError, bulkBar } = useBulkBar({
+    mailboxId: mailboxId!,
+    box: 'ALL_MAIL',
+    emails,
+    refresh,
+  });
+
+  const viewer = useEmailViewer(mailboxId!, refresh);
+  const favorites = useFavorite(mailboxId!);
+  const composer = useDraftComposerContext();
+
+  const handleReply = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForReply(email);
+  };
+  const handleReplyAll = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForReplyAll(email);
+  };
+  const handleForward = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForForward(email);
+  };
+
+  const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
+    favorites
+      .toggle({
+        accountId: email.account_id,
+        providerMessageId: email.provider_message_id,
+        favorite: next,
+      })
+      .catch(() => {});
+  };
+
+  const combinedError = error || bulkError || favorites.error;
+
+  const handleSearchChange = (next: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (next.length === 0) params.delete('q');
+    else params.set('q', next);
+    setSearchParams(params, { replace: true });
+  };
+
+  const isSearching = debouncedQ.trim().length >= MIN_SEARCH_LENGTH;
+  const emptyMessage = isSearching
+    ? 'No se encontraron correos para tu búsqueda en esta bandeja ficticia.'
+    : 'Ningún correo coincide con los filtros de esta bandeja ficticia.';
+
+  // 404 on the vmbox lookup means the URL points to a deleted /
+  // foreign / never-existed virtual mailbox. The listing hook will
+  // independently also 404, which used to render the same red banner
+  // twice (load + combined). Detect the lookup 404 and short-circuit
+  // to a dedicated empty state so we don't show a stale title, an
+  // active search input and a duplicated error.
+  const isNotFound = loadError !== null && loadError.code === 'virtual_mailbox_not_found';
+
+  if (isNotFound) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
+          <button
+            type="button"
+            onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
+            className="self-start text-xs text-zinc-500 hover:text-zinc-900"
+          >
+            ← Volver a bandejas ficticias
+          </button>
+        </div>
+        <div className="mx-8 mt-8 rounded-md bg-zinc-50 px-6 py-10 text-center">
+          <h1 className="text-[20px] font-semibold text-zinc-900">
+            Esta bandeja ficticia ya no existe
+          </h1>
+          <p className="mt-2 text-[14px] text-zinc-500">
+            Es posible que la hayas eliminado o que la URL sea incorrecta.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
+            className="mt-4 inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Volver al listado
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
+              className="self-start text-xs text-zinc-500 hover:text-zinc-900"
+            >
+              ← Volver a bandejas ficticias
+            </button>
+            <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+              {record?.display_name ?? 'Bandeja ficticia'}
+            </h1>
+            <p className="text-[15px] leading-[1.5] text-zinc-500">
+              Vista filtrada — los correos siguen viviendo en sus bandejas reales.
+            </p>
+          </div>
+        </div>
+        <div className="pt-2">
+          <SearchInput value={rawQ} onChange={handleSearchChange} />
+        </div>
+      </div>
+      {loadError && <div className="px-8 text-sm text-red-600">{loadError.message}</div>}
+      {combinedError ? (
+        <div className="px-8 text-sm text-red-600">{combinedError.message}</div>
+      ) : (
+        <EmailTable
+          emails={emails}
+          accounts={accounts}
+          loading={loading}
+          view="unified"
+          isSent={false}
+          hasSelection={selection.size > 0}
+          isSelected={selection.isSelected}
+          onToggle={selection.toggle}
+          onToggleAll={() => selection.toggleTopN(emails)}
+          onOpen={viewer.open}
+          onToggleFavorite={handleToggleFavorite}
+          headerCheckboxState={selection.headerState(emails)}
+          bulkBar={bulkBar}
+          emptyMessage={emptyMessage}
+        />
+      )}
+      <ViewerMount
+        mailboxId={mailboxId!}
+        openedEmail={viewer.openedEmail}
+        accounts={accounts}
+        onClose={viewer.close}
+        onRead={viewer.handleRead}
+        onReply={handleReply}
+        onReplyAll={handleReplyAll}
+        onForward={handleForward}
+      />
+    </div>
+  );
+}
