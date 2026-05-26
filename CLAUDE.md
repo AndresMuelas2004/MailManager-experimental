@@ -33,7 +33,6 @@
 
   - `backend/` — API server organized in layers (FastAPI + Python).
   - `frontend/` — Client application (React + Vite + TypeScript + Tailwind).
-  - Docker Compose orchestrates both services plus the database.
 
   ### 3 Excluded Directories
 

@@ -140,7 +140,7 @@ Two framework exception handlers form the final safety net:
 
 The `create_app()` factory:
 
-1. Loads environment variables (OS/Docker env vars take precedence over `.env` files).
+1. Loads environment variables (OS env vars take precedence over `.env` files).
 2. Creates the framework instance with a lifespan context manager.
 3. Adds CORS middleware.
 4. Registers error handlers.

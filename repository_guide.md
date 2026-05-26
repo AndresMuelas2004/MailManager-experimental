@@ -91,10 +91,6 @@ For any operation that modifies email state both at the provider and in our data
 - Both providers (Gmail and Outlook) use a uniform no-op approach for `delete_messages` — the provider API is not called and deletion is performed only in the local database. See `core_guide.md` (Trash Management Operations > `delete_messages`) for the detailed rationale.
 - Draft attachments lazy push (D-07): `POST /drafts/{id}/attachments` and `DELETE .../attachments/{aid}` write only to `draft_attachments`. The provider draft is updated transactionally during `send_draft` (atomic for Gmail; non-atomic + D-27 partial-resume for Outlook). Rationale in `docs/features/adjuntos.md` § 6.9.
 
-## Environment
-
-PostgreSQL is installed natively on this machine, not via Docker. Do not attempt to use Docker for database operations.
-
 ## Claude Code Configuration
 
 This project has a single contributor working from a single machine, so the split between `.claude/settings.json` (tracked) and `.claude/settings.local.json` (gitignored) — designed to keep developer- or machine-specific overrides out of the shared config — adds no value here. `settings.local.json` is intentionally not used: all Claude Code permissions, hooks, MCP toggles, and plugin configuration live in the tracked `.claude/settings.json`. The `.gitignore` entry for `settings.local.json` is kept as a safety net in case Claude Code recreates the file automatically when granting new permissions mid-session — if that happens, fold the new entries back into `settings.json` and delete the local file again.

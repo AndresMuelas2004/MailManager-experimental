@@ -79,7 +79,6 @@ MailManager/
 - PostgreSQL
 - Gmail OAuth app credentials JSON (Google Cloud)
 - Outlook app credentials JSON (Azure app registration)
-- Docker and Docker Compose (optional, for containerized deployment)
 
 ## Getting Started
 
@@ -157,25 +156,6 @@ npm run dev
 ```
 
 Frontend URL: `http://localhost:5173`
-
-### Docker (alternative)
-
-Instead of manual setup, run everything with Docker Compose:
-
-```bash
-# Configure the credentials volume in docker-compose.yml
-# The volume mount path is developer-specific — edit the 'volumes' entry
-# to point to your local OAuth credentials directory.
-
-docker compose up --build
-```
-
-This starts PostgreSQL and the backend (port 8000). The frontend service is currently commented out in `docker-compose.yml`. Run Alembic migrations before exposing the API.
-
-```bash
-docker compose down      # stop all services
-docker compose down -v   # stop and delete database volume
-```
 
 ## Environment Variables
 
