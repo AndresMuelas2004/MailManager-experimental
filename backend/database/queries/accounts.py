@@ -17,6 +17,26 @@ GET_ACCOUNT = """
     WHERE mailbox_id = %(mailbox_id)s AND account_id = %(account_id)s
 """
 
+# Single-JOIN ownership lookup used by cross-account flows where the
+# service has only the account id and the authenticated user id (it
+# does NOT receive the mailbox id from the request). ``GET_ACCOUNT``
+# is keyed by ``(mailbox_id, account_id)`` and would force the service
+# to first resolve the mailbox, which leaks the anti-leak policy
+# D-22 (a foreign mailbox collapses to 403 while the account itself
+# should uniformly 404). The JOIN here returns ``None`` for missing
+# OR foreign accounts in one round trip, and the service converts
+# the absence into ``AccountNotFound`` (HTTP 404) — same pattern as
+# the email-attachments ownership chain.
+GET_ACCOUNT_BY_ID_FOR_USER = """
+    SELECT a.account_id, a.mailbox_id, a.provider, a.display_label,
+           a.config, a.email_address, a.created_at,
+           m.owner_user_id
+    FROM accounts a
+    INNER JOIN mailboxes m ON m.mailbox_id = a.mailbox_id
+    WHERE a.account_id    = %(account_id)s
+      AND m.owner_user_id = %(user_id)s
+"""
+
 UPSERT_ACCOUNT = """
     INSERT INTO accounts (account_id, mailbox_id, provider, display_label, config)
     VALUES (%(account_id)s, %(mailbox_id)s, %(provider)s, %(display_label)s, %(config)s::jsonb)

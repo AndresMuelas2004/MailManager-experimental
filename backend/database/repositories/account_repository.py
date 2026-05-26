@@ -182,6 +182,31 @@ class PgAccountStore(AccountStore):
             return None
         return _row_to_dict(row)
 
+    def get_by_id_for_user(
+        self, account_id: str, user_id: str,
+    ) -> dict[str, Any] | None:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        accounts.GET_ACCOUNT_BY_ID_FOR_USER,
+                        {"account_id": account_id, "user_id": user_id},
+                    )
+                    row = cur.fetchone()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return None
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to get account by id for user.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected account get_by_id_for_user error ({type(exc).__name__}): {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return _row_to_dict(row)
+
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         params = dict(account)
         if isinstance(params.get("config"), dict):

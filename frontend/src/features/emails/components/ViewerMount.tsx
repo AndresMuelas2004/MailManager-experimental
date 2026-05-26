@@ -8,9 +8,21 @@ type Props = {
   accounts: AccountOut[];
   onClose: () => void;
   onRead: (email: EmailMetadataOut) => Promise<void>;
+  onReply: (email: EmailMetadataOut) => void | Promise<void>;
+  onReplyAll: (email: EmailMetadataOut) => void | Promise<void>;
+  onForward: (email: EmailMetadataOut) => void | Promise<void>;
 };
 
-export default function ViewerMount({ mailboxId, openedEmail, accounts, onClose, onRead }: Props) {
+export default function ViewerMount({
+  mailboxId,
+  openedEmail,
+  accounts,
+  onClose,
+  onRead,
+  onReply,
+  onReplyAll,
+  onForward,
+}: Props) {
   if (!openedEmail) return null;
   return (
     <ViewerWithDownloader
@@ -19,6 +31,9 @@ export default function ViewerMount({ mailboxId, openedEmail, accounts, onClose,
       accounts={accounts}
       onClose={onClose}
       onRead={onRead}
+      onReply={onReply}
+      onReplyAll={onReplyAll}
+      onForward={onForward}
     />
   );
 }
@@ -33,6 +48,9 @@ function ViewerWithDownloader({
   accounts,
   onClose,
   onRead,
+  onReply,
+  onReplyAll,
+  onForward,
 }: Omit<Props, 'openedEmail'> & { openedEmail: EmailMetadataOut }) {
   const downloader = useAttachmentDownloader({
     mailboxId,
@@ -47,6 +65,9 @@ function ViewerWithDownloader({
       onClose={onClose}
       onRead={onRead}
       downloader={downloader}
+      onReply={onReply}
+      onReplyAll={onReplyAll}
+      onForward={onForward}
     />
   );
 }

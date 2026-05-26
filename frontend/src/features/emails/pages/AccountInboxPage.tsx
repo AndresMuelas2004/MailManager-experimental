@@ -4,13 +4,16 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useFavorite from '../hooks/useFavorite';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import useDebounce from '../hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';
+import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
+import type { EmailMetadataOut } from '../../../api/types/dto';
 
 type Props = {
   box: EmailBox;
@@ -43,6 +46,31 @@ export default function AccountInboxPage({ box }: Props) {
   });
 
   const viewer = useEmailViewer(mailboxId!, refresh);
+  const favorites = useFavorite(mailboxId!);
+  const composer = useDraftComposerContext();
+
+  const handleReply = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForReply(email);
+  };
+  const handleReplyAll = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForReplyAll(email);
+  };
+  const handleForward = (email: EmailMetadataOut) => {
+    viewer.close();
+    void composer.openForForward(email);
+  };
+
+  const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
+    favorites
+      .toggle({
+        accountId: email.account_id,
+        providerMessageId: email.provider_message_id,
+        favorite: next,
+      })
+      .catch(() => {});
+  };
 
   const { title, bandejaLabel } = useMemo(() => {
     const account = accounts.find((a) => a.account_id === accountId);
@@ -56,7 +84,7 @@ export default function AccountInboxPage({ box }: Props) {
     return { title: computedTitle, bandejaLabel: computedBandeja };
   }, [accounts, accountId]);
 
-  const combinedError = error || bulkError;
+  const combinedError = error || bulkError || favorites.error;
   const basePath = `/m/${mailboxId}/account/${accountId}`;
 
   const handleSearchChange = (next: string) => {
@@ -92,11 +120,14 @@ export default function AccountInboxPage({ box }: Props) {
         emails={emails}
         accounts={accounts}
         loading={loading}
+        view="individual"
+        isSent={box === 'SENT'}
         hasSelection={selection.size > 0}
         isSelected={selection.isSelected}
         onToggle={selection.toggle}
         onToggleAll={() => selection.toggleTopN(emails)}
         onOpen={viewer.open}
+        onToggleFavorite={handleToggleFavorite}
         headerCheckboxState={selection.headerState(emails)}
         bulkBar={bulkBar}
         emptyMessage={emptyMessage}
@@ -108,6 +139,9 @@ export default function AccountInboxPage({ box }: Props) {
         accounts={accounts}
         onClose={viewer.close}
         onRead={viewer.handleRead}
+        onReply={handleReply}
+        onReplyAll={handleReplyAll}
+        onForward={handleForward}
       />
     </div>
   );

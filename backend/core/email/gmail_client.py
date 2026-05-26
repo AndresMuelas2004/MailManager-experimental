@@ -8,7 +8,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ from .email_client import (
     EmailContent,
     EmailMetadata,
     LabelUpdate,
+    ReplyContext,
     SpamMoveResult,
     SyncResult,
 )
@@ -50,6 +51,7 @@ from .errors import (
     EmailNotAuthenticatedError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
+    EmailReplyContextFetchError,
 )
 from .helpers import (
     GmailSendStrategy,
@@ -118,6 +120,50 @@ def _is_retryable(exception: Any) -> bool:
         status = getattr(getattr(exception, "resp", None), "status", None)
         return status in _RETRYABLE_STATUS_CODES
     return True
+
+
+def _split_address_header(header_value: str) -> list[str]:
+    """Decompose an RFC 5322 ``To`` / ``Cc`` / ``Reply-To`` header into
+    a list of plain email addresses (no display name, no angle brackets).
+
+    Uses :py:func:`email.utils.getaddresses` to tolerate display names,
+    quoted local parts, multiple addresses separated by commas, and
+    rare RFC 5322 § 3.4 group syntax. Empty / whitespace strings
+    return ``[]``. Addresses without an ``@`` are dropped silently —
+    they are usually leftover ``"Undisclosed recipients:;"`` group
+    headers or malformed senders that would break downstream.
+    """
+    raw = (header_value or "").strip()
+    if not raw:
+        return []
+    pairs = getaddresses([raw])
+    out: list[str] = []
+    for _name, addr in pairs:
+        cleaned = (addr or "").strip()
+        if not cleaned or "@" not in cleaned:
+            continue
+        out.append(cleaned)
+    return out
+
+
+def _first_recipient_from_to_header(header_value: str) -> tuple[str, str]:
+    """Extract ``(name, email)`` of the first valid recipient in a ``To`` header.
+
+    Same RFC 5322 parser as :py:func:`_split_address_header` but
+    preserves the display name for the leading entry — used to populate
+    ``EmailMetadata.to_email`` / ``to_name`` during sync. Returns
+    ``("", "")`` when the header is empty or carries no address with
+    an ``@`` (rare; service-side notifications mass-mailed via Bcc).
+    """
+    raw = (header_value or "").strip()
+    if not raw:
+        return "", ""
+    for name, addr in getaddresses([raw]):
+        cleaned_addr = (addr or "").strip()
+        if not cleaned_addr or "@" not in cleaned_addr:
+            continue
+        return (name or "").strip(), cleaned_addr
+    return "", ""
 
 
 def _is_send_retryable(exception: Any) -> bool:
@@ -778,7 +824,7 @@ class GmailClient(EmailClient):
             message_ids,
             fmt="metadata",
             error_context="batch metadata fetch",
-            extra_kwargs={"metadataHeaders": ["From", "Subject"]},
+            extra_kwargs={"metadataHeaders": ["From", "To", "Subject"]},
         )
         results: list[EmailMetadata] = []
         skipped_ids: list[str] = []
@@ -822,6 +868,8 @@ class GmailClient(EmailClient):
         from_header = headers.get("From", "")
         from_name, from_email = parseaddr(from_header)
 
+        to_name, to_email = _first_recipient_from_to_header(headers.get("To", ""))
+
         is_read, box = GmailClient._resolve_labels(msg.get("labelIds") or [])
 
         internal_date = msg.get("internalDate")
@@ -842,6 +890,8 @@ class GmailClient(EmailClient):
             received_at=received_at,
             is_read=is_read,
             box=box,
+            to_email=to_email,
+            to_name=to_name,
         )
 
     def _fetch_sender_email(self) -> str:
@@ -1069,6 +1119,7 @@ class GmailClient(EmailClient):
 
         # Fallback: build minimal metadata from the send response
         sender_email = self._fetch_sender_email()
+        primary_recipient = recipients[0] if recipients else ""
         return EmailMetadata(
             provider_message_id=message_id,
             thread_id=response.get("threadId") or "",
@@ -1078,6 +1129,8 @@ class GmailClient(EmailClient):
             received_at=datetime.now(timezone.utc),
             is_read=True,
             box="SENT",
+            to_email=primary_recipient,
+            to_name="",
         )
 
     def send_draft(self, provider_draft_id: str) -> EmailMetadata:
@@ -1157,6 +1210,8 @@ class GmailClient(EmailClient):
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput] | None = None,
+        *,
+        extra_headers: dict[str, str] | None = None,
     ) -> tuple[str, bytes]:
         """Build the RFC 5322 message for Gmail drafts.create / drafts.update / drafts.send.
 
@@ -1173,6 +1228,11 @@ class GmailClient(EmailClient):
         clean ``multipart/mixed`` (with a ``text/plain`` body part and
         each attachment carrying ``Content-Disposition: attachment``,
         RFC 2231 + RFC 2047 filename encoding).
+
+        ``extra_headers`` carries arbitrary RFC 5322 header injections.
+        Used by the Reply / Forward flow to add ``In-Reply-To`` and
+        ``References`` so any destination client (Outlook, Apple Mail)
+        re-threads even without our Gmail ``threadId``.
         """
         attachment_payloads = [
             {
@@ -1191,6 +1251,7 @@ class GmailClient(EmailClient):
             subject=subject or "",
             body=body or "",
             attachments=attachment_payloads,
+            extra_headers=extra_headers,
         )
         return base64.urlsafe_b64encode(raw_bytes).decode("utf-8"), raw_bytes
 
@@ -1201,25 +1262,61 @@ class GmailClient(EmailClient):
         bcc_recipients: list[str],
         subject: str,
         body: str,
+        *,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        reply_to_message_id: str | None = None,
+        reply_kind: str | None = None,
+        original_subject: str | None = None,
     ) -> DraftMetadata:
         """
         Create a draft in Gmail via users().drafts().create(). All fields
         may be empty; Gmail accepts empty drafts. The body is sent as
         ``text/plain`` (D-31). Attachments are NOT pushed here — they
         are attached during ``send_draft_with_attachments`` (D-07).
+
+        When ``thread_id`` is provided, Gmail's documented triple
+        requirement applies: ``threadId`` + ``In-Reply-To`` / ``References``
+        + matching ``Subject``. Coherence between those three is
+        guaranteed locally by the service layer (which has access to
+        the original :py:class:`ReplyContext` and runs
+        :py:func:`validate_reply_threading_coherence` before invoking
+        us) — so the client trusts the inputs and just propagates them
+        to Gmail. ``original_subject`` is accepted to keep the
+        contract symmetric with Outlook callers but unused here.
+
+        ``reply_to_message_id`` and ``reply_kind`` are accepted for
+        signature symmetry with Outlook but unused by Gmail (no
+        ``createReply`` equivalent).
         """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail create_draft requires authentication.")
 
+        del reply_to_message_id, reply_kind, original_subject  # signature symmetry
+
+        extra_headers: dict[str, str] | None = None
+        if in_reply_to or references:
+            extra_headers = {}
+            if in_reply_to:
+                extra_headers["In-Reply-To"] = in_reply_to
+            if references:
+                extra_headers["References"] = references
+
         raw_message, _ = self._build_draft_raw_message(
             to_recipients, cc_recipients, bcc_recipients, subject, body,
+            extra_headers=extra_headers,
         )
+
+        message_payload: dict[str, Any] = {"raw": raw_message}
+        if thread_id:
+            message_payload["threadId"] = thread_id
 
         try:
             response = (
                 self.service.users()
                 .drafts()
-                .create(userId="me", body={"message": {"raw": raw_message}})
+                .create(userId="me", body={"message": message_payload})
                 .execute()
             )
         except HttpError as exc:
@@ -1609,6 +1706,68 @@ class GmailClient(EmailClient):
             return self._batch_modify_labels(message_ids, add_labels=["UNREAD"])
 
     # ------------------------------------------------------------------
+    # Favourites — STARRED label (D-31bis)
+    # ------------------------------------------------------------------
+
+    def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
+        """Toggle the STARRED label on a single Gmail message.
+
+        Reuses :py:meth:`_batch_modify_labels` with a one-element list
+        rather than calling ``users.messages.modify`` directly — the
+        batch helper already centralises the retry policy, the
+        per-chunk error classification, and the no-op behaviour for
+        already-applied / already-removed labels (relevant for the
+        idempotent toggle semantics of the favourites endpoint).
+        """
+        if self.service is None:
+            raise EmailNotAuthenticatedError("Gmail set_favorite requires authentication.")
+        if not provider_message_id:
+            return
+        labels = ["STARRED"]
+        if is_favorite:
+            updated = self._batch_modify_labels([provider_message_id], add_labels=labels)
+        else:
+            updated = self._batch_modify_labels([provider_message_id], remove_labels=labels)
+        if not updated:
+            raise EmailExternalAPIError(
+                f"Gmail set_favorite did not affect message {provider_message_id}."
+            )
+
+    def list_favorite_ids(self) -> list[str]:
+        """List message ids labelled STARRED via ``users.messages.list``."""
+        if self.service is None:
+            raise EmailNotAuthenticatedError("Gmail list_favorite_ids requires authentication.")
+        ids: list[str] = []
+        page_token: str | None = None
+        while True:
+            list_kwargs: dict[str, Any] = {
+                "userId": "me",
+                "labelIds": ["STARRED"],
+                "maxResults": 500,
+                "includeSpamTrash": True,
+            }
+            if page_token:
+                list_kwargs["pageToken"] = page_token
+            try:
+                response = self.service.users().messages().list(**list_kwargs).execute()
+            except HttpError as exc:
+                status, reason = http_error_detail(exc)
+                raise EmailExternalAPIError(
+                    f"Gmail failed to list STARRED messages (HTTP {status}: {reason})."
+                ) from exc
+            except Exception as exc:
+                raise EmailExternalAPIError(
+                    f"Gmail unexpected STARRED list error ({type(exc).__name__}): {exc}"
+                ) from exc
+            for msg in response.get("messages", []) or []:
+                msg_id = str(msg.get("id") or "").strip()
+                if msg_id:
+                    ids.append(msg_id)
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return ids
+
+    # ------------------------------------------------------------------
     # Spam operations
     # ------------------------------------------------------------------
 
@@ -1747,6 +1906,98 @@ class GmailClient(EmailClient):
             payload, provider_message_id, html_body,
         )
         return attachments, cid_map
+
+    def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
+        """Single ``messages.get(format=FULL)`` plus header + body parsing.
+
+        Reuses :py:meth:`_fetch_message_payload` (error wrapping + auth
+        guard already in place) so the new endpoint shares the same
+        retry / 404 semantics as ``fetch_email_content``. ``format=full``
+        is used regardless of ``action`` (Reply / Forward) — the quota
+        cost is identical (20 units in both ``metadata`` and ``full``
+        modes) and the body is needed for the quote on every action that
+        the frontend can choose, see core_guide.md § Helper Reuse Policy.
+
+        Header parsing reuses :py:meth:`_header_value` and applies
+        :py:func:`email.utils.getaddresses` to decompose ``To`` / ``Cc``
+        / ``Reply-To`` headers that may carry multiple comma-separated
+        addresses (with display names, RFC 5322 § 3.4 group syntax,
+        etc.). ``Date`` is parsed via :py:func:`parsedate_to_datetime`
+        with a soft fallback to ``internalDate`` (already used by
+        :py:meth:`_parse_metadata_response`).
+        """
+        try:
+            payload = self._fetch_message_payload(provider_message_id)
+        except CoreError as exc:
+            # Re-raise as a reply-context-specific error so the service
+            # layer maps to ``EmailReplyContextError`` (HTTP 502) instead
+            # of the generic external API error.
+            raise EmailReplyContextFetchError(
+                f"Failed to fetch reply context for message {provider_message_id}: {exc.message}",
+                detail={"reason": "provider_fetch_failed"},
+            ) from exc
+
+        from_header = self._header_value(payload, "From") or ""
+        from_name_raw, from_email_raw = parseaddr(from_header)
+
+        reply_to_addrs = _split_address_header(
+            self._header_value(payload, "Reply-To") or "",
+        )
+        to_addrs = _split_address_header(
+            self._header_value(payload, "To") or "",
+        )
+        cc_addrs = _split_address_header(
+            self._header_value(payload, "Cc") or "",
+        )
+
+        subject = self._header_value(payload, "Subject") or ""
+        message_id_raw = (self._header_value(payload, "Message-ID") or "").strip().strip("<>")
+        references = self._header_value(payload, "References") or ""
+
+        date_header = self._header_value(payload, "Date")
+        received_at: datetime | None = None
+        if date_header:
+            try:
+                received_at = parsedate_to_datetime(date_header)
+            except (TypeError, ValueError):
+                received_at = None
+        if received_at is None:
+            # internalDate is in ms since epoch — same fallback as
+            # ``_parse_metadata_response``.
+            internal_date = payload.get("internalDate") or ""
+            if internal_date:
+                try:
+                    received_at = datetime.fromtimestamp(
+                        int(internal_date) / 1000, tz=timezone.utc,
+                    )
+                except (ValueError, OverflowError, OSError, TypeError):
+                    received_at = None
+        if received_at is None:
+            received_at = datetime.now(timezone.utc)
+
+        # ``_classify_attachments`` walks the MIME tree; we don't need
+        # the attachments here, only the body, so call the dedicated
+        # extractor directly (cheaper than re-classifying).
+        html_body, text_body = self._extract_body_from_payload(payload)
+
+        _, box = self._resolve_labels(payload.get("labelIds") or [])
+
+        return ReplyContext(
+            provider_message_id=provider_message_id,
+            thread_id=payload.get("threadId") or "",
+            from_email=(from_email_raw or "").strip(),
+            from_name=(from_name_raw or "").strip(),
+            reply_to=reply_to_addrs,
+            to_recipients=to_addrs,
+            cc_recipients=cc_addrs,
+            subject=subject,
+            body_html=html_body,
+            body_text=text_body,
+            received_at=received_at,
+            message_id=message_id_raw,
+            references=references,
+            box=box,
+        )
 
     def _fetch_message_payload(self, provider_message_id: str) -> dict[str, Any]:
         """``messages.get(format=FULL)`` with the standard error wrapping.
@@ -2062,6 +2313,10 @@ class GmailClient(EmailClient):
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        thread_id: str | None = None,
     ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
         """Atomic Gmail draft send with attachments (D-07, D-18).
 
@@ -2071,6 +2326,13 @@ class GmailClient(EmailClient):
         total payload exceeds 5 MB). Gmail does not support partial
         attachment state on drafts, so the result list never reports
         provider_attachment_ids — Gmail's send is atomic.
+
+        When ``in_reply_to`` / ``references`` are provided (reply / forward
+        drafts), they are injected as MIME headers via
+        :py:meth:`_build_draft_raw_message`'s ``extra_headers`` plumbing
+        so any destination client re-threads. ``thread_id`` rides the
+        ``drafts.send`` JSON ``message`` shape so Gmail itself stitches
+        the outgoing message into the right thread.
 
         On success returns the sent ``EmailMetadata`` and an empty
         upload result list. On a non-retryable failure raises
@@ -2084,26 +2346,58 @@ class GmailClient(EmailClient):
                 "Gmail send_draft_with_attachments requires authentication."
             )
 
+        extra_headers: dict[str, str] | None = None
+        if in_reply_to or references:
+            extra_headers = {}
+            if in_reply_to:
+                extra_headers["In-Reply-To"] = in_reply_to
+            if references:
+                extra_headers["References"] = references
+
         raw_b64url, raw_bytes = self._build_draft_raw_message(
             to_recipients, cc_recipients, bcc_recipients, subject, body, attachments,
+            extra_headers=extra_headers,
         )
         strategy = pick_gmail_send_strategy(len(raw_bytes))
 
         if strategy is GmailSendStrategy.SIMPLE:
-            response = self._send_draft_simple(provider_draft_id, raw_b64url, attachments)
+            response = self._send_draft_simple(
+                provider_draft_id, raw_b64url, attachments, thread_id=thread_id,
+            )
         else:
             response = self._send_draft_resumable(
                 provider_draft_id, raw_b64url, raw_bytes, attachments,
+                thread_id=thread_id,
             )
 
         message_id = response.get("id", "") if isinstance(response, dict) else ""
-        return self._build_sent_metadata(message_id, response, subject), []
+        return (
+            self._build_sent_metadata(message_id, response, subject, to_recipients),
+            [],
+        )
+
+    @staticmethod
+    def _build_send_message_payload(
+        raw_b64url: str, thread_id: str | None,
+    ) -> dict[str, Any]:
+        """Build the ``message`` sub-payload for ``drafts.send``.
+
+        Used by both the simple and resumable paths so the shape stays
+        identical (``raw`` always present, ``threadId`` only when the
+        draft belongs to a thread).
+        """
+        message: dict[str, Any] = {"raw": raw_b64url}
+        if thread_id:
+            message["threadId"] = thread_id
+        return message
 
     def _send_draft_simple(
         self,
         provider_draft_id: str,
         raw_b64url: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         """``drafts.send`` with the metadata body shape (<= 5 MB total MIME)."""
         for attempt in range(1, _SEND_DRAFT_MAX_ATTEMPTS + 1):
@@ -2115,7 +2409,9 @@ class GmailClient(EmailClient):
                         userId="me",
                         body={
                             "id": provider_draft_id,
-                            "message": {"raw": raw_b64url},
+                            "message": self._build_send_message_payload(
+                                raw_b64url, thread_id,
+                            ),
                         },
                     )
                     .execute()
@@ -2144,6 +2440,8 @@ class GmailClient(EmailClient):
         raw_b64url: str,
         raw_bytes: bytes,
         attachments: list[DraftAttachmentInput],
+        *,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         """Resumable upload path for >5 MB total MIME payloads.
 
@@ -2162,7 +2460,7 @@ class GmailClient(EmailClient):
         # separately via PUT chunks.
         init_body = {
             "id": provider_draft_id,
-            "message": {"raw": raw_b64url},
+            "message": self._build_send_message_payload(raw_b64url, thread_id),
         }
         try:
             init_response = self._http_request(
@@ -2285,13 +2583,17 @@ class GmailClient(EmailClient):
         message_id: str,
         response: dict[str, Any],
         subject: str,
+        to_recipients: list[str] | None = None,
     ) -> EmailMetadata:
         """Best-effort metadata enrichment for a freshly-sent message.
 
         Re-uses the same fallback-to-minimal-metadata pattern as
         ``send_email`` and ``send_draft`` so all three send paths emit
         a consistent ``EmailMetadata`` shape regardless of how the
-        upstream call returned.
+        upstream call returned. When ``to_recipients`` is provided and
+        the post-send fetch fails, the first recipient seeds
+        ``to_email`` so the inbox "Para" column still renders correctly
+        for the freshly-sent message.
         """
         if message_id:
             try:
@@ -2304,6 +2606,8 @@ class GmailClient(EmailClient):
                         result.from_email = self._fetch_sender_email()
                     if not result.from_name:
                         result.from_name = result.from_email
+                    if not result.to_email and to_recipients:
+                        result.to_email = to_recipients[0]
                     return result
             except Exception as exc:
                 logger.warning(
@@ -2311,6 +2615,7 @@ class GmailClient(EmailClient):
                     message_id, type(exc).__name__, exc,
                 )
         sender_email = self._fetch_sender_email()
+        primary_recipient = to_recipients[0] if to_recipients else ""
         return EmailMetadata(
             provider_message_id=message_id,
             thread_id=response.get("threadId") or "" if isinstance(response, dict) else "",
@@ -2320,6 +2625,8 @@ class GmailClient(EmailClient):
             received_at=datetime.now(timezone.utc),
             is_read=True,
             box="SENT",
+            to_email=primary_recipient,
+            to_name="",
         )
 
     @staticmethod

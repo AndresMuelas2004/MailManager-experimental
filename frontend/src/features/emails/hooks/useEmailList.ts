@@ -24,16 +24,25 @@ export default function useEmailList(
   box: EmailBox,
   accountId?: string,
   searchQuery?: string,
+  favorite?: boolean,
 ): UseEmailListReturn {
   const queryClient = useQueryClient();
   const trimmedQuery = (searchQuery ?? '').trim();
   const effectiveQ = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : undefined;
-  const emailsKey = ['emails', mailboxId, box, accountId ?? null, effectiveQ ?? null] as const;
+  const emailsKey = [
+    'emails',
+    mailboxId,
+    box,
+    accountId ?? null,
+    effectiveQ ?? null,
+    favorite ?? null,
+  ] as const;
   const accountsKey = ['accounts', mailboxId] as const;
 
   const emailsQuery = useQuery({
     queryKey: emailsKey,
-    queryFn: ({ signal }) => listEmails(mailboxId, box, accountId, { q: effectiveQ, signal }),
+    queryFn: ({ signal }) =>
+      listEmails(mailboxId, box, accountId, { q: effectiveQ, favorite, signal }),
     enabled: mailboxId.length > 0,
   });
 
@@ -58,7 +67,7 @@ export default function useEmailList(
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: emailsKey });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryClient, mailboxId, box, accountId, effectiveQ]);
+  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite]);
 
   const error = emailsQuery.error
     ? toUiError(emailsQuery.error)

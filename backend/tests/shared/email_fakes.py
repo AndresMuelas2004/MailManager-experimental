@@ -17,6 +17,7 @@ from core.email import (
     SpamMoveResult,
     SyncResult,
 )
+from core.email.email_client import ReplyContext
 
 
 DEFAULT_RECEIVED_AT = datetime(2024, 1, 1, 12, 0, 0)
@@ -78,6 +79,11 @@ class FakeEmailClient(EmailClient):
         list_message_attachments_exc: Exception | None = None,
         fetch_attachment_binary_exc: Exception | None = None,
         send_draft_with_attachments_exc: Exception | None = None,
+        set_favorite_exc: Exception | None = None,
+        list_favorite_ids_exc: Exception | None = None,
+        list_favorite_ids_return: list[str] | None = None,
+        fetch_reply_context_exc: Exception | None = None,
+        fetch_reply_context_return: ReplyContext | None = None,
         list_message_attachments_return: tuple[list[AttachmentMetadata], dict[str, str]] | None = None,
         fetch_attachment_binary_return: AttachmentBinary | None = None,
         send_draft_with_attachments_return: tuple[EmailMetadata, list[AttachmentUploadResult]] | None = None,
@@ -126,6 +132,11 @@ class FakeEmailClient(EmailClient):
         self._list_message_attachments_exc = list_message_attachments_exc
         self._fetch_attachment_binary_exc = fetch_attachment_binary_exc
         self._send_draft_with_attachments_exc = send_draft_with_attachments_exc
+        self._set_favorite_exc = set_favorite_exc
+        self._list_favorite_ids_exc = list_favorite_ids_exc
+        self._list_favorite_ids_return = list(list_favorite_ids_return or [])
+        self._fetch_reply_context_exc = fetch_reply_context_exc
+        self._fetch_reply_context_return = fetch_reply_context_return
         self._list_message_attachments_return = list_message_attachments_return
         self._fetch_attachment_binary_return = fetch_attachment_binary_return
         self._send_draft_with_attachments_return = send_draft_with_attachments_return
@@ -164,6 +175,19 @@ class FakeEmailClient(EmailClient):
         self.send_draft_with_attachments_calls: list[
             tuple[str, list[str], list[str], list[str], str, str, list[DraftAttachmentInput]]
         ] = []
+        self.set_favorite_calls: list[tuple[str, bool]] = []
+        self.list_favorite_ids_calls = 0
+        # Reply / Forward bookkeeping. ``create_draft_reply_kwargs`` and
+        # ``send_draft_with_attachments_reply_kwargs`` are populated on
+        # every call so a test can assert that the reply / forward
+        # kwargs were propagated from the service layer all the way to
+        # the provider client. Each entry is a dict of the new optional
+        # kwargs (``thread_id`` / ``in_reply_to`` / ``references`` /
+        # ``reply_to_message_id`` / ``reply_kind`` / ``original_subject``
+        # for create_draft, and the subset that send accepts).
+        self.fetch_reply_context_calls: list[str] = []
+        self.create_draft_reply_kwargs: list[dict] = []
+        self.send_draft_with_attachments_reply_kwargs: list[dict] = []
         self.deleted_message_ids: list[str] = []
         self.restored_items: list[dict] = []
         self.trashed_items: list[dict[str, str]] = []
@@ -283,10 +307,28 @@ class FakeEmailClient(EmailClient):
         bcc_recipients: list[str],
         subject: str,
         body: str,
+        *,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        reply_to_message_id: str | None = None,
+        reply_kind: str | None = None,
+        original_subject: str | None = None,
     ) -> DraftMetadata:
         self.create_draft_calls.append(
             (list(to_recipients), list(cc_recipients), list(bcc_recipients), subject, body)
         )
+        # Mirror the reply / forward kwargs into their own list so a
+        # test can assert exactly what was propagated to the provider
+        # client without having to reshape ``create_draft_calls``.
+        self.create_draft_reply_kwargs.append({
+            "thread_id": thread_id,
+            "in_reply_to": in_reply_to,
+            "references": references,
+            "reply_to_message_id": reply_to_message_id,
+            "reply_kind": reply_kind,
+            "original_subject": original_subject,
+        })
         if self._create_draft_exc:
             raise self._create_draft_exc
         if self._create_draft_return is not None:
@@ -397,6 +439,10 @@ class FakeEmailClient(EmailClient):
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        thread_id: str | None = None,
     ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
         self.send_draft_with_attachments_calls.append(
             (
@@ -409,6 +455,11 @@ class FakeEmailClient(EmailClient):
                 list(attachments),
             )
         )
+        self.send_draft_with_attachments_reply_kwargs.append({
+            "in_reply_to": in_reply_to,
+            "references": references,
+            "thread_id": thread_id,
+        })
         if self._send_draft_with_attachments_exc:
             raise self._send_draft_with_attachments_exc
         if self._send_draft_with_attachments_return is not None:
@@ -420,6 +471,47 @@ class FakeEmailClient(EmailClient):
             is_read=True,
         )
         return sent_meta, []
+
+    def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
+        self.set_favorite_calls.append((provider_message_id, is_favorite))
+        if self._set_favorite_exc:
+            raise self._set_favorite_exc
+
+    def list_favorite_ids(self) -> list[str]:
+        self.list_favorite_ids_calls += 1
+        if self._list_favorite_ids_exc:
+            raise self._list_favorite_ids_exc
+        return list(self._list_favorite_ids_return)
+
+    def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
+        """Return the injected ``ReplyContext`` (or a benign default).
+
+        The default value is intentionally empty so tests that exercise
+        unrelated flows don't need to provide one. Tests that exercise
+        the reply / forward surface should always inject
+        ``fetch_reply_context_return`` to lock the payload.
+        """
+        self.fetch_reply_context_calls.append(provider_message_id)
+        if self._fetch_reply_context_exc:
+            raise self._fetch_reply_context_exc
+        if self._fetch_reply_context_return is not None:
+            return self._fetch_reply_context_return
+        return ReplyContext(
+            provider_message_id=provider_message_id,
+            thread_id="",
+            from_email="",
+            from_name="",
+            reply_to=[],
+            to_recipients=[],
+            cc_recipients=[],
+            subject="",
+            body_html=None,
+            body_text=None,
+            received_at=DEFAULT_RECEIVED_AT,
+            message_id="",
+            references="",
+            box="ALL_MAIL",
+        )
 
     def get_account_label(self) -> str:
         return self._account_label

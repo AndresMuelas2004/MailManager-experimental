@@ -20,6 +20,7 @@ from .email_client import (
     EmailContent,
     EmailMetadata,
     LabelUpdate,
+    ReplyContext,
     SpamMoveResult,
     SyncResult,
 )
@@ -36,6 +37,7 @@ from .errors import (
     EmailProviderConfigError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
+    EmailReplyContextFetchError,
 )
 from .helpers import (
     OutlookAttachmentStrategy,
@@ -59,7 +61,9 @@ GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
 logger = logging.getLogger(__name__)
 
-_DELTA_SELECT_FIELDS = "id,conversationId,from,subject,receivedDateTime,isRead"
+_DELTA_SELECT_FIELDS = (
+    "id,conversationId,from,toRecipients,subject,receivedDateTime,isRead"
+)
 _DELTA_PAGE_SIZE = 100
 
 _DRAFTS_PAGE_SIZE = 100
@@ -82,7 +86,8 @@ _OUTLOOK_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 _OUTLOOK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 _BOOTSTRAP_SELECT_FIELDS = (
-    "id,conversationId,from,subject,receivedDateTime,isRead,parentFolderId"
+    "id,conversationId,from,toRecipients,subject,"
+    "receivedDateTime,isRead,parentFolderId"
 )
 
 _DELTA_FOLDERS = ("inbox", "sentitems", "drafts", "deleteditems", "junkemail", "archive")
@@ -512,6 +517,10 @@ class OutlookClient(EmailClient):
         from_obj = msg.get("from") or {}
         email_address = from_obj.get("emailAddress") or {}
 
+        to_name, to_email = OutlookClient._first_recipient_from_graph_recipients(
+            msg.get("toRecipients"),
+        )
+
         received_raw = msg.get("receivedDateTime", "")
         if received_raw:
             try:
@@ -530,6 +539,8 @@ class OutlookClient(EmailClient):
             received_at=received_at,
             is_read=msg.get("isRead", False),
             box=box,
+            to_email=to_email,
+            to_name=to_name,
         )
 
     def _fetch_folder_delta(
@@ -842,22 +853,59 @@ class OutlookClient(EmailClient):
         bcc_recipients: list[str],
         subject: str,
         body: str,
+        *,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        reply_to_message_id: str | None = None,
+        reply_kind: str | None = None,
+        original_subject: str | None = None,
     ) -> DraftMetadata:
         """
-        Create a draft in Outlook via POST /me/messages.
+        Create a draft in Outlook.
 
-        CRITICAL: uses the 'Prefer: IdType="ImmutableId"' header so the
-        message ID stays stable across state transitions (e.g. when the
-        draft is later sent). Without this header, Outlook may return a
-        mutable ID that changes on send, which would break any future
-        lookups by provider_draft_id.
+        - **Standalone draft** (no ``reply_to_message_id`` / ``reply_kind``):
+          ``POST /me/messages`` with the message payload — same path
+          the composer has always used. ``thread_id`` / ``in_reply_to`` /
+          ``references`` are accepted for signature symmetry with Gmail
+          but ignored on the wire (Outlook needs ``createReply`` to
+          fix ``conversationId``).
+
+        - **Reply / Reply All / Forward draft** (``reply_to_message_id``
+          and ``reply_kind`` both set): routes through
+          :py:meth:`_create_draft_via_reply`, which calls
+          ``POST /me/messages/{id}/createReply`` /
+          ``createReplyAll`` / ``createForward`` with the message body
+          in the JSON payload — a single round trip per R-09. The
+          provider stitches ``conversationId`` server-side.
+
+        CRITICAL: every Graph call here sends
+        ``Prefer: IdType="ImmutableId"`` so the returned id stays stable
+        across state transitions (e.g. when the draft is later sent).
+        Without this header, Outlook may return a mutable ID that
+        changes on send and break any future ``GET`` / ``PATCH`` /
+        ``DELETE`` keyed by ``provider_draft_id``.
         """
         if self._access_token is None:
             raise EmailNotAuthenticatedError("Outlook create_draft requires authentication.")
 
+        del thread_id, in_reply_to, references, original_subject  # symmetry with Gmail
+
         payload = self._build_draft_graph_payload(
             to_recipients, cc_recipients, bcc_recipients, subject, body,
         )
+
+        if reply_to_message_id and reply_kind in ("reply", "reply_all", "forward"):
+            return self._create_draft_via_reply(
+                reply_to_message_id=reply_to_message_id,
+                kind=reply_kind,
+                message_payload=payload,
+                to_recipients=to_recipients,
+                cc_recipients=cc_recipients,
+                bcc_recipients=bcc_recipients,
+                subject=subject,
+                body=body,
+            )
 
         try:
             response = self._graph_request(
@@ -871,6 +919,91 @@ class OutlookClient(EmailClient):
         except Exception as exc:
             raise EmailExternalAPIError(
                 f"Outlook unexpected create_draft error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+        provider_draft_id = str(response.get("id", ""))
+        created_at = self._parse_graph_datetime(response.get("createdDateTime"))
+        updated_at = self._parse_graph_datetime(response.get("lastModifiedDateTime"))
+
+        return DraftMetadata(
+            provider_draft_id=provider_draft_id,
+            to_recipients=list(to_recipients),
+            cc_recipients=list(cc_recipients),
+            bcc_recipients=list(bcc_recipients),
+            subject=subject,
+            body=body,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+    def _create_draft_via_reply(
+        self,
+        *,
+        reply_to_message_id: str,
+        kind: str,
+        message_payload: dict[str, Any],
+        to_recipients: list[str],
+        cc_recipients: list[str],
+        bcc_recipients: list[str],
+        subject: str,
+        body: str,
+    ) -> DraftMetadata:
+        """``createReply`` / ``createReplyAll`` / ``createForward`` with body JSON (R-09).
+
+        Single round trip — the message payload (subject, body,
+        recipients) is sent in the same call, so we don't need a
+        follow-up PATCH. Graph fixes ``conversationId`` server-side so
+        the draft and the eventual sent message belong to the original
+        thread.
+
+        Pre-validates ``toRecipients`` for ``reply`` / ``reply_all``:
+        Graph's documented XOR constraint requires at least one
+        ``toRecipients`` (either root or under ``message``); skipping
+        it would produce a guaranteed 400 we want to avoid paying
+        quota for. ``forward`` is allowed with empty recipients
+        because the composer fills them later, and Graph allows the
+        forward draft to land in Drafts even if the user has yet to
+        type a recipient.
+        """
+        endpoint_map = {
+            "reply": "createReply",
+            "reply_all": "createReplyAll",
+            "forward": "createForward",
+        }
+        endpoint = endpoint_map.get(kind)
+        if endpoint is None:
+            raise EmailExternalAPIError(
+                f"Outlook _create_draft_via_reply called with invalid kind '{kind}'."
+            )
+        recipients = message_payload.get("toRecipients") or []
+        if kind in ("reply", "reply_all") and not recipients:
+            # Pre-check: the XOR constraint of the createReply body schema
+            # rejects a payload with no toRecipients at all. Surfacing
+            # locally produces a deterministic error instead of an
+            # opaque 400.
+            raise EmailRecipientsMissingError(
+                f"Outlook {endpoint} requires at least one recipient."
+            )
+
+        encoded_id = urllib.parse.quote(reply_to_message_id, safe="")
+        url = f"{GRAPH_BASE_URL}/me/messages/{encoded_id}/{endpoint}"
+
+        # Body shape (R-09 / §15.2): ONLY ``message`` — no ``comment``,
+        # no ``toRecipients`` at the root. Sending either alongside
+        # ``message.body`` / ``message.toRecipients`` produces a 400
+        # by Graph's XOR constraint.
+        request_body = {"message": message_payload}
+
+        try:
+            response = self._graph_request(
+                "POST", url, body=request_body,
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+        except EmailExternalAPIError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Outlook unexpected {endpoint} error ({type(exc).__name__}): {exc}"
             ) from exc
 
         provider_draft_id = str(response.get("id", ""))
@@ -1003,34 +1136,7 @@ class OutlookClient(EmailClient):
                 ) from exc
 
         # With ImmutableId, provider_draft_id == provider_message_id after send.
-        try:
-            fetched = self.fetch_messages_metadata([provider_draft_id])
-            if fetched:
-                result = fetched[0]
-                if not result.from_email or not result.from_name:
-                    profile_email, profile_name = self._fetch_sender_profile()
-                    if not result.from_email:
-                        result.from_email = profile_email
-                    if not result.from_name:
-                        result.from_name = profile_name or profile_email
-                return result
-        except Exception as exc:
-            logger.warning(
-                "Outlook failed to fetch metadata for sent draft %s (%s): %s",
-                provider_draft_id, type(exc).__name__, exc,
-            )
-
-        profile_email, profile_name = self._fetch_sender_profile()
-        return EmailMetadata(
-            provider_message_id=provider_draft_id,
-            thread_id="",
-            from_email=profile_email,
-            from_name=profile_name or profile_email,
-            subject="",
-            received_at=datetime.now(timezone.utc),
-            is_read=True,
-            box="SENT",
-        )
+        return self._build_outlook_sent_metadata(provider_draft_id)
 
     def fetch_drafts(self) -> list[DraftMetadata]:
         """Fetch the most recent Outlook drafts (capped at _DRAFTS_MAX_TOTAL).
@@ -1232,6 +1338,61 @@ class OutlookClient(EmailClient):
         return updated
 
     # ------------------------------------------------------------------
+    # Favourites — followupFlag (Outlook flag)
+    # ------------------------------------------------------------------
+
+    def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
+        """Toggle ``flag.flagStatus`` for a single Outlook message.
+
+        Uses the Immutable-ID Prefer header (every message-touching
+        Graph call must repeat it, see core_guide.md). The toggle is
+        idempotent at Graph: re-setting the same value is a no-op.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError("Outlook set_favorite requires authentication.")
+        if not provider_message_id:
+            return
+        flag_status = "flagged" if is_favorite else "notFlagged"
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages/"
+            f"{urllib.parse.quote(provider_message_id, safe='')}"
+        )
+        self._graph_request(
+            "PATCH",
+            url,
+            body={"flag": {"flagStatus": flag_status}},
+            extra_headers=_PREFER_IMMUTABLE_HEADERS,
+        )
+
+    def list_favorite_ids(self) -> list[str]:
+        """List ids of every flagged Outlook message in the mailbox.
+
+        Filters with ``$filter=flag/flagStatus eq 'flagged'`` and pages
+        through ``@odata.nextLink`` until the result set is exhausted.
+        ImmutableId is preferred so the returned ids stay stable across
+        future moves (and match the ids already in ``email_metadata``).
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError("Outlook list_favorite_ids requires authentication.")
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages"
+            "?$filter=flag/flagStatus%20eq%20'flagged'"
+            "&$select=id"
+            "&$top=100"
+        )
+        ids: list[str] = []
+        while url:
+            response = self._graph_request(
+                "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+            for msg in response.get("value", []) or []:
+                msg_id = str(msg.get("id") or "").strip()
+                if msg_id:
+                    ids.append(msg_id)
+            url = response.get("@odata.nextLink")
+        return ids
+
+    # ------------------------------------------------------------------
     # Spam operations
     # ------------------------------------------------------------------
 
@@ -1321,6 +1482,190 @@ class OutlookClient(EmailClient):
             raise EmailExternalAPIError(
                 f"Outlook unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
             ) from exc
+
+    def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
+        """Single ``GET /me/messages/{id}`` covering every Reply / Forward
+        input field, with provider parsing isolated in
+        :py:meth:`_reply_context_from_graph_message`.
+
+        ``$select`` enumerates only the fields the composer needs:
+        ``from``, ``toRecipients``, ``ccRecipients``, ``replyTo``,
+        ``subject``, ``body``, ``internetMessageId``,
+        ``internetMessageHeaders``, ``receivedDateTime``,
+        ``conversationId``, ``parentFolderId``, ``hasAttachments``.
+
+        ``parentFolderId`` is mapped to a box via the existing
+        :py:meth:`_resolve_special_folder_ids` helper so the
+        self-reply override ("I replied to my own Sent message") can
+        be derived in the service layer.
+
+        Errors from Graph are wrapped as
+        :py:class:`EmailReplyContextFetchError` so the service maps
+        them to the reply-specific ``EmailReplyContextError`` (HTTP
+        502).
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook fetch_reply_context requires authentication."
+            )
+        escaped_id = urllib.parse.quote(provider_message_id, safe="")
+        select_fields = (
+            "from,toRecipients,ccRecipients,replyTo,subject,body,"
+            "internetMessageId,internetMessageHeaders,receivedDateTime,"
+            "conversationId,parentFolderId,hasAttachments"
+        )
+        try:
+            response = self._graph_request(
+                "GET",
+                f"{GRAPH_BASE_URL}/me/messages/{escaped_id}?$select={select_fields}",
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+        except EmailExternalAPIError as exc:
+            raise EmailReplyContextFetchError(
+                f"Failed to fetch reply context for Outlook message {provider_message_id}: {exc.message}",
+                detail={"reason": "provider_fetch_failed"},
+            ) from exc
+        except Exception as exc:
+            raise EmailReplyContextFetchError(
+                f"Outlook unexpected fetch_reply_context error ({type(exc).__name__}): {exc}",
+                detail={"reason": "provider_fetch_failed"},
+            ) from exc
+
+        # Best-effort folder resolution. A failure here just collapses
+        # to ``ALL_MAIL`` — the self-reply override is a UX nicety,
+        # not a correctness invariant.
+        try:
+            folder_id_to_box = self._resolve_special_folder_ids()
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "Outlook reply context: folder resolution failed (%s): %s",
+                type(exc).__name__, exc,
+            )
+            folder_id_to_box = {}
+        parent_folder_id = response.get("parentFolderId") or ""
+        box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
+
+        return self._reply_context_from_graph_message(
+            provider_message_id=provider_message_id, message=response, box=box,
+        )
+
+    @staticmethod
+    def _emails_from_recipients(recipients: Any) -> list[str]:
+        """Decompose a Graph ``recipients`` list into plain email strings.
+
+        Graph returns ``[{"emailAddress": {"address": "...", "name": "..."}}, ...]``.
+        We surface a flat list of addresses for symmetry with
+        :py:meth:`GmailClient._split_address_header` and to keep the
+        :py:class:`ReplyContext` shape provider-agnostic.
+        """
+        out: list[str] = []
+        if not isinstance(recipients, list):
+            return out
+        for entry in recipients:
+            if not isinstance(entry, dict):
+                continue
+            addr_obj = entry.get("emailAddress") or {}
+            if not isinstance(addr_obj, dict):
+                continue
+            addr = (addr_obj.get("address") or "").strip()
+            if addr and "@" in addr:
+                out.append(addr)
+        return out
+
+    @staticmethod
+    def _first_recipient_from_graph_recipients(
+        recipients: Any,
+    ) -> tuple[str, str]:
+        """Extract ``(name, email)`` of the first valid Graph recipient.
+
+        Symmetric with :py:meth:`_emails_from_recipients` (same Graph
+        shape parsing) but preserves the display name for the leading
+        entry — used to populate ``EmailMetadata.to_email`` / ``to_name``
+        during sync. Returns ``("", "")`` when no recipient carries a
+        valid ``@`` address.
+        """
+        if not isinstance(recipients, list):
+            return "", ""
+        for entry in recipients:
+            if not isinstance(entry, dict):
+                continue
+            addr_obj = entry.get("emailAddress") or {}
+            if not isinstance(addr_obj, dict):
+                continue
+            addr = (addr_obj.get("address") or "").strip()
+            if not addr or "@" not in addr:
+                continue
+            name = (addr_obj.get("name") or "").strip()
+            return name, addr
+        return "", ""
+
+    @staticmethod
+    def _references_from_internet_headers(headers: Any) -> str:
+        """Extract the raw ``References`` value from ``internetMessageHeaders``.
+
+        The Graph property is a list of ``{name, value}`` records. We
+        match ``References`` case-insensitively (RFC 5322 header names
+        are case-insensitive). A missing header collapses to ``""``.
+        """
+        if not isinstance(headers, list):
+            return ""
+        for entry in headers:
+            if not isinstance(entry, dict):
+                continue
+            if (entry.get("name") or "").lower() == "references":
+                return str(entry.get("value") or "")
+        return ""
+
+    def _reply_context_from_graph_message(
+        self,
+        *,
+        provider_message_id: str,
+        message: dict[str, Any],
+        box: str,
+    ) -> ReplyContext:
+        """Pure-shape conversion from Graph ``message`` JSON to ``ReplyContext``.
+
+        Split from :py:meth:`fetch_reply_context` so the HTTP layer
+        and the parsing layer can be tested independently (fakes that
+        feed pre-shaped dicts don't need to mock the Graph stack).
+        """
+        from_obj = message.get("from") or {}
+        from_addr_obj = from_obj.get("emailAddress") or {} if isinstance(from_obj, dict) else {}
+        from_email = (from_addr_obj.get("address") or "").strip()
+        from_name = (from_addr_obj.get("name") or "").strip()
+
+        body_section = message.get("body") or {}
+        content_type = (body_section.get("contentType") or "").lower()
+        content = body_section.get("content")
+        if content_type == "html":
+            html_body = content
+            text_body = None
+        else:
+            html_body = None
+            text_body = content
+
+        message_id_raw = (message.get("internetMessageId") or "").strip().strip("<>")
+        references = self._references_from_internet_headers(
+            message.get("internetMessageHeaders"),
+        )
+        received_at = self._parse_graph_datetime(message.get("receivedDateTime"))
+
+        return ReplyContext(
+            provider_message_id=provider_message_id,
+            thread_id=str(message.get("conversationId") or ""),
+            from_email=from_email,
+            from_name=from_name,
+            reply_to=self._emails_from_recipients(message.get("replyTo")),
+            to_recipients=self._emails_from_recipients(message.get("toRecipients")),
+            cc_recipients=self._emails_from_recipients(message.get("ccRecipients")),
+            subject=str(message.get("subject") or ""),
+            body_html=html_body,
+            body_text=text_body,
+            received_at=received_at,
+            message_id=message_id_raw,
+            references=references,
+            box=box,
+        )
 
     def list_message_attachments(
         self,
@@ -1523,6 +1868,10 @@ class OutlookClient(EmailClient):
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        thread_id: str | None = None,
     ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
         """Push attachments to the provider draft and send (D-07, D-18, D-27).
 
@@ -1538,11 +1887,19 @@ class OutlookClient(EmailClient):
         :py:class:`EmailAttachmentSendFailed` with the failed
         attachments listed; the partial upload results returned BEFORE
         the failure remain valid for resume.
+
+        ``in_reply_to`` / ``references`` / ``thread_id`` are accepted for
+        signature symmetry with Gmail but **ignored** — Outlook stitches
+        the thread server-side via ``createReply`` / ``createReplyAll``
+        / ``createForward`` (used at draft creation), so injecting the
+        same data on the wire here would be redundant and Graph
+        provides no header-injection path for the ``send`` endpoint.
         """
         if self._access_token is None:
             raise EmailNotAuthenticatedError(
                 "Outlook send_draft_with_attachments requires authentication."
             )
+        del in_reply_to, references, thread_id  # signature symmetry with Gmail
 
         upload_results: list[AttachmentUploadResult] = []
         failed: list[dict[str, Any]] = []
@@ -1619,7 +1976,10 @@ class OutlookClient(EmailClient):
                 ]},
             ) from last_exc
 
-        return self._build_outlook_sent_metadata(provider_draft_id), upload_results
+        return (
+            self._build_outlook_sent_metadata(provider_draft_id, to_recipients),
+            upload_results,
+        )
 
     def _upload_attachment_simple(
         self, provider_draft_id: str, attachment: DraftAttachmentInput,
@@ -1759,12 +2119,19 @@ class OutlookClient(EmailClient):
                 f"Outlook upload chunk PUT URL error: {exc.reason}"
             ) from exc
 
-    def _build_outlook_sent_metadata(self, provider_draft_id: str) -> EmailMetadata:
+    def _build_outlook_sent_metadata(
+        self,
+        provider_draft_id: str,
+        to_recipients: list[str] | None = None,
+    ) -> EmailMetadata:
         """Best-effort metadata for a freshly-sent message (Outlook).
 
         With ImmutableId, the message id is preserved across the send
         transition, so we can reuse ``fetch_messages_metadata`` against
         the same id. Mirrors the existing pattern in ``send_draft``.
+        When ``to_recipients`` is provided, the first recipient seeds
+        ``to_email`` if the post-send fetch fails — keeping the "Para"
+        column populated for freshly-sent messages.
         """
         try:
             fetched = self.fetch_messages_metadata([provider_draft_id])
@@ -1776,6 +2143,8 @@ class OutlookClient(EmailClient):
                         result.from_email = profile_email
                     if not result.from_name:
                         result.from_name = profile_name or profile_email
+                if not result.to_email and to_recipients:
+                    result.to_email = to_recipients[0]
                 return result
         except Exception as exc:
             logger.warning(
@@ -1783,6 +2152,7 @@ class OutlookClient(EmailClient):
                 provider_draft_id, type(exc).__name__, exc,
             )
         profile_email, profile_name = self._fetch_sender_profile()
+        primary_recipient = to_recipients[0] if to_recipients else ""
         return EmailMetadata(
             provider_message_id=provider_draft_id,
             thread_id="",
@@ -1792,6 +2162,8 @@ class OutlookClient(EmailClient):
             received_at=datetime.now(timezone.utc),
             is_read=True,
             box="SENT",
+            to_email=primary_recipient,
+            to_name="",
         )
 
     def get_account_label(self) -> str:

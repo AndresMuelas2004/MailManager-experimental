@@ -203,3 +203,36 @@ describe('ComposeOverlay — account selector locked', () => {
     expect(onSelectedAccountChange).not.toHaveBeenCalled();
   });
 });
+
+describe('ComposeOverlay — title by mode', () => {
+  // The reply / reply_all / forward modes were added in the Reply
+  // feature. Each must render its own header label so the user always
+  // sees which action they are about to perform — the only visual
+  // distinction between the four composer modes ``edit_draft`` and
+  // ``reply``/``reply_all``/``forward`` (the button set is identical).
+  it.each([
+    ['reply', 'Responder'],
+    ['reply_all', 'Responder a todos'],
+    ['forward', 'Reenviar'],
+  ] as const)('mode=%s renders the %s title', (mode, title) => {
+    renderOverlay({ mode });
+    expect(screen.getByText(title)).toBeInTheDocument();
+  });
+
+  it('mode=reply shows the same button set as edit_draft (Send draft + Save)', () => {
+    // Reply / Reply All / Forward share their button set with
+    // edit_draft: both can be saved AND sent (no "Send email" path,
+    // because the draft already exists on the provider).
+    renderOverlay({ mode: 'reply' });
+    // Save-draft button present.
+    expect(screen.getByRole('button', { name: /guardar/i })).toBeInTheDocument();
+    // Send-draft button present.
+    expect(screen.getByRole('button', { name: /enviar/i })).toBeInTheDocument();
+  });
+
+  it('mode=forward keeps the same buttons as reply', () => {
+    renderOverlay({ mode: 'forward' });
+    expect(screen.getByRole('button', { name: /guardar/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enviar/i })).toBeInTheDocument();
+  });
+});

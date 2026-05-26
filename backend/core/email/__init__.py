@@ -13,6 +13,7 @@ from core.email.email_client import (
     EmailContent,
     EmailMetadata,
     LabelUpdate,
+    ReplyContext,
     SpamMoveResult,
     SyncResult,
 )
@@ -41,6 +42,7 @@ from core.email.errors import (
     EmailProviderConfigError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
+    EmailReplyContextFetchError,
 )
 
 __all__ = [
@@ -79,6 +81,8 @@ __all__ = [
     "EmailProviderConfigError",
     "EmailRecipientsMissingError",
     "EmailRefreshFailedError",
+    "EmailReplyContextFetchError",
+    "ReplyContext",
     "SyncResult",
     "is_blocked_extension",
 ]

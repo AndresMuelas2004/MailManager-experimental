@@ -10,6 +10,7 @@ from .email_client import (
     EmailClient,
     EmailContent,
     EmailMetadata,
+    ReplyContext,
     SpamMoveResult,
     SyncResult,
 )
@@ -259,21 +260,61 @@ class EmailManager:
         bcc_recipients: list[str],
         subject: str,
         body: str,
+        *,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        reply_to_message_id: str | None = None,
+        reply_kind: str | None = None,
+        original_subject: str | None = None,
     ) -> DraftMetadata:
         """
         Create a draft using the client that matches the requested account label.
         Body is plain text (D-31).
+
+        The reply / forward kwargs (all optional) are propagated to the
+        underlying client. Gmail uses ``thread_id`` + ``in_reply_to`` /
+        ``references`` to stitch the outgoing message into the thread;
+        Outlook uses ``reply_to_message_id`` + ``reply_kind`` to route
+        through ``createReply`` / ``createReplyAll`` / ``createForward``.
+        See :py:meth:`EmailClient.create_draft` for the full contract.
         """
         client = self._get_client_or_raise(account_label)
         try:
             return client.create_draft(
                 to_recipients, cc_recipients, bcc_recipients, subject, body,
+                thread_id=thread_id,
+                in_reply_to=in_reply_to,
+                references=references,
+                reply_to_message_id=reply_to_message_id,
+                reply_kind=reply_kind,
+                original_subject=original_subject,
             )
         except CoreError:
             raise
         except Exception as exc:
             raise EmailExternalAPIError(
                 f"Unexpected create_draft error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def fetch_reply_context(
+        self, account_label: str, provider_message_id: str,
+    ) -> ReplyContext:
+        """Delegate ``fetch_reply_context`` to the matching client.
+
+        Returns a fully populated :py:class:`ReplyContext`. The service
+        layer consumes this to compute the composer prefill (To / Cc /
+        Subject / quoted body) and the threading metadata persisted on
+        the new draft row.
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.fetch_reply_context(provider_message_id)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected fetch_reply_context error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def update_draft(
@@ -353,6 +394,53 @@ class EmailManager:
             raise EmailExternalAPIError(
                 f"Unexpected update_read_status error ({type(exc).__name__}): {exc}"
             ) from exc
+
+    def set_favorite(
+        self,
+        account_label: str,
+        provider_message_id: str,
+        is_favorite: bool,
+    ) -> None:
+        """Toggle the provider's favourite flag for a single message."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            client.set_favorite(provider_message_id, is_favorite)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected set_favorite error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def list_favorite_ids(self, account_label: str) -> list[str]:
+        """Return the provider's current favourite message ids for one account."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.list_favorite_ids()
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected list_favorite_ids error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def list_all_favorite_ids(self) -> dict[str, list[str]]:
+        """Per-account favourite-id listing — used by the multi-account sync.
+
+        Mirrors :py:meth:`fetch_all_drafts` shape: returns
+        ``{account_label: list[str]}`` and accumulates per-client errors
+        in ``self._last_errors`` so the service layer can decide how to
+        surface partial failures.
+        """
+        self._last_errors = {}
+        results: dict[str, list[str]] = {}
+        for client in self._clients:
+            label = client.get_account_label()
+            try:
+                results[label] = client.list_favorite_ids()
+            except Exception as exc:
+                self._last_errors[label] = exc
+        return results
 
     def move_to_spam(
         self,
@@ -448,8 +536,19 @@ class EmailManager:
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        thread_id: str | None = None,
     ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
-        """Send a draft together with its locally-stored attachments (D-07, D-27)."""
+        """Send a draft together with its locally-stored attachments (D-07, D-27).
+
+        ``in_reply_to`` / ``references`` / ``thread_id`` carry the
+        threading metadata persisted on the local ``drafts`` row for
+        reply / forward sends; Gmail injects the headers + ``threadId``
+        into the wire send, Outlook ignores them (the provider already
+        stitched the thread server-side at draft creation).
+        """
         client = self._get_client_or_raise(account_label)
         try:
             return client.send_draft_with_attachments(
@@ -460,6 +559,9 @@ class EmailManager:
                 subject,
                 body,
                 attachments,
+                in_reply_to=in_reply_to,
+                references=references,
+                thread_id=thread_id,
             )
         except CoreError:
             raise

@@ -14,7 +14,7 @@ from __future__ import annotations
 UPSERT_EMAIL_METADATA_BATCH = """
     INSERT INTO email_metadata
         (provider_message_id, account_id, thread_id, from_email, from_name,
-         subject, received_at, is_read, box)
+         subject, received_at, is_read, box, to_email, to_name)
     VALUES %s
     ON CONFLICT (provider_message_id, account_id) DO UPDATE SET
         is_read = EXCLUDED.is_read,
@@ -22,7 +22,9 @@ UPSERT_EMAIL_METADATA_BATCH = """
             WHEN email_metadata.box = 'DELETED' AND EXCLUDED.box = 'TRASH'
             THEN 'DELETED'
             ELSE EXCLUDED.box
-        END
+        END,
+        to_email = EXCLUDED.to_email,
+        to_name = EXCLUDED.to_name
 """
 
 DELETE_BATCH_BY_MESSAGE_IDS = """
@@ -128,24 +130,68 @@ MOVE_TO_TRASH_BATCH = """
       AND em.box NOT IN ('TRASH', 'DELETED')
 """
 
-# {search_predicate} is a Python str.format() slot populated by PgEmailMetadataStore.list_filtered.
-# It expands to either an empty string or " AND (...)" — only parameterized clauses (%(name)s) belong inside.
+# {box_predicate}, {search_predicate} and {extra_predicate} are Python
+# str.format() slots populated by PgEmailMetadataStore.list_filtered.
+# Each one expands to either an empty string or " AND (...)" — only
+# parameterised clauses (%(name)s) belong inside.
 #
-# INVARIANT: NOTHING outside this module may inject text into the slot. The
-# repository builds the predicate from a fixed set of hardcoded SQL fragments
-# matched against trusted column whitelists; any future caller that wants a
-# new predicate must extend the whitelist there, not pass a string here.
-# Allowing arbitrary text would be a SQL injection vector.
+# Single query backs BOTH the regular box listing (one box, mandatory)
+# and the virtual-mailbox listing (zero, one or many boxes derived from
+# the stored filter_payload). The caller passes the right slot text in
+# each case; merging them avoids two near-identical queries drifting
+# over time.
+#
+# INVARIANT: NOTHING outside this module may inject text into any of the
+# slots. The repository builds the predicates from a fixed set of
+# hardcoded SQL fragments matched against trusted column whitelists; any
+# future caller that wants a new predicate must extend the whitelist
+# there, not pass a string here. Allowing arbitrary text would be a SQL
+# injection vector.
 LIST_FILTERED = """
     SELECT provider_message_id, account_id, thread_id, from_email, from_name,
-           subject, received_at, is_read, box, has_attachments
+           subject, received_at, is_read, box, has_attachments, is_favorite,
+           to_email, to_name
     FROM email_metadata
     WHERE account_id = ANY(%(account_ids)s::uuid[])
-      AND box = %(box)s
+      {box_predicate}
       {search_predicate}
-    ORDER BY received_at DESC
+      {extra_predicate}
+    ORDER BY received_at DESC, account_id, provider_message_id
     LIMIT %(limit)s
     OFFSET %(offset)s
+"""
+# NOTE: ``ORDER BY received_at DESC`` alone leaves ties non-deterministic.
+# When two messages share an identical ``received_at`` (e.g. mass-sent
+# notifications batched to the same second), PostgreSQL is free to return
+# them in any order — so the same physical row can appear on adjacent
+# OFFSET pages (or be skipped) under the SAME query. The composite key
+# ``(account_id, provider_message_id)`` is unique across the table (it is
+# the table's primary key) and breaks every possible tie, making the
+# ordering total — paging by ``OFFSET`` becomes stable. Do NOT remove
+# the secondary keys without replacing them with another total-ordering
+# tie-break: a regression here re-introduces silent dup/skip between
+# pages, which is invisible from a single-page test.
+
+# Favourites toggle (single row, the API surface is one message at a time
+# per the no-bulk MVP decision). Returns the affected provider_message_id
+# so the service can detect "row not found" without a second roundtrip.
+UPDATE_FAVORITE_STATUS = """
+    UPDATE email_metadata
+    SET is_favorite = %(is_favorite)s
+    WHERE account_id = %(account_id)s
+      AND provider_message_id = %(provider_message_id)s
+    RETURNING provider_message_id
+"""
+
+# Favourites sync: full replacement of the favourite set for a given
+# account. ``true_ids`` is the list of provider_message_ids that should
+# be marked TRUE; every OTHER row of that account is forced to FALSE.
+# Single statement — atomic from the caller's perspective and cheaper
+# than two separate updates.
+SYNC_FAVORITES_FOR_ACCOUNT = """
+    UPDATE email_metadata
+    SET is_favorite = (provider_message_id = ANY(%(true_ids)s))
+    WHERE account_id = %(account_id)s
 """
 
 EXISTS_BY_MESSAGE_ID = """

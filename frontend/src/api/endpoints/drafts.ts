@@ -1,10 +1,12 @@
 import { request } from '../client/http';
 import {
+  copyAttachmentsFromEmailResponseSchema,
   draftListSchema,
   draftOutSchema,
   draftSendOutSchema,
   draftsSyncResultOutSchema,
   statusResponseSchema,
+  type CopyAttachmentsFromEmailResponse,
   type DraftCreate,
   type DraftOut,
   type DraftSendOut,
@@ -71,4 +73,23 @@ export function deleteDraft(
     method: 'DELETE',
     schema: statusResponseSchema,
   });
+}
+
+export function copyAttachmentsFromEmail(
+  mailboxId: string,
+  accountId: string,
+  providerDraftId: string,
+  source: { accountId: string; providerMessageId: string },
+): Promise<CopyAttachmentsFromEmailResponse> {
+  return request(
+    `/mailboxes/${mailboxId}/accounts/${accountId}/drafts/${providerDraftId}/attachments/copy-from-email`,
+    {
+      method: 'POST',
+      body: {
+        source_account_id: source.accountId,
+        source_provider_message_id: source.providerMessageId,
+      },
+      schema: copyAttachmentsFromEmailResponseSchema,
+    },
+  );
 }

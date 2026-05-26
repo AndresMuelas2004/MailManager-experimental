@@ -117,11 +117,14 @@ export const emailMetadataOutSchema = z.object({
   thread_id: z.string().nullable(),
   from_email: z.string(),
   from_name: z.string().nullable(),
+  to_email: z.string().nullable().optional(),
+  to_name: z.string().nullable().optional(),
   subject: z.string().nullable(),
   received_at: z.string(),
   is_read: z.boolean(),
   box: z.string(),
   has_attachments: z.boolean().default(false),
+  is_favorite: z.boolean().default(false),
 });
 export type EmailMetadataOut = z.infer<typeof emailMetadataOutSchema>;
 
@@ -195,12 +198,25 @@ export const spamResponseSchema = z.object({
 export type SpamResponse = z.infer<typeof spamResponseSchema>;
 
 // Drafts — body is plain text (D-31).
+// The six reply / forward fields mirror the backend ``DraftCreate`` /
+// ``DraftOut`` extensions. Zod's default extra-key policy ("allow")
+// is intentionally kept — the backend does NOT set ``extra="forbid"``
+// so older clients with unknown fields keep working.
+export const replyKindSchema = z.enum(['reply', 'reply_all', 'forward']);
+export type ReplyKindDto = z.infer<typeof replyKindSchema>;
+
 export const draftCreateSchema = z.object({
   to_recipients: z.array(z.string()).optional(),
   cc_recipients: z.array(z.string()).optional(),
   bcc_recipients: z.array(z.string()).optional(),
   subject: z.string().optional(),
   body: z.string().optional(),
+  reply_kind: replyKindSchema.nullable().optional(),
+  reply_to_message_id: z.string().nullable().optional(),
+  reply_to_account_id: z.string().nullable().optional(),
+  thread_id: z.string().nullable().optional(),
+  in_reply_to: z.string().nullable().optional(),
+  references_header: z.string().nullable().optional(),
 });
 export type DraftCreate = z.infer<typeof draftCreateSchema>;
 
@@ -224,6 +240,12 @@ export const draftOutSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   attachments: z.array(draftAttachmentMetadataSchema).default([]),
+  reply_kind: replyKindSchema.nullable().optional(),
+  reply_to_message_id: z.string().nullable().optional(),
+  reply_to_account_id: z.string().nullable().optional(),
+  thread_id: z.string().nullable().optional(),
+  in_reply_to: z.string().nullable().optional(),
+  references_header: z.string().nullable().optional(),
 });
 export type DraftOut = z.infer<typeof draftOutSchema>;
 
@@ -248,3 +270,120 @@ export const draftSendOutSchema = z.object({
   status: z.string(),
 });
 export type DraftSendOut = z.infer<typeof draftSendOutSchema>;
+
+// Favourites
+export const favoriteUpdateRequestSchema = z.object({
+  favorite: z.boolean(),
+});
+export type FavoriteUpdateRequest = z.infer<typeof favoriteUpdateRequestSchema>;
+
+export const favoriteUpdateResponseSchema = z.object({
+  provider_message_id: z.string(),
+  account_id: z.string(),
+  is_favorite: z.boolean(),
+});
+export type FavoriteUpdateResponse = z.infer<typeof favoriteUpdateResponseSchema>;
+
+export const favoriteSyncAccountDetailSchema = z.object({
+  account_id: z.string(),
+  provider: z.string(),
+  favorites_synced: z.number(),
+});
+export type FavoriteSyncAccountDetail = z.infer<typeof favoriteSyncAccountDetailSchema>;
+
+export const favoriteSyncResponseSchema = z.object({
+  total_synced: z.number(),
+  accounts: z.array(favoriteSyncAccountDetailSchema),
+});
+export type FavoriteSyncResponse = z.infer<typeof favoriteSyncResponseSchema>;
+
+// Virtual mailboxes (fake mailboxes — filtered views over email_metadata).
+export const virtualMailboxScopeKindSchema = z.enum(['mailbox', 'all', 'accounts']);
+export type VirtualMailboxScopeKind = z.infer<typeof virtualMailboxScopeKindSchema>;
+
+export const virtualMailboxFilterBoxSchema = z.enum(['ALL_MAIL', 'SENT', 'SPAM', 'TRASH']);
+export type VirtualMailboxFilterBox = z.infer<typeof virtualMailboxFilterBoxSchema>;
+
+export const virtualMailboxScopePayloadSchema = z.object({
+  mailbox_id: z.string().optional(),
+  account_ids: z.array(z.string()).optional(),
+});
+export type VirtualMailboxScopePayload = z.infer<typeof virtualMailboxScopePayloadSchema>;
+
+export const virtualMailboxFilterPayloadSchema = z.object({
+  box: virtualMailboxFilterBoxSchema.optional(),
+  box_not_in: z.array(virtualMailboxFilterBoxSchema).optional(),
+  from_email: z.string().optional(),
+  from_domain: z.string().optional(),
+  subject_contains: z.string().optional(),
+  is_read: z.boolean().optional(),
+  is_favorite: z.boolean().optional(),
+});
+export type VirtualMailboxFilterPayload = z.infer<typeof virtualMailboxFilterPayloadSchema>;
+
+export const virtualMailboxCreateSchema = z.object({
+  display_name: z.string().min(1).max(120),
+  scope_kind: virtualMailboxScopeKindSchema,
+  scope_payload: virtualMailboxScopePayloadSchema,
+  filter_payload: virtualMailboxFilterPayloadSchema,
+});
+export type VirtualMailboxCreate = z.infer<typeof virtualMailboxCreateSchema>;
+
+export const virtualMailboxUpdateSchema = virtualMailboxCreateSchema;
+export type VirtualMailboxUpdate = z.infer<typeof virtualMailboxUpdateSchema>;
+
+// The backend stores scope/filter as JSONB and re-emits them; we keep
+// them loosely typed in the OUT shape because the create/update side
+// already enforces the constrained schema.
+export const virtualMailboxOutSchema = z.object({
+  virtual_mailbox_id: z.string(),
+  owner_user_id: z.string(),
+  display_name: z.string(),
+  scope_kind: virtualMailboxScopeKindSchema,
+  scope_payload: z.record(z.string(), z.unknown()),
+  filter_payload: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type VirtualMailboxOut = z.infer<typeof virtualMailboxOutSchema>;
+
+export const virtualMailboxListSchema = z.array(virtualMailboxOutSchema);
+
+// Reply / Reply All / Forward context — response payload for
+// ``GET /mailboxes/{mid}/accounts/{aid}/emails/{pmid}/reply-context``.
+// Every value is already computed server-side: ``to_recipients`` /
+// ``cc_recipients`` apply Reply-To and self-reply rules, ``subject``
+// carries the ``Re:`` / ``Fwd:`` prefix, ``body`` is the plain-text
+// degraded body with the quote header. The composer prefills with
+// these values directly — no further computation on the frontend.
+export const replyContextOutSchema = z.object({
+  to_recipients: z.array(z.string()),
+  cc_recipients: z.array(z.string()),
+  bcc_recipients: z.array(z.string()).default([]),
+  subject: z.string(),
+  body: z.string(),
+  in_reply_to: z.string(),
+  references: z.string(),
+  thread_id: z.string(),
+  reply_to_message_id: z.string(),
+  reply_kind: replyKindSchema,
+  original_from_email: z.string(),
+});
+export type ReplyContextOut = z.infer<typeof replyContextOutSchema>;
+
+// Forward attachment copy — request body and response payload for
+// ``POST /mailboxes/{mid}/accounts/{aid}/drafts/{pdid}/attachments/copy-from-email``.
+export const copyAttachmentsFromEmailRequestSchema = z.object({
+  source_account_id: z.string(),
+  source_provider_message_id: z.string().min(1).max(255),
+});
+export type CopyAttachmentsFromEmailRequest = z.infer<typeof copyAttachmentsFromEmailRequestSchema>;
+
+export const copyAttachmentsFromEmailResponseSchema = z.object({
+  copied_count: z.number().int().nonnegative(),
+  skipped: z.array(z.record(z.string(), z.string())).default([]),
+  attachments: z.array(draftAttachmentMetadataSchema).default([]),
+});
+export type CopyAttachmentsFromEmailResponse = z.infer<
+  typeof copyAttachmentsFromEmailResponseSchema
+>;

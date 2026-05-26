@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { listAccounts } from '../../../api/endpoints/accounts';
+import { getReplyContext } from '../../../api/endpoints/emails';
+import { copyAttachmentsFromEmail, createDraft } from '../../../api/endpoints/drafts';
+import { toUiError } from '../../../api/client/errors';
 import type {
   AccountOut,
   DraftOut,
+  EmailMetadataOut,
   FailedAttachmentDetail,
+  ReplyKindDto,
 } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
-import type { ComposerMode } from '../../../lib/types';
-import useComposerForm from './useComposerForm';
+import type { ComposerMode, ReplyKind } from '../../../lib/types';
+import useComposerForm, { type ReplyMetadata } from './useComposerForm';
 import useComposerAttachments, {
   type AttachmentChip,
   type AttachmentTarget,
@@ -17,6 +22,12 @@ import useDraftPersistence from './useDraftPersistence';
 
 type OpenNewDraftArgs = {
   accountId?: string;
+};
+
+const REPLY_KIND_TO_MODE: Record<ReplyKind, ComposerMode> = {
+  reply: 'reply',
+  reply_all: 'reply_all',
+  forward: 'forward',
 };
 
 type UseDraftComposerReturn = {
@@ -44,6 +55,10 @@ type UseDraftComposerReturn = {
   openForNewEmail: () => void;
   openForNewDraft: (args?: OpenNewDraftArgs) => void;
   openForEditDraft: (draft: DraftOut) => void;
+  openForReply: (email: EmailMetadataOut) => Promise<void>;
+  openForReplyAll: (email: EmailMetadataOut) => Promise<void>;
+  openForForward: (email: EmailMetadataOut) => Promise<void>;
+  replyContextLoading: boolean;
   closeWithX: () => void;
   confirmCloseSave: () => Promise<void>;
   confirmCloseDiscard: () => Promise<void>;
@@ -171,6 +186,120 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     [attachments, form, loadAccountsIfNeeded, mailboxId, persistence, resetAll],
   );
 
+  const [replyContextLoading, setReplyContextLoading] = useState(false);
+
+  const openForReplyKind = useCallback(
+    async (email: EmailMetadataOut, action: ReplyKind) => {
+      if (!mailboxId) return;
+      resetAll();
+      setReplyContextLoading(true);
+      persistence.setError(null);
+      try {
+        const accountsList = await loadAccountsIfNeeded();
+        const accountId = email.account_id;
+        if (!accountsList.some((a) => a.account_id === accountId)) {
+          persistence.setError({
+            message: 'No se encontró la cuenta del correo para responder.',
+            code: 'account_not_found',
+          });
+          return;
+        }
+
+        // 1. Fetch reply context (recipients, subject, quoted body,
+        //    threading metadata). ~200ms typical — spinner UI is on.
+        const context = await getReplyContext(
+          mailboxId,
+          accountId,
+          email.provider_message_id,
+          action as ReplyKindDto,
+        );
+
+        const replyMetadata: ReplyMetadata = {
+          replyKind: context.reply_kind,
+          replyToMessageId: context.reply_to_message_id,
+          replyToAccountId: accountId,
+          threadId: context.thread_id,
+          inReplyTo: context.in_reply_to,
+          referencesHeader: context.references,
+        };
+
+        // 2. Create the provider draft right away (R-07). The composer
+        //    needs a ``provider_draft_id`` before it can accept
+        //    attachments (D-07), and creating the draft pre-emptively
+        //    matches Gmail/Outlook web's behaviour.
+        const created = await createDraft(mailboxId, accountId, {
+          to_recipients: context.to_recipients,
+          cc_recipients: context.cc_recipients,
+          bcc_recipients: context.bcc_recipients,
+          subject: context.subject,
+          body: context.body,
+          reply_kind: context.reply_kind,
+          reply_to_message_id: context.reply_to_message_id,
+          reply_to_account_id: accountId,
+          thread_id: context.thread_id,
+          in_reply_to: context.in_reply_to,
+          references_header: context.references,
+        });
+
+        // 3. Seed the form state + register the provider_draft_id so
+        //    the composer treats this as an existing draft (locked
+        //    account selector, send-draft button).
+        form.seedForReply({
+          accountId,
+          to: context.to_recipients,
+          cc: context.cc_recipients,
+          subject: context.subject,
+          body: context.body,
+          replyMetadata,
+        });
+        attachments.seedFromDraft(created.attachments);
+        setProviderDraftIdState(created.provider_draft_id);
+        persistence.setProviderDraftId(created.provider_draft_id);
+        setMode(REPLY_KIND_TO_MODE[action]);
+
+        // 4. Forward: copy attachments from the original message.
+        //    The endpoint is uniform across providers (Outlook no-op
+        //    because createForward already inherited them at step 2).
+        if (action === 'forward') {
+          try {
+            const copyResult = await copyAttachmentsFromEmail(
+              mailboxId,
+              accountId,
+              created.provider_draft_id,
+              {
+                accountId,
+                providerMessageId: email.provider_message_id,
+              },
+            );
+            attachments.seedFromDraft(copyResult.attachments);
+          } catch (err) {
+            // Soft-fail: the forward composer still opens; the user
+            // can re-add attachments manually if needed.
+            persistence.setError(toUiError(err));
+          }
+        }
+      } catch (err) {
+        persistence.setError(toUiError(err));
+      } finally {
+        setReplyContextLoading(false);
+      }
+    },
+    [attachments, form, loadAccountsIfNeeded, mailboxId, persistence, resetAll],
+  );
+
+  const openForReply = useCallback(
+    (email: EmailMetadataOut) => openForReplyKind(email, 'reply'),
+    [openForReplyKind],
+  );
+  const openForReplyAll = useCallback(
+    (email: EmailMetadataOut) => openForReplyKind(email, 'reply_all'),
+    [openForReplyKind],
+  );
+  const openForForward = useCallback(
+    (email: EmailMetadataOut) => openForReplyKind(email, 'forward'),
+    [openForReplyKind],
+  );
+
   const close = useCallback(() => {
     setMode(null);
     resetAll();
@@ -294,15 +423,21 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
 
     // D-28: pending changes (form fields or unsynced attachments)
     // must trigger the explicit save / discard / cancel dialog.
+    // Reply / Reply All / Forward modes always have a provider_draft_id
+    // (R-07 created it eagerly), so the dialog runs the same flow as
+    // edit_draft — the user picks Save (persist) or Discard (delete
+    // the provider draft).
     const dirtyForm =
       currentMode === 'new_email' || currentMode === 'new_draft'
         ? form.hasAnyContent()
-        : currentMode === 'edit_draft'
+        : currentMode === 'edit_draft' ||
+            currentMode === 'reply' ||
+            currentMode === 'reply_all' ||
+            currentMode === 'forward'
           ? form.isDirty()
           : false;
     const dirtyAttachments =
-      attachments.chips.length > 0 &&
-      (currentMode !== 'new_email' || providerDraftId !== null);
+      attachments.chips.length > 0 && (currentMode !== 'new_email' || providerDraftId !== null);
 
     if (dirtyForm || dirtyAttachments) {
       setCloseDialogOpen(true);
@@ -348,19 +483,29 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     setCloseDialogOpen(false);
   }, []);
 
+  // Reply / Reply All / Forward share the same UI surface as edit_draft
+  // (Save + Send buttons). The mode set drives the title in the
+  // Overlay and the way the composer behaves on close (D-28 dialog).
+  const isDraftMode =
+    mode === 'new_draft' ||
+    mode === 'edit_draft' ||
+    mode === 'reply' ||
+    mode === 'reply_all' ||
+    mode === 'forward';
+
+  const isSendDraftMode =
+    mode === 'edit_draft' || mode === 'reply' || mode === 'reply_all' || mode === 'forward';
+
   const canSendEmail =
     mode === 'new_email' &&
     form.accountId.length > 0 &&
     form.parseRecipients(form.to).length > 0 &&
     !persistence.sending;
 
-  const canSaveDraft =
-    (mode === 'new_draft' || mode === 'edit_draft') &&
-    form.accountId.length > 0 &&
-    !persistence.saving;
+  const canSaveDraft = isDraftMode && form.accountId.length > 0 && !persistence.saving;
 
   const canSendDraft =
-    mode === 'edit_draft' &&
+    isSendDraftMode &&
     form.accountId.length > 0 &&
     providerDraftId !== null &&
     form.parseRecipients(form.to).length > 0 &&
@@ -460,6 +605,10 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     openForNewEmail,
     openForNewDraft,
     openForEditDraft,
+    openForReply,
+    openForReplyAll,
+    openForForward,
+    replyContextLoading,
     closeWithX,
     confirmCloseSave,
     confirmCloseDiscard,

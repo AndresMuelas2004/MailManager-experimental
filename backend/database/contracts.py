@@ -44,6 +44,22 @@ class AccountStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_by_id_for_user(
+        self, account_id: str, user_id: str,
+    ) -> dict[str, Any] | None:
+        """Single-JOIN lookup that proves the account belongs to ``user_id``.
+
+        Returns the account row only when ``account_id`` exists AND the
+        owning mailbox's ``owner_user_id`` equals ``user_id``. ``None``
+        otherwise — used by cross-account flows (Forward copy from a
+        different account) where the service has the account id but
+        not the mailbox id. ``None`` collapses to ``AccountNotFound``
+        (HTTP 404) uniformly so a foreign account is indistinguishable
+        from a missing one (anti-leak D-22).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -121,17 +137,66 @@ class EmailMetadataStore(ABC):
     def list_filtered(
         self,
         account_ids: list[str],
-        box: str,
+        box: str | None,
         tokens: list[str],
         limit: int,
         offset: int,
+        *,
+        extra_filters: dict[str, Any] | None = None,
+        box_in: list[str] | None = None,
+        box_not_in: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """List email metadata for the given accounts and box, optionally filtered by search tokens.
+        """List email metadata for the given accounts, optionally filtered.
 
-        Empty `tokens` means no search filter. Non-empty tokens are AND-combined; for each
-        token, the predicate is OR'd across `subject`, `from_email`, `from_name` with
-        accent-insensitive case-insensitive substring match (literal — no fuzzy/stemming).
-        LIKE metacharacters in user input must be escaped before reaching the implementation.
+        ``box`` may be ``None`` when ``box_in`` or ``box_not_in`` is
+        used instead — virtual mailboxes can match across multiple
+        boxes, but the regular inbox listing always passes a single
+        ``box`` value.
+
+        ``tokens``: empty means no search filter. Non-empty tokens are
+        AND-combined; for each token, the predicate is OR'd across
+        ``subject``, ``from_email``, ``from_name`` with accent-/case-
+        insensitive substring match (literal — no fuzzy/stemming).
+        LIKE metacharacters in user input must be escaped before
+        reaching the implementation.
+
+        ``extra_filters``: optional dict with keys taken from a fixed
+        whitelist (see the repository). Today supported: ``is_read``
+        (bool), ``is_favorite`` (bool), ``from_email`` (str, exact
+        match, case-insensitive), ``from_domain`` (str, suffix match
+        on ``from_email``), ``subject_contains`` (str, substring).
+        Unknown keys are ignored — they cannot inject SQL.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_favorite(
+        self,
+        account_id: str,
+        provider_message_id: str,
+        is_favorite: bool,
+    ) -> bool:
+        """Toggle ``is_favorite`` for a single message.
+
+        Returns ``True`` iff a row was updated. Returns ``False`` when
+        no matching row exists (the service translates this into
+        ``EmailNotFound``).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def sync_favorites_for_account(
+        self,
+        account_id: str,
+        favorite_ids: list[str],
+    ) -> int:
+        """Full replacement of the favourite set for one account.
+
+        Marks ``is_favorite = TRUE`` for every ``provider_message_id``
+        in ``favorite_ids`` AND ``is_favorite = FALSE`` for every other
+        row of the account, in a single atomic statement. Returns the
+        number of rows touched (always equals the row count for the
+        account; useful for observability).
         """
         raise NotImplementedError
 
@@ -403,6 +468,61 @@ class DraftAttachmentStore(ABC):
         were actually updated (rows missing because the CASCADE delete
         won the race are silently skipped — the caller is on the
         best-effort post-send hygiene path)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_existing_source_attachment_ids(
+        self, account_id: str, provider_draft_id: str,
+    ) -> set[str]:
+        """Return the set of ``email_attachments.attachment_id`` values
+        already copied into this draft.
+
+        Used by ``copy_attachments_from_email`` for R-12 idempotency:
+        a retried copy filters its candidate list against this set so
+        already-landed rows are not duplicated. The partial index
+        ``idx_draft_attachments_source`` (migration 0030) backs the
+        underlying query.
+        """
+        raise NotImplementedError
+
+
+class VirtualMailboxStore(ABC):
+    """
+    Contract for virtual (fake) mailbox persistence.
+
+    Virtual mailboxes are user-defined filtered views over the messages
+    that already live in ``email_metadata``. The store owns the CRUD
+    over the ``virtual_mailboxes`` table — the actual filtering (scope
+    + filter translated to SQL) is the service layer's job.
+    """
+
+    @abstractmethod
+    def create(self, virtual_mailbox: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, virtual_mailbox_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_by_owner(self, owner_user_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, virtual_mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        """Full-field replace.
+
+        Returns the updated row when the UPDATE matched, or ``None`` when
+        no row matched the id — typically because the row was deleted
+        between the service's ownership pre-check and this call (race).
+        The service translates ``None`` into a 404 to keep the contract
+        symmetric with the rest of the virtual-mailbox surface.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, virtual_mailbox_id: str) -> bool:
+        """Delete a virtual mailbox by id. Returns ``True`` iff a row was removed."""
         raise NotImplementedError
 
 

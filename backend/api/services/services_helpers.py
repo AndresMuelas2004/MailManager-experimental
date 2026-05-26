@@ -46,6 +46,7 @@ from core.email import (
     EmailProviderConfigError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
+    EmailReplyContextFetchError,
     LabelUpdate,
     SpamMoveResult,
 )
@@ -66,6 +67,7 @@ from api.errors.exceptions import (
     AttachmentSendFailed,
     AttachmentTooLarge,
     AttachmentUnavailable,
+    EmailReplyContextError,
     CredentialFileError,
     DatabaseConnectionError,
     DatabaseMigrationError,
@@ -131,6 +133,10 @@ _CORE_TO_API_MAP: list[tuple[type[CoreError], type[ApiError]]] = [
     (EmailAttachmentTooLargeForProvider, AttachmentTooLarge),
     (EmailAttachmentSendFailed, AttachmentSendFailed),
     (EmailAttachmentDownloadFailed, AttachmentProviderUnavailable),
+    # Reply / forward context fetch failures map to the dedicated
+    # ``EmailReplyContextError`` (HTTP 502). Listed before the generic
+    # external API translation so it does not get caught by it.
+    (EmailReplyContextFetchError, EmailReplyContextError),
     (EmailExternalAPIError, ExternalAPIError),
     (CoreError, ApiError),
 ]
@@ -450,6 +456,7 @@ def persist_email_metadata_batch(
         (
             m.provider_message_id, account_id, m.thread_id, m.from_email,
             m.from_name, m.subject, m.received_at, m.is_read, m.box,
+            m.to_email, m.to_name,
         )
         for m in metadata_list
     ]

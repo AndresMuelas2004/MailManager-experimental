@@ -14,6 +14,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Draft deletion at the provider with local cleanup (Provider-First Rule).
 - Draft synchronization pulls the most recent drafts from every connected account into the local database (capped at 100 per account).
 - Attachments support across received emails (cache-aside download) and outgoing drafts (lazy push, atomic Gmail send / partial-resume Outlook send).
+- Reply / Reply All / Forward composer flow with provider-native threading (Gmail `threadId` + RFC 5322 headers; Outlook `createReply` / `createReplyAll` / `createForward`) and server-side attachment inheritance on Outlook forwards / explicit copy on Gmail forwards.
 - Batch read/unread status management across accounts.
 - Trash management: move emails to trash, permanently delete, or restore.
 - Spam operations: move to spam and restore from spam with cross-provider support.
@@ -243,6 +244,7 @@ Emails:
 - `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `limit` (default 200, max 500), `offset` (default 0). Each row carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`).
 - `GET /mailboxes/{mailbox_id}/emails/{provider_message_id}/content` — Required query param: `account_id`. Response includes `attachments[]` (the strict D-13 split between inline images embedded in the body and downloadable parts).
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/attachments/{attachment_id}` — Streams a single attachment binary with `Content-Disposition: attachment` (forced download, never inline). Cache-aside: served from local cache or fetched from the provider on miss.
+- `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/reply-context` — Required query param: `action=reply|reply_all|forward`. Read-only — returns the prefilled `to_recipients` / `cc_recipients` / `subject` / `body` (plain-text quote) the composer needs, plus the RFC 5322 threading strings (`in_reply_to`, `references`, `thread_id`). Gmail-bound `reply` / `reply_all` runs the triple-requirement coherence guard locally before returning (502 `email_reply_context_error` on mismatch).
 
 Drafts:
 
@@ -254,6 +256,7 @@ Drafts:
 - `GET /mailboxes/{mailbox_id}/drafts` — List drafts for the mailbox (DB-only, no provider calls). Optional query param `account_id`: when provided, returns drafts of that account; when omitted, returns the unified view across all accounts in the mailbox. Ordered by `created_at DESC`. `DraftOut.body` is plain text (was `body_html` before D-31); each draft carries `attachments[]`.
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments` — Multipart upload (`file` field). Local-only (D-07 lazy push) — the provider draft is not touched; the bytes live in `draft_attachments` until Save/Send. Server-side validation: extension blocklist (D-04a), 25 MB per-file (D-01), 25 MB cumulative per draft (D-02), max 25 attachments per draft (D-03). Multipart bodies > 30 MB are rejected upstream as 413 `request_too_large`.
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments/{draft_attachment_id}` — Local-only removal of a draft attachment row.
+- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments/copy-from-email` — Copy downloadable attachments from a received email into a Forward draft (R-06 / R-12). Always returns 200 even on partial failure: per-row failures (provider 404/410, size / count cap hit, already-copied) surface via the `skipped[]` array. Idempotent — a retry skips rows already landed via `source_attachment_id`. Gmail downloads + re-uploads; Outlook is a no-op (drafts created via `createForward` already inherited attachments server-side).
 - `POST /admin/attachments/purge` — Admin maintenance endpoint that drops `email_attachment_blobs` rows whose `email_attachments.last_accessed_at` is older than 30 days (TTL purge, D-15). Requires the `X-Admin-Token` header to match the `ATTACHMENTS_PURGE_TOKEN` env var; 503 `purge_disabled` when the env var is unset, 401 `invalid_admin_token` when set but the header is missing/wrong.
 
 Auth:
@@ -319,12 +322,14 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `spam_move_error` — 502
 - `spam_restore_error` — 502
 - `email_content_fetch_error` — 502
+- `email_reply_context_error` — 502
 - `draft_creation_error` — 502
 - `draft_update_error` — 502
 - `draft_delete_error` — 502
 - `draft_sync_error` — 502
 - `attachment_not_found` — 404
 - `attachment_unavailable` — 404
+- `attachment_copy_source_unavailable` — 404
 - `draft_attachment_not_found` — 404
 - `attachment_blocked_extension` — 400
 - `attachment_limit_exceeded` — 400

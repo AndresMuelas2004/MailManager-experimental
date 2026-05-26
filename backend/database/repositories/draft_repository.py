@@ -14,15 +14,40 @@ from database.queries import drafts as queries
 from database.errors import DatabaseError, QueryError
 
 
+_DRAFT_REPLY_FIELDS = (
+    "reply_kind",
+    "reply_to_message_id",
+    "reply_to_account_id",
+    "thread_id",
+    "in_reply_to",
+    "references_header",
+)
+
+
 def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a psycopg2 RealDict row into a serializable dict."""
     result = dict(row)
     if result.get("account_id") is not None:
         result["account_id"] = str(result["account_id"])
+    if result.get("reply_to_account_id") is not None:
+        result["reply_to_account_id"] = str(result["reply_to_account_id"])
     for key in ("to_recipients", "cc_recipients", "bcc_recipients"):
         if result.get(key) is None:
             result[key] = []
+    # Ensure reply fields exist as keys even on legacy rows the SELECT
+    # might have returned without them — callers always read them.
+    for key in _DRAFT_REPLY_FIELDS:
+        result.setdefault(key, None)
     return result
+
+
+def _draft_insert_params(draft: dict[str, Any]) -> dict[str, Any]:
+    """Normalise an INSERT/UPSERT input dict so the SQL placeholders
+    always resolve to a value (``None`` for unset reply fields)."""
+    params = dict(draft)
+    for key in _DRAFT_REPLY_FIELDS:
+        params.setdefault(key, None)
+    return params
 
 
 class PgDraftStore(DraftStore):
@@ -34,7 +59,7 @@ class PgDraftStore(DraftStore):
         try:
             with connection.get_connection() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(queries.INSERT_DRAFT, draft)
+                    cur.execute(queries.INSERT_DRAFT, _draft_insert_params(draft))
                     row = cur.fetchone()
             return _row_to_dict(row)
         except DatabaseError:
@@ -145,6 +170,12 @@ class PgDraftStore(DraftStore):
             with connection.get_connection() as conn:
                 with conn.cursor() as cur:
                     if drafts:
+                        # sync_drafts pulls drafts back from the provider
+                        # without our reply metadata — every tuple here
+                        # passes NULL for those columns. The UPSERT's
+                        # COALESCE clauses (see ``UPSERT_DRAFTS_BATCH``)
+                        # then preserve any locally-set reply values
+                        # instead of clobbering them on every refresh.
                         rows = [
                             (
                                 str(d["provider_draft_id"]),
@@ -156,6 +187,12 @@ class PgDraftStore(DraftStore):
                                 str(d.get("body") or ""),
                                 d.get("created_at"),
                                 d.get("updated_at"),
+                                d.get("reply_kind"),
+                                d.get("reply_to_message_id"),
+                                d.get("reply_to_account_id"),
+                                d.get("thread_id"),
+                                d.get("in_reply_to"),
+                                d.get("references_header"),
                             )
                             for d in drafts
                         ]

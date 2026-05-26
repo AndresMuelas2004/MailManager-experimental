@@ -139,6 +139,30 @@ Gmail's variant lists `provider_attachment_id = EXCLUDED.provider_attachment_id`
 
 `PgDraftAttachmentStore._row_to_dict` calls `bytes(memoryview)` on the `blob` column so the service sees plain `bytes`. `PgEmailAttachmentStore._row_to_dict` does not — its callers (the StreamingResponse path) consume `memoryview` directly to avoid an extra copy on the hot path. If you ever extract a shared `_row_to_dict`, preserve this divergence behind a flag rather than collapsing it.
 
+### `PgAccountStore.get_by_id_for_user` — JOIN-based D-22 anti-leak
+
+The standard `get(mailbox_id, account_id)` is keyed by both, so a cross-account service flow that only carries the account id (Forward copy from a different mailbox the same user owns) cannot use it without first resolving the mailbox — and that resolution would expose a 403/404 split a foreign account is supposed to avoid. `get_by_id_for_user` runs the JOIN over `mailboxes.owner_user_id` in a single round trip and returns `None` for both missing AND foreign accounts. The service layer converts the absence into 404 `AccountNotFound` uniformly. Do not relax the JOIN to a fast-path lookup keyed only by `account_id` — that opens UUID-guessing leakage.
+
+A malformed UUID surfaces as `psycopg2.errors.InvalidTextRepresentation` and is swallowed into `return None` (consistent with the other store methods that treat malformed input as "not found" rather than 500). Do NOT route this through `QueryError` — the service relies on the silent collapse to drive the 404 path.
+
+### `LIST_FILTERED` slot triple — `{box_predicate}` / `{search_predicate}` / `{extra_predicate}`
+
+Three `str.format` slots back one SQL constant — used by both the regular `GET /emails` listing (single `box`, mandatory) and the virtual-mailbox listing (zero, one or many boxes derived from the stored `filter_payload`). The repository's `list_filtered` accepts `box` (str | None), `box_in` (list[str] | None) and `box_not_in` (list[str] | None) — **passing more than one of those is a programming error**. The service layer guarantees exclusivity; the repository does not re-validate, so a regression there would emit duplicated `AND box ...` predicates that compose with AND and silently return zero rows. `{extra_predicate}` is the slot the virtual-mailbox extra filters land in (built from a closed whitelist inside the repository — never accept free-form text from the caller into any of the three slots).
+
+### `LIST_FILTERED` total-ordering tie-break
+
+`ORDER BY received_at DESC, account_id, provider_message_id` is total by construction (the trailing pair is the table's primary key). Removing the tie-break leaves OFFSET paging non-deterministic when two rows share `received_at` (mass-sent notifications batched to the same second), so the same row can appear on adjacent pages or be skipped. Single-page tests never catch this; the regression only manifests when the user scrolls.
+
+### `DraftAttachmentStore.list_existing_source_attachment_ids` — R-12 idempotency, backed by partial index
+
+The repository method drives the R-12 idempotency check inside `copy_attachments_from_email`: candidates whose `source_attachment_id` already lives on the draft are reported as `skipped[reason="already_copied"]` instead of being inserted twice. The partial index `idx_draft_attachments_source (account_id, provider_draft_id, source_attachment_id) WHERE source_attachment_id IS NOT NULL` (migration 0030) is what keeps the query cheap — without it, every retry of the copy endpoint would table-scan `draft_attachments`. Direct uploads leave both source columns NULL so they do not bloat the index.
+
+### Reply / forward columns on `drafts` (migration 0029)
+
+`_DRAFT_REPLY_FIELDS` is the single source of truth for the set of nullable reply columns: `_row_to_dict` defaults each to `None` on legacy SELECTs that did not project them, and `_draft_insert_params` defaults each to `None` on INSERTs whose payload omitted them. Both helpers MUST iterate the same tuple — drifting them (e.g. adding a column only to `_row_to_dict`) makes `INSERT_DRAFT` fail with `MissingArg` on a payload from a back-compat caller, while reads still appear to work. The COALESCE rationale on `UPSERT_DRAFTS_BATCH` (sync vs local-write conflict resolution) lives in the SQL constant's own header in `queries/drafts.py`; do not duplicate it here.
+
+`idx_drafts_reply_to_message_id` is intentionally added without any current reader — reserved for a future "list drafts replying to message X" lookup so a follow-up does not require a new migration.
+
 ### `DraftAttachmentStore.delete` returns `bool`, `DraftStore.delete` raises
 
 The two siblings disagree intentionally. The composer's remove flow tolerates a missing row (the user double-clicked the X, or the row already CASCADE-deleted) and treats the absence as success → 204 from the router. Drafts at the parent level need the harder contract because deleting a non-existent draft is a 404 the user must see. Don't normalise these two interfaces.

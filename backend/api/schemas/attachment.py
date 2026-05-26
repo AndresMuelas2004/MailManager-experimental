@@ -4,6 +4,8 @@ Pydantic schemas for attachment API contracts.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 
@@ -57,3 +59,30 @@ class PurgeResult(BaseModel):
 
     purged_count: int = Field(..., ge=0)
     freed_bytes: int = Field(..., ge=0)
+
+
+class CopyAttachmentsFromEmailRequest(BaseModel):
+    """Request body for the Forward attachment copy endpoint.
+
+    ``source_account_id`` is typed as ``UUID`` (not free str) so a
+    typo / accidental empty string surfaces at the boundary as a 422
+    instead of silently flowing into a ``None``-row lookup in the
+    repository.
+    """
+
+    source_account_id: UUID
+    source_provider_message_id: str = Field(..., min_length=1, max_length=255)
+
+
+class CopyAttachmentsFromEmailResponse(BaseModel):
+    """Response payload for the Forward attachment copy endpoint.
+
+    Status code is always 200 — partial failures are reported via
+    ``skipped`` instead of a 207. The frontend uses ``attachments``
+    (full current list of the draft) to refresh the composer chips
+    without an extra round trip.
+    """
+
+    copied_count: int = Field(..., ge=0)
+    skipped: list[dict[str, str]] = Field(default_factory=list)
+    attachments: list[DraftAttachmentMetadataOut] = Field(default_factory=list)

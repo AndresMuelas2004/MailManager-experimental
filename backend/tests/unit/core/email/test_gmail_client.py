@@ -2241,3 +2241,320 @@ class TestSendDraftWithAttachments:
                 "draft-1", ["to@x"], [], [], "S", "B",
                 [self._attachment_input()],
             )
+
+
+# ── _split_address_header (module-level helper) ────────────────────
+
+
+from core.email.gmail_client import _split_address_header
+
+
+class TestSplitAddressHeader:
+    """Covers the RFC 5322 address parsing helper used by fetch_reply_context."""
+
+    def test_single_address_no_display_name(self):
+        assert _split_address_header("ana@example.com") == ["ana@example.com"]
+
+    def test_single_address_with_display_name(self):
+        assert _split_address_header("Ana López <ana@example.com>") == ["ana@example.com"]
+
+    def test_multiple_addresses_comma_separated(self):
+        out = _split_address_header(
+            'Ana <ana@x.com>, "Bob, Jr." <bob@y.com>, charlie@z.com',
+        )
+        assert "ana@x.com" in out
+        assert "bob@y.com" in out
+        assert "charlie@z.com" in out
+
+    def test_empty_string_returns_empty_list(self):
+        assert _split_address_header("") == []
+
+    def test_whitespace_only_returns_empty_list(self):
+        assert _split_address_header("   ") == []
+
+    def test_none_value_returns_empty_list(self):
+        assert _split_address_header(None) == []
+
+    def test_address_without_at_dropped(self):
+        # ``Undisclosed recipients:;`` and similar malformed senders
+        # produce display-only entries — those are silently dropped.
+        out = _split_address_header("Undisclosed recipients:;")
+        assert out == []
+
+    def test_address_with_angle_brackets_only(self):
+        assert _split_address_header("<bare@x.com>") == ["bare@x.com"]
+
+
+# ── fetch_reply_context ────────────────────────────────────────────
+
+
+class TestGmailFetchReplyContext:
+    """Covers the single-payload parse used by GET /reply-context.
+
+    The implementation reuses ``_fetch_message_payload`` (which already
+    has error wrapping) and ``_header_value`` / ``_extract_body_from_payload``
+    for parsing. We mock the underlying ``users().messages().get()``
+    call so the test exercises the parsing layer in isolation.
+    """
+
+    def _build_payload(self, *, label_ids: list[str] | None = None):
+        # ``_fetch_message_payload`` returns ``response.get("payload", {})``
+        # — the test mock wraps the inner shape inside ``payload`` so the
+        # full ``messages.get`` response shape is preserved. ``threadId``
+        # and ``labelIds`` live inside the inner payload (mirrors the
+        # production behaviour: ``payload.get("threadId")`` / ``payload.get("labelIds")``).
+        return {
+            "id": "msg-1",
+            "payload": {
+                "threadId": "thread-1",
+                "labelIds": label_ids or ["INBOX"],
+                "headers": [
+                    {"name": "From", "value": "Ana Lopez <ana@example.com>"},
+                    {"name": "Reply-To", "value": "editor@list.com"},
+                    {"name": "To", "value": "me@me.com, carol@x.com"},
+                    {"name": "Cc", "value": "dan@y.com"},
+                    {"name": "Subject", "value": "Hello"},
+                    {"name": "Message-ID", "value": "<orig@x>"},
+                    {"name": "References", "value": "<older@x>"},
+                    {"name": "Date", "value": "Sat, 23 May 2026 14:32:00 +0000"},
+                ],
+                "mimeType": "text/plain",
+                "body": {
+                    "data": base64.urlsafe_b64encode(b"body text").decode("ascii").rstrip("="),
+                },
+            },
+        }
+
+    def test_parses_full_payload_into_reply_context(self, client: GmailClient):
+        payload = self._build_payload()
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.return_value = payload
+
+        result = client.fetch_reply_context("msg-1")
+        assert result.provider_message_id == "msg-1"
+        assert result.thread_id == "thread-1"
+        assert result.from_email == "ana@example.com"
+        assert result.from_name == "Ana Lopez"
+        assert result.reply_to == ["editor@list.com"]
+        assert result.to_recipients == ["me@me.com", "carol@x.com"]
+        assert result.cc_recipients == ["dan@y.com"]
+        assert result.subject == "Hello"
+        # The angle brackets are stripped from message_id at the parser boundary.
+        assert result.message_id == "orig@x"
+        assert result.references == "<older@x>"
+        # Date header parsed by parsedate_to_datetime.
+        assert result.received_at.year == 2026
+        assert result.received_at.month == 5
+
+    def test_no_reply_to_returns_empty_list(self, client: GmailClient):
+        # Most messages don't carry Reply-To — the field is optional.
+        payload = self._build_payload()
+        payload["payload"]["headers"] = [
+            h for h in payload["payload"]["headers"] if h["name"] != "Reply-To"
+        ]
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.return_value = payload
+        result = client.fetch_reply_context("msg-1")
+        assert result.reply_to == []
+
+    def test_no_message_id_collapses_to_empty(self, client: GmailClient):
+        # Corrupt / missing Message-ID is tolerated — service guard later.
+        payload = self._build_payload()
+        payload["payload"]["headers"] = [
+            h for h in payload["payload"]["headers"] if h["name"] != "Message-ID"
+        ]
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.return_value = payload
+        result = client.fetch_reply_context("msg-1")
+        assert result.message_id == ""
+
+    def test_box_derived_from_labels(self, client: GmailClient):
+        # The box is computed from the labelIds — SPAM / TRASH detected.
+        payload = self._build_payload(label_ids=["SPAM"])
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.return_value = payload
+        result = client.fetch_reply_context("msg-1")
+        assert result.box == "SPAM"
+
+    def test_box_sent_when_label_present(self, client: GmailClient):
+        payload = self._build_payload(label_ids=["SENT"])
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.return_value = payload
+        result = client.fetch_reply_context("msg-1")
+        assert result.box == "SENT"
+
+    def test_provider_failure_wrapped_as_reply_context_error(self, client: GmailClient):
+        # HttpError on the underlying messages.get → translated to
+        # EmailReplyContextFetchError (not the generic EmailExternalAPIError).
+        from googleapiclient.errors import HttpError
+        from core.email.errors import EmailReplyContextFetchError
+
+        resp = MagicMock()
+        resp.status = 404
+        resp.reason = "Not Found"
+        http_err = HttpError(resp=resp, content=b"missing")
+
+        client.service = MagicMock()
+        client.service.users.return_value.messages.return_value.get.return_value.execute.side_effect = http_err
+
+        with pytest.raises(EmailReplyContextFetchError) as exc_info:
+            client.fetch_reply_context("msg-1")
+        assert exc_info.value.detail.get("reason") == "provider_fetch_failed"
+
+    def test_unauthenticated_wraps_into_reply_context_error(self, client: GmailClient):
+        # ``_fetch_message_payload`` raises EmailNotAuthenticatedError (a
+        # CoreError); the outer ``fetch_reply_context`` re-wraps every
+        # CoreError as EmailReplyContextFetchError so the API layer
+        # maps it uniformly to 502.
+        from core.email.errors import EmailReplyContextFetchError
+        client.service = None
+        with pytest.raises(EmailReplyContextFetchError):
+            client.fetch_reply_context("msg-1")
+
+
+# ── create_draft — reply / forward extensions ──────────────────────
+
+
+class TestGmailCreateDraftReply:
+    """Covers ``thread_id`` + ``extra_headers`` propagation in create_draft."""
+
+    def _setup(self, client: GmailClient, response: dict | None = None):
+        mock_service = MagicMock()
+        client.service = mock_service
+        if response is None:
+            response = {"id": "draft-1", "message": {"id": "msg-1"}}
+        mock_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = response
+        return mock_service
+
+    def test_thread_id_included_in_payload(self, client: GmailClient):
+        # Gmail requires ``threadId`` on the request body for the reply
+        # to land in the original thread.
+        mock_service = self._setup(client)
+        client.create_draft(
+            ["to@x"], [], [], "Re: Hello", "body",
+            thread_id="thread-1",
+        )
+        create_fn = mock_service.users.return_value.drafts.return_value.create
+        body = create_fn.call_args[1]["body"]
+        assert body["message"].get("threadId") == "thread-1"
+
+    def test_no_thread_id_excludes_field_from_payload(self, client: GmailClient):
+        # Standalone draft path: no threadId on the wire.
+        mock_service = self._setup(client)
+        client.create_draft(["to@x"], [], [], "Hello", "body")
+        body = mock_service.users.return_value.drafts.return_value.create.call_args[1]["body"]
+        assert "threadId" not in body["message"]
+
+    def test_in_reply_to_and_references_propagate_to_mime(self, client: GmailClient):
+        # The MIME bytes must carry the RFC 5322 headers so any destination
+        # client (Outlook, Apple Mail) re-threads correctly even without
+        # the Gmail-specific threadId.
+        mock_service = self._setup(client)
+        client.create_draft(
+            ["to@x"], [], [], "Re: Hello", "body",
+            in_reply_to="<orig@x>", references="<older@x> <orig@x>",
+        )
+        body = mock_service.users.return_value.drafts.return_value.create.call_args[1]["body"]
+        # ``raw`` is base64url-encoded. Decode it back to text and verify
+        # the headers are inside the MIME.
+        raw_b64 = body["message"]["raw"]
+        # Pad for urlsafe decode.
+        padding = "=" * (4 - len(raw_b64) % 4)
+        mime_bytes = base64.urlsafe_b64decode(raw_b64 + padding)
+        text = mime_bytes.decode("utf-8", errors="replace")
+        assert "In-Reply-To: <orig@x>" in text
+        assert "References: <older@x> <orig@x>" in text
+
+
+# ── _build_send_message_payload (static helper) ────────────────────
+
+
+class TestBuildSendMessagePayload:
+    """Covers the message sub-payload used by drafts.send simple + resumable."""
+
+    def test_without_thread_id_returns_just_raw(self):
+        out = GmailClient._build_send_message_payload("RAW", None)
+        assert out == {"raw": "RAW"}
+
+    def test_with_thread_id_includes_field(self):
+        out = GmailClient._build_send_message_payload("RAW", "thread-1")
+        assert out == {"raw": "RAW", "threadId": "thread-1"}
+
+    def test_empty_thread_id_excluded(self):
+        # Empty string is falsy → no threadId field on the wire.
+        out = GmailClient._build_send_message_payload("RAW", "")
+        assert "threadId" not in out
+
+
+# ── send_draft_with_attachments — reply metadata propagation ───────
+
+
+class TestGmailSendDraftReplyHeaders:
+    """Covers the ``in_reply_to`` / ``references`` / ``thread_id`` kwargs."""
+
+    def _setup_drafts_send_mock(self, client: GmailClient, response: dict | None = None):
+        mock_service = MagicMock()
+        client.service = mock_service
+        if response is None:
+            response = {"id": "sent-msg-1", "threadId": "thread-1", "labelIds": ["SENT"]}
+        mock_service.users.return_value.drafts.return_value.send.return_value.execute.return_value = response
+        return mock_service
+
+    def _attachment_input(self):
+        from core.email.email_client import DraftAttachmentInput
+        return DraftAttachmentInput(
+            draft_attachment_id="local-1",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            data=b"PDF",
+            size=3,
+            position=0,
+            content_id=None,
+            is_inline=False,
+        )
+
+    def test_thread_id_propagated_to_send_payload(self, client: GmailClient):
+        mock_service = self._setup_drafts_send_mock(client)
+        with patch.object(client, "fetch_messages_metadata", return_value=[]):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "Re: Hi", "body",
+                [self._attachment_input()],
+                thread_id="thread-1",
+            )
+        body = mock_service.users.return_value.drafts.return_value.send.call_args[1]["body"]
+        # threadId rides in ``message`` so Gmail stitches the send into the thread.
+        assert body["message"].get("threadId") == "thread-1"
+
+    def test_in_reply_to_and_references_injected_into_mime(self, client: GmailClient):
+        mock_service = self._setup_drafts_send_mock(client)
+        with patch.object(client, "fetch_messages_metadata", return_value=[]):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "Re: Hi", "body",
+                [self._attachment_input()],
+                in_reply_to="<orig@x>", references="<orig@x>",
+            )
+        raw_b64 = (
+            mock_service.users.return_value.drafts.return_value.send.call_args[1]
+            ["body"]["message"]["raw"]
+        )
+        padding = "=" * (4 - len(raw_b64) % 4)
+        mime_text = base64.urlsafe_b64decode(raw_b64 + padding).decode("utf-8", errors="replace")
+        assert "In-Reply-To: <orig@x>" in mime_text
+        assert "References: <orig@x>" in mime_text
+
+    def test_no_reply_kwargs_omits_threadId_and_headers(self, client: GmailClient):
+        # Backward compat: regular send-draft path (no reply context) does
+        # not introduce threadId or reply headers.
+        mock_service = self._setup_drafts_send_mock(client)
+        with patch.object(client, "fetch_messages_metadata", return_value=[]):
+            client.send_draft_with_attachments(
+                "draft-1", ["to@x"], [], [], "Hi", "body",
+                [self._attachment_input()],
+            )
+        body = mock_service.users.return_value.drafts.return_value.send.call_args[1]["body"]
+        assert "threadId" not in body["message"]
+        raw_b64 = body["message"]["raw"]
+        padding = "=" * (4 - len(raw_b64) % 4)
+        mime_text = base64.urlsafe_b64decode(raw_b64 + padding).decode("utf-8", errors="replace")
+        assert "In-Reply-To" not in mime_text
+        assert "References" not in mime_text

@@ -2,9 +2,18 @@
 SQL string constants for draft persistence.
 """
 
+# Reply / forward columns (migration 0029) — opt-in fields read by the
+# send path so the outgoing message keeps the thread. ``COALESCE`` is
+# critical in :py:data:`UPSERT_DRAFTS_BATCH` (see below): ``sync_drafts``
+# pulls drafts back from the provider with these fields ``NULL`` and
+# would otherwise overwrite the locally-set reply metadata. The query
+# constants in this module are the single SQL surface for those columns
+# — every read/write goes through them.
 GET_DRAFT = """
     SELECT provider_draft_id, account_id, to_recipients, cc_recipients, bcc_recipients,
-           subject, body, created_at, updated_at
+           subject, body, created_at, updated_at,
+           reply_kind, reply_to_message_id, reply_to_account_id,
+           thread_id, in_reply_to, references_header
     FROM drafts
     WHERE provider_draft_id = %(provider_draft_id)s
       AND account_id        = %(account_id)s
@@ -29,7 +38,13 @@ UPDATE_DRAFT = """
         subject,
         body,
         created_at,
-        updated_at
+        updated_at,
+        reply_kind,
+        reply_to_message_id,
+        reply_to_account_id,
+        thread_id,
+        in_reply_to,
+        references_header
 """
 
 INSERT_DRAFT = """
@@ -40,7 +55,13 @@ INSERT_DRAFT = """
         cc_recipients,
         bcc_recipients,
         subject,
-        body
+        body,
+        reply_kind,
+        reply_to_message_id,
+        reply_to_account_id,
+        thread_id,
+        in_reply_to,
+        references_header
     )
     VALUES (
         %(provider_draft_id)s,
@@ -49,7 +70,13 @@ INSERT_DRAFT = """
         %(cc_recipients)s,
         %(bcc_recipients)s,
         %(subject)s,
-        %(body)s
+        %(body)s,
+        %(reply_kind)s,
+        %(reply_to_message_id)s,
+        %(reply_to_account_id)s,
+        %(thread_id)s,
+        %(in_reply_to)s,
+        %(references_header)s
     )
     RETURNING
         provider_draft_id,
@@ -60,7 +87,13 @@ INSERT_DRAFT = """
         subject,
         body,
         created_at,
-        updated_at
+        updated_at,
+        reply_kind,
+        reply_to_message_id,
+        reply_to_account_id,
+        thread_id,
+        in_reply_to,
+        references_header
 """
 
 # Listing queries co-aggregate the draft attachments in a single round trip
@@ -74,6 +107,8 @@ INSERT_DRAFT = """
 _LIST_DRAFTS_SELECT = """
     SELECT d.provider_draft_id, d.account_id, d.to_recipients, d.cc_recipients,
            d.bcc_recipients, d.subject, d.body, d.created_at, d.updated_at,
+           d.reply_kind, d.reply_to_message_id, d.reply_to_account_id,
+           d.thread_id, d.in_reply_to, d.references_header,
            COALESCE(
                (SELECT json_agg(
                    json_build_object(
@@ -105,10 +140,20 @@ LIST_DRAFTS_BY_MAILBOX = _LIST_DRAFTS_SELECT + """
 """
 
 # Used with execute_values(cur, UPSERT_DRAFTS_BATCH, rows); positional %s required.
+#
+# COALESCE for the reply metadata columns is load-bearing: ``sync_drafts``
+# pulls drafts back from the provider without those fields (Gmail /
+# Outlook do not expose reply_kind / thread_id / In-Reply-To as draft
+# properties). Without COALESCE, the sync would clobber locally-persisted
+# reply metadata on every refresh. COALESCE preserves the existing
+# non-NULL local value whenever the EXCLUDED value is NULL — which is
+# exactly the right direction for sync-vs-local-write conflicts.
 UPSERT_DRAFTS_BATCH = """
     INSERT INTO drafts (
         provider_draft_id, account_id, to_recipients, cc_recipients,
-        bcc_recipients, subject, body, created_at, updated_at
+        bcc_recipients, subject, body, created_at, updated_at,
+        reply_kind, reply_to_message_id, reply_to_account_id,
+        thread_id, in_reply_to, references_header
     )
     VALUES %s
     ON CONFLICT (provider_draft_id, account_id) DO UPDATE SET
@@ -117,7 +162,15 @@ UPSERT_DRAFTS_BATCH = """
         bcc_recipients = EXCLUDED.bcc_recipients,
         subject       = EXCLUDED.subject,
         body          = EXCLUDED.body,
-        updated_at    = now()
+        updated_at    = now(),
+        -- preserve local reply metadata when the EXCLUDED row (sync from
+        -- provider) carries NULLs — see module docstring.
+        reply_kind          = COALESCE(EXCLUDED.reply_kind, drafts.reply_kind),
+        reply_to_message_id = COALESCE(EXCLUDED.reply_to_message_id, drafts.reply_to_message_id),
+        reply_to_account_id = COALESCE(EXCLUDED.reply_to_account_id, drafts.reply_to_account_id),
+        thread_id           = COALESCE(EXCLUDED.thread_id, drafts.thread_id),
+        in_reply_to         = COALESCE(EXCLUDED.in_reply_to, drafts.in_reply_to),
+        references_header   = COALESCE(EXCLUDED.references_header, drafts.references_header)
         -- created_at intentionally excluded; preserve original on upsert
 """
 

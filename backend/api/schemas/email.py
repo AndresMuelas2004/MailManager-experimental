@@ -142,6 +142,11 @@ class EmailMetadataOut(BaseModel):
     it stays ``False`` until the user opens the email for the first
     time and ``get_email_content`` populates ``email_attachments`` —
     after that, the inbox icon (📎) appears for that row.
+
+    ``is_favorite`` is the cross-provider abstraction over Gmail's
+    ``STARRED`` label and Outlook's message flag. It is orthogonal to
+    ``box`` / ``is_read``: a favourite email can sit in any box, read
+    or unread.
     """
 
     provider_message_id: str
@@ -149,8 +154,73 @@ class EmailMetadataOut(BaseModel):
     thread_id: str | None = None
     from_email: str
     from_name: str | None = None
+    to_email: str | None = None
+    to_name: str | None = None
     subject: str | None = None
     received_at: datetime
     is_read: bool
     box: str
     has_attachments: bool = False
+    is_favorite: bool = False
+
+
+class FavoriteUpdateRequest(BaseModel):
+    """Request body for the ``PATCH .../{message_id}/favorite`` endpoint."""
+
+    favorite: bool
+
+
+class FavoriteUpdateResponse(BaseModel):
+    """Response after toggling a favourite (mirrors the new state)."""
+
+    provider_message_id: str
+    account_id: str
+    is_favorite: bool
+
+
+class FavoriteSyncAccountDetail(BaseModel):
+    """Per-account result of the /favorites/sync endpoint."""
+
+    account_id: str
+    provider: str
+    favorites_synced: int
+
+
+class FavoriteSyncResponse(BaseModel):
+    """Response for the /favorites/sync endpoint."""
+
+    total_synced: int
+    accounts: list[FavoriteSyncAccountDetail]
+
+
+class ReplyContextOut(BaseModel):
+    """Response for ``GET .../emails/{pmid}/reply-context``.
+
+    Carries every value the composer needs to open a Reply / Reply All
+    / Forward draft: recipients (already computed against the current
+    account email — Reply-To and self-reply rules applied), the
+    pre-prefixed subject, the plain-text body (header + quoted
+    original), and the RFC 5322 threading strings persisted alongside
+    the draft.
+
+    ``reply_kind`` mirrors the request's ``action`` query param so the
+    frontend can route the response to the right composer mode without
+    re-parsing the URL.
+
+    ``original_from_email`` is purely informational — the prefilled
+    ``to_recipients`` already contain the correct destination after
+    applying R-10 (Reply-To respected). The frontend may use it to
+    render contextual hints in the composer header.
+    """
+
+    to_recipients: list[str]
+    cc_recipients: list[str]
+    bcc_recipients: list[str] = Field(default_factory=list)
+    subject: str
+    body: str
+    in_reply_to: str
+    references: str
+    thread_id: str
+    reply_to_message_id: str
+    reply_kind: Literal["reply", "reply_all", "forward"]
+    original_from_email: str

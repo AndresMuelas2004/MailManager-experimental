@@ -15,6 +15,9 @@ type Props = {
   onClose: () => void;
   onRead: (email: EmailMetadataOut) => Promise<void>;
   downloader: UseAttachmentDownloaderReturn;
+  onReply: (email: EmailMetadataOut) => void | Promise<void>;
+  onReplyAll: (email: EmailMetadataOut) => void | Promise<void>;
+  onForward: (email: EmailMetadataOut) => void | Promise<void>;
 };
 
 function escapeHtml(value: string): string {
@@ -37,6 +40,9 @@ export default function EmailViewer({
   onClose,
   onRead,
   downloader,
+  onReply,
+  onReplyAll,
+  onForward,
 }: Props) {
   const { content, loading, error } = useEmailContent(mailboxId, {
     account_id: email.account_id,
@@ -120,13 +126,39 @@ export default function EmailViewer({
             <span className="truncate">{accountEmail}</span>
           </div>
         )}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              void onReply(email);
+            }}
+            className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
+          >
+            Responder
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void onReplyAll(email);
+            }}
+            className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
+          >
+            Responder a todos
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void onForward(email);
+            }}
+            className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
+          >
+            Reenviar
+          </button>
+        </div>
       </div>
       <div className="flex flex-1 flex-col overflow-auto bg-white">
         {body}
-        <AttachmentsList
-          attachments={content?.attachments ?? []}
-          downloader={downloader}
-        />
+        <AttachmentsList attachments={content?.attachments ?? []} downloader={downloader} />
       </div>
     </Modal>
   );

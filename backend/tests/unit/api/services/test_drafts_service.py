@@ -1805,3 +1805,562 @@ class TestSendDraft:
             drafts_service.send_draft(
                 _MAILBOX_ID, _ACCOUNT_ID, _SEND_DRAFT_ID, _USER_ID,
             )
+
+
+# ==================================================================
+# Reply / Forward extensions to create_draft + send_draft
+# ==================================================================
+
+
+class TestCreateDraftReplyMetadata:
+    """The reply / forward request fields must reach both the provider
+    client (via the manager) AND the local draft row insert."""
+
+    def _make_reply_payload(self) -> DraftCreate:
+        from uuid import uuid4
+        return DraftCreate(
+            to_recipients=["to@x"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="Re: Hi",
+            body="quoted body",
+            reply_kind="reply",
+            reply_to_message_id="orig-msg-1",
+            reply_to_account_id=uuid4(),
+            thread_id="thr-1",
+            in_reply_to="<orig@x>",
+            references_header="<older@x> <orig@x>",
+        )
+
+    def test_reply_fields_persist_into_draft_store(self, monkeypatch):
+        # The row passed to ``draft_store.create`` must carry every
+        # reply / forward column from the request payload.
+        _patch_common(monkeypatch)
+        captured: list[dict] = []
+
+        def _create(row):
+            captured.append(row)
+            return _persisted_row(
+                provider_draft_id=row.get("provider_draft_id", "fake_draft_1"),
+                to_recipients=row.get("to_recipients", []),
+                cc_recipients=row.get("cc_recipients", []),
+                bcc_recipients=row.get("bcc_recipients", []),
+                subject=row.get("subject", ""),
+                body=row.get("body", ""),
+            )
+        monkeypatch.setattr(drafts_service.draft_store, "create", _create)
+
+        payload = self._make_reply_payload()
+        drafts_service.create_draft(
+            _MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID,
+        )
+        assert len(captured) == 1
+        row = captured[0]
+        assert row["reply_kind"] == "reply"
+        assert row["reply_to_message_id"] == "orig-msg-1"
+        # UUID stringified for DB.
+        assert row["reply_to_account_id"] == str(payload.reply_to_account_id)
+        assert row["thread_id"] == "thr-1"
+        assert row["in_reply_to"] == "<orig@x>"
+        assert row["references_header"] == "<older@x> <orig@x>"
+
+    def test_reply_kwargs_propagate_to_provider_client(self, monkeypatch):
+        # The provider's create_draft receives every reply kwarg so that
+        # Outlook can route to createReply/All/Forward and Gmail can
+        # inject threading metadata.
+        _patch_common(monkeypatch)
+        captured_clients: list[FakeEmailClient] = []
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                mid = str(acc.get("mailbox_id", ""))
+                aid = str(acc.get("account_id", ""))
+                label = f"{mid}__{aid}"
+                client = FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                )
+                captured_clients.append(client)
+                manager.add_client(client)
+            return manager
+
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+        payload = self._make_reply_payload()
+        drafts_service.create_draft(_MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID)
+        assert len(captured_clients) == 1
+        kw = captured_clients[0].create_draft_reply_kwargs[0]
+        assert kw["thread_id"] == "thr-1"
+        assert kw["in_reply_to"] == "<orig@x>"
+        assert kw["references"] == "<older@x> <orig@x>"
+        assert kw["reply_to_message_id"] == "orig-msg-1"
+        assert kw["reply_kind"] == "reply"
+
+    def test_outlook_forward_invokes_attachment_inheritance(self, monkeypatch):
+        # Outlook ``createForward`` copies attachments server-side. The
+        # service calls ``list_message_attachments`` against the newly
+        # created draft to discover the inherited rows + persists them.
+        _patch_common(monkeypatch)
+
+        # Switch the test account to Outlook.
+        monkeypatch.setattr(
+            drafts_service.account_store, "get",
+            lambda _mb, _aid: {
+                "account_id": _ACCOUNT_ID,
+                "mailbox_id": _MAILBOX_ID,
+                "provider": "outlook",
+                "display_label": "outlook:acc1",
+            } if _aid == _ACCOUNT_ID else None,
+        )
+
+        # Capture the list_message_attachments call.
+        from core.email.email_client import AttachmentMetadata
+        inherited = AttachmentMetadata(
+            provider_message_id="forwarded-draft-id",
+            part_id=None,
+            provider_attachment_id="att-inherited-1",
+            filename="inherited.pdf",
+            mime_type="application/pdf",
+            size=128,
+            content_id=None,
+            is_inline=False,
+            position=0,
+        )
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                mid = str(acc.get("mailbox_id", ""))
+                aid = str(acc.get("account_id", ""))
+                label = f"{mid}__{aid}"
+                manager.add_client(FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    list_message_attachments_return=([inherited], {}),
+                ))
+            return manager
+
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+
+        inserted: list[dict] = []
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "insert",
+            lambda row: inserted.append(row),
+        )
+        # Stamping step (best-effort): also stub list_by_draft + batch update.
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_by_draft",
+            lambda _aid, _did: [
+                {"draft_attachment_id": "uuid-1", "filename": "inherited.pdf"},
+            ],
+        )
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "batch_update_provider_attachment_ids",
+            lambda _pairs: None,
+        )
+
+        from uuid import uuid4
+        payload = DraftCreate(
+            to_recipients=["to@x"],
+            subject="Fwd: Hi",
+            body="body",
+            reply_kind="forward",
+            reply_to_message_id="orig-fwd-1",
+            reply_to_account_id=uuid4(),
+        )
+        drafts_service.create_draft(_MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID)
+        # One row inserted into draft_attachments (the inherited one),
+        # with the filename + size from the AttachmentMetadata.
+        assert len(inserted) == 1
+        assert inserted[0]["filename"] == "inherited.pdf"
+        assert inserted[0]["size"] == 128
+        assert inserted[0]["is_inline"] is False
+        # The bytes are not downloaded — provider draft holds them.
+        assert inserted[0]["blob"] is None
+
+    def test_outlook_forward_inheritance_soft_fails(self, monkeypatch):
+        # ``list_message_attachments`` failure during the inheritance
+        # step is best-effort: the draft creation still succeeds.
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            drafts_service.account_store, "get",
+            lambda _mb, _aid: {
+                "account_id": _ACCOUNT_ID,
+                "mailbox_id": _MAILBOX_ID,
+                "provider": "outlook",
+                "display_label": "outlook:acc1",
+            } if _aid == _ACCOUNT_ID else None,
+        )
+        # Configure the fake to raise during list_message_attachments.
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                mid = str(acc.get("mailbox_id", ""))
+                aid = str(acc.get("account_id", ""))
+                label = f"{mid}__{aid}"
+                manager.add_client(FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    list_message_attachments_exc=RuntimeError("boom"),
+                ))
+            return manager
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+
+        # Should NOT raise — the response is still produced.
+        from uuid import uuid4
+        payload = DraftCreate(
+            subject="Fwd: Hi", body="body",
+            reply_kind="forward",
+            reply_to_message_id="orig-1",
+            reply_to_account_id=uuid4(),
+        )
+        result = drafts_service.create_draft(
+            _MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID,
+        )
+        # Draft created successfully despite the inheritance failure.
+        assert result.provider_draft_id == "fake_draft_1"
+
+
+class TestSendDraftPropagatesReplyMetadata:
+    """``send_draft`` reads the reply metadata from the local row and
+    passes ``in_reply_to`` / ``references`` / ``thread_id`` to
+    ``send_draft_with_attachments`` — not from the request body."""
+
+    def test_send_propagates_reply_kwargs_from_local_row(self, monkeypatch):
+        _patch_send_common(monkeypatch)
+        # Override the draft row to carry reply metadata.
+        row = _persisted_row(provider_draft_id=_SEND_DRAFT_ID)
+        row["reply_kind"] = "reply"
+        row["reply_to_message_id"] = "orig-1"
+        row["thread_id"] = "thr-row"
+        row["in_reply_to"] = "<orig@x>"
+        row["references_header"] = "<older@x> <orig@x>"
+        monkeypatch.setattr(
+            drafts_service.draft_store, "get",
+            lambda _did, _aid: row if _did == _SEND_DRAFT_ID else None,
+        )
+        # Capture clients to inspect send_draft_with_attachments kwargs.
+        captured: list[FakeEmailClient] = []
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                mid = str(acc.get("mailbox_id", ""))
+                aid = str(acc.get("account_id", ""))
+                label = f"{mid}__{aid}"
+                client = FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                )
+                captured.append(client)
+                manager.add_client(client)
+            return manager
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+
+        drafts_service.send_draft(
+            _MAILBOX_ID, _ACCOUNT_ID, _SEND_DRAFT_ID, _USER_ID,
+        )
+        assert len(captured) == 1
+        kw = captured[0].send_draft_with_attachments_reply_kwargs[0]
+        # Threading flows from the row, NOT from the request body.
+        assert kw["in_reply_to"] == "<orig@x>"
+        assert kw["references"] == "<older@x> <orig@x>"
+        assert kw["thread_id"] == "thr-row"
+
+
+# ==================================================================
+# copy_attachments_from_email
+# ==================================================================
+
+
+_COPY_DRAFT_ID = "draft_copy"
+_SOURCE_ACCOUNT_ID = "00000000-0000-4000-a000-000000000abc"
+_SOURCE_MESSAGE_ID = "src-msg-1"
+_SOURCE_ATTACHMENT_ID = "11111111-1111-4000-a000-aaaaaaaaaaaa"
+
+
+def _patch_copy_attachments_common(monkeypatch, *, draft_provider: str = "gmail"):
+    """Patch helpers needed by copy_attachments_from_email tests."""
+    _patch_common(monkeypatch)
+
+    # Draft account.
+    def _get(_mb, _aid):
+        if _aid != _ACCOUNT_ID:
+            return None
+        return {
+            "account_id": _ACCOUNT_ID,
+            "mailbox_id": _MAILBOX_ID,
+            "provider": draft_provider,
+            "display_label": f"{draft_provider}:{_ACCOUNT_ID}",
+            "email_address": "me@me.com",
+        }
+    monkeypatch.setattr(drafts_service.account_store, "get", _get)
+
+    # Source account ownership (D-22 single-JOIN).
+    monkeypatch.setattr(
+        drafts_service.account_store, "get_by_id_for_user",
+        lambda _aid, _uid: {
+            "account_id": _SOURCE_ACCOUNT_ID,
+            "mailbox_id": _MAILBOX_ID,
+            "provider": "gmail",
+            "display_label": "gmail:src",
+            "email_address": "src@me.com",
+        } if _aid == _SOURCE_ACCOUNT_ID else None,
+    )
+
+    # Draft exists.
+    monkeypatch.setattr(
+        drafts_service.draft_store, "get",
+        lambda _did, _aid: _persisted_row(provider_draft_id=_did) if _did == _COPY_DRAFT_ID else None,
+    )
+
+    # Source email metadata exists.
+    monkeypatch.setattr(
+        drafts_service.email_metadata_store, "exists",
+        lambda _aid, _mid: True,
+    )
+
+    # Loader for the final response (returns the current draft attachments).
+    monkeypatch.setattr(
+        drafts_service, "_load_draft_attachments_metadata_out",
+        lambda _aid, _did: [],
+    )
+
+
+class TestCopyAttachmentsFromEmail:
+    """Covers R-06 / R-12 — server-side copy of Forward attachments."""
+
+    def _seed_one_source_attachment(
+        self, monkeypatch, *, blob: bytes | None = b"BLOB-BYTES",
+        unavailable_at=None,
+    ):
+        # Source email_attachments rows.
+        rows = [{
+            "attachment_id": _SOURCE_ATTACHMENT_ID,
+            "filename": "src.pdf",
+            "mime_type": "application/pdf",
+            "size": len(blob) if blob else 1000,
+            "content_id": None,
+            "is_inline": False,
+            "position": 0,
+            "part_id": "1",
+            "provider_attachment_id": None,
+            "unavailable_at": unavailable_at,
+        }]
+        monkeypatch.setattr(
+            drafts_service.email_attachment_store, "list_by_message",
+            lambda _aid, _mid: rows,
+        )
+        monkeypatch.setattr(
+            drafts_service.email_attachment_store, "get_blob",
+            lambda _aid: blob,
+        )
+        # No prior copies — idempotency check returns empty.
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_existing_source_attachment_ids",
+            lambda _aid, _did: set(),
+        )
+        # No pre-existing chips → counts start at zero.
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_by_draft",
+            lambda _aid, _did: [],
+        )
+        inserts: list[dict] = []
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "insert",
+            lambda row: inserts.append(row) or row,
+        )
+        return inserts
+
+    def test_outlook_draft_returns_noop(self, monkeypatch):
+        # The Outlook code path short-circuits before reading source
+        # attachments — createForward already inherited them.
+        _patch_copy_attachments_common(monkeypatch, draft_provider="outlook")
+        monkeypatch.setattr(
+            drafts_service.email_attachment_store, "list_by_message",
+            lambda *_a, **_kw: pytest.fail("list_by_message must NOT be called for Outlook"),
+        )
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        assert result.copied_count == 0
+        assert result.skipped == []
+
+    def test_gmail_cached_blob_inserts_draft_attachment(self, monkeypatch):
+        # Happy path: source attachment row + cached blob → single insert.
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        inserts = self._seed_one_source_attachment(monkeypatch, blob=b"BLOB-BYTES")
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        assert result.copied_count == 1
+        assert result.skipped == []
+        assert len(inserts) == 1
+        # R-12 source-tracking columns set on the new row.
+        assert inserts[0]["source_account_id"] == _SOURCE_ACCOUNT_ID
+        assert inserts[0]["source_attachment_id"] == _SOURCE_ATTACHMENT_ID
+        # Blob copied from the cache.
+        assert inserts[0]["blob"] == b"BLOB-BYTES"
+
+    def test_gmail_missing_blob_falls_back_to_provider_download(self, monkeypatch):
+        # Cache miss path: fetch_attachment_binary is invoked, then
+        # the bytes are persisted (cache-aside) and the draft row inserted.
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        inserts = self._seed_one_source_attachment(monkeypatch, blob=None)
+        # Track insert_blob calls for cache-aside.
+        blob_inserts: list[tuple] = []
+        monkeypatch.setattr(
+            drafts_service.email_attachment_store, "insert_blob",
+            lambda aid, b: blob_inserts.append((aid, b)),
+        )
+        # Reconfigure the source manager fake to return a binary.
+        from core.email.email_client import AttachmentBinary
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                mid = str(acc.get("mailbox_id", ""))
+                aid = str(acc.get("account_id", ""))
+                label = f"{mid}__{aid}"
+                manager.add_client(FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    fetch_attachment_binary_return=AttachmentBinary(
+                        mime_type="application/pdf",
+                        filename="src.pdf",
+                        data=b"DOWNLOADED-BYTES",
+                        size=16,
+                    ),
+                ))
+            return manager
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        assert result.copied_count == 1
+        assert len(inserts) == 1
+        # Blob was persisted into email_attachment_blobs (cache-aside).
+        assert blob_inserts == [(_SOURCE_ATTACHMENT_ID, b"DOWNLOADED-BYTES")]
+        # The draft attachment carries the downloaded bytes.
+        assert inserts[0]["blob"] == b"DOWNLOADED-BYTES"
+
+    def test_unavailable_at_source_skipped_with_reason(self, monkeypatch):
+        # An attachment marked unavailable (D-17) is skipped without
+        # touching the provider.
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        inserts = self._seed_one_source_attachment(
+            monkeypatch, blob=b"DOES-NOT-MATTER", unavailable_at="2026-01-01T00:00:00Z",
+        )
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        assert result.copied_count == 0
+        assert len(result.skipped) == 1
+        assert result.skipped[0]["reason"] == "unavailable_at_source"
+        # Nothing inserted.
+        assert inserts == []
+
+    def test_idempotency_skips_already_copied_rows(self, monkeypatch):
+        # R-12: a retry must NOT duplicate rows. ``list_existing_source_attachment_ids``
+        # returns the ids we already copied; those are skipped.
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        inserts = self._seed_one_source_attachment(monkeypatch, blob=b"X")
+        # Pretend the attachment was already copied.
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_existing_source_attachment_ids",
+            lambda _aid, _did: {_SOURCE_ATTACHMENT_ID},
+        )
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        assert result.copied_count == 0
+        assert len(result.skipped) == 1
+        assert result.skipped[0]["reason"] == "already_copied"
+        assert inserts == []
+
+    def test_source_email_not_found_returns_404(self, monkeypatch):
+        from api.errors.exceptions import EmailNotFound
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        monkeypatch.setattr(
+            drafts_service.email_metadata_store, "exists",
+            lambda _aid, _mid: False,
+        )
+        with pytest.raises(EmailNotFound):
+            drafts_service.copy_attachments_from_email(
+                _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+                _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+            )
+
+    def test_source_account_unknown_returns_account_not_found(self, monkeypatch):
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        # D-22 anti-leak: foreign / unknown account → 404 account_not_found.
+        monkeypatch.setattr(
+            drafts_service.account_store, "get_by_id_for_user",
+            lambda _aid, _uid: None,
+        )
+        with pytest.raises(AccountNotFound):
+            drafts_service.copy_attachments_from_email(
+                _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+                _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+            )
+
+    def test_draft_not_found_short_circuits(self, monkeypatch):
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        monkeypatch.setattr(
+            drafts_service.draft_store, "get",
+            lambda _did, _aid: None,
+        )
+        with pytest.raises(DraftNotFound):
+            drafts_service.copy_attachments_from_email(
+                _MAILBOX_ID, _ACCOUNT_ID, "missing", _SOURCE_ACCOUNT_ID,
+                _SOURCE_MESSAGE_ID, _USER_ID,
+            )
+
+    def test_inline_attachments_filtered_out(self, monkeypatch):
+        # Only ``is_inline=False`` rows are candidates; inline images
+        # are excluded (D-13 strict + R-06).
+        _patch_copy_attachments_common(monkeypatch, draft_provider="gmail")
+        rows = [
+            {
+                "attachment_id": _SOURCE_ATTACHMENT_ID,
+                "filename": "inline.png",
+                "mime_type": "image/png",
+                "size": 100,
+                "content_id": "cid-1",
+                "is_inline": True,  # excluded
+                "position": 0,
+                "part_id": "1",
+                "provider_attachment_id": None,
+                "unavailable_at": None,
+            },
+        ]
+        monkeypatch.setattr(
+            drafts_service.email_attachment_store, "list_by_message",
+            lambda _aid, _mid: rows,
+        )
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_existing_source_attachment_ids",
+            lambda _aid, _did: set(),
+        )
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "list_by_draft",
+            lambda _aid, _did: [],
+        )
+        inserts: list[dict] = []
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "insert",
+            lambda row: inserts.append(row) or row,
+        )
+        result = drafts_service.copy_attachments_from_email(
+            _MAILBOX_ID, _ACCOUNT_ID, _COPY_DRAFT_ID,
+            _SOURCE_ACCOUNT_ID, _SOURCE_MESSAGE_ID, _USER_ID,
+        )
+        # Inline rows pre-filtered → no copies.
+        assert result.copied_count == 0
+        assert inserts == []

@@ -37,6 +37,13 @@ class PgDraftAttachmentStore(DraftAttachmentStore):
         # ``position`` is computed atomically inside the INSERT statement —
         # see :py:data:`queries.INSERT_DRAFT_ATTACHMENT`. The caller must
         # NOT pre-resolve it (any value passed here is ignored).
+        #
+        # ``source_account_id`` / ``source_attachment_id`` (migration 0030)
+        # are populated only by the Forward copy endpoint; direct uploads
+        # pass ``None`` and the row stores ``NULL`` so the partial R-12
+        # index does not bloat with no-op rows.
+        source_account_id = row.get("source_account_id")
+        source_attachment_id = row.get("source_attachment_id")
         params = {
             "draft_attachment_id": str(row["draft_attachment_id"]),
             "account_id": str(row["account_id"]),
@@ -47,6 +54,8 @@ class PgDraftAttachmentStore(DraftAttachmentStore):
             "content_id": row.get("content_id"),
             "is_inline": bool(row.get("is_inline", False)),
             "blob": psycopg2.Binary(row["blob"]) if row.get("blob") is not None else None,
+            "source_account_id": str(source_account_id) if source_account_id else None,
+            "source_attachment_id": str(source_attachment_id) if source_attachment_id else None,
         }
         try:
             with connection.get_connection() as conn:
@@ -186,6 +195,39 @@ class PgDraftAttachmentStore(DraftAttachmentStore):
             raise QueryError(
                 f"Unexpected draft attachment update error ({type(exc).__name__}): {exc}"
             ) from exc
+
+    def list_existing_source_attachment_ids(
+        self, account_id: str, provider_draft_id: str,
+    ) -> set[str]:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        queries.LIST_EXISTING_SOURCE_ATTACHMENT_IDS,
+                        {
+                            "account_id": account_id,
+                            "provider_draft_id": provider_draft_id,
+                        },
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return set()
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError(
+                "Failed to list existing source attachment ids."
+            ) from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected source attachment list error ({type(exc).__name__}): {exc}"
+            ) from exc
+        out: set[str] = set()
+        for (raw,) in rows:
+            if raw is None:
+                continue
+            out.add(str(raw))
+        return out
 
     def batch_update_provider_attachment_ids(
         self, pairs: list[tuple[str, str]],

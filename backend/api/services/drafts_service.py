@@ -16,6 +16,7 @@ from api.errors.exceptions import (
     AccountNotFound,
     ApiError,
     AttachmentBlockedExtension,
+    AttachmentCopySourceUnavailable,
     AttachmentInsertError,
     AttachmentLimitExceeded,
     AttachmentListingError,
@@ -31,8 +32,10 @@ from api.errors.exceptions import (
     DraftSendError,
     DraftSyncError,
     DraftUpdateError,
+    EmailNotFound,
 )
 from api.schemas.attachment import (
+    CopyAttachmentsFromEmailResponse,
     DraftAttachmentMetadataOut,
     DraftAttachmentResponseOut,
 )
@@ -56,8 +59,10 @@ from api.services.services_helpers import (
     unwrap_secret,
 )
 from core.email import (
+    AttachmentMetadata,
     CoreError,
     DraftAttachmentInput,
+    EmailAttachmentNotFound,
     EmailAttachmentSendFailed,
     is_blocked_extension,
 )
@@ -66,6 +71,8 @@ from database import (
     account_store,
     draft_attachment_store,
     draft_store,
+    email_attachment_store,
+    email_metadata_store,
     DatabaseError,
 )
 
@@ -248,6 +255,11 @@ def create_draft(
                 payload.bcc_recipients,
                 payload.subject,
                 payload.body,
+                thread_id=payload.thread_id,
+                in_reply_to=payload.in_reply_to,
+                references=payload.references_header,
+                reply_to_message_id=payload.reply_to_message_id,
+                reply_kind=payload.reply_kind,
             )
         except CoreError as exc:
             raise translate_core_error(
@@ -272,6 +284,14 @@ def create_draft(
             "bcc_recipients": list(payload.bcc_recipients),
             "subject": payload.subject,
             "body": payload.body,
+            "reply_kind": payload.reply_kind,
+            "reply_to_message_id": payload.reply_to_message_id,
+            "reply_to_account_id": (
+                str(payload.reply_to_account_id) if payload.reply_to_account_id else None
+            ),
+            "thread_id": payload.thread_id,
+            "in_reply_to": payload.in_reply_to,
+            "references_header": payload.references_header,
         }
         try:
             persisted = draft_store.create(row)
@@ -286,6 +306,25 @@ def create_draft(
                 "Failed to persist draft to database after provider creation."
             ) from exc
 
+        # Outlook + Forward: ``createForward`` copies the original
+        # message's attachments server-side. Discover them now and
+        # persist the metadata rows in ``draft_attachments`` (no blob —
+        # the bytes live in the provider draft until send) so the
+        # composer renders the chips from first render. Gmail has no
+        # such inheritance; the frontend will call
+        # ``copy_attachments_from_email`` explicitly for Gmail.
+        if provider == "outlook" and payload.reply_kind == "forward":
+            _persist_outlook_forward_inherited_attachments(
+                account_id=account_id,
+                provider_draft_id=draft_metadata.provider_draft_id,
+                manager=manager,
+                account_label=account_label,
+            )
+
+        # Reload to pick up the just-inserted ``draft_attachments`` rows
+        # — only matters for the Outlook Forward path; otherwise the
+        # query returns an empty attachments list which matches the
+        # behaviour before the inheritance step.
         return _draft_out_from_row(persisted)
     except ApiError:
         raise
@@ -295,6 +334,103 @@ def create_draft(
             type(exc).__name__, exc,
         )
         raise DraftCreationError("Failed to create draft.") from exc
+
+
+def _persist_outlook_forward_inherited_attachments(
+    *,
+    account_id: str,
+    provider_draft_id: str,
+    manager: Any,
+    account_label: str,
+) -> None:
+    """Discover and persist the attachments Outlook copied server-side
+    when ``createForward`` returned a new draft.
+
+    Best-effort: the composer can still operate without the chips
+    appearing immediately (a refresh after the user clicks Save reveals
+    them via ``list_drafts``). We log on failure and swallow — the send
+    path uses the provider's draft state directly, so the local rows
+    are a UX nicety, not a correctness requirement.
+
+    Persists each attachment row with ``blob=None``: the binary lives
+    only in the provider draft (we never downloaded it). The Outlook
+    send path will leave ``provider_attachment_id`` already set, so it
+    skips re-uploading (D-27 partial-success contract).
+    """
+    try:
+        attachments, _ = manager.list_message_attachments(
+            account_label, provider_draft_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Outlook createForward attachment inheritance discovery failed (%s): %s",
+            type(exc).__name__, exc,
+        )
+        return
+
+    if not attachments:
+        return
+
+    persisted_count = 0
+    for meta in attachments:
+        if meta.is_inline:
+            # Inline images travel embedded inside the body — they are
+            # not chips. Skip; the strict D-13 split applies to draft
+            # attachments too.
+            continue
+        try:
+            draft_attachment_store.insert(
+                {
+                    "draft_attachment_id": str(uuid.uuid4()),
+                    "account_id": account_id,
+                    "provider_draft_id": provider_draft_id,
+                    "filename": meta.filename,
+                    "mime_type": meta.mime_type,
+                    "size": meta.size,
+                    "content_id": meta.content_id,
+                    "is_inline": False,
+                    "blob": None,
+                    "source_account_id": None,
+                    "source_attachment_id": None,
+                }
+            )
+            persisted_count += 1
+        except DatabaseError as exc:
+            logger.warning(
+                "Outlook inherited attachment persist failed (%s): %s",
+                type(exc).__name__, exc,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Outlook inherited attachment unexpected persist error (%s): %s",
+                type(exc).__name__, exc,
+            )
+
+    # Best-effort post-insert: stamp the provider_attachment_id so the
+    # send path knows they are already at the provider.
+    if persisted_count > 0:
+        try:
+            rows = draft_attachment_store.list_by_draft(account_id, provider_draft_id)
+            pairs: list[tuple[str, str]] = []
+            for row in rows:
+                pid = None
+                for meta in attachments:
+                    if (
+                        meta.filename == row.get("filename")
+                        and not meta.is_inline
+                        and meta.provider_attachment_id
+                    ):
+                        pid = meta.provider_attachment_id
+                        break
+                if pid:
+                    pairs.append((row["draft_attachment_id"], pid))
+            if pairs:
+                draft_attachment_store.batch_update_provider_attachment_ids(pairs)
+        except Exception as exc:
+            logger.warning(
+                "Outlook inherited attachment provider_id stamp failed (%s): %s",
+                type(exc).__name__, exc,
+            )
 
 
 def update_draft(
@@ -869,6 +1005,14 @@ def send_draft(
         # multi-step for Outlook). Partial successes during the Outlook
         # path are persisted *before* re-raising the failure so a retry
         # can skip the already-uploaded parts.
+        #
+        # Reply / forward metadata (Gmail-only on the wire — Outlook
+        # threading is already fixed by createReply/All/Forward at
+        # creation): the values come from the local draft row, NOT
+        # from the request body. ``buildDraftPayload`` in the frontend
+        # deliberately omits them so the row stays the single source
+        # of truth — see repository_guide.md "reply fields persisted
+        # in row" invariant.
         try:
             sent_metadata, upload_results = manager.send_draft_with_attachments(
                 account_label,
@@ -879,6 +1023,9 @@ def send_draft(
                 str(existing_draft.get("subject") or ""),
                 str(existing_draft.get("body") or ""),
                 draft_attachment_inputs,
+                in_reply_to=existing_draft.get("in_reply_to"),
+                references=existing_draft.get("references_header"),
+                thread_id=existing_draft.get("thread_id"),
             )
         except EmailAttachmentSendFailed as exc:
             _persist_partial_upload_results(exc.detail or {})
@@ -1258,3 +1405,366 @@ def remove_draft_attachment(
             draft_attachment_id,
         )
     return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Copy attachments from a received email into a Forward draft (R-06 / R-12)
+# ---------------------------------------------------------------------------
+
+
+def _load_draft_attachments_metadata_out(
+    account_id: str, provider_draft_id: str,
+) -> list[DraftAttachmentMetadataOut]:
+    """Re-export of the existing ``_load_draft_attachments_for_out`` helper.
+
+    Kept as a thin alias so the copy endpoint can rebuild the chip list
+    after persisting new rows; the existing helper already runs the
+    DB → DraftAttachmentMetadataOut mapping with the right error
+    handling.
+    """
+    return _load_draft_attachments_for_out(account_id, provider_draft_id)
+
+
+def copy_attachments_from_email(
+    mailbox_id: str,
+    account_id: str,
+    provider_draft_id: str,
+    source_account_id: str,
+    source_provider_message_id: str,
+    user_id: str,
+) -> CopyAttachmentsFromEmailResponse:
+    """Copy downloadable attachments from a received email into a Forward draft.
+
+    R-06 / R-12: idempotent, partial-success-friendly. Gmail must
+    download + re-upload each attachment via this endpoint because
+    Gmail's API has no "attach by reference" primitive. Outlook
+    inherits attachments automatically via ``createForward`` at draft
+    creation, so this endpoint is a no-op for Outlook drafts and
+    returns ``copied_count=0`` with the current attachment list — the
+    frontend calls it uniformly for both providers.
+
+    Flow:
+
+    1. Mailbox + draft ownership pre-checks (D-22 anti-leak).
+    2. Source account ownership via the single-JOIN repository method.
+    3. If draft account is Outlook → no-op response.
+    4. Read source attachments (``is_inline = FALSE``).
+    5. Filter out already-copied rows via R-12 idempotency check.
+    6. For each remaining attachment: reuse cached blob when present,
+       otherwise download from provider; persist into ``draft_attachments``
+       carrying ``source_account_id`` + ``source_attachment_id`` so a
+       future retry skips the row.
+    7. Skipped reasons surface as structured records (per-row
+       failures do NOT abort the whole batch — best-effort).
+    """
+    ensure_mailbox_access(mailbox_id, user_id)
+
+    # Draft pre-check + account lookup (same pattern as add_draft_attachment).
+    try:
+        draft_account = account_store.get(mailbox_id, account_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account lookup error during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentLookupError(
+            "Failed to look up account while copying attachments from email."
+        ) from exc
+    if draft_account is None:
+        raise AccountNotFound(
+            f"Account '{account_id}' not found in mailbox '{mailbox_id}' "
+            "during copy attachments from email."
+        )
+
+    try:
+        existing_draft = draft_store.get(provider_draft_id, account_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected draft lookup error during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentLookupError(
+            "Failed to look up draft while copying attachments from email."
+        ) from exc
+    if existing_draft is None:
+        raise DraftNotFound(
+            f"Draft '{provider_draft_id}' not found for account '{account_id}' "
+            "during copy attachments from email."
+        )
+
+    # Source account ownership — D-22 anti-leak via single JOIN. A
+    # foreign or missing account uniformly collapses to 404.
+    try:
+        source_account = account_store.get_by_id_for_user(
+            source_account_id, user_id,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected source account lookup error during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentLookupError(
+            "Failed to verify source account while copying attachments from email."
+        ) from exc
+    if source_account is None:
+        raise AccountNotFound(
+            f"Source account '{source_account_id}' not found "
+            "during copy attachments from email."
+        )
+
+    # Source email metadata existence — avoids spending a provider
+    # round trip on a guaranteed 404.
+    try:
+        source_exists = email_metadata_store.exists(
+            source_account_id, source_provider_message_id,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected source email existence check during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentLookupError(
+            "Failed to verify source email existence during copy."
+        ) from exc
+    if not source_exists:
+        raise EmailNotFound(
+            f"Source email '{source_provider_message_id}' not found "
+            f"for account '{source_account_id}' during copy attachments from email."
+        )
+
+    draft_provider = str(draft_account.get("provider") or "").lower()
+
+    # Outlook: createForward already copied attachments server-side at
+    # draft creation. Returning the current chip list keeps the
+    # frontend single-path (it always invokes copy-from-email after
+    # creating a Forward draft).
+    if draft_provider == "outlook":
+        return CopyAttachmentsFromEmailResponse(
+            copied_count=0,
+            skipped=[],
+            attachments=_load_draft_attachments_metadata_out(
+                account_id, provider_draft_id,
+            ),
+        )
+
+    # Gmail path: download + re-upload.
+    try:
+        source_rows = email_attachment_store.list_by_message(
+            source_account_id, source_provider_message_id,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected source attachments list error during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentListingError(
+            "Failed to list source attachments during copy."
+        ) from exc
+    downloadable_sources = [row for row in source_rows if not row.get("is_inline")]
+
+    # R-12 idempotency: skip rows already copied into this draft.
+    try:
+        already_copied = draft_attachment_store.list_existing_source_attachment_ids(
+            account_id, provider_draft_id,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected existing source-id query during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentListingError(
+            "Failed to read existing source ids during copy."
+        ) from exc
+
+    # Pre-load existing chip list to enforce D-03 (count) / D-02
+    # (cumulative size) caps before downloading anything.
+    try:
+        existing_chips = draft_attachment_store.list_by_draft(
+            account_id, provider_draft_id,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected existing chips query during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentListingError(
+            "Failed to read existing chips during copy."
+        ) from exc
+
+    current_count = len(existing_chips)
+    cumulative_size = sum(int(row.get("size") or 0) for row in existing_chips)
+
+    # Build the source account label for provider calls. We need a
+    # manager scoped to the SOURCE account because the attachments
+    # live in that mailbox.
+    source_mailbox_id = str(source_account.get("mailbox_id") or "")
+    source_provider = str(source_account.get("provider") or "").lower()
+    source_account_label = f"{source_mailbox_id}__{source_account_id}"
+
+    try:
+        source_manager = build_manager_for_accounts([source_account])
+        source_app_credentials = load_wrapped_app_credentials(source_provider)
+        source_user_tokens = load_wrapped_account_tokens(
+            source_mailbox_id, source_account_id, source_provider,
+        )
+        source_auth_payloads = {
+            source_account_label: (source_app_credentials, source_user_tokens),
+        }
+        source_label_lookup = {
+            source_account_label: (
+                source_mailbox_id, source_account_id, source_provider,
+            ),
+        }
+        updated_tokens = source_manager.authenticate_all_silent(source_auth_payloads)
+        if updated_tokens:
+            _persist_refreshed_tokens(
+                updated_tokens, source_label_lookup, fallback=AttachmentLookupError,
+            )
+        raise_on_silent_auth_errors(
+            source_manager.get_last_errors(), fallback=AttachmentLookupError,
+        )
+    except ApiError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Unexpected source manager build during copy_from_email (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AttachmentLookupError(
+            "Failed to prepare source provider client during copy."
+        ) from exc
+
+    skipped: list[dict[str, str]] = []
+    copied_count = 0
+    for row in downloadable_sources:
+        attachment_id = str(row["attachment_id"])
+        filename = str(row.get("filename") or "attachment")
+        size = int(row.get("size") or 0)
+
+        if attachment_id in already_copied:
+            skipped.append({"filename": filename, "reason": "already_copied"})
+            continue
+        if row.get("unavailable_at") is not None:
+            skipped.append({"filename": filename, "reason": "unavailable_at_source"})
+            continue
+        if current_count + 1 > _MAX_ATTACHMENTS_PER_MESSAGE:
+            skipped.append({"filename": filename, "reason": "attachment_limit_exceeded"})
+            continue
+        if cumulative_size + size > _MAX_MESSAGE_SIZE_BYTES:
+            skipped.append({"filename": filename, "reason": "message_size_exceeded"})
+            continue
+
+        try:
+            blob = email_attachment_store.get_blob(attachment_id)
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected blob lookup during copy_from_email (%s): %s",
+                type(exc).__name__, exc,
+            )
+            skipped.append({"filename": filename, "reason": "blob_lookup_failed"})
+            continue
+
+        if blob is None:
+            # Cache miss — pull from the provider and persist for next time.
+            meta = AttachmentMetadata(
+                provider_message_id=source_provider_message_id,
+                part_id=row.get("part_id"),
+                provider_attachment_id=row.get("provider_attachment_id"),
+                filename=filename,
+                mime_type=str(row.get("mime_type") or "application/octet-stream"),
+                size=size,
+                content_id=row.get("content_id"),
+                is_inline=False,
+                position=int(row.get("position") or 0),
+            )
+            try:
+                binary = source_manager.fetch_attachment_binary(
+                    source_account_label, source_provider_message_id, meta,
+                )
+            except EmailAttachmentNotFound:
+                try:
+                    email_attachment_store.mark_unavailable(attachment_id)
+                except Exception as inner_exc:
+                    logger.warning(
+                        "mark_unavailable failed during copy_from_email (%s): %s",
+                        type(inner_exc).__name__, inner_exc,
+                    )
+                skipped.append({"filename": filename, "reason": "unavailable_at_source"})
+                continue
+            except CoreError as exc:
+                logger.warning(
+                    "Provider download failed during copy_from_email: %s", exc,
+                )
+                skipped.append({"filename": filename, "reason": "provider_unavailable"})
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected provider download during copy_from_email (%s): %s",
+                    type(exc).__name__, exc,
+                )
+                skipped.append({"filename": filename, "reason": "provider_unavailable"})
+                continue
+            blob = binary.data
+            try:
+                email_attachment_store.insert_blob(attachment_id, blob)
+            except Exception as exc:
+                logger.warning(
+                    "insert_blob failed during copy_from_email (%s): %s",
+                    type(exc).__name__, exc,
+                )
+
+        # Persist into draft_attachments with the R-12 source-tracking
+        # columns. ``draft_attachment_id`` is freshly minted — the row
+        # is a copy, not a reference.
+        try:
+            draft_attachment_store.insert({
+                "draft_attachment_id": str(uuid.uuid4()),
+                "account_id": account_id,
+                "provider_draft_id": provider_draft_id,
+                "filename": filename,
+                "mime_type": str(row.get("mime_type") or "application/octet-stream"),
+                "size": size,
+                "content_id": row.get("content_id"),
+                "is_inline": False,
+                "blob": blob,
+                "source_account_id": source_account_id,
+                "source_attachment_id": attachment_id,
+            })
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected draft attachment insert during copy_from_email (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise AttachmentInsertError(
+                "Failed to persist copied draft attachment."
+            ) from exc
+
+        copied_count += 1
+        current_count += 1
+        cumulative_size += size
+
+    return CopyAttachmentsFromEmailResponse(
+        copied_count=copied_count,
+        skipped=skipped,
+        attachments=_load_draft_attachments_metadata_out(
+            account_id, provider_draft_id,
+        ),
+    )

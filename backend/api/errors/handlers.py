@@ -25,6 +25,7 @@ from api.errors.exceptions import (
     AppCredentialsLoadError,
     AppCredentialsMissing,
     AttachmentBlockedExtension,
+    AttachmentCopySourceUnavailable,
     AttachmentInsertError,
     AttachmentLimitExceeded,
     AttachmentListingError,
@@ -49,6 +50,9 @@ from api.errors.exceptions import (
     DraftSyncError,
     DraftUpdateError,
     EmailContentFetchError,
+    EmailReplyContextError,
+    FavoriteSyncError,
+    FavoriteUpdateError,
     EmailFetchError,
     EmailNotFound,
     EmailNotInTrash,
@@ -76,6 +80,10 @@ from api.errors.exceptions import (
     Unauthorized,
     UserNotFound,
     UserOperationError,
+    VirtualMailboxInvalid,
+    VirtualMailboxListError,
+    VirtualMailboxNotFound,
+    VirtualMailboxOperationError,
 )
 from api.schemas.error import ErrorResponse
 
@@ -93,6 +101,7 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     AccountConnectAuthError: status.HTTP_401_UNAUTHORIZED,
     AccountNotConnected: status.HTTP_409_CONFLICT,
     EmailContentFetchError: status.HTTP_502_BAD_GATEWAY,
+    EmailReplyContextError: status.HTTP_502_BAD_GATEWAY,
     EmailFetchError: status.HTTP_502_BAD_GATEWAY,
     EmailSendError: status.HTTP_502_BAD_GATEWAY,
     ReadStatusUpdateError: status.HTTP_502_BAD_GATEWAY,
@@ -133,6 +142,7 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     AttachmentTooLarge: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
     AttachmentNotFound: status.HTTP_404_NOT_FOUND,
     AttachmentUnavailable: status.HTTP_404_NOT_FOUND,
+    AttachmentCopySourceUnavailable: status.HTTP_404_NOT_FOUND,
     DraftAttachmentNotFound: status.HTTP_404_NOT_FOUND,
     AttachmentProviderForbidden: status.HTTP_502_BAD_GATEWAY,
     AttachmentProviderUnavailable: status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -143,6 +153,14 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     RequestTooLarge: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
     PurgeDisabled: status.HTTP_503_SERVICE_UNAVAILABLE,
     InvalidAdminToken: status.HTTP_401_UNAUTHORIZED,
+    # Favourites
+    FavoriteUpdateError: status.HTTP_502_BAD_GATEWAY,
+    FavoriteSyncError: status.HTTP_502_BAD_GATEWAY,
+    # Virtual mailboxes
+    VirtualMailboxNotFound: status.HTTP_404_NOT_FOUND,
+    VirtualMailboxInvalid: status.HTTP_400_BAD_REQUEST,
+    VirtualMailboxOperationError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
 

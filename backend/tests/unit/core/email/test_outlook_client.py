@@ -2420,3 +2420,383 @@ class TestOutlookSendDraftWithAttachments:
             entry.get("draft_attachment_id") == "fail-1"
             for entry in detail.get("failed_attachments", [])
         )
+
+
+# ── _create_draft_via_reply — body shape + endpoint routing ────────
+
+
+class TestOutlookCreateDraftViaReply:
+    """Covers ``createReply`` / ``createReplyAll`` / ``createForward`` routing.
+
+    Per §4.2 + R-09: the body JSON carries ONLY ``message`` (no ``comment``,
+    no root-level ``toRecipients`` — XOR constraint guaranteed 400).
+    Pre-validation of ``toRecipients`` for ``reply`` / ``reply_all``
+    locally rejects empty recipients to avoid burning provider quota.
+    """
+
+    _DRAFT_RESPONSE = {
+        "id": "draft-1",
+        "createdDateTime": "2026-05-23T14:32:00Z",
+        "lastModifiedDateTime": "2026-05-23T14:32:00Z",
+    }
+
+    def test_reply_endpoint_path_uses_create_reply(self, authenticated_client):
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["method"] = method
+            captured["url"] = url
+            captured["body"] = body
+            captured["extra_headers"] = extra_headers
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                ["to@x"], [], [], "Re: Hi", "body",
+                reply_to_message_id="orig-1", reply_kind="reply",
+            )
+        assert "createReply" in captured["url"]
+        # Must NOT use createReplyAll / createForward.
+        assert "createReplyAll" not in captured["url"]
+        assert "createForward" not in captured["url"]
+
+    def test_reply_all_endpoint_path(self, authenticated_client):
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["url"] = url
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                ["to@x"], ["cc@x"], [], "Re: Hi", "body",
+                reply_to_message_id="orig-1", reply_kind="reply_all",
+            )
+        assert "createReplyAll" in captured["url"]
+
+    def test_forward_endpoint_path(self, authenticated_client):
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["url"] = url
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                [], [], [], "Fwd: Hi", "body",
+                reply_to_message_id="orig-1", reply_kind="forward",
+            )
+        assert "createForward" in captured["url"]
+
+    def test_body_shape_only_message_no_comment_no_root_to(self, authenticated_client):
+        # Graph's XOR constraint: ``comment`` + ``message.body`` →
+        # 400; root ``toRecipients`` + ``message.toRecipients`` → 400.
+        # The helper MUST send only ``{"message": {...}}``.
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["body"] = body
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                ["to@x"], ["cc@x"], [], "Re: Hi", "Plain body",
+                reply_to_message_id="orig-1", reply_kind="reply",
+            )
+        body = captured["body"]
+        # Shape: only ``message`` key at the root.
+        assert set(body.keys()) == {"message"}
+        # ``comment`` (the rich-text alternative) is NEVER present.
+        assert "comment" not in body
+        # Root-level ``toRecipients`` is NEVER present.
+        assert "toRecipients" not in body
+        # The composer fields ride inside ``message`` only.
+        message = body["message"]
+        assert message["subject"] == "Re: Hi"
+        assert message["body"] == {"contentType": "Text", "content": "Plain body"}
+        assert message["toRecipients"] == [{"emailAddress": {"address": "to@x"}}]
+        assert message["ccRecipients"] == [{"emailAddress": {"address": "cc@x"}}]
+
+    def test_prefer_immutable_id_header_sent(self, authenticated_client):
+        # ``Prefer: IdType="ImmutableId"`` must travel with every Graph
+        # call (the stored id is an Immutable ID — without the header
+        # Graph reinterprets it as transient and returns 404).
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["extra_headers"] = extra_headers
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                ["to@x"], [], [], "Re: Hi", "body",
+                reply_to_message_id="orig-1", reply_kind="reply",
+            )
+        # The header dict is propagated. The value is the canonical
+        # ``IdType="ImmutableId"`` (production constant in outlook_client.py).
+        assert captured["extra_headers"] is not None
+        any_immutable = any(
+            "ImmutableId" in str(v) or "Prefer" in str(k)
+            for k, v in (captured["extra_headers"] or {}).items()
+        )
+        assert any_immutable
+
+    def test_reply_with_empty_recipients_raises_locally(self, authenticated_client):
+        # The pre-check rejects ``reply`` / ``reply_all`` with empty
+        # toRecipients BEFORE the Graph call (the constraint would 400).
+        with patch.object(authenticated_client, "_graph_request") as graph_mock:
+            with pytest.raises(EmailRecipientsMissingError):
+                authenticated_client.create_draft(
+                    [], [], [], "Re: Hi", "body",
+                    reply_to_message_id="orig-1", reply_kind="reply",
+                )
+            graph_mock.assert_not_called()
+
+    def test_reply_all_with_empty_recipients_raises_locally(self, authenticated_client):
+        with patch.object(authenticated_client, "_graph_request") as graph_mock:
+            with pytest.raises(EmailRecipientsMissingError):
+                authenticated_client.create_draft(
+                    [], ["cc@x"], [], "Re: Hi", "body",
+                    reply_to_message_id="orig-1", reply_kind="reply_all",
+                )
+            graph_mock.assert_not_called()
+
+    def test_forward_with_empty_recipients_makes_call(self, authenticated_client):
+        # Forward is the documented exception (R-07): the composer fills
+        # recipients later, so the create-draft path tolerates empty.
+        with patch.object(
+            authenticated_client, "_graph_request",
+            return_value=self._DRAFT_RESPONSE,
+        ) as graph_mock:
+            authenticated_client.create_draft(
+                [], [], [], "Fwd: Hi", "body",
+                reply_to_message_id="orig-1", reply_kind="forward",
+            )
+            graph_mock.assert_called_once()
+
+    def test_no_reply_to_message_id_uses_post_me_messages_path(self, authenticated_client):
+        # Plain draft (no reply context) falls back to the legacy
+        # ``POST /me/messages`` path.
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["url"] = url
+            return self._DRAFT_RESPONSE
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            authenticated_client.create_draft(
+                ["to@x"], [], [], "Hi", "body",
+            )
+        # No ``createReply`` / ``createForward`` markers.
+        assert "createReply" not in captured["url"]
+        assert "createForward" not in captured["url"]
+        # The path ends in ``/me/messages`` (no id segment).
+        assert captured["url"].endswith("/me/messages")
+
+
+# ── fetch_reply_context — Graph payload parsing ────────────────────
+
+
+class TestOutlookFetchReplyContext:
+    """Covers the GET /me/messages parsing in fetch_reply_context."""
+
+    def _graph_message(self, *, parent_folder_id: str = "inbox-folder-1"):
+        return {
+            "id": "msg-1",
+            "from": {
+                "emailAddress": {"address": "ana@example.com", "name": "Ana Lopez"},
+            },
+            "toRecipients": [
+                {"emailAddress": {"address": "me@me.com", "name": "Me"}},
+                {"emailAddress": {"address": "carol@x.com"}},
+            ],
+            "ccRecipients": [
+                {"emailAddress": {"address": "dan@y.com"}},
+            ],
+            "replyTo": [
+                {"emailAddress": {"address": "editor@list.com"}},
+            ],
+            "subject": "Hello",
+            "body": {"contentType": "html", "content": "<p>body</p>"},
+            "internetMessageId": "<orig@x>",
+            "internetMessageHeaders": [
+                {"name": "References", "value": "<older@x>"},
+                {"name": "X-Other", "value": "ignored"},
+            ],
+            "receivedDateTime": "2026-05-23T14:32:00Z",
+            "conversationId": "conv-1",
+            "parentFolderId": parent_folder_id,
+            "hasAttachments": False,
+        }
+
+    def test_parses_graph_message_into_reply_context(self, authenticated_client):
+        msg = self._graph_message()
+        # Stub the GET + folder resolution.
+        with patch.object(authenticated_client, "_graph_request", return_value=msg):
+            with patch.object(
+                authenticated_client, "_resolve_special_folder_ids",
+                return_value={"inbox-folder-1": "ALL_MAIL"},
+            ):
+                result = authenticated_client.fetch_reply_context("msg-1")
+        assert result.provider_message_id == "msg-1"
+        assert result.thread_id == "conv-1"
+        assert result.from_email == "ana@example.com"
+        assert result.from_name == "Ana Lopez"
+        assert result.reply_to == ["editor@list.com"]
+        assert result.to_recipients == ["me@me.com", "carol@x.com"]
+        assert result.cc_recipients == ["dan@y.com"]
+        assert result.subject == "Hello"
+        # Body shape: html part goes to body_html.
+        assert result.body_html == "<p>body</p>"
+        assert result.body_text is None
+        # Internet message id has angle brackets stripped at parse time.
+        assert result.message_id == "orig@x"
+        # References extracted from internetMessageHeaders by case-insensitive name.
+        assert result.references == "<older@x>"
+
+    def test_parent_folder_resolved_to_box(self, authenticated_client):
+        # Parent folder id resolution → "SENT" mapping → ReplyContext.box.
+        msg = self._graph_message(parent_folder_id="sent-folder-1")
+        with patch.object(authenticated_client, "_graph_request", return_value=msg):
+            with patch.object(
+                authenticated_client, "_resolve_special_folder_ids",
+                return_value={"sent-folder-1": "SENT"},
+            ):
+                result = authenticated_client.fetch_reply_context("msg-1")
+        assert result.box == "SENT"
+
+    def test_unknown_folder_collapses_to_all_mail(self, authenticated_client):
+        # Defensive: a parent folder id we don't recognise must NOT crash
+        # — the box just collapses to ALL_MAIL.
+        msg = self._graph_message(parent_folder_id="unknown-folder-zzz")
+        with patch.object(authenticated_client, "_graph_request", return_value=msg):
+            with patch.object(
+                authenticated_client, "_resolve_special_folder_ids",
+                return_value={},
+            ):
+                result = authenticated_client.fetch_reply_context("msg-1")
+        assert result.box == "ALL_MAIL"
+
+    def test_prefer_immutable_id_header_sent(self, authenticated_client):
+        # The GET must carry ``Prefer: IdType="ImmutableId"`` (same rule
+        # as every other call against an immutable-id endpoint).
+        captured = {}
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured["extra_headers"] = extra_headers
+            return self._graph_message()
+
+        with patch.object(authenticated_client, "_graph_request", side_effect=_graph_request):
+            with patch.object(
+                authenticated_client, "_resolve_special_folder_ids",
+                return_value={},
+            ):
+                authenticated_client.fetch_reply_context("msg-1")
+        any_immutable = any(
+            "ImmutableId" in str(v) or "Prefer" in str(k)
+            for k, v in (captured.get("extra_headers") or {}).items()
+        )
+        assert any_immutable
+
+    def test_provider_failure_wrapped_as_reply_context_error(self, authenticated_client):
+        # Failed Graph call → EmailExternalAPIError, re-wrapped by
+        # ``fetch_reply_context`` as EmailReplyContextFetchError.
+        from core.email.errors import EmailReplyContextFetchError
+        with patch.object(
+            authenticated_client, "_graph_request",
+            side_effect=EmailExternalAPIError("Graph 404"),
+        ):
+            with pytest.raises(EmailReplyContextFetchError) as exc_info:
+                authenticated_client.fetch_reply_context("msg-1")
+            assert exc_info.value.detail.get("reason") == "provider_fetch_failed"
+
+    def test_unauthenticated_raises(self, authenticated_client):
+        authenticated_client._access_token = None
+        from core.email.errors import EmailNotAuthenticatedError
+        with pytest.raises(EmailNotAuthenticatedError):
+            authenticated_client.fetch_reply_context("msg-1")
+
+    def test_text_body_shape(self, authenticated_client):
+        # contentType=Text → result.body_text populated, body_html=None.
+        msg = self._graph_message()
+        msg["body"] = {"contentType": "text", "content": "plain body"}
+        with patch.object(authenticated_client, "_graph_request", return_value=msg):
+            with patch.object(
+                authenticated_client, "_resolve_special_folder_ids",
+                return_value={},
+            ):
+                result = authenticated_client.fetch_reply_context("msg-1")
+        assert result.body_text == "plain body"
+        assert result.body_html is None
+
+
+# ── send_draft_with_attachments — reply signature symmetry ─────────
+
+
+class TestOutlookSendDraftReplySymmetry:
+    """The Outlook send-path accepts ``in_reply_to`` / ``references`` /
+    ``thread_id`` kwargs for signature symmetry with Gmail but **does NOT
+    use them on the wire** — Outlook stitches the thread server-side via
+    createReply / createReplyAll / createForward at draft creation, so
+    repeating the data on send would be redundant and Graph provides no
+    header-injection path for ``POST /messages/{id}/send``.
+
+    This contract is load-bearing: if a refactor silently switches Outlook
+    to inject these headers, integration tests that assume "thread already
+    fixed" would still pass but the Outlook surface would diverge from
+    Gmail and double-count thread metadata.
+    """
+
+    def _attachment_input(self):
+        from core.email.email_client import DraftAttachmentInput
+        return DraftAttachmentInput(
+            draft_attachment_id="local-1",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+            data=b"PDF",
+            size=3,
+            position=0,
+            content_id=None,
+            is_inline=False,
+            provider_attachment_id="already-uploaded-id",
+        )
+
+    def test_reply_kwargs_accepted_without_error(
+        self, authenticated_client, monkeypatch,
+    ):
+        # No re-upload (provider_attachment_id already set) and send
+        # succeeds — the kwargs are silently swallowed.
+        captured_sends: list[tuple[str, dict | None]] = []
+
+        def _graph_request(method, url, body=None, extra_headers=None):
+            captured_sends.append((url, body))
+            return {"id": "draft-1"}
+
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request", _graph_request,
+        )
+        monkeypatch.setattr(
+            authenticated_client, "_build_outlook_sent_metadata",
+            lambda pdid: __import__("tests.shared.email_fakes", fromlist=["build_metadata"]).build_metadata(
+                provider_message_id=pdid, subject="Re: Hi", box="SENT", is_read=True,
+            ),
+        )
+        sent_meta, uploads = authenticated_client.send_draft_with_attachments(
+            "draft-1", ["to@x"], [], [], "Re: Hi", "body",
+            [self._attachment_input()],
+            in_reply_to="<orig@x>",
+            references="<orig@x>",
+            thread_id="conv-1",
+        )
+        # The send URL is hit (signature accepted, no upload because the
+        # only attachment already has a provider id).
+        assert any("/send" in url for url, _b in captured_sends)
+        assert len(uploads) == 1
+        # And the kwargs do NOT leak into the request body (Graph has
+        # no header-injection path here).
+        for _url, body in captured_sends:
+            if body:
+                assert "In-Reply-To" not in str(body)
+                assert "References" not in str(body)
+                assert "threadId" not in (body or {})
+                assert "conversationId" not in (body or {})

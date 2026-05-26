@@ -29,6 +29,7 @@ from database.repositories import (
     mailbox_store,
     session_store,
     user_store,
+    virtual_mailbox_store,
 )
 from database.security import load_app_credentials
 
@@ -56,5 +57,6 @@ __all__ = [
     "TokenValidationError",
     "UnknownProviderError",
     "user_store",
+    "virtual_mailbox_store",
     "warmup_connection",
 ]

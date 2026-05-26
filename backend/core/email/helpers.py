@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import enum
+import html as _html_lib
 import logging
 import re
 import time
@@ -18,7 +19,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import make_msgid
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, Literal, TypeVar
 
 from pydantic import SecretStr
 
@@ -27,6 +28,7 @@ from .errors import (
     EmailInvalidCredentialsDataError,
     EmailInvalidExpiryError,
     EmailInvalidTokenDataError,
+    EmailReplyContextFetchError,
 )
 
 logger = logging.getLogger(__name__)
@@ -482,6 +484,7 @@ def build_mime_with_attachments(
     body: str,
     attachments: list[dict[str, Any]],
     from_email: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> bytes:
     """Build a complete RFC 5322 message with text/plain body + attachments.
 
@@ -491,6 +494,15 @@ def build_mime_with_attachments(
     ``data`` (bytes); optional ``content_id`` and ``is_inline`` are
     honoured for inline parts (composer doesn't ship them today, but the
     helper supports them so the call site is uniform).
+
+    ``extra_headers`` carries arbitrary RFC 5322 header injections used
+    by the Reply / Forward flow (``In-Reply-To``, ``References``).
+    The keys are unique by construction (it's a ``dict``) so a single
+    call cannot accidentally duplicate a header — Python's
+    :py:class:`email.message.EmailMessage` would otherwise append on
+    repeated subscript assignment. ``None`` and empty-string values
+    are silently skipped so callers can pass partial maps without a
+    pre-filter.
 
     Returns the raw bytes of the MIME message (not base64url-encoded).
     Callers wrap the bytes in ``base64.urlsafe_b64encode`` for the
@@ -512,6 +524,14 @@ def build_mime_with_attachments(
         msg["Bcc"] = ", ".join(bcc_recipients)
     if subject:
         msg["Subject"] = subject
+    if extra_headers:
+        for name, value in extra_headers.items():
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if not value_str:
+                continue
+            msg[name] = value_str
     msg.set_content(body or "", subtype="plain", charset="utf-8")
 
     for attachment in attachments:
@@ -536,3 +556,550 @@ def build_mime_with_attachments(
         msg.add_attachment(bytes(data), **kwargs)
 
     return msg.as_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Reply / Reply All / Forward helpers (R-01..R-12 — see Ignore/reply-feature.md)
+# ---------------------------------------------------------------------------
+
+
+# Common ``Re:`` prefixes across locales (English, German ``AW:``,
+# Swedish ``SV:``). ``Re :`` with the rogue space is folded by the
+# ``\s*:\s*`` token. We do NOT support numbered variants like ``Re[2]:``
+# in MVP — the clients that emit them are very rare and the failure
+# mode (the prefix is treated as part of the subject body) is benign
+# (the thread still forms via ``threadId`` / ``conversationId``).
+_RE_PREFIX_RE = re.compile(r"^\s*(re|aw|sv)\s*:\s*", re.IGNORECASE)
+
+# Forward prefixes — English ``Fw:`` / ``Fwd:`` plus Spanish ``RV:`` /
+# ``Reenv:`` (and the rarer plain ``Reenviar:``). Symmetric handling
+# with ``_RE_PREFIX_RE``: detect-once, prepend-on-miss.
+_FWD_PREFIX_RE = re.compile(r"^\s*(fwd?|rv|reenv)\s*:\s*", re.IGNORECASE)
+
+# Repeated-prefix normaliser used by ``validate_reply_threading_coherence``
+# to compare the original and the new subject regardless of how many
+# ``Re:`` (or ``Fwd:``) layers were stacked in either direction. Applied
+# in a loop until no further match — single ``re.sub`` would stop after
+# one substitution.
+_REPLY_PREFIX_NORMALISE_RE = re.compile(
+    r"^(\s*(?:re|aw|sv|fwd?|rv|reenv)\s*:\s*)+", re.IGNORECASE,
+)
+
+
+def build_reply_subject(original_subject: str, action: str) -> str:
+    """Build the ``Subject:`` for a Reply / Reply All / Forward.
+
+    For ``reply`` / ``reply_all``: prepend ``Re:`` unless one of the
+    accepted Re-variants already prefixes the subject. For ``forward``:
+    prepend ``Fwd:`` unless a Fwd-variant already does.
+
+    The original prefix is preserved (case + spacing) instead of being
+    rewritten to a canonical form, so the user does not see the subject
+    shape change on re-reply (Gmail web does the same).
+
+    Unknown ``action`` values default to ``reply`` semantics — soft
+    fallback, the caller stays responsible for passing a valid value.
+    """
+    base = (original_subject or "").strip()
+    if action == "forward":
+        if _FWD_PREFIX_RE.match(base):
+            return base
+        return f"Fwd: {base}" if base else "Fwd:"
+    # reply / reply_all (and unknown actions — soft fallback)
+    if _RE_PREFIX_RE.match(base):
+        return base
+    return f"Re: {base}" if base else "Re:"
+
+
+def _normalise_subject_for_match(subject: str) -> str:
+    """Strip every stacked Re/Fwd prefix and lowercase the result.
+
+    Used by :py:func:`validate_reply_threading_coherence` to decide
+    whether the draft's ``Subject:`` still belongs to the same thread
+    as the original. Gmail's documented rule is "Subject headers must
+    match" — the doc does NOT specify case-sensitivity nor prefix
+    handling, but every reference client (Gmail web, Apple Mail,
+    Outlook) tolerates ``Re:`` chains. Matching after normalisation is
+    the safest interpretation: if the normalised forms are equal,
+    Gmail accepts the draft into the thread; if they diverge, we
+    surface a local error before paying for the round trip.
+    """
+    base = (subject or "").strip()
+    while True:
+        stripped, count = _REPLY_PREFIX_NORMALISE_RE.subn("", base, count=1)
+        if count == 0:
+            break
+        base = stripped.strip()
+    return base.lower()
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
+    """Return ``items`` with duplicates removed, preserving first-seen order.
+
+    Case-insensitive on the email address part — RFC 5321 declares the
+    local part case-sensitive in theory but every real mail system
+    treats it as case-insensitive. Returning a single canonical form
+    avoids surprising the user with ``Foo@x`` and ``foo@x`` both
+    landing in the CC.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in items:
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def compute_reply_recipients(
+    *,
+    original_from: str,
+    original_reply_to: list[str] | None,
+    original_to: list[str] | None,
+    original_cc: list[str] | None,
+    current_account_email: str | None,
+    action: Literal["reply", "reply_all", "forward"],
+    original_box: str,
+) -> tuple[list[str], list[str]]:
+    """Compute ``(to_recipients, cc_recipients)`` for a Reply / Reply All / Forward.
+
+    Rules (R-10 included):
+
+    - ``forward`` → ``([], [])``. The user fills in the recipients.
+    - ``reply`` / ``reply_all``:
+        - **Primary (To)** = ``reply_to`` when present, otherwise
+          ``[from]`` (RFC 2822: a sender that asks to be replied
+          elsewhere — mailing lists, no-reply forwarders — gets
+          respected). Empty / whitespace-only ``reply_to`` collapses
+          back to ``from``.
+        - **Self-reply** (the user replies to a message they themself
+          sent — ``original_box == 'SENT'``): the ``To`` becomes the
+          original ``to`` list, so the reply lands on the original
+          recipient instead of looping back to the user.
+        - **CC (Reply All only)** = ``original_to ∪ original_cc``,
+          minus the current account's address and minus the primary
+          To list. Deduplicated case-insensitively.
+        - **CC (Reply)** = ``[]``.
+
+    ``current_account_email`` may be ``None`` (the connect flow did not
+    fetch the address); the filter just becomes a no-op and the user
+    appears auto-included in the CC. The service layer can mitigate
+    this by calling the provider's ``_fetch_sender_email`` cache before
+    invoking us.
+    """
+    reply_to = [r for r in (original_reply_to or []) if r and r.strip()]
+    to_list = [r for r in (original_to or []) if r and r.strip()]
+    cc_list = [r for r in (original_cc or []) if r and r.strip()]
+
+    if action == "forward":
+        return [], []
+
+    if (original_box or "").upper() == "SENT":
+        primary_raw = to_list or ([original_from] if original_from else [])
+    else:
+        if reply_to:
+            primary_raw = reply_to
+        elif original_from:
+            primary_raw = [original_from]
+        else:
+            primary_raw = []
+
+    primary = _dedupe_preserve_order(primary_raw)
+
+    if action != "reply_all":
+        return primary, []
+
+    raw_cc = list(to_list) + list(cc_list)
+    excluded: set[str] = {item.lower() for item in primary}
+    if current_account_email:
+        excluded.add(current_account_email.strip().lower())
+    filtered_cc = [r for r in raw_cc if r.strip().lower() not in excluded]
+    return primary, _dedupe_preserve_order(filtered_cc)
+
+
+def build_in_reply_to_and_references(
+    original_message_id: str,
+    original_references: str,
+) -> tuple[str, str]:
+    """Compute the RFC 5322 ``In-Reply-To`` and ``References`` headers.
+
+    Both headers are returned **with** surrounding angle brackets if
+    the original message id did not already carry them — Gmail and
+    Apple Mail accept either form, but ``<id>`` is the canonical
+    spelling and avoids ambiguity when a future caller concatenates
+    multiple ids.
+
+    ``References`` extends the original ``References`` chain with the
+    new id (RFC 5322 § 3.6.4). If the original carried no ``References``
+    header, ``References`` collapses to the single new id — that is
+    still legal and lets clients that walk the chain (Apple Mail,
+    Thunderbird) re-thread on the destination.
+
+    Empty / whitespace-only ``original_message_id`` returns ``("", "")``:
+    we never inject a header with a missing value, which would produce
+    a malformed ``In-Reply-To: <>`` on the wire.
+    """
+    raw = (original_message_id or "").strip()
+    if not raw:
+        return "", ""
+    in_reply_to = raw if raw.startswith("<") and raw.endswith(">") else f"<{raw.strip('<>')}>"
+    prior = (original_references or "").strip()
+    if prior:
+        references = f"{prior} {in_reply_to}"
+    else:
+        references = in_reply_to
+    return in_reply_to, references
+
+
+# Tags whose textual content must NOT leak into the quoted body.
+# ``html_to_text`` drops the entire subtree of these instead of
+# emitting their inner text.
+_TEXT_DROP_TAGS = frozenset({"script", "style", "head", "title", "meta", "link"})
+
+# Tags that should produce a line break in the plain-text output.
+# Approximates how a renderer would visually flow the document — close
+# enough for quotation purposes.
+_TEXT_BREAK_TAGS = frozenset(
+    {
+        "br",
+        "p",
+        "div",
+        "li",
+        "tr",
+        "hr",
+        "blockquote",
+        "table",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "section",
+        "article",
+        "header",
+        "footer",
+    }
+)
+
+
+def html_to_text(html: str | None, *, max_chars: int = 50_000) -> str:
+    """Degrade an HTML body to plain text for the Reply / Forward quote.
+
+    Intentionally simpler than the rendering pipeline
+    (``api.services.email_html_pipeline``): that pipeline produces a
+    sanitised HTML fragment suitable for an iframe; here we want a
+    plain-text degradation suitable for a ``<textarea>``. Differences:
+
+    - Scripts, styles and metadata subtrees are discarded outright (no
+      ``<style>`` content leaking as visible characters).
+    - Block-level tags emit a newline so the visual line breaks of the
+      original survive into the quote. ``<br>`` collapses to a single
+      newline; ``<p>`` / ``<div>`` / list items / table rows behave the
+      same to keep the output readable without sucking in `lxml`'s
+      smart-rendering layer.
+    - HTML entities are decoded (``&amp;`` → ``&``).
+    - Output is clipped to ``max_chars`` so a 1 MB newsletter cannot
+      blow up the composer field.
+
+    Implementation uses Python's stdlib :py:class:`html.parser.HTMLParser`
+    so this module remains import-safe regardless of which optional
+    HTML stack (``lxml``, ``beautifulsoup``) is available. The plan
+    initially suggested lxml; stdlib produces an identical result for
+    the simple needs of this helper and keeps the dependency surface
+    minimal.
+
+    ``html`` of ``None`` or empty string returns ``""`` (soft fallback —
+    the caller may then build a header-only quote).
+    """
+    if not html:
+        return ""
+
+    from html.parser import HTMLParser
+
+    chunks: list[str] = []
+    skip_depth = 0
+
+    class _Extractor(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            nonlocal skip_depth
+            lower = tag.lower()
+            if lower in _TEXT_DROP_TAGS:
+                skip_depth += 1
+                return
+            if lower in _TEXT_BREAK_TAGS:
+                chunks.append("\n")
+
+        def handle_endtag(self, tag: str) -> None:
+            nonlocal skip_depth
+            lower = tag.lower()
+            if lower in _TEXT_DROP_TAGS:
+                if skip_depth > 0:
+                    skip_depth -= 1
+                return
+            if lower in _TEXT_BREAK_TAGS:
+                chunks.append("\n")
+
+        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            # Self-closing tags like ``<br/>``.
+            if tag.lower() in _TEXT_BREAK_TAGS:
+                chunks.append("\n")
+
+        def handle_data(self, data: str) -> None:
+            if skip_depth > 0:
+                return
+            chunks.append(data)
+
+        def handle_entityref(self, name: str) -> None:
+            if skip_depth > 0:
+                return
+            chunks.append(_html_lib.unescape(f"&{name};"))
+
+        def handle_charref(self, name: str) -> None:
+            if skip_depth > 0:
+                return
+            chunks.append(_html_lib.unescape(f"&#{name};"))
+
+    try:
+        parser = _Extractor(convert_charrefs=False)
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:  # pragma: no cover — defensive: parser bugs
+        # Soft fallback: a visible-but-ugly text is better than losing
+        # the entire quote. Strip tags brute-force via regex.
+        logger.warning("html_to_text parser failed (%s): %s", type(exc).__name__, exc)
+        stripped = re.sub(r"<[^>]+>", "", html)
+        return _html_lib.unescape(stripped)[:max_chars]
+
+    raw = "".join(chunks)
+    raw = _html_lib.unescape(raw)
+    # Collapse runs of blank lines to at most two so the quote stays
+    # visually tight without losing intentional paragraph breaks.
+    raw = re.sub(r"\n[ \t]+", "\n", raw)
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    raw = raw.strip()
+    if len(raw) > max_chars:
+        raw = raw[:max_chars].rstrip() + "\n[...truncado...]"
+    return raw
+
+
+_SPANISH_MONTHS = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+
+
+def _format_quoted_header_date(received_at: datetime | None) -> str:
+    """Format ``received_at`` like Gmail web's "El 23 de mayo de 2026 a las 14:32".
+
+    Soft fallback to ``"el {iso}"`` if ``received_at`` is ``None`` or
+    not a ``datetime`` — the quote stays readable instead of crashing
+    on a corrupt row.
+    """
+    if not isinstance(received_at, datetime):
+        return ""
+    try:
+        local = received_at
+        if local.tzinfo is None:
+            local = local.replace(tzinfo=timezone.utc)
+        # Render in UTC for now — i18n is out of MVP scope (R-05).
+        month = _SPANISH_MONTHS[local.month - 1] if 1 <= local.month <= 12 else str(local.month)
+        return f"El {local.day} de {month} de {local.year} a las {local.hour:02d}:{local.minute:02d}"
+    except Exception:  # pragma: no cover — defensive
+        return f"El {received_at.isoformat()}"
+
+
+def _quote_lines(text: str) -> str:
+    """Prefix every line of ``text`` with ``"> "`` (Gmail-web style).
+
+    Empty input returns ``""`` (no header without content). A trailing
+    newline is preserved so the quote ends with a clean line break.
+    """
+    if not text:
+        return ""
+    out_lines = [f"> {line}" if line else ">" for line in text.split("\n")]
+    return "\n".join(out_lines)
+
+
+def build_quoted_body(
+    original_body_html: str | None,
+    original_body_text: str | None,
+    *,
+    from_name: str,
+    from_email: str,
+    received_at: datetime | None,
+    action: Literal["reply", "reply_all", "forward"],
+    to_recipients: list[str] | None = None,
+    cc_recipients: list[str] | None = None,
+    subject: str | None = None,
+) -> str:
+    """Build the plain-text body for a Reply / Reply All / Forward composer.
+
+    Output shape (Reply / Reply All):
+
+    ```
+    <blank line>
+    <blank line>
+    El 23 de mayo de 2026 a las 14:32, Ana López <ana@example.com> escribió:
+
+    > Texto original línea 1
+    > Texto original línea 2
+    ```
+
+    Output shape (Forward — Gmail / Outlook web style):
+
+    ```
+    <blank line>
+    <blank line>
+    ---------- Mensaje reenviado ----------
+    De: Ana López <ana@example.com>
+    Fecha: El 23 de mayo de 2026 a las 14:32
+    Asunto: <subject>
+    Para: a@x, b@x
+    Cc: c@x
+
+    <body sin prefijo>
+    ```
+
+    The two leading blank lines are intentional: the composer cursor
+    lands on the first line and the user types **above** the quote
+    without pisarla. R-05 makes the body plain-text even when the
+    original is HTML — see :py:func:`html_to_text` for the degrader.
+    """
+    if original_body_text:
+        body_text = (original_body_text or "").strip()
+    else:
+        body_text = html_to_text(original_body_html)
+
+    sender_display = (from_name or "").strip()
+    sender_email = (from_email or "").strip()
+    if sender_display and sender_email:
+        sender = f"{sender_display} <{sender_email}>"
+    else:
+        sender = sender_display or sender_email or "(remitente desconocido)"
+
+    date_line = _format_quoted_header_date(received_at)
+
+    if action == "forward":
+        parts: list[str] = ["", "", "---------- Mensaje reenviado ----------"]
+        parts.append(f"De: {sender}")
+        if date_line:
+            parts.append(f"Fecha: {date_line}")
+        if subject:
+            parts.append(f"Asunto: {subject}")
+        if to_recipients:
+            parts.append(f"Para: {', '.join(to_recipients)}")
+        if cc_recipients:
+            parts.append(f"Cc: {', '.join(cc_recipients)}")
+        parts.append("")
+        if body_text:
+            parts.append(body_text)
+        return "\n".join(parts)
+
+    # reply / reply_all
+    header = f"{date_line}, {sender} escribió:" if date_line else f"{sender} escribió:"
+    quoted = _quote_lines(body_text)
+    if quoted:
+        return f"\n\n{header}\n\n{quoted}"
+    return f"\n\n{header}"
+
+
+def validate_reply_threading_coherence(
+    *,
+    thread_id: str,
+    in_reply_to: str,
+    references: str,
+    original_message_id: str,
+    original_thread_id: str,
+    original_subject: str,
+    new_subject: str,
+) -> None:
+    """Guard the triple-requirement Gmail enforces for thread membership.
+
+    Gmail's "Manage threads" doc states three conditions for a draft to
+    be associated with an existing thread:
+
+    1. ``threadId`` matches the original message's ``threadId``.
+    2. ``In-Reply-To`` / ``References`` follow RFC 2822 (i.e. include
+       the original ``Message-ID``).
+    3. The ``Subject`` header matches.
+
+    The doc does **not** document the exact HTTP code Gmail returns
+    when any of the three fails (foros report 400 ``Invalid thread_id``
+    intermittently). Rather than depending on provider behaviour, we
+    verify the three constraints locally **before** building the MIME
+    payload — that way the user gets a deterministic
+    :py:class:`EmailReplyContextFetchError` with a precise
+    ``detail['reason']`` instead of an opaque 502 from Gmail.
+
+    Outlook does NOT need this guard: ``createReply`` /
+    ``createReplyAll`` / ``createForward`` are server-side primitives,
+    so the coherence is the provider's responsibility there.
+
+    Raises :py:class:`EmailReplyContextFetchError` on any mismatch.
+    Returns ``None`` on success.
+    """
+    if not thread_id or not original_thread_id:
+        # Nothing to validate against — the caller should not have
+        # invoked us without a thread id; treat as misconfiguration
+        # rather than guess.
+        raise EmailReplyContextFetchError(
+            "Cannot validate threading coherence without both thread ids.",
+            {"reason": "thread_id_mismatch"},
+        )
+    if thread_id != original_thread_id:
+        raise EmailReplyContextFetchError(
+            "Reply thread_id does not match the original message's thread_id.",
+            {
+                "reason": "thread_id_mismatch",
+                "thread_id": thread_id,
+                "original_thread_id": original_thread_id,
+            },
+        )
+
+    original_msg_id = (original_message_id or "").strip().strip("<>")
+    if not original_msg_id:
+        raise EmailReplyContextFetchError(
+            "Original Message-ID is missing; cannot validate reply threading.",
+            {"reason": "message_id_not_referenced"},
+        )
+    in_reply_to_raw = (in_reply_to or "").strip().strip("<>")
+    references_raw = (references or "").lower()
+    needle = original_msg_id.lower()
+    if needle != in_reply_to_raw.lower() and needle not in references_raw:
+        raise EmailReplyContextFetchError(
+            "Original Message-ID is not referenced by In-Reply-To or References.",
+            {
+                "reason": "message_id_not_referenced",
+                "original_message_id": original_msg_id,
+            },
+        )
+
+    new_norm = _normalise_subject_for_match(new_subject)
+    original_norm = _normalise_subject_for_match(original_subject)
+    if new_norm != original_norm:
+        raise EmailReplyContextFetchError(
+            "Reply subject does not match the original subject after Re/Fwd normalisation.",
+            {
+                "reason": "subject_mismatch",
+                "new_subject": new_subject,
+                "original_subject": original_subject,
+            },
+        )

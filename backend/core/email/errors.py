@@ -155,3 +155,26 @@ class EmailAttachmentSendFailed(EmailError):
     """
     code = "email_attachment_send_failed"
     default_message = "One or more attachments failed to upload during send."
+
+
+class EmailReplyContextFetchError(EmailError):
+    """Provider-side failure (or local coherence mismatch) while preparing
+    the data needed to open a Reply / Reply All / Forward composer.
+
+    Used by:
+
+    - ``GmailClient.fetch_reply_context`` / ``OutlookClient.fetch_reply_context``
+      when the underlying ``messages.get`` (Gmail) or ``GET /me/messages/{id}``
+      (Outlook) fails after token refresh — e.g. the message was deleted
+      between the user opening the viewer and clicking Reply.
+    - ``validate_reply_threading_coherence`` (Gmail-side guard, see
+      :py:func:`core.email.helpers.validate_reply_threading_coherence`)
+      when the local triple-check fails. The ``detail['reason']`` carries
+      one of ``"thread_id_mismatch"`` / ``"message_id_not_referenced"`` /
+      ``"subject_mismatch"`` so the service layer can surface a precise
+      message and tests can pin the failure mode.
+
+    The service translates this to ``EmailReplyContextError`` (HTTP 502).
+    """
+    code = "email_reply_context_fetch_error"
+    default_message = "Failed to fetch reply context from the provider."

@@ -143,6 +143,18 @@ class EmailContentFetchError(ApiError):
     code = "email_content_fetch_error"
 
 
+class EmailReplyContextError(ApiError):
+    """Provider-side or coherence failure while preparing the data the
+    composer needs to open a Reply / Reply All / Forward.
+
+    Mapped to HTTP 502 — same shape as the rest of the provider-fetch
+    failures (``EmailFetchError``, ``EmailContentFetchError``, …). The
+    user-facing message lives in the frontend translation; the API
+    just emits the code.
+    """
+    code = "email_reply_context_error"
+
+
 class EmailListError(ApiError):
     code = "email_list_error"
 
@@ -226,6 +238,18 @@ class AttachmentNotFound(ApiError):
 class AttachmentUnavailable(ApiError):
     """The provider returned 404/410 for a previously-listed attachment (D-17)."""
     code = "attachment_unavailable"
+
+
+class AttachmentCopySourceUnavailable(ApiError):
+    """The Forward copy endpoint could not retrieve a source attachment
+    (the provider returned 404/410 or the row was previously stamped
+    ``unavailable_at``).
+
+    Mapped to HTTP 404 — semantically aligned with the existing
+    ``AttachmentUnavailable`` mapping so the frontend handles both with
+    the same "no longer available" branch.
+    """
+    code = "attachment_copy_source_unavailable"
 
 
 class AttachmentTooLarge(ApiError):
@@ -312,3 +336,43 @@ class PurgeDisabled(ApiError):
 class InvalidAdminToken(ApiError):
     """The X-Admin-Token header does not match the configured token (D-30)."""
     code = "invalid_admin_token"
+
+
+# ---------------------------------------------------------------------------
+# Favourites (Gmail STARRED / Outlook flag).
+# ---------------------------------------------------------------------------
+
+
+class FavoriteUpdateError(ApiError):
+    """Provider-side failure while toggling the favourite flag."""
+    code = "favorite_update_error"
+
+
+class FavoriteSyncError(ApiError):
+    """Provider-side failure during the manual /favorites/sync reconciliation."""
+    code = "favorite_sync_error"
+
+
+# ---------------------------------------------------------------------------
+# Virtual mailboxes (filtered views over email_metadata).
+# ---------------------------------------------------------------------------
+
+
+class VirtualMailboxNotFound(ApiError):
+    """Virtual mailbox does not exist or does not belong to the user."""
+    code = "virtual_mailbox_not_found"
+
+
+class VirtualMailboxInvalid(ApiError):
+    """The provided scope / filter payload is structurally invalid."""
+    code = "virtual_mailbox_invalid"
+
+
+class VirtualMailboxOperationError(ApiError):
+    """Unexpected DB-side failure during a virtual mailbox CRUD operation."""
+    code = "virtual_mailbox_operation_error"
+
+
+class VirtualMailboxListError(ApiError):
+    """Unexpected failure while resolving the filtered email listing of a virtual mailbox."""
+    code = "virtual_mailbox_list_error"

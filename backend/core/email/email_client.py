@@ -10,6 +10,14 @@ from typing import Any
 class EmailMetadata:
     """
     Normalized email metadata returned by provider clients.
+
+    ``to_email`` / ``to_name`` carry the **first** recipient of the
+    original ``To`` header — captured during sync so the inbox listing
+    can render "Para" without re-hitting the provider. Multi-recipient
+    messages still happen but the table has a single column for "Para";
+    promoting this to a list is a non-destructive future migration.
+    Empty strings (default) when the provider response carries no ``To``
+    (rare; service-side notifications mass-mailed via Bcc).
     """
     provider_message_id: str
     thread_id: str
@@ -19,6 +27,8 @@ class EmailMetadata:
     received_at: datetime
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED"
+    to_email: str = ""
+    to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
 
 
@@ -59,6 +69,55 @@ class EmailContent:
     """Full body content of a single email message."""
     html_body: str | None
     text_body: str | None
+
+
+@dataclass
+class ReplyContext:
+    """Per-message data the API needs to open a Reply / Reply All / Forward.
+
+    Returned by :py:meth:`EmailClient.fetch_reply_context` and consumed
+    by the service layer to compute the pre-filled ``to`` / ``cc`` /
+    ``subject`` / ``quoted_body`` for the composer, plus the threading
+    metadata persisted in ``drafts`` (R-04 / R-09 / R-10).
+
+    Fields:
+    - ``provider_message_id`` — echo of the request id, useful for
+      assertions in tests and downstream caches.
+    - ``thread_id`` — Gmail ``threadId`` / Outlook ``conversationId``.
+    - ``from_email`` / ``from_name`` — parsed ``From`` header.
+    - ``reply_to`` — RFC 2822 ``Reply-To`` addresses; empty list when
+      the original did not set the header. Honoured per R-10.
+    - ``to_recipients`` / ``cc_recipients`` — addresses the original
+      went out to; used for Reply All CC computation and for the
+      Forward header.
+    - ``subject`` — the original ``Subject`` (without re-prefixing).
+    - ``body_html`` / ``body_text`` — original body parts; either may be
+      ``None``. The service degrades HTML → text via
+      :py:func:`core.email.helpers.html_to_text`.
+    - ``received_at`` — original ``Date`` header (or provider-side
+      timestamp on fallback).
+    - ``message_id`` — RFC 5322 ``Message-ID`` (without angle brackets
+      already stripped by the client). Used to build ``In-Reply-To``.
+    - ``references`` — raw ``References`` header value (or ``""``).
+    - ``box`` — provider-side folder (``ALL_MAIL`` / ``SENT`` /
+      ``SPAM`` / ``TRASH``). Drives the self-reply override (when
+      replying to your own SENT message, the To becomes the original
+      To).
+    """
+    provider_message_id: str
+    thread_id: str
+    from_email: str
+    from_name: str
+    reply_to: list[str]
+    to_recipients: list[str]
+    cc_recipients: list[str]
+    subject: str
+    body_html: str | None
+    body_text: str | None
+    received_at: datetime
+    message_id: str
+    references: str
+    box: str = "ALL_MAIL"
 
 
 @dataclass
@@ -217,6 +276,13 @@ class EmailClient(ABC):
         bcc_recipients: list[str],
         subject: str,
         body: str,
+        *,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        reply_to_message_id: str | None = None,
+        reply_kind: str | None = None,
+        original_subject: str | None = None,
     ) -> DraftMetadata:
         """
         Create a draft message at the provider. All fields may be empty
@@ -225,6 +291,32 @@ class EmailClient(ABC):
         ``body`` is plain text (D-31): both providers persist a
         ``text/plain`` MIME at the provider so subsequent draft sends
         can compose a clean ``multipart/mixed`` with attachments.
+
+        Reply / Forward kwargs (all optional, all defaulting to ``None``
+        for back-compat with "compose from scratch" callers):
+
+        - ``thread_id`` — Gmail ``threadId`` / Outlook ``conversationId``
+          of the original message. Gmail uses it as the third leg of the
+          triple-requirement guard; Outlook uses it implicitly via the
+          ``createReply`` / ``createForward`` endpoint and does not need
+          this value on the wire.
+        - ``in_reply_to`` / ``references`` — RFC 5322 strings injected
+          into the Gmail MIME so any non-Gmail destination client
+          (Outlook, Apple Mail) can re-thread. Outlook ignores them
+          (the provider sets its own equivalents server-side).
+        - ``reply_to_message_id`` — the original message's provider id.
+          Outlook routes the call to ``createReply`` /
+          ``createReplyAll`` / ``createForward`` only when this value
+          is present alongside ``reply_kind``; absent both → fall back
+          to the "blank draft" ``POST /me/messages`` path.
+        - ``reply_kind`` — one of ``"reply"`` / ``"reply_all"`` /
+          ``"forward"`` / ``None``. Drives the Outlook endpoint
+          selection; Gmail uses it only to scope error messages.
+        - ``original_subject`` — used by the Gmail-side triple-check
+          guard (``validate_reply_threading_coherence``) so the local
+          validation matches the subject normalisation rule. ``None``
+          disables the subject check (Outlook caller is expected to
+          pass ``None``).
         """
 
     @abstractmethod
@@ -325,6 +417,30 @@ class EmailClient(ABC):
         """Mark messages as read/unread at the provider. Returns IDs successfully updated."""
 
     @abstractmethod
+    def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
+        """Toggle the provider's favourite mark for a single message.
+
+        Gmail uses the ``STARRED`` label (added or removed via
+        ``users.messages.modify``). Outlook uses the message ``flag``
+        property (``flagStatus`` set to ``"flagged"`` /
+        ``"notFlagged"`` via ``PATCH /me/messages/{id}``).
+
+        Must raise :py:class:`EmailNotAuthenticatedError` when the
+        client is not authenticated and a typed ``CoreError`` subclass
+        on any provider-side failure. Returns ``None`` — success is
+        signalled by absence of an exception.
+        """
+
+    @abstractmethod
+    def list_favorite_ids(self) -> list[str]:
+        """List the provider's currently-favourite message ids for this account.
+
+        Used by the manual ``/favorites/sync`` endpoint to reconcile the
+        local flag against the provider's source of truth (covers
+        out-of-band changes from Gmail web, Outlook desktop, mobile…).
+        """
+
+    @abstractmethod
     def move_to_spam(self, message_ids: list[str]) -> list[SpamMoveResult]:
         """Move messages to spam at the provider. Returns results for successfully moved messages."""
 
@@ -388,6 +504,18 @@ class EmailClient(ABC):
         """
 
     @abstractmethod
+    def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
+        """Fetch every piece of data the composer needs to open a Reply /
+        Reply All / Forward over ``provider_message_id``.
+
+        Returns a fully populated :py:class:`ReplyContext`. Raises a
+        :py:class:`CoreError` subclass on provider failure — the
+        service layer translates it into ``EmailReplyContextError``
+        (HTTP 502) or :py:class:`EmailNotFound` (HTTP 404) depending
+        on the underlying status.
+        """
+
+    @abstractmethod
     def send_draft_with_attachments(
         self,
         provider_draft_id: str,
@@ -397,6 +525,10 @@ class EmailClient(ABC):
         subject: str,
         body: str,
         attachments: list[DraftAttachmentInput],
+        *,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        thread_id: str | None = None,
     ) -> tuple[EmailMetadata, list[AttachmentUploadResult]]:
         """Send a draft together with its locally-stored attachments (D-07, D-27).
 
@@ -407,6 +539,19 @@ class EmailClient(ABC):
         the MIME atomically (``drafts.send`` with a fresh
         ``message.raw``) — Outlook does not need them on the wire but
         the contract is uniform across providers.
+
+        ``in_reply_to`` / ``references`` / ``thread_id`` (all keyword-
+        only, all optional) carry the threading metadata persisted on
+        the local ``drafts`` row when the draft was created as a reply
+        or forward (R-01..R-12). Gmail injects ``In-Reply-To`` and
+        ``References`` as MIME headers via ``extra_headers`` so the
+        destination client (Outlook, Apple Mail, …) re-threads even
+        without our ``threadId``. Gmail callers also pass ``thread_id``
+        through to the underlying ``drafts.send`` payload so the
+        outgoing message attaches to the right Gmail thread. Outlook
+        ignores all three — the draft was already created via
+        ``createReply`` / ``createForward`` which fixes the
+        ``conversationId`` server-side.
 
         Behaviour:
 

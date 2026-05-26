@@ -5,10 +5,22 @@ Pydantic schemas for draft API contracts.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from api.schemas.attachment import DraftAttachmentMetadataOut
+
+
+# The six reply / forward fields are accepted on both ``DraftCreate``
+# and surfaced on ``DraftOut``. They are populated only when the
+# composer opens via Reply / Reply All / Forward; "compose from
+# scratch" drafts leave them ``None``. The schemas deliberately do NOT
+# set ``ConfigDict(extra="forbid")`` to preserve backwards-compat with
+# older clients that send unknown fields silently — backend persists
+# only what it recognises.
+ReplyKind = Literal["reply", "reply_all", "forward"]
 
 
 class DraftCreate(BaseModel):
@@ -18,6 +30,20 @@ class DraftCreate(BaseModel):
 
     ``body`` is plain text (D-31): the composer is a plain ``<textarea>``
     and both providers persist the draft as ``text/plain``.
+
+    Reply / forward fields (all optional, ``None`` by default):
+
+    - ``reply_kind`` — composer mode (``reply`` / ``reply_all`` /
+      ``forward``). When set together with ``reply_to_message_id`` the
+      Outlook client routes via ``createReply`` / ``createReplyAll`` /
+      ``createForward``.
+    - ``reply_to_message_id`` — provider id of the original message.
+    - ``reply_to_account_id`` — UUID of the account owning the original
+      message; defensively typed (a free string would let typo'd
+      account ids slip through Pydantic).
+    - ``thread_id`` — Gmail ``threadId`` / Outlook ``conversationId``.
+    - ``in_reply_to`` — RFC 5322 ``In-Reply-To`` header value.
+    - ``references_header`` — RFC 5322 ``References`` header chain.
     """
 
     to_recipients: list[str] = Field(default_factory=list)
@@ -25,6 +51,12 @@ class DraftCreate(BaseModel):
     bcc_recipients: list[str] = Field(default_factory=list)
     subject: str = ""
     body: str = ""
+    reply_kind: ReplyKind | None = None
+    reply_to_message_id: str | None = None
+    reply_to_account_id: UUID | None = None
+    thread_id: str | None = None
+    in_reply_to: str | None = None
+    references_header: str | None = None
 
 
 class DraftUpdate(BaseModel):
@@ -49,6 +81,11 @@ class DraftOut(BaseModel):
     ``attachments`` carries the local-only attachment list (D-07 lazy
     push). The composer hydrates its chip list from this field when
     reopening an existing draft.
+
+    The reply / forward fields mirror :py:class:`DraftCreate`. They
+    are present in the response even when ``None`` so the composer
+    state hook (``useComposerForm.seedFromDraft``) can propagate them
+    into local state when reopening a saved reply draft.
     """
 
     provider_draft_id: str
@@ -61,6 +98,12 @@ class DraftOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     attachments: list[DraftAttachmentMetadataOut] = Field(default_factory=list)
+    reply_kind: ReplyKind | None = None
+    reply_to_message_id: str | None = None
+    reply_to_account_id: UUID | None = None
+    thread_id: str | None = None
+    in_reply_to: str | None = None
+    references_header: str | None = None
 
 
 class DraftsAccountSyncDetail(BaseModel):

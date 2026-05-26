@@ -26,6 +26,9 @@ export default function DraftComposerHost({ mailboxId }: Props) {
       openForNewEmail: composer.openForNewEmail,
       openForNewDraft: composer.openForNewDraft,
       openForEditDraft: composer.openForEditDraft,
+      openForReply: composer.openForReply,
+      openForReplyAll: composer.openForReplyAll,
+      openForForward: composer.openForForward,
       setRefreshCallback: composer.setRefreshCallback,
     });
     return () => __register(null);
@@ -34,6 +37,9 @@ export default function DraftComposerHost({ mailboxId }: Props) {
     composer.openForNewEmail,
     composer.openForNewDraft,
     composer.openForEditDraft,
+    composer.openForReply,
+    composer.openForReplyAll,
+    composer.openForForward,
     composer.setRefreshCallback,
   ]);
 

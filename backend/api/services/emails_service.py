@@ -18,7 +18,10 @@ from api.errors.exceptions import (
     EmailListError,
     EmailNotFound,
     EmailNotInTrash,
+    EmailReplyContextError,
     EmailSendError,
+    FavoriteSyncError,
+    FavoriteUpdateError,
     MoveToTrashError,
     ReadStatusUpdateError,
     SpamMoveError,
@@ -26,6 +29,13 @@ from api.errors.exceptions import (
     TrashOperationError,
 )
 from core.email import CoreError
+from core.email.helpers import (
+    build_in_reply_to_and_references,
+    build_quoted_body,
+    build_reply_subject,
+    compute_reply_recipients,
+    validate_reply_threading_coherence,
+)
 from api.schemas.email import (
     AccountReadStatusDetail,
     AccountSpamDetail,
@@ -33,10 +43,14 @@ from api.schemas.email import (
     EmailContentOut,
     EmailMetadataOut,
     EmailSendRequest,
+    FavoriteSyncAccountDetail,
+    FavoriteSyncResponse,
+    FavoriteUpdateResponse,
     MoveToTrashRequest,
     MoveToTrashResult,
     ReadStatusRequest,
     ReadStatusResponse,
+    ReplyContextOut,
     SpamRequest,
     SpamResponse,
     SyncResultOut,
@@ -708,6 +722,30 @@ def _execute_spam_operation(
         raise fallback_error(f"Failed to execute {operation_label}.") from exc
 
 
+def _row_to_email_metadata_out(row: dict[str, Any]) -> EmailMetadataOut:
+    """Map an ``email_metadata`` row dict into the API response model.
+
+    Centralised so the regular box listing AND the virtual-mailbox
+    listing always project the same fields (including ``is_favorite``
+    and ``has_attachments``).
+    """
+    return EmailMetadataOut(
+        provider_message_id=row["provider_message_id"],
+        account_id=str(row["account_id"]),
+        thread_id=row.get("thread_id"),
+        from_email=row["from_email"],
+        from_name=row.get("from_name"),
+        to_email=row.get("to_email") or None,
+        to_name=row.get("to_name") or None,
+        subject=row.get("subject"),
+        received_at=row["received_at"],
+        is_read=row["is_read"],
+        box=row["box"],
+        has_attachments=bool(row.get("has_attachments", False)),
+        is_favorite=bool(row.get("is_favorite", False)),
+    )
+
+
 def list_emails(
     mailbox_id: str,
     box: str,
@@ -716,8 +754,14 @@ def list_emails(
     q: str | None = None,
     limit: int = 200,
     offset: int = 0,
+    favorite: bool | None = None,
 ) -> list[EmailMetadataOut]:
-    """List email metadata for a mailbox, with optional search and pagination."""
+    """List email metadata for a mailbox, with optional search and pagination.
+
+    When ``favorite=True``, the listing only returns favourite messages
+    and TRASH / SPAM are excluded by default (matching the dedicated
+    Favourites view documented in ``Ignore/Favoritos-Funcionalidad.md``).
+    """
     ensure_mailbox_access(mailbox_id, user_id)
 
     if account_id is not None:
@@ -756,10 +800,27 @@ def list_emails(
         if not account_ids:
             return []
 
+    extra_filters: dict[str, Any] = {}
+    box_arg: str | None = box
+    box_not_in: list[str] | None = None
+    if favorite is True:
+        extra_filters["is_favorite"] = True
+        # ``box=ALL_MAIL`` is the "everywhere except trash and spam"
+        # anchor used by the dedicated FavoritesPage (see the comment
+        # in ``frontend/src/features/emails/pages/FavoritesPage.tsx``).
+        # For any other explicit box (SENT / SPAM / TRASH) we respect
+        # the caller's choice — otherwise the SENT favourites view
+        # would silently surface ALL_MAIL favourites too.
+        if box == "ALL_MAIL":
+            box_arg = None
+            box_not_in = ["TRASH", "SPAM"]
+
     try:
         tokens = parse_search_tokens(q)
         rows = email_metadata_store.list_filtered(
-            account_ids, box, tokens, limit, offset,
+            account_ids, box_arg, tokens, limit, offset,
+            extra_filters=extra_filters or None,
+            box_not_in=box_not_in,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
@@ -772,21 +833,243 @@ def list_emails(
             "Failed to list email metadata for filtered listing."
         ) from exc
 
-    return [
-        EmailMetadataOut(
-            provider_message_id=row["provider_message_id"],
-            account_id=str(row["account_id"]),
-            thread_id=row.get("thread_id"),
-            from_email=row["from_email"],
-            from_name=row.get("from_name"),
-            subject=row.get("subject"),
-            received_at=row["received_at"],
-            is_read=row["is_read"],
-            box=row["box"],
-            has_attachments=bool(row.get("has_attachments", False)),
+    return [_row_to_email_metadata_out(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Favourites — Gmail STARRED label / Outlook flag.
+# ---------------------------------------------------------------------------
+
+
+def set_favorite(
+    mailbox_id: str,
+    account_id: str,
+    provider_message_id: str,
+    favorite: bool,
+    user_id: str,
+) -> FavoriteUpdateResponse:
+    """Toggle the favourite flag at the provider and persist locally.
+
+    Provider-First Rule: the provider call runs first; only on success
+    is ``is_favorite`` updated on the local ``email_metadata`` row.
+    If the local row does not exist, surface 404 ``email_not_found``
+    BEFORE the provider call (saves the round trip).
+    """
+    ensure_mailbox_access(mailbox_id, user_id)
+
+    try:
+        account = account_store.get(mailbox_id, account_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account lookup error during favorite toggle (%s): %s",
+            type(exc).__name__, exc,
         )
-        for row in rows
-    ]
+        raise FavoriteUpdateError(
+            "Failed to look up account for favourite toggle."
+        ) from exc
+    if account is None:
+        raise AccountNotFound(
+            f"Account '{account_id}' not found in mailbox '{mailbox_id}' "
+            "during favourite toggle."
+        )
+
+    try:
+        exists = email_metadata_store.exists(account_id, provider_message_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected metadata existence check during favorite toggle (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise FavoriteUpdateError(
+            "Failed to verify email existence for favourite toggle."
+        ) from exc
+    if not exists:
+        raise EmailNotFound(
+            f"Email '{provider_message_id}' not found for account '{account_id}' "
+            "during favourite toggle."
+        )
+
+    try:
+        auth_payloads, label_lookup = _build_auth_context([account], mailbox_id)
+        manager = build_manager_for_accounts([account])
+        account_label = f"{mailbox_id}__{account_id}"
+
+        updated_tokens = manager.authenticate_all_silent(auth_payloads)
+        if updated_tokens:
+            _persist_refreshed_tokens(updated_tokens, label_lookup, fallback=FavoriteUpdateError)
+        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=FavoriteUpdateError)
+
+        try:
+            manager.set_favorite(account_label, provider_message_id, favorite)
+        except CoreError as exc:
+            raise translate_core_error(
+                exc,
+                fallback=FavoriteUpdateError,
+                context={
+                    "account_id": account_id,
+                    "provider_message_id": provider_message_id,
+                },
+            ) from exc
+
+        try:
+            updated = email_metadata_store.update_favorite(
+                account_id, provider_message_id, favorite,
+            )
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Provider favorite toggle succeeded but DB persist failed (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise FavoriteUpdateError(
+                "Failed to persist favourite toggle in database."
+            ) from exc
+        if not updated:
+            # Race: the row was deleted between the existence pre-check
+            # and the update. Surface as 404 instead of silently
+            # succeeding so callers can refresh.
+            raise EmailNotFound(
+                f"Email '{provider_message_id}' disappeared during favourite toggle "
+                f"for account '{account_id}'."
+            )
+
+        return FavoriteUpdateResponse(
+            provider_message_id=provider_message_id,
+            account_id=account_id,
+            is_favorite=favorite,
+        )
+    except ApiError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Unexpected favourite toggle error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise FavoriteUpdateError(
+            "Failed to toggle email favourite flag."
+        ) from exc
+
+
+def sync_favorites(
+    mailbox_id: str,
+    user_id: str,
+    account_id: str | None = None,
+) -> FavoriteSyncResponse:
+    """Reconcile ``is_favorite`` against the provider for one or every account.
+
+    The sync ONLY updates rows that already exist locally (Option A in
+    ``Ignore/Favoritos-Funcionalidad.md``): a favourite that exists at
+    the provider but not yet in our local ``email_metadata`` is silently
+    skipped — the general ``/emails/sync-metadata`` endpoint owns the
+    job of importing brand-new rows.
+    """
+    ensure_mailbox_access(mailbox_id, user_id)
+
+    if account_id is not None:
+        try:
+            account = account_store.get(mailbox_id, account_id)
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected account lookup error during favorites sync (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise FavoriteSyncError(
+                "Failed to look up account for favourites sync."
+            ) from exc
+        if account is None:
+            raise AccountNotFound(
+                f"Account '{account_id}' not found in mailbox '{mailbox_id}' "
+                "during favourites sync."
+            )
+        accounts = [account]
+    else:
+        try:
+            accounts = account_store.list_by_mailbox(mailbox_id)
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected account listing error during favorites sync (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise FavoriteSyncError(
+                "Failed to list accounts for favourites sync."
+            ) from exc
+
+    try:
+        auth_payloads, label_lookup = _build_auth_context(accounts, mailbox_id)
+        manager = build_manager_for_accounts(accounts)
+
+        updated_tokens = manager.authenticate_all_silent(auth_payloads)
+        if updated_tokens:
+            _persist_refreshed_tokens(updated_tokens, label_lookup, fallback=FavoriteSyncError)
+        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=FavoriteSyncError)
+
+        try:
+            provider_results = manager.list_all_favorite_ids()
+        except CoreError as exc:
+            raise translate_core_error(exc, fallback=FavoriteSyncError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected list_all_favorite_ids error (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise FavoriteSyncError(
+                "Unexpected failure listing favourites from providers."
+            ) from exc
+
+        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=FavoriteSyncError)
+
+        account_details: list[FavoriteSyncAccountDetail] = []
+        total_synced = 0
+        for label, favorite_ids in provider_results.items():
+            ids = label_lookup.get(label)
+            if not ids:
+                continue
+            _mailbox_id, aid, provider = ids
+            try:
+                affected = email_metadata_store.sync_favorites_for_account(
+                    aid, favorite_ids,
+                )
+            except DatabaseError as exc:
+                raise translate_database_error(exc) from exc
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected favourites sync DB error for account '%s' (%s): %s",
+                    aid, type(exc).__name__, exc,
+                )
+                raise FavoriteSyncError(
+                    "Failed to persist favourites sync result for an account."
+                ) from exc
+
+            total_synced += affected
+            account_details.append(FavoriteSyncAccountDetail(
+                account_id=aid,
+                provider=provider,
+                favorites_synced=len(favorite_ids),
+            ))
+
+        return FavoriteSyncResponse(
+            total_synced=total_synced,
+            accounts=account_details,
+        )
+    except ApiError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Unexpected favourites sync error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise FavoriteSyncError(
+            "Failed to synchronise favourites."
+        ) from exc
 
 
 def get_email_full_content(
@@ -911,6 +1194,159 @@ def get_email_full_content(
             type(exc).__name__, exc,
         )
         raise EmailContentFetchError("Failed to fetch email content.") from exc
+
+
+def get_reply_context(
+    mailbox_id: str,
+    account_id: str,
+    provider_message_id: str,
+    action: str,
+    user_id: str,
+) -> ReplyContextOut:
+    """Build the data the composer needs to open Reply / Reply All / Forward.
+
+    Single Provider-call read (no DB mutations). Follows the standard
+    cascade: ``ensure_mailbox_access`` → account lookup → metadata
+    existence pre-check → silent auth → ``manager.fetch_reply_context``
+    → recipient / subject / quoted-body computation in pure helpers
+    → coherence guard for Gmail-bound replies → assemble
+    :py:class:`ReplyContextOut`.
+
+    The local-existence pre-check via ``email_metadata_store.exists``
+    matches the favourites toggle pattern: a missing row collapses
+    to 404 without spending a provider round trip.
+    """
+    if action not in ("reply", "reply_all", "forward"):
+        raise EmailReplyContextError(
+            f"Invalid reply action '{action}' while preparing reply context "
+            f"for message '{provider_message_id}'.",
+            detail={"action": action},
+        )
+
+    ensure_mailbox_access(mailbox_id, user_id)
+
+    try:
+        account = account_store.get(mailbox_id, account_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account lookup error during reply context fetch (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise EmailReplyContextError(
+            "Failed to look up account while preparing reply context."
+        ) from exc
+    if account is None:
+        raise AccountNotFound(
+            f"Account '{account_id}' not found in mailbox '{mailbox_id}' "
+            "during reply context fetch."
+        )
+
+    try:
+        metadata_exists = email_metadata_store.exists(account_id, provider_message_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected metadata existence check error during reply context fetch (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise EmailReplyContextError(
+            "Failed to verify email existence for reply context fetch."
+        ) from exc
+    if not metadata_exists:
+        raise EmailNotFound(
+            f"Email '{provider_message_id}' not found for account '{account_id}' "
+            f"in mailbox '{mailbox_id}' during reply context fetch."
+        )
+
+    provider = str(account.get("provider") or "").lower()
+    current_email = (account.get("email_address") or "").strip() or None
+
+    try:
+        auth_payloads, label_lookup = _build_auth_context([account], mailbox_id)
+        manager = build_manager_for_accounts([account])
+        account_label = f"{mailbox_id}__{account_id}"
+
+        updated_tokens = manager.authenticate_all_silent(auth_payloads)
+        if updated_tokens:
+            _persist_refreshed_tokens(updated_tokens, label_lookup, fallback=EmailReplyContextError)
+        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=EmailReplyContextError)
+
+        try:
+            reply_context = manager.fetch_reply_context(account_label, provider_message_id)
+        except CoreError as exc:
+            raise translate_core_error(exc, fallback=EmailReplyContextError) from exc
+    except ApiError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Unexpected reply context fetch error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise EmailReplyContextError(
+            "Failed to prepare reply context for the composer."
+        ) from exc
+
+    to_recipients, cc_recipients = compute_reply_recipients(
+        original_from=reply_context.from_email,
+        original_reply_to=reply_context.reply_to,
+        original_to=reply_context.to_recipients,
+        original_cc=reply_context.cc_recipients,
+        current_account_email=current_email,
+        action=action,
+        original_box=reply_context.box,
+    )
+
+    new_subject = build_reply_subject(reply_context.subject, action)
+    in_reply_to, references = build_in_reply_to_and_references(
+        reply_context.message_id, reply_context.references,
+    )
+    quoted_body = build_quoted_body(
+        reply_context.body_html,
+        reply_context.body_text,
+        from_name=reply_context.from_name,
+        from_email=reply_context.from_email,
+        received_at=reply_context.received_at,
+        action=action,
+        to_recipients=reply_context.to_recipients,
+        cc_recipients=reply_context.cc_recipients,
+        subject=reply_context.subject,
+    )
+
+    # Gmail-bound replies must satisfy the triple-requirement guard
+    # (threadId + In-Reply-To/References + matching Subject). For
+    # Forward we skip the subject check because the prefix changes
+    # ("Fwd:" vs original) and Gmail does not require subject match
+    # for forwards (the user reaches new recipients with a new id).
+    if provider == "gmail" and action in ("reply", "reply_all") and reply_context.thread_id:
+        try:
+            validate_reply_threading_coherence(
+                thread_id=reply_context.thread_id,
+                in_reply_to=in_reply_to,
+                references=references,
+                original_message_id=reply_context.message_id,
+                original_thread_id=reply_context.thread_id,
+                original_subject=reply_context.subject,
+                new_subject=new_subject,
+            )
+        except CoreError as exc:
+            raise translate_core_error(exc, fallback=EmailReplyContextError) from exc
+
+    return ReplyContextOut(
+        to_recipients=to_recipients,
+        cc_recipients=cc_recipients,
+        bcc_recipients=[],
+        subject=new_subject,
+        body=quoted_body,
+        in_reply_to=in_reply_to,
+        references=references,
+        thread_id=reply_context.thread_id,
+        reply_to_message_id=reply_context.provider_message_id,
+        reply_kind=action,  # type: ignore[arg-type]
+        original_from_email=reply_context.from_email,
+    )
 
 
 def _persist_attachment_metadata(

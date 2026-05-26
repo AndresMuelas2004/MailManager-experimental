@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
-import { Inbox, Send, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
+import { Filter, FileEdit, Inbox, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { useAuth } from '../../../app/providers/AuthContext';
@@ -19,6 +19,8 @@ const MAILBOX_NAV_ITEMS: Array<{
 }> = [
   { icon: Inbox, label: 'Bandeja unificada', path: 'inbox' },
   { icon: Send, label: 'Enviados', path: 'sent' },
+  { icon: Star, label: 'Favoritos', path: 'favorites' },
+  { icon: Filter, label: 'Bandejas ficticias', path: 'virtual-mailboxes' },
   { icon: ShieldAlert, label: 'Spam', path: 'spam' },
   { icon: FileEdit, label: 'Borradores', path: 'drafts' },
   { icon: Trash2, label: 'Papelera de reciclaje', path: 'trash' },

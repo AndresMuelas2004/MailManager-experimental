@@ -2,8 +2,11 @@ import { request } from '../client/http';
 import {
   emailContentOutSchema,
   emailMetadataListSchema,
+  favoriteSyncResponseSchema,
+  favoriteUpdateResponseSchema,
   moveToTrashResultSchema,
   readStatusResponseSchema,
+  replyContextOutSchema,
   spamResponseSchema,
   statusResponseSchema,
   syncResultOutSchema,
@@ -12,8 +15,12 @@ import {
   type EmailItemRef,
   type EmailMetadataOut,
   type EmailSendRequest,
+  type FavoriteSyncResponse,
+  type FavoriteUpdateResponse,
   type MoveToTrashResult,
   type ReadStatusResponse,
+  type ReplyContextOut,
+  type ReplyKindDto,
   type SpamResponse,
   type StatusResponse,
   type SyncResultOut,
@@ -22,6 +29,7 @@ import {
 
 export type ListEmailsOptions = {
   q?: string;
+  favorite?: boolean;
   signal?: AbortSignal;
 };
 
@@ -34,10 +42,51 @@ export function listEmails(
   const params = new URLSearchParams({ box });
   if (accountId) params.set('account_id', accountId);
   if (options.q !== undefined && options.q.length > 0) params.set('q', options.q);
+  if (options.favorite !== undefined) params.set('favorite', String(options.favorite));
   return request(`/mailboxes/${mailboxId}/emails?${params}`, {
     schema: emailMetadataListSchema,
     signal: options.signal,
   });
+}
+
+export function setFavorite(
+  mailboxId: string,
+  accountId: string,
+  providerMessageId: string,
+  favorite: boolean,
+): Promise<FavoriteUpdateResponse> {
+  return request(
+    `/mailboxes/${mailboxId}/accounts/${accountId}/emails/${providerMessageId}/favorite`,
+    {
+      method: 'PATCH',
+      body: { favorite },
+      schema: favoriteUpdateResponseSchema,
+    },
+  );
+}
+
+export function syncFavorites(
+  mailboxId: string,
+  accountId?: string,
+): Promise<FavoriteSyncResponse> {
+  const params = accountId ? `?account_id=${accountId}` : '';
+  return request(`/mailboxes/${mailboxId}/favorites/sync${params}`, {
+    method: 'POST',
+    schema: favoriteSyncResponseSchema,
+  });
+}
+
+export function getReplyContext(
+  mailboxId: string,
+  accountId: string,
+  providerMessageId: string,
+  action: ReplyKindDto,
+): Promise<ReplyContextOut> {
+  const params = new URLSearchParams({ action });
+  return request(
+    `/mailboxes/${mailboxId}/accounts/${accountId}/emails/${providerMessageId}/reply-context?${params}`,
+    { schema: replyContextOutSchema },
+  );
 }
 
 export function getEmailContent(

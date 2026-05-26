@@ -66,11 +66,19 @@ GET_DRAFT_ATTACHMENT = """
 # This replaces the earlier two-statement pattern (separate
 # ``NEXT_DRAFT_ATTACHMENT_POSITION`` + ``INSERT``) which was a TOCTOU race
 # despite a code comment claiming atomicity.
+#
+# ``source_account_id`` / ``source_attachment_id`` (migration 0030) are
+# populated when this row comes from the Forward copy endpoint
+# (``copy_attachments_from_email``). They stay ``NULL`` for direct
+# uploads (drag & drop, file picker). The pair backs the R-12
+# idempotency check so a retry of the copy endpoint skips rows that
+# already landed in this draft.
 INSERT_DRAFT_ATTACHMENT = """
     INSERT INTO draft_attachments (
         draft_attachment_id, account_id, provider_draft_id,
         filename, mime_type, size, content_id, is_inline, position,
-        blob, blob_storage_kind, blob_ref, provider_attachment_id
+        blob, blob_storage_kind, blob_ref, provider_attachment_id,
+        source_account_id, source_attachment_id
     )
     VALUES (
         %(draft_attachment_id)s, %(account_id)s, %(provider_draft_id)s,
@@ -82,11 +90,25 @@ INSERT_DRAFT_ATTACHMENT = """
             WHERE account_id        = %(account_id)s
               AND provider_draft_id = %(provider_draft_id)s
         ), 0),
-        %(blob)s, 'db', NULL, NULL
+        %(blob)s, 'db', NULL, NULL,
+        %(source_account_id)s, %(source_attachment_id)s
     )
     RETURNING draft_attachment_id, account_id, provider_draft_id,
               filename, mime_type, size, content_id, is_inline, position,
               provider_attachment_id, created_at
+"""
+
+# Reads the ``source_attachment_id`` values already copied into the
+# target draft. The R-12 idempotency check filters the candidate
+# attachment list by these ids so a retried ``copy_attachments_from_email``
+# call skips the rows that already landed. The partial index
+# ``idx_draft_attachments_source`` (migration 0030) backs the WHERE clause.
+LIST_EXISTING_SOURCE_ATTACHMENT_IDS = """
+    SELECT source_attachment_id
+    FROM draft_attachments
+    WHERE account_id              = %(account_id)s
+      AND provider_draft_id       = %(provider_draft_id)s
+      AND source_attachment_id    IS NOT NULL
 """
 
 # DELETE returns the deleted draft_attachment_id when the row existed

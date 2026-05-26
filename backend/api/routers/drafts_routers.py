@@ -7,7 +7,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
 from api.routers.routers_helpers import enforce_multipart_size_limit, require_session
-from api.schemas.attachment import DraftAttachmentResponseOut
+from api.schemas.attachment import (
+    CopyAttachmentsFromEmailRequest,
+    CopyAttachmentsFromEmailResponse,
+    DraftAttachmentResponseOut,
+)
 from api.schemas.draft import DraftCreate, DraftOut, DraftSendOut, DraftsSyncResultOut, DraftUpdate
 from api.services import drafts_service
 
@@ -158,4 +162,36 @@ def remove_draft_attachment(
     """Remove an attachment from a draft (D-07, local only)."""
     return drafts_service.remove_draft_attachment(
         mailbox_id, account_id, provider_draft_id, draft_attachment_id, user_id,
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/drafts/{provider_draft_id}/attachments/copy-from-email",
+    response_model=CopyAttachmentsFromEmailResponse,
+)
+def copy_attachments_from_email(
+    mailbox_id: str,
+    account_id: str,
+    provider_draft_id: str,
+    payload: CopyAttachmentsFromEmailRequest,
+    user_id: str = Depends(require_session),
+) -> CopyAttachmentsFromEmailResponse:
+    """Copy downloadable attachments from a received email into a Forward draft.
+
+    R-06 (server-side copy) + R-12 (idempotent retry). Gmail downloads
+    + re-uploads through this endpoint; Outlook is a no-op because
+    ``createForward`` already inherits attachments server-side.
+
+    Always returns HTTP 200 even on partial failure — per-attachment
+    skips are reported via the ``skipped`` array in the response.
+    Mid-flow errors that abort the whole operation (mailbox not found,
+    provider 502, …) surface via the regular ``ApiError`` status map.
+    """
+    return drafts_service.copy_attachments_from_email(
+        mailbox_id,
+        account_id,
+        provider_draft_id,
+        str(payload.source_account_id),
+        payload.source_provider_message_id,
+        user_id,
     )

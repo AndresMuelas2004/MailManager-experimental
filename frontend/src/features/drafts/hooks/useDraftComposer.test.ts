@@ -96,12 +96,14 @@ function deferred<T>() {
  * Install the typical happy-path handlers used by every bootstrap
  * test. Returns counters/payload captures the test can assert on.
  */
-function installBootstrapHandlers(opts: {
-  accounts?: ReturnType<typeof gmailAccountFixture>[];
-  draftId?: string;
-  delayedAccounts?: Promise<unknown> | null;
-  attachmentResponseFn?: (n: number) => ReturnType<typeof draftAttachmentResponseFixture>;
-} = {}) {
+function installBootstrapHandlers(
+  opts: {
+    accounts?: ReturnType<typeof gmailAccountFixture>[];
+    draftId?: string;
+    delayedAccounts?: Promise<unknown> | null;
+    attachmentResponseFn?: (n: number) => ReturnType<typeof draftAttachmentResponseFixture>;
+  } = {},
+) {
   const accounts = opts.accounts ?? [gmailAccountFixture()];
   const draftId = opts.draftId ?? 'drf_silent';
   const counters = {
@@ -154,15 +156,18 @@ function installBootstrapHandlers(opts: {
       counters.deleteDraft += 1;
       return HttpResponse.json({ status: 'deleted' });
     }),
-    http.post(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts/:draftId/send`, ({ request }) => {
-      counters.sendDraft += 1;
-      captured.sendDraftPaths.push(new URL(request.url).pathname);
-      return HttpResponse.json({
-        provider_message_id: 'msg_sent',
-        provider: 'gmail',
-        status: 'sent',
-      });
-    }),
+    http.post(
+      `${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts/:draftId/send`,
+      ({ request }) => {
+        counters.sendDraft += 1;
+        captured.sendDraftPaths.push(new URL(request.url).pathname);
+        return HttpResponse.json({
+          provider_message_id: 'msg_sent',
+          provider: 'gmail',
+          status: 'sent',
+        });
+      },
+    ),
     http.post(`${API_BASE}/mailboxes/mb_1/emails/send`, async ({ request }) => {
       counters.sendEmail += 1;
       captured.sendEmailBodies.push(await request.json());
@@ -426,9 +431,7 @@ describe('useDraftComposer — handleSendEmail redirection', () => {
       subject: 'Hello',
       body: '',
     });
-    expect(captured.sendDraftPaths[0]).toBe(
-      '/mailboxes/mb_1/accounts/acc_1/drafts/drf_redir/send',
-    );
+    expect(captured.sendDraftPaths[0]).toBe('/mailboxes/mb_1/accounts/acc_1/drafts/drf_redir/send');
   });
 });
 
@@ -589,5 +592,288 @@ describe('useDraftComposer — bootstrap failure path', () => {
     expect(addAttachmentCallCount).toBe(0);
     // No draft id was cached, so the lock state stays off.
     expect(result.current.accountSelectorLocked).toBe(false);
+  });
+});
+
+/**
+ * Reply / Reply All / Forward — composer opens with prefilled state.
+ *
+ * The hook orchestrates three steps:
+ *   1. ``GET /reply-context`` returns recipients / subject / quoted body /
+ *      threading metadata.
+ *   2. ``POST /drafts`` creates a real provider draft with the prefill
+ *      (R-07 — the draft is created at click time, not on first edit).
+ *   3. For ``forward`` only: ``POST .../copy-from-email`` materialises
+ *      the inherited attachments (Gmail downloads + re-uploads, Outlook
+ *      no-ops because ``createForward`` already inherited them).
+ *
+ * Each test installs handlers that capture the call sequence and asserts
+ * the post-condition: mode flipped to the right kind, prefilled fields
+ * visible in the form, ``providerDraftId`` cached for follow-up writes,
+ * ``copy-from-email`` invoked only on Forward.
+ */
+
+function emailMetadataFixture(providerMessageId = 'pmid_1', accountId = 'acc_1') {
+  // Minimal EmailMetadataOut shape — only the fields openForReply reads
+  // (``provider_message_id`` and ``account_id``).
+  return {
+    provider_message_id: providerMessageId,
+    account_id: accountId,
+    thread_id: 't_1',
+    from_email: 'ana@example.com',
+    from_name: 'Ana Lopez',
+    subject: 'Hello',
+    received_at: '2026-05-23T14:32:00Z',
+    is_read: true,
+    box: 'ALL_MAIL' as const,
+    is_favorite: false,
+    has_attachments: false,
+  };
+}
+
+function replyContextFixture(replyKind: 'reply' | 'reply_all' | 'forward') {
+  // The server returns the full ReplyContextOut. Recipients are
+  // populated for reply/reply_all and empty for forward (the user
+  // fills them in §5.1).
+  const base = {
+    in_reply_to: '<orig@x>',
+    references: '<orig@x>',
+    thread_id: 't_1',
+    reply_to_message_id: 'pmid_1',
+    reply_kind: replyKind,
+    original_from_email: 'ana@example.com',
+    bcc_recipients: [] as string[],
+  };
+  if (replyKind === 'forward') {
+    return {
+      ...base,
+      to_recipients: [] as string[],
+      cc_recipients: [] as string[],
+      subject: 'Fwd: Hello',
+      body: '\n\n---------- Mensaje reenviado ----------\nDe: Ana <ana@example.com>\nAsunto: Hello\n',
+    };
+  }
+  return {
+    ...base,
+    to_recipients: ['ana@example.com'],
+    cc_recipients: replyKind === 'reply_all' ? ['carol@x.com'] : ([] as string[]),
+    subject: 'Re: Hello',
+    body: '\n\nEl 23 de mayo de 2026, Ana Lopez <ana@example.com> escribió:\n\n> Hello',
+  };
+}
+
+function installReplyHandlers(
+  opts: {
+    replyKind?: 'reply' | 'reply_all' | 'forward';
+    draftId?: string;
+  } = {},
+) {
+  const replyKind = opts.replyKind ?? 'reply';
+  const draftId = opts.draftId ?? 'drf_reply';
+  const counters = {
+    listAccounts: 0,
+    replyContext: 0,
+    createDraft: 0,
+    copyFromEmail: 0,
+  };
+  const captured: {
+    createDraftBodies: unknown[];
+    replyContextActions: string[];
+    copyFromEmailBodies: unknown[];
+  } = {
+    createDraftBodies: [],
+    replyContextActions: [],
+    copyFromEmailBodies: [],
+  };
+
+  server.use(
+    http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => {
+      counters.listAccounts += 1;
+      return HttpResponse.json([gmailAccountFixture()]);
+    }),
+    http.get(
+      `${API_BASE}/mailboxes/mb_1/accounts/:accountId/emails/:pmid/reply-context`,
+      ({ request }) => {
+        counters.replyContext += 1;
+        const url = new URL(request.url);
+        captured.replyContextActions.push(url.searchParams.get('action') ?? '');
+        return HttpResponse.json(replyContextFixture(replyKind));
+      },
+    ),
+    http.post(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts`, async ({ request }) => {
+      counters.createDraft += 1;
+      captured.createDraftBodies.push(await request.json());
+      return HttpResponse.json({
+        provider_draft_id: draftId,
+        account_id: 'acc_1',
+        to_recipients: [],
+        cc_recipients: [],
+        bcc_recipients: [],
+        subject: '',
+        body: '',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        attachments: [],
+      });
+    }),
+    http.post(
+      `${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts/:draftId/attachments/copy-from-email`,
+      async ({ request }) => {
+        counters.copyFromEmail += 1;
+        captured.copyFromEmailBodies.push(await request.json());
+        return HttpResponse.json({
+          copied_count: 1,
+          skipped: [],
+          attachments: [
+            {
+              draft_attachment_id: '11111111-1111-4000-a000-aaaaaaaaaaaa',
+              filename: 'inherited.pdf',
+              mime_type: 'application/pdf',
+              size: 100,
+              position: 0,
+              provider_attachment_id: null,
+            },
+          ],
+        });
+      },
+    ),
+  );
+
+  return { counters, captured };
+}
+
+describe('useDraftComposer — openForReply', () => {
+  it('fetches reply context, creates the draft, and switches mode to reply', async () => {
+    const { counters, captured } = installReplyHandlers({
+      replyKind: 'reply',
+      draftId: 'drf_reply_1',
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForReply(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    // The composer is now in reply mode with the prefilled form.
+    await waitFor(() => {
+      expect(result.current.mode).toBe('reply');
+      expect(result.current.subject).toBe('Re: Hello');
+      // To-recipients prefilled from the reply context.
+      expect(result.current.to).toBe('ana@example.com');
+    });
+
+    // One call to each of: reply-context + create-draft.
+    expect(counters.replyContext).toBe(1);
+    expect(counters.createDraft).toBe(1);
+    // Reply MUST NOT trigger copy-from-email (that's forward-only).
+    expect(counters.copyFromEmail).toBe(0);
+    // The action query param was forwarded as ``reply``.
+    expect(captured.replyContextActions[0]).toBe('reply');
+
+    // The provider_draft_id flips the lock + transitions the composer
+    // into "edit-an-existing-draft"-like behaviour.
+    expect(result.current.accountSelectorLocked).toBe(true);
+  });
+});
+
+describe('useDraftComposer — openForReplyAll', () => {
+  it('passes action=reply_all to /reply-context and seeds the CC field', async () => {
+    const { counters, captured } = installReplyHandlers({
+      replyKind: 'reply_all',
+      draftId: 'drf_replyall_1',
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForReplyAll(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    await waitFor(() => expect(result.current.mode).toBe('reply_all'));
+    expect(captured.replyContextActions[0]).toBe('reply_all');
+    // The reply context fixture seeds a CC for reply_all.
+    expect(result.current.cc).toBe('carol@x.com');
+    expect(counters.copyFromEmail).toBe(0);
+  });
+});
+
+describe('useDraftComposer — openForForward', () => {
+  it('creates the draft and then invokes copy-from-email exactly once', async () => {
+    const { counters, captured } = installReplyHandlers({
+      replyKind: 'forward',
+      draftId: 'drf_fwd_1',
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForForward(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    await waitFor(() => expect(result.current.mode).toBe('forward'));
+    // Forward subject is prefixed.
+    expect(result.current.subject).toBe('Fwd: Hello');
+    // Forward pre-fills NO recipients (the user adds them).
+    expect(result.current.to).toBe('');
+
+    expect(counters.replyContext).toBe(1);
+    expect(counters.createDraft).toBe(1);
+    // copy-from-email IS invoked for Forward.
+    expect(counters.copyFromEmail).toBe(1);
+
+    // The copy-from-email body carries the source pointers (the
+    // original message + its account).
+    const copyBody = captured.copyFromEmailBodies[0] as Record<string, unknown>;
+    expect(copyBody.source_account_id).toBe('acc_1');
+    expect(copyBody.source_provider_message_id).toBe('pmid_1');
+  });
+
+  it('surfaces persistence.error when copy-from-email fails (composer still opens)', async () => {
+    // Soft-fail contract: a failed copy-from-email must NOT block the
+    // composer — it just shows the error.
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () =>
+        HttpResponse.json([gmailAccountFixture()]),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/emails/:pmid/reply-context`, () =>
+        HttpResponse.json(replyContextFixture('forward')),
+      ),
+      http.post(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts`, () =>
+        HttpResponse.json({
+          provider_draft_id: 'drf_fwd_fail',
+          account_id: 'acc_1',
+          to_recipients: [],
+          cc_recipients: [],
+          bcc_recipients: [],
+          subject: '',
+          body: '',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          attachments: [],
+        }),
+      ),
+      http.post(
+        `${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts/:draftId/attachments/copy-from-email`,
+        () =>
+          HttpResponse.json(
+            { error: { code: 'attachment_provider_unavailable', message: 'down' } },
+            { status: 503 },
+          ),
+      ),
+    );
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForForward(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    // The composer opened anyway (mode flipped to forward) and the error
+    // is surfaced as a UiError.
+    await waitFor(() => {
+      expect(result.current.mode).toBe('forward');
+      expect(result.current.error?.code).toBe('attachment_provider_unavailable');
+    });
   });
 });

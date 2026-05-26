@@ -15,6 +15,13 @@ const UnifiedInboxPage = lazy(() => import('../../features/emails/pages/UnifiedI
 const AccountInboxPage = lazy(() => import('../../features/emails/pages/AccountInboxPage'));
 const DraftsPage = lazy(() => import('../../features/drafts/pages/DraftsPage'));
 const AccountDraftsPage = lazy(() => import('../../features/drafts/pages/AccountDraftsPage'));
+const FavoritesPage = lazy(() => import('../../features/emails/pages/FavoritesPage'));
+const VirtualMailboxesPage = lazy(
+  () => import('../../features/virtual-mailboxes/pages/VirtualMailboxesPage'),
+);
+const VirtualMailboxViewPage = lazy(
+  () => import('../../features/virtual-mailboxes/pages/VirtualMailboxViewPage'),
+);
 
 const router = createBrowserRouter([
   {
@@ -37,6 +44,12 @@ const router = createBrowserRouter([
               { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
               { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
               { path: 'drafts', element: <DraftsPage /> },
+              { path: 'favorites', element: <FavoritesPage /> },
+              { path: 'virtual-mailboxes', element: <VirtualMailboxesPage /> },
+              {
+                path: 'virtual-mailboxes/:virtualMailboxId',
+                element: <VirtualMailboxViewPage />,
+              },
               {
                 path: 'account/:accountId',
                 children: [

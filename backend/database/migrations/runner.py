@@ -417,6 +417,65 @@ _DDL_STATEMENTS = [
     "ON email_attachments (last_accessed_at) "
     "WHERE last_accessed_at IS NOT NULL;",
     "UPDATE alembic_version SET version_num = '0026_index_email_attachments_last_accessed';",
+    # Migration 0027: favourites — ``is_favorite`` denormalised on
+    # ``email_metadata`` as the cross-provider abstraction over Gmail's
+    # ``STARRED`` label and Outlook's message flag. Pure DDL plus a
+    # partial index over the favourites-only subset.
+    "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS is_favorite BOOLEAN NOT NULL DEFAULT FALSE;",
+    "CREATE INDEX IF NOT EXISTS idx_email_metadata_favorites "
+    "ON email_metadata (account_id, received_at DESC) "
+    "WHERE is_favorite = TRUE;",
+    "UPDATE alembic_version SET version_num = '0027_add_is_favorite_to_email_metadata';",
+    # Migration 0028: virtual_mailboxes — user-defined filtered views over
+    # email_metadata. The scope/filter are JSONB blobs interpreted by the
+    # service layer; CHECK only enforces the closed enum of scope_kind.
+    """
+    CREATE TABLE IF NOT EXISTS virtual_mailboxes (
+        virtual_mailbox_id  UUID         PRIMARY KEY,
+        owner_user_id       UUID         NOT NULL
+                             REFERENCES users(user_id) ON DELETE CASCADE,
+        display_name        VARCHAR(120) NOT NULL,
+        scope_kind          VARCHAR(20)  NOT NULL
+                             CHECK (scope_kind IN ('mailbox', 'all', 'accounts')),
+        scope_payload       JSONB        NOT NULL DEFAULT '{}'::jsonb,
+        filter_payload      JSONB        NOT NULL DEFAULT '{}'::jsonb,
+        created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_virtual_mailboxes_owner ON virtual_mailboxes(owner_user_id);",
+    "UPDATE alembic_version SET version_num = '0028_create_virtual_mailboxes_table';",
+    # Migration 0029: reply / forward threading columns on ``drafts``. All
+    # nullable — pre-existing drafts and "compose from scratch" rows keep
+    # them NULL. The partial index supports future "list drafts that reply
+    # to <message>" lookups without bloating the index with NULL rows.
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS reply_kind VARCHAR(20) "
+    "CHECK (reply_kind IN ('reply', 'reply_all', 'forward'));",
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS reply_to_message_id VARCHAR(255);",
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS reply_to_account_id UUID;",
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS thread_id VARCHAR(255);",
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS in_reply_to VARCHAR(998);",
+    "ALTER TABLE drafts ADD COLUMN IF NOT EXISTS references_header TEXT;",
+    "CREATE INDEX IF NOT EXISTS idx_drafts_reply_to_message_id "
+    "ON drafts (reply_to_account_id, reply_to_message_id) "
+    "WHERE reply_to_message_id IS NOT NULL;",
+    "UPDATE alembic_version SET version_num = '0029_drafts_reply_threading';",
+    # Migration 0030: source-tracking columns on ``draft_attachments`` for
+    # Forward copies. The partial index keys the idempotency check used by
+    # ``copy_attachments_from_email`` (R-12) — only Forward-copied rows pay.
+    "ALTER TABLE draft_attachments ADD COLUMN IF NOT EXISTS source_account_id UUID;",
+    "ALTER TABLE draft_attachments ADD COLUMN IF NOT EXISTS source_attachment_id UUID;",
+    "CREATE INDEX IF NOT EXISTS idx_draft_attachments_source "
+    "ON draft_attachments (account_id, provider_draft_id, source_attachment_id) "
+    "WHERE source_attachment_id IS NOT NULL;",
+    "UPDATE alembic_version SET version_num = '0030_draft_attachments_source';",
+    # Migration 0031: capture the first ``To`` recipient on ``email_metadata``
+    # (symmetric with the existing ``from_email`` / ``from_name`` pair) so the
+    # sent / unified-sent inbox can render the destination without an extra
+    # provider round trip. Nullable defaults so existing rows survive the ALTER.
+    "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS to_email VARCHAR(320) NOT NULL DEFAULT '';",
+    "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS to_name VARCHAR(200) NOT NULL DEFAULT '';",
+    "UPDATE alembic_version SET version_num = '0031_add_to_email_to_email_metadata';",
 ]
 
 

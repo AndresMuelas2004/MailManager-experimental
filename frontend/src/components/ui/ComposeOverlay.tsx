@@ -59,6 +59,9 @@ const TITLE_BY_MODE: Record<ComposerMode, string> = {
   new_email: 'Nuevo mensaje',
   new_draft: 'Nuevo borrador',
   edit_draft: 'Editar borrador',
+  reply: 'Responder',
+  reply_all: 'Responder a todos',
+  forward: 'Reenviar',
 };
 
 export default function ComposeOverlay({
@@ -128,8 +131,14 @@ export default function ComposeOverlay({
   const title = TITLE_BY_MODE[mode];
 
   const showSendEmail = mode === 'new_email';
-  const showSaveDraft = mode === 'new_draft' || mode === 'edit_draft';
-  const showSendDraft = mode === 'edit_draft';
+  const showSaveDraft =
+    mode === 'new_draft' ||
+    mode === 'edit_draft' ||
+    mode === 'reply' ||
+    mode === 'reply_all' ||
+    mode === 'forward';
+  const showSendDraft =
+    mode === 'edit_draft' || mode === 'reply' || mode === 'reply_all' || mode === 'forward';
 
   return (
     <div
