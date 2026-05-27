@@ -2315,7 +2315,10 @@ class TestOutlookSendDraftWithAttachments:
         from core.email.email_client import EmailMetadata
         from datetime import datetime, timezone
 
-        def _fake(provider_draft_id: str) -> EmailMetadata:
+        def _fake(
+            provider_draft_id: str,
+            to_recipients: list[str] | None = None,
+        ) -> EmailMetadata:
             return EmailMetadata(
                 provider_message_id=provider_draft_id,
                 thread_id=None,
@@ -2777,7 +2780,7 @@ class TestOutlookSendDraftReplySymmetry:
         )
         monkeypatch.setattr(
             authenticated_client, "_build_outlook_sent_metadata",
-            lambda pdid: __import__("tests.shared.email_fakes", fromlist=["build_metadata"]).build_metadata(
+            lambda pdid, to_recipients=None: __import__("tests.shared.email_fakes", fromlist=["build_metadata"]).build_metadata(
                 provider_message_id=pdid, subject="Re: Hi", box="SENT", is_read=True,
             ),
         )
