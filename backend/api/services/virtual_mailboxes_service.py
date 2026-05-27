@@ -418,6 +418,72 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
     return box, box_not_in, extra_filters
 
 
+def _dedupe_rows_by_provider_message_id(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse rows sharing a ``provider_message_id``, preferring the most
+    complete one.
+
+    The same Gmail / Outlook account can be connected as two distinct
+    ``account_id`` rows under two different mailboxes — both syncs land
+    the same provider message twice in ``email_metadata`` (PK is
+    ``(account_id, provider_message_id)``). For ``scope='all'`` and
+    ``scope='accounts'`` virtual mailboxes that aggregate across both
+    accounts, the listing surfaces each message twice. A virtual mailbox
+    is a "definition, not a collection" — collapsing the duplicates is a
+    presentation decision that lives here, not in the shared SQL query
+    (which is reused verbatim by regular box listings where the
+    duplication is not possible because each listing is scoped to a
+    single mailbox).
+
+    Preference: pick the row whose ``to_email`` is a non-empty string
+    (synced after migration 0031 with a real ``To`` header). Other rows
+    can carry ``NULL`` (column was nullable before migration 0031 on
+    older databases), ``''`` (migration default for missing ``To``
+    headers), or a real address — only the last case scores as
+    "populated". ``to_name`` is used as a secondary signal to handle the
+    rare case where both rows have empty ``to_email`` but only one has
+    a populated ``to_name``. Among rows that tie on both signals,
+    pick the most recent ``received_at``.
+
+    Implementation does an explicit pairwise pick rather than a
+    sort+first-wins dict insertion to avoid any subtle interaction
+    with Python's stable sort on equal keys: the surviving row is
+    chosen by a deterministic comparison against the current best.
+    """
+
+    def _completeness_score(row: dict[str, Any]) -> tuple[int, int, float]:
+        # Higher tuples win. Components, most significant first:
+        #   1. to_email is a real address (non-empty string after strip).
+        #   2. to_name is populated (secondary, correlates with #1).
+        #   3. received_at most recent (tie-breaker — last writer wins).
+        to_email = row.get("to_email")
+        to_email_score = 1 if (isinstance(to_email, str) and to_email.strip()) else 0
+        to_name = row.get("to_name")
+        to_name_score = 1 if (isinstance(to_name, str) and to_name.strip()) else 0
+        ts = row.get("received_at")
+        ts_seconds = ts.timestamp() if ts is not None else 0.0
+        return (to_email_score, to_name_score, ts_seconds)
+
+    chosen: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("provider_message_id")
+        if key is None:
+            continue
+        current = chosen.get(key)
+        if current is None or _completeness_score(row) > _completeness_score(current):
+            chosen[key] = row
+
+    # Restore the chronological-DESC order the SQL produced — the
+    # dict iteration order reflects insertion order from the input,
+    # and the frontend expects newest-first listings.
+    return sorted(
+        chosen.values(),
+        key=lambda r: r.get("received_at") or 0,
+        reverse=True,
+    )
+
+
 def list_emails_for_virtual_mailbox(
     virtual_mailbox_id: str,
     user_id: str,
@@ -452,4 +518,5 @@ def list_emails_for_virtual_mailbox(
             "Failed to list emails for virtual mailbox."
         ) from exc
 
+    rows = _dedupe_rows_by_provider_message_id(rows)
     return [_row_to_email_metadata_out(row) for row in rows]
