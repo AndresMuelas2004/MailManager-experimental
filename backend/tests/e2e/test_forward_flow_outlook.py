@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import psycopg2
 import pytest
 
+from ._forward_helpers import bootstrap_attachment_message
 from .e2e_config import (
     OUTLOOK_ACCOUNT_ID,
     OUTLOOK_MAILBOX_ID,
@@ -69,6 +70,10 @@ def test_50_forward_flow_outlook(e2e_client):
     sync_resp = e2e_client.post(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata")
     _assert_ok(sync_resp)
     candidate_pmid = _fetch_message_with_attachments(OUTLOOK_ACCOUNT_ID)
+    if candidate_pmid is None:
+        candidate_pmid = bootstrap_attachment_message(
+            e2e_client, OUTLOOK_MAILBOX_ID, OUTLOOK_ACCOUNT_ID,
+        )
     if candidate_pmid is None:
         pytest.skip("No Outlook inbox message with attachments available")
 

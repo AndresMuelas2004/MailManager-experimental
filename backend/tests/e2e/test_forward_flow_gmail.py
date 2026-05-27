@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import psycopg2
 import pytest
 
+from ._forward_helpers import bootstrap_attachment_message
 from .e2e_config import (
     GMAIL_ACCOUNT_ID,
     GMAIL_MAILBOX_ID,
@@ -80,6 +81,10 @@ def test_49_forward_flow_gmail(e2e_client):
     sync_resp = e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata")
     _assert_ok(sync_resp)
     candidate_pmid = _fetch_message_with_attachments(GMAIL_ACCOUNT_ID)
+    if candidate_pmid is None:
+        candidate_pmid = bootstrap_attachment_message(
+            e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID,
+        )
     if candidate_pmid is None:
         pytest.skip("No Gmail inbox message with attachments available")
 

@@ -42,13 +42,21 @@ def _assert_ok(response, *, expected: int = 200) -> None:
 
 
 def _fetch_one_inbox_message(account_id: str) -> tuple[str, str] | None:
-    """Return ``(provider_message_id, thread_id)`` for one inbox row."""
+    """Return ``(provider_message_id, thread_id)`` for one inbox row.
+
+    Excludes rows without a stored ``from_email`` so the reply flow
+    test always picks a real received message (orphan drafts from
+    previous failed runs can land in ``ALL_MAIL`` without a sender,
+    making them unsuitable as Reply source — see the ``sender``
+    fallback in :py:meth:`OutlookClient._reply_context_from_graph_message`).
+    """
     conn = _db_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT provider_message_id, thread_id FROM email_metadata "
                 "WHERE account_id = %s AND box = 'ALL_MAIL' "
+                "AND from_email IS NOT NULL AND from_email <> '' "
                 "ORDER BY received_at DESC NULLS LAST LIMIT 1",
                 (account_id,),
             )
@@ -96,6 +104,11 @@ def test_48_reply_flow_outlook(e2e_client):
     assert len(ctx["to_recipients"]) >= 1
 
     # 2. POST /drafts → routes through Graph createReply on the wire.
+    # The subject is kept untouched (just the ``Re: …`` from
+    # reply-context): Outlook reassigns ``conversationId`` when the
+    # draft subject diverges from the original ``Re: <subject>``,
+    # which would break the threading assertion below (same trap
+    # documented for ``createForward`` — see repository_guide.md).
     ts = datetime.now(timezone.utc).isoformat()
     create_resp = e2e_client.post(
         f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts/{OUTLOOK_ACCOUNT_ID}/drafts",
@@ -103,8 +116,8 @@ def test_48_reply_flow_outlook(e2e_client):
             "to_recipients": [SEND_RECIPIENT],
             "cc_recipients": [],
             "bcc_recipients": [],
-            "subject": f"{ctx['subject']} — E2E {ts}",
-            "body": ctx["body"],
+            "subject": ctx["subject"],
+            "body": f"{ctx['body']}\n\nE2E run {ts}",
             "reply_kind": "reply",
             "reply_to_message_id": original_pmid,
             "reply_to_account_id": OUTLOOK_ACCOUNT_ID,

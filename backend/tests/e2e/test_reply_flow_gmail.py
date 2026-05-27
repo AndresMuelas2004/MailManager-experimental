@@ -46,13 +46,19 @@ def _assert_ok(response, *, expected: int = 200) -> None:
 
 
 def _fetch_one_inbox_message(account_id: str) -> tuple[str, str] | None:
-    """Return ``(provider_message_id, thread_id)`` for one inbox row."""
+    """Return ``(provider_message_id, thread_id)`` for one inbox row.
+
+    Excludes rows without a stored ``from_email`` so the reply flow
+    test always picks a real received message (orphan rows from
+    previous failed runs can land in ``ALL_MAIL`` without a sender).
+    """
     conn = _db_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT provider_message_id, thread_id FROM email_metadata "
                 "WHERE account_id = %s AND box = 'ALL_MAIL' "
+                "AND from_email IS NOT NULL AND from_email <> '' "
                 "ORDER BY received_at DESC NULLS LAST LIMIT 1",
                 (account_id,),
             )
