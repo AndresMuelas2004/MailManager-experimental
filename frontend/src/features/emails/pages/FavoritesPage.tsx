@@ -35,13 +35,12 @@ export default function FavoritesPage() {
   );
 
   const { selection, bulkError, bulkBar } = useBulkBar({
-    mailboxId: mailboxId!,
     box: 'ALL_MAIL',
     emails,
     refresh,
   });
 
-  const viewer = useEmailViewer(mailboxId!, refresh);
+  const viewer = useEmailViewer(refresh);
   const favorites = useFavorite(mailboxId!);
   const composer = useDraftComposerContext();
 
@@ -61,6 +60,7 @@ export default function FavoritesPage() {
   const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
     favorites
       .toggle({
+        mailboxId: email.mailbox_id,
         accountId: email.account_id,
         providerMessageId: email.provider_message_id,
         favorite: next,
@@ -131,7 +131,6 @@ export default function FavoritesPage() {
         />
       )}
       <ViewerMount
-        mailboxId={mailboxId!}
         openedEmail={viewer.openedEmail}
         accounts={accounts}
         onClose={viewer.close}

@@ -40,13 +40,12 @@ export default function VirtualMailboxViewPage() {
   // (controls which bulk actions are exposed); ALL_MAIL is the safest
   // baseline.
   const { selection, bulkError, bulkBar } = useBulkBar({
-    mailboxId: mailboxId!,
     box: 'ALL_MAIL',
     emails,
     refresh,
   });
 
-  const viewer = useEmailViewer(mailboxId!, refresh);
+  const viewer = useEmailViewer(refresh);
   const favorites = useFavorite(mailboxId!);
   const composer = useDraftComposerContext();
 
@@ -66,6 +65,7 @@ export default function VirtualMailboxViewPage() {
   const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
     favorites
       .toggle({
+        mailboxId: email.mailbox_id,
         accountId: email.account_id,
         providerMessageId: email.provider_message_id,
         favorite: next,
@@ -172,7 +172,6 @@ export default function VirtualMailboxViewPage() {
         />
       )}
       <ViewerMount
-        mailboxId={mailboxId!}
         openedEmail={viewer.openedEmail}
         accounts={accounts}
         onClose={viewer.close}

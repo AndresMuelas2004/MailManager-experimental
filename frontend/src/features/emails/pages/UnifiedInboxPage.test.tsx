@@ -14,6 +14,7 @@ const emailFixtures = [
   {
     provider_message_id: 'm_1',
     account_id: 'a_1',
+    mailbox_id: 'mb_1',
     thread_id: null,
     from_email: 'alice@example.com',
     from_name: 'Alice',
@@ -25,6 +26,7 @@ const emailFixtures = [
   {
     provider_message_id: 'm_2',
     account_id: 'a_1',
+    mailbox_id: 'mb_1',
     thread_id: null,
     from_email: 'bob@example.com',
     from_name: 'Bob',

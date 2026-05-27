@@ -247,6 +247,22 @@ def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
     account_ids = {row["account_id"] for row in rows}
     assert _SEEDED_GMAIL_ACCOUNT in account_ids
     assert _SEEDED_OUTLOOK_ACCOUNT in account_ids
+    # Each row carries its real mailbox_id (derived from the JOIN on
+    # ``accounts``). The frontend uses it to open / favourite / move
+    # the right email — when ``scope='all'`` aggregates emails from
+    # several real mailboxes, the route's ``mailbox_id`` is not enough
+    # and using it would 404 with ``account_not_found`` on the open
+    # path.
+    mailbox_ids = {row["mailbox_id"] for row in rows}
+    assert _SEEDED_GMAIL_MAILBOX in mailbox_ids
+    assert _SEEDED_OUTLOOK_MAILBOX in mailbox_ids
+    # And each row's mailbox_id matches its account_id mapping (no
+    # cross-pollination from the join going wrong).
+    for row in rows:
+        if row["account_id"] == _SEEDED_GMAIL_ACCOUNT:
+            assert row["mailbox_id"] == _SEEDED_GMAIL_MAILBOX
+        elif row["account_id"] == _SEEDED_OUTLOOK_ACCOUNT:
+            assert row["mailbox_id"] == _SEEDED_OUTLOOK_MAILBOX
 
 
 def test_emails_for_virtual_mailbox_filter_by_from_domain(test_client, isolated_db):

@@ -732,6 +732,7 @@ def _row_to_email_metadata_out(row: dict[str, Any]) -> EmailMetadataOut:
     return EmailMetadataOut(
         provider_message_id=row["provider_message_id"],
         account_id=str(row["account_id"]),
+        mailbox_id=str(row["mailbox_id"]),
         thread_id=row.get("thread_id"),
         from_email=row["from_email"],
         from_name=row.get("from_name"),

@@ -138,6 +138,7 @@ describe('emailMetadataOutSchema — has_attachments', () => {
     const parsed = emailMetadataOutSchema.parse({
       provider_message_id: 'm1',
       account_id: 'acc',
+      mailbox_id: 'mb',
       thread_id: null,
       from_email: 'a@b.c',
       from_name: null,
@@ -153,6 +154,7 @@ describe('emailMetadataOutSchema — has_attachments', () => {
     const parsed = emailMetadataOutSchema.parse({
       provider_message_id: 'm1',
       account_id: 'acc',
+      mailbox_id: 'mb',
       thread_id: null,
       from_email: 'a@b.c',
       from_name: null,

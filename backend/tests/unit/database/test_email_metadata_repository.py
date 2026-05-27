@@ -565,7 +565,8 @@ def test_update_spam_status_batch_propagates_connection_pool_error(monkeypatch):
 
 def _row(**overrides):
     base = {
-        "provider_message_id": "m1", "account_id": "acc1", "thread_id": "t1",
+        "provider_message_id": "m1", "account_id": "acc1", "mailbox_id": "mb1",
+        "thread_id": "t1",
         "from_email": "a@b.com", "from_name": "A", "subject": "s",
         "received_at": datetime.now(timezone.utc), "is_read": False, "box": "ALL_MAIL",
     }
@@ -690,6 +691,24 @@ def test_list_filtered_returns_dicts_for_each_row(monkeypatch):
     # The repository normalises rows to plain dicts even when the cursor returns
     # RealDictRow / mapping-like objects.
     assert all(isinstance(r, dict) for r in result)
+
+
+def test_list_filtered_joins_accounts_and_selects_mailbox_id(monkeypatch):
+    # Virtual mailboxes with scope='all' / 'accounts' can mix emails
+    # from several real mailboxes — the listing must surface each
+    # email's REAL mailbox_id (not the route's). The repository owns
+    # that join: it must SELECT ``mailbox_id`` from the joined
+    # ``accounts`` table and emit it in every row. Regressing this
+    # join silently re-introduces the ``account_not_found`` 404 the
+    # frontend used to hit when opening an email's content from a
+    # virtual mailbox.
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(["acc1"], "ALL_MAIL", [], 200, 0)
+    sql, _ = cursor.executed[0]
+    assert "JOIN accounts" in sql
+    assert "a.mailbox_id" in sql
 
 
 # ===== exists =====

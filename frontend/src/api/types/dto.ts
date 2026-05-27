@@ -114,6 +114,7 @@ export type FailedAttachmentDetail = z.infer<typeof failedAttachmentSchema>;
 export const emailMetadataOutSchema = z.object({
   provider_message_id: z.string(),
   account_id: z.string(),
+  mailbox_id: z.string(),
   thread_id: z.string().nullable(),
   from_email: z.string(),
   from_name: z.string().nullable(),

@@ -619,6 +619,7 @@ function emailMetadataFixture(providerMessageId = 'pmid_1', accountId = 'acc_1')
   return {
     provider_message_id: providerMessageId,
     account_id: accountId,
+    mailbox_id: 'mb_1',
     thread_id: 't_1',
     from_email: 'ana@example.com',
     from_name: 'Ana Lopez',

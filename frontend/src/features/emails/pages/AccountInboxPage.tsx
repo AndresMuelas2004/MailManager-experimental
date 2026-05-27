@@ -39,13 +39,12 @@ export default function AccountInboxPage({ box }: Props) {
   );
 
   const { selection, bulkError, bulkBar } = useBulkBar({
-    mailboxId: mailboxId!,
     box,
     emails,
     refresh,
   });
 
-  const viewer = useEmailViewer(mailboxId!, refresh);
+  const viewer = useEmailViewer(refresh);
   const favorites = useFavorite(mailboxId!);
   const composer = useDraftComposerContext();
 
@@ -65,6 +64,7 @@ export default function AccountInboxPage({ box }: Props) {
   const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
     favorites
       .toggle({
+        mailboxId: email.mailbox_id,
         accountId: email.account_id,
         providerMessageId: email.provider_message_id,
         favorite: next,
@@ -134,7 +134,6 @@ export default function AccountInboxPage({ box }: Props) {
       />
 
       <ViewerMount
-        mailboxId={mailboxId!}
         openedEmail={viewer.openedEmail}
         accounts={accounts}
         onClose={viewer.close}

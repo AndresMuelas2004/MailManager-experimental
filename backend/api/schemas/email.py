@@ -151,6 +151,7 @@ class EmailMetadataOut(BaseModel):
 
     provider_message_id: str
     account_id: str
+    mailbox_id: str
     thread_id: str | None = None
     from_email: str
     from_name: str | None = None

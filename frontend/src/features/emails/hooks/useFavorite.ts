@@ -7,6 +7,12 @@ import type { UiError } from '../../../api/client/errors';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
 type ToggleArgs = {
+  // The email's REAL mailbox (carried in the listing payload). Virtual
+  // mailboxes can surface emails whose account lives in a mailbox
+  // other than the route's mailbox — the toggle endpoint validates
+  // ``account ∈ mailbox`` on the backend so we must always pass the
+  // mailbox that actually owns the account, not the route mailbox.
+  mailboxId: string;
   accountId: string;
   providerMessageId: string;
   favorite: boolean;
@@ -29,8 +35,12 @@ export default function useFavorite(mailboxId: string): UseFavoriteReturn {
   const queryClient = useQueryClient();
 
   const toggleMutation = useMutation({
-    mutationFn: ({ accountId, providerMessageId, favorite }: ToggleArgs) =>
-      setFavorite(mailboxId, accountId, providerMessageId, favorite),
+    mutationFn: ({
+      mailboxId: itemMailboxId,
+      accountId,
+      providerMessageId,
+      favorite,
+    }: ToggleArgs) => setFavorite(itemMailboxId, accountId, providerMessageId, favorite),
     // Optimistic update so the star flips immediately and the user
     // does not perceive provider latency. The blanket invalidation in
     // ``onSettled`` reconciles with server truth — including the case

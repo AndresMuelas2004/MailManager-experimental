@@ -1180,6 +1180,7 @@ class TestRestoreFromSpam:
 _SAMPLE_ROW = {
     "provider_message_id": "m1",
     "account_id": _ACCOUNT_ID,
+    "mailbox_id": _MAILBOX_ID,
     "thread_id": "t1",
     "from_email": "sender@test.com",
     "from_name": "Sender",
@@ -1251,6 +1252,12 @@ class TestListEmails:
         assert len(result) == 1
         assert result[0].provider_message_id == "m1"
         assert result[0].account_id == _ACCOUNT_ID
+        # ``mailbox_id`` is projected from the JOIN on ``accounts``. The
+        # frontend reads it to know which mailbox owns each row inside a
+        # virtual mailbox whose scope spans several real mailboxes —
+        # dropping it would re-introduce the ``account_not_found`` 404 on
+        # open/favorite/reply/forward/attachment paths.
+        assert result[0].mailbox_id == _MAILBOX_ID
         # Single-account branch passes a one-element account_ids list.
         assert len(calls) == 1
         assert calls[0]["account_ids"] == [_ACCOUNT_ID]

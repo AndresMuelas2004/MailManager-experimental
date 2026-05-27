@@ -148,15 +148,17 @@ MOVE_TO_TRASH_BATCH = """
 # there, not pass a string here. Allowing arbitrary text would be a SQL
 # injection vector.
 LIST_FILTERED = """
-    SELECT provider_message_id, account_id, thread_id, from_email, from_name,
-           subject, received_at, is_read, box, has_attachments, is_favorite,
-           to_email, to_name
-    FROM email_metadata
-    WHERE account_id = ANY(%(account_ids)s::uuid[])
+    SELECT em.provider_message_id, em.account_id, em.thread_id, em.from_email,
+           em.from_name, em.subject, em.received_at, em.is_read, em.box,
+           em.has_attachments, em.is_favorite, em.to_email, em.to_name,
+           a.mailbox_id
+    FROM email_metadata AS em
+    JOIN accounts AS a USING (account_id)
+    WHERE em.account_id = ANY(%(account_ids)s::uuid[])
       {box_predicate}
       {search_predicate}
       {extra_predicate}
-    ORDER BY received_at DESC, account_id, provider_message_id
+    ORDER BY em.received_at DESC, em.account_id, em.provider_message_id
     LIMIT %(limit)s
     OFFSET %(offset)s
 """
