@@ -33,6 +33,16 @@ export default function useVirtualMailboxEmails(
     queryKey: emailsKey,
     queryFn: ({ signal }) => listVirtualMailboxEmails(virtualMailboxId, { q: effectiveQ, signal }),
     enabled: virtualMailboxId.length > 0,
+    // Force a fresh GET every time the user navigates back into a
+    // virtual mailbox. Virtual mailboxes are user-curated, time-
+    // sensitive views (Marina's mail, "today's invoices", etc.) — the
+    // user expects newly arrived emails to surface the moment they
+    // re-open the view, not after the 30 s global staleTime expires.
+    // ``refetchOnMount: 'always'`` overrides the global cache freshness
+    // and triggers the GET on every mount, even when a previous render
+    // already cached the listing.
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   // Accounts are required for the resolveAccount() lookup on the email
