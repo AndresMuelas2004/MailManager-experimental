@@ -1,8 +1,9 @@
 import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { listVirtualMailboxEmails } from '../../../api/endpoints/virtualMailboxes';
 import { listAccounts } from '../../../api/endpoints/accounts';
+import { listMailboxes } from '../../../api/endpoints/mailboxes';
 import { toUiError } from '../../../api/client/errors';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
@@ -27,7 +28,6 @@ export default function useVirtualMailboxEmails(
   const trimmedQuery = (searchQuery ?? '').trim();
   const effectiveQ = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : undefined;
   const emailsKey = ['virtual-mailbox-emails', virtualMailboxId, effectiveQ ?? null] as const;
-  const accountsKey = ['accounts', mailboxId] as const;
 
   const emailsQuery = useQuery({
     queryKey: emailsKey,
@@ -36,12 +36,25 @@ export default function useVirtualMailboxEmails(
   });
 
   // Accounts are required for the resolveAccount() lookup on the email
-  // table — they are fetched per mailbox so the user can still see
-  // provider/email columns even in the cross-mailbox 'all' scope.
-  const accountsQuery = useQuery({
-    queryKey: accountsKey,
-    queryFn: () => listAccounts(mailboxId),
+  // table — they are fetched across every mailbox the user owns
+  // because scope_kind 'all' and 'accounts' can surface emails whose
+  // account_id belongs to a mailbox other than the one active in the
+  // sidebar; loading only the active mailbox leaves those rows with
+  // empty provider/email columns.
+  const mailboxesQuery = useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: () => listMailboxes(),
     enabled: mailboxId.length > 0,
+  });
+
+  const mailboxes = mailboxesQuery.data ?? [];
+
+  const accountQueries = useQueries({
+    queries: mailboxes.map((m) => ({
+      queryKey: ['accounts', m.mailbox_id],
+      queryFn: () => listAccounts(m.mailbox_id),
+      enabled: m.mailbox_id.length > 0,
+    })),
   });
 
   const refresh = useCallback(async () => {
@@ -49,16 +62,22 @@ export default function useVirtualMailboxEmails(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, virtualMailboxId, effectiveQ]);
 
+  const accountsError = accountQueries.find((q) => q.error)?.error ?? null;
   const error = emailsQuery.error
     ? toUiError(emailsQuery.error)
-    : accountsQuery.error
-      ? toUiError(accountsQuery.error)
-      : null;
+    : mailboxesQuery.error
+      ? toUiError(mailboxesQuery.error)
+      : accountsError
+        ? toUiError(accountsError)
+        : null;
+
+  const accounts: AccountOut[] = accountQueries.flatMap((q) => q.data ?? []);
+  const accountsLoading = mailboxesQuery.isLoading || accountQueries.some((q) => q.isLoading);
 
   return {
     emails: emailsQuery.data ?? [],
-    accounts: accountsQuery.data ?? [],
-    loading: emailsQuery.isLoading || accountsQuery.isLoading,
+    accounts,
+    loading: emailsQuery.isLoading || accountsLoading,
     syncing: emailsQuery.isFetching && !emailsQuery.isLoading,
     error,
     refresh,
