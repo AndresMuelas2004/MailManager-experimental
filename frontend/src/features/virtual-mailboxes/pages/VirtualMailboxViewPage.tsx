@@ -159,7 +159,7 @@ export default function VirtualMailboxViewPage() {
           accounts={accounts}
           loading={loading}
           view="unified"
-          isSent={false}
+          isSent={record?.filter_payload?.box === 'SENT'}
           hasSelection={selection.size > 0}
           isSelected={selection.isSelected}
           onToggle={selection.toggle}
