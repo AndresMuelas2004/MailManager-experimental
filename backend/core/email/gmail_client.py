@@ -1927,7 +1927,7 @@ class GmailClient(EmailClient):
         :py:meth:`_parse_metadata_response`).
         """
         try:
-            payload = self._fetch_message_payload(provider_message_id)
+            resource = self._fetch_message_resource(provider_message_id)
         except CoreError as exc:
             # Re-raise as a reply-context-specific error so the service
             # layer maps to ``EmailReplyContextError`` (HTTP 502) instead
@@ -1936,6 +1936,9 @@ class GmailClient(EmailClient):
                 f"Failed to fetch reply context for message {provider_message_id}: {exc.message}",
                 detail={"reason": "provider_fetch_failed"},
             ) from exc
+
+        payload = resource.get("payload", {}) or {}
+        thread_id = (resource.get("threadId") or "").strip()
 
         from_header = self._header_value(payload, "From") or ""
         from_name_raw, from_email_raw = parseaddr(from_header)
@@ -1980,11 +1983,11 @@ class GmailClient(EmailClient):
         # extractor directly (cheaper than re-classifying).
         html_body, text_body = self._extract_body_from_payload(payload)
 
-        _, box = self._resolve_labels(payload.get("labelIds") or [])
+        _, box = self._resolve_labels(resource.get("labelIds") or [])
 
         return ReplyContext(
             provider_message_id=provider_message_id,
-            thread_id=payload.get("threadId") or "",
+            thread_id=thread_id,
             from_email=(from_email_raw or "").strip(),
             from_name=(from_name_raw or "").strip(),
             reply_to=reply_to_addrs,
@@ -1999,12 +2002,13 @@ class GmailClient(EmailClient):
             box=box,
         )
 
-    def _fetch_message_payload(self, provider_message_id: str) -> dict[str, Any]:
-        """``messages.get(format=FULL)`` with the standard error wrapping.
+    def _fetch_message_resource(self, provider_message_id: str) -> dict[str, Any]:
+        """``messages.get(format=FULL)`` returning the full Message resource.
 
-        Used by both ``fetch_email_content`` and
-        ``list_message_attachments`` so both methods share the same
-        retry/error semantics and we do not duplicate the boilerplate.
+        Callers that only need the MIME tree should use
+        :py:meth:`_fetch_message_payload` instead. Root-level fields
+        such as ``threadId`` live outside ``payload`` and require this
+        helper.
         """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail messages.get requires authentication.")
@@ -2025,7 +2029,16 @@ class GmailClient(EmailClient):
             raise EmailExternalAPIError(
                 f"Gmail unexpected messages.get error ({type(exc).__name__}): {exc}"
             ) from exc
-        return response.get("payload", {}) or {}
+        return response or {}
+
+    def _fetch_message_payload(self, provider_message_id: str) -> dict[str, Any]:
+        """``messages.get(format=FULL)`` returning just the MIME ``payload``.
+
+        Thin wrapper over :py:meth:`_fetch_message_resource` for the
+        common case where root-level fields (``threadId``, ``labelIds``)
+        are not needed.
+        """
+        return self._fetch_message_resource(provider_message_id).get("payload", {}) or {}
 
     @staticmethod
     def _header_value(part: dict[str, Any], name: str) -> str | None:

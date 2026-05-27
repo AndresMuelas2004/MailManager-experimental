@@ -2298,16 +2298,15 @@ class TestGmailFetchReplyContext:
     """
 
     def _build_payload(self, *, label_ids: list[str] | None = None):
-        # ``_fetch_message_payload`` returns ``response.get("payload", {})``
-        # — the test mock wraps the inner shape inside ``payload`` so the
-        # full ``messages.get`` response shape is preserved. ``threadId``
-        # and ``labelIds`` live inside the inner payload (mirrors the
-        # production behaviour: ``payload.get("threadId")`` / ``payload.get("labelIds")``).
+        # Mirrors the real ``messages.get(format=full)`` shape: Gmail
+        # exposes ``threadId`` / ``labelIds`` at the resource ROOT
+        # (not inside ``payload``). ``fetch_reply_context`` reads
+        # those root-level fields via ``_fetch_message_resource``.
         return {
             "id": "msg-1",
+            "threadId": "thread-1",
+            "labelIds": label_ids or ["INBOX"],
             "payload": {
-                "threadId": "thread-1",
-                "labelIds": label_ids or ["INBOX"],
                 "headers": [
                     {"name": "From", "value": "Ana Lopez <ana@example.com>"},
                     {"name": "Reply-To", "value": "editor@list.com"},

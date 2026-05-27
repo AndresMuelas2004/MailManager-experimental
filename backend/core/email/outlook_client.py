@@ -1510,7 +1510,7 @@ class OutlookClient(EmailClient):
             )
         escaped_id = urllib.parse.quote(provider_message_id, safe="")
         select_fields = (
-            "from,toRecipients,ccRecipients,replyTo,subject,body,"
+            "from,sender,toRecipients,ccRecipients,replyTo,subject,body,"
             "internetMessageId,internetMessageHeaders,receivedDateTime,"
             "conversationId,parentFolderId,hasAttachments"
         )
@@ -1573,6 +1573,23 @@ class OutlookClient(EmailClient):
         return out
 
     @staticmethod
+    def _extract_email_address(recipient: Any) -> tuple[str, str]:
+        """Return ``(email, name)`` from a Graph ``recipient`` object.
+
+        Graph wraps single-recipient fields (``from``, ``sender``) in
+        the shape ``{"emailAddress": {"address": "...", "name": "..."}}``.
+        Returns ``("", "")`` when the structure is missing or invalid.
+        """
+        if not isinstance(recipient, dict):
+            return "", ""
+        addr_obj = recipient.get("emailAddress") or {}
+        if not isinstance(addr_obj, dict):
+            return "", ""
+        addr = (addr_obj.get("address") or "").strip()
+        name = (addr_obj.get("name") or "").strip()
+        return addr, name
+
+    @staticmethod
     def _first_recipient_from_graph_recipients(
         recipients: Any,
     ) -> tuple[str, str]:
@@ -1629,10 +1646,16 @@ class OutlookClient(EmailClient):
         and the parsing layer can be tested independently (fakes that
         feed pre-shaped dicts don't need to mock the Graph stack).
         """
-        from_obj = message.get("from") or {}
-        from_addr_obj = from_obj.get("emailAddress") or {} if isinstance(from_obj, dict) else {}
-        from_email = (from_addr_obj.get("address") or "").strip()
-        from_name = (from_addr_obj.get("name") or "").strip()
+        from_email, from_name = self._extract_email_address(message.get("from"))
+        if not from_email:
+            # Graph occasionally omits ``from`` (delegated mailboxes,
+            # certain on-behalf-of sends). ``sender`` is documented as
+            # the actual sending mailbox and is always populated for
+            # received messages — fall back to it so the composer can
+            # still seed ``to_recipients`` for Reply.
+            from_email, sender_name = self._extract_email_address(message.get("sender"))
+            if not from_name:
+                from_name = sender_name
 
         body_section = message.get("body") or {}
         content_type = (body_section.get("contentType") or "").lower()
