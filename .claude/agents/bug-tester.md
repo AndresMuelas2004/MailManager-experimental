@@ -46,19 +46,29 @@ Si todos los pasos de reproducción ya muestran el `comportamiento esperado`:
    ```
    `bug-analisis/` está gitignored, así que el borrado NO afecta al diff de git.
 
-2. **Verifica el estado git**:
+2. **Limpia screenshots residuales de Playwright (pre-commit)** — `browser_take_screenshot` vuelca archivos `.png` en la raíz del repo durante la reproducción. Bórralos ANTES de inspeccionar el diff para que `git status` solo muestre los cambios reales del fix:
+   ```powershell
+   git status --porcelain | ForEach-Object {
+       if ($_ -match '^\?\? ([^/\\]+\.png)$') {
+           Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       }
+   }
+   ```
+   Borra **únicamente** `.png` **untracked en la raíz** del repo (línea `?? <nombre>.png` en `git status --porcelain`, sin barras). Nunca toca `.png` versionados, ni `.png` dentro de subdirectorios (p.ej. `frontend/public/`, `frontend/src/assets/`).
+
+3. **Verifica el estado git**:
    ```powershell
    git status --porcelain
    ```
    Inspecciona qué archivos han cambiado. Solo deberían aparecer archivos del proyecto modificados por bug-correccion. NO deberían aparecer archivos dentro de `bug-analisis/` (gitignored). Si aparecen archivos sospechosos no relacionados con el fix → ve al caso 3c.
 
-3. **Stagea con rutas explícitas** — NUNCA `git add -A`, NUNCA `git add .`, NUNCA `git add -u`:
+4. **Stagea con rutas explícitas** — NUNCA `git add -A`, NUNCA `git add .`, NUNCA `git add -u`:
    ```powershell
    git add <ruta1> <ruta2> ...
    ```
    Listando una a una las rutas que viste en `git status`.
 
-4. **Commit con mensaje natural** — como un programador que acaba de arreglar este bug. NO incluyas marcas de "ciclo autónomo", "subagente", ni `Co-Authored-By`. Mensaje conciso y descriptivo del bug arreglado, ~70 chars en la primera línea:
+5. **Commit con mensaje natural** — como un programador que acaba de arreglar este bug. NO incluyas marcas de "ciclo autónomo", "subagente", ni `Co-Authored-By`. Mensaje conciso y descriptivo del bug arreglado, ~70 chars en la primera línea:
    ```powershell
    git commit -m "<mensaje natural del fix>"
    ```
@@ -67,9 +77,18 @@ Si todos los pasos de reproducción ya muestran el `comportamiento esperado`:
    - NUNCA uses `-a`.
    - NO hagas push.
 
-5. **Cierra navegador**: `browser_close`.
+6. **Limpia screenshots residuales de Playwright (post-commit)** — repite el barrido por defensa en profundidad. Garantiza que ningún `.png` untracked queda en la raíz cuando devuelvas el control al orquestador; sin esta segunda pasada, la preparación inicial del siguiente ciclo (que rechaza working tree dirty, ver SKILL.md § Preparación inicial paso 3 y § Condiciones excepcionales punto 3) abortaría el bucle:
+   ```powershell
+   git status --porcelain | ForEach-Object {
+       if ($_ -match '^\?\? ([^/\\]+\.png)$') {
+           Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       }
+   }
+   ```
 
-6. **Devuelve LITERAL EXACTO** (carácter por carácter, sin nada antes ni después, sin slug añadido):
+7. **Cierra navegador**: `browser_close`.
+
+8. **Devuelve LITERAL EXACTO** (carácter por carácter, sin nada antes ni después, sin slug añadido):
    ```
    El bug ha sido solucionado correctamente. Vuelve a empezar el ciclo lanzando el subagente detector.
    ```

@@ -38,9 +38,19 @@ hasta que:
    if (-not (Select-String -Path ".gitignore" -Pattern "^bug-analisis/?$" -Quiet)) { Add-Content -Path ".gitignore" -Value "bug-analisis/" }
    ```
 
-3. **Verifica que el working tree NO tiene cambios sin commit relacionados con la app** (`git status --porcelain` excluyendo `bug-analisis/`). Si los hay → para con condición excepcional informando al usuario; un working tree dirty contamina el primer commit del ciclo.
+3. **Limpia screenshots residuales de Playwright en la raíz** — si un ciclo anterior dejó archivos `.png` untracked en la raíz del repo (capturas de `browser_take_screenshot` no barridas por interrupción manual, abort de Esc, o por venir de antes del parche del bug-tester), elimínalos ahora para que la verificación del working tree en el paso siguiente no aborte el ciclo falsamente:
+   ```powershell
+   git status --porcelain | ForEach-Object {
+       if ($_ -match '^\?\? ([^/\\]+\.png)$') {
+           Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       }
+   }
+   ```
+   Restricción: borra **únicamente** `.png` **untracked en la raíz** (línea `?? <nombre>.png` sin barras). Nunca toca `.png` versionados ni `.png` dentro de subdirectorios (p. ej. `frontend/public/`, `frontend/src/assets/`).
 
-4. **Informa al usuario**: "Ciclo autofix iniciado. La app debe estar corriendo en localhost. Pulsa Esc en cualquier momento para parar."
+4. **Verifica que el working tree NO tiene cambios sin commit relacionados con la app** (`git status --porcelain` excluyendo `bug-analisis/`). Si los hay → para con condición excepcional informando al usuario; un working tree dirty contamina el primer commit del ciclo.
+
+5. **Informa al usuario**: "Ciclo autofix iniciado. La app debe estar corriendo en localhost. Pulsa Esc en cualquier momento para parar."
 
 ## Estado que mantienes durante el ciclo
 
