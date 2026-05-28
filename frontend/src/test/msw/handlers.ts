@@ -18,6 +18,12 @@ export const handlers = [
       message: 'Logged in',
     }),
   ),
+  http.post(`${API_BASE}/auth/dev-login`, () =>
+    HttpResponse.json({
+      user: { user_id: 'u_dev', email: 'dev@example.com', name: 'Dev User', avatar_url: null },
+      message: 'Dev login successful.',
+    }),
+  ),
   http.get(`${API_BASE}/auth/me`, () =>
     HttpResponse.json({
       user_id: 'u_test',

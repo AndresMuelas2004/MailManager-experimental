@@ -15,7 +15,17 @@ from auth import AuthError, AuthTokenInvalidError, AuthTokenNetworkError
 
 from database import DatabaseError, QueryError
 
-from api.errors.exceptions import ApiError, EnvVarError, ExternalAPIError, Unauthorized, UserNotFound
+from api.errors.exceptions import (
+    ApiError,
+    DevLoginDisabled,
+    DevLoginNotLocalhost,
+    EnvVarError,
+    ExternalAPIError,
+    SessionOperationError,
+    Unauthorized,
+    UserNotFound,
+    UserOperationError,
+)
 from api.schemas.auth import AuthResponse, UserOut
 from api.services import auth_service
 
@@ -347,3 +357,167 @@ def test_get_current_user_unexpected_error_raises_api_error(monkeypatch):
     monkeypatch.setattr(auth_service, "user_store", FailingUserStore())
     with pytest.raises(ApiError, match="Failed to look up current user"):
         auth_service.get_current_user("some-user-id")
+
+
+# ------------------------------------------------------------------
+# dev_login — three-state guard + happy path + error translation
+# ------------------------------------------------------------------
+
+
+class FakeUserStoreWithEmail(FakeUserStore):
+    """Extends FakeUserStore with email lookup for dev_login tests."""
+
+    def __init__(self, *, user=None):
+        super().__init__(user=user)
+        self.email_lookups: list[str] = []
+
+    def get_by_email(self, email):
+        self.email_lookups.append(email)
+        if self._user and self._user["email"] == email:
+            return dict(self._user)
+        return None
+
+
+def _enable_dev_login(monkeypatch, *, email="dev@example.com"):
+    """Activate DEV_LOGIN_ENABLED + DEV_LOGIN_EMAIL for happy-path tests."""
+    monkeypatch.setenv("DEV_LOGIN_ENABLED", "true")
+    monkeypatch.setenv("DEV_LOGIN_EMAIL", email)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")  # needed by _load_auth_settings
+
+
+def test_dev_login_disabled_when_env_unset(monkeypatch, mock_response):
+    """DEV_LOGIN_ENABLED unset → DevLoginDisabled (503)."""
+    monkeypatch.delenv("DEV_LOGIN_ENABLED", raising=False)
+    with pytest.raises(DevLoginDisabled, match="is not truthy"):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_disabled_when_env_is_false(monkeypatch, mock_response):
+    """DEV_LOGIN_ENABLED=false → DevLoginDisabled."""
+    monkeypatch.setenv("DEV_LOGIN_ENABLED", "false")
+    with pytest.raises(DevLoginDisabled):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_refused_when_client_host_not_trusted(monkeypatch, mock_response):
+    """client_host outside the trusted set → DevLoginNotLocalhost (403) with client_host in detail."""
+    _enable_dev_login(monkeypatch)
+    with pytest.raises(DevLoginNotLocalhost) as exc_info:
+        auth_service.dev_login(mock_response, "10.0.0.5")
+    assert exc_info.value.detail == {"client_host": "10.0.0.5"}
+
+
+def test_dev_login_refused_when_client_host_is_none(monkeypatch, mock_response):
+    """client_host=None (missing request.client) → DevLoginNotLocalhost."""
+    _enable_dev_login(monkeypatch)
+    with pytest.raises(DevLoginNotLocalhost):
+        auth_service.dev_login(mock_response, None)
+
+
+def test_dev_login_trusted_hosts_env_override(monkeypatch, mock_response):
+    """DEV_LOGIN_TRUSTED_HOSTS env var widens the allowlist."""
+    _enable_dev_login(monkeypatch)
+    monkeypatch.setenv("DEV_LOGIN_TRUSTED_HOSTS", "10.0.0.5,127.0.0.1")
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStoreWithEmail(user={
+        **_FAKE_USER, "email": "dev@example.com",
+    }))
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    # 10.0.0.5 is now trusted; should reach the happy path.
+    result = auth_service.dev_login(mock_response, "10.0.0.5")
+    assert isinstance(result, AuthResponse)
+
+
+def test_dev_login_missing_email_env(monkeypatch, mock_response):
+    """DEV_LOGIN_ENABLED=true but DEV_LOGIN_EMAIL unset → EnvVarError (500)."""
+    monkeypatch.setenv("DEV_LOGIN_ENABLED", "true")
+    monkeypatch.delenv("DEV_LOGIN_EMAIL", raising=False)
+    with pytest.raises(EnvVarError, match="DEV_LOGIN_EMAIL"):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_user_not_in_db(monkeypatch, mock_response):
+    """No row matching the email → UserNotFound (404) with detail."""
+    _enable_dev_login(monkeypatch, email="ghost@example.com")
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStoreWithEmail())  # empty store
+    with pytest.raises(UserNotFound) as exc_info:
+        auth_service.dev_login(mock_response, "127.0.0.1")
+    assert exc_info.value.detail == {"email": "ghost@example.com"}
+
+
+def test_dev_login_happy_path(monkeypatch, mock_response):
+    """Existing user → AuthResponse + session cookie set."""
+    _enable_dev_login(monkeypatch, email="amulas14@example.com")
+    user = {**_FAKE_USER, "email": "amulas14@example.com"}
+    store = FakeUserStoreWithEmail(user=user)
+    monkeypatch.setattr(auth_service, "user_store", store)
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+
+    result = auth_service.dev_login(mock_response, "127.0.0.1")
+
+    assert isinstance(result, AuthResponse)
+    assert result.user.email == "amulas14@example.com"
+    assert result.message == "Dev login successful."
+    assert store.email_lookups == ["amulas14@example.com"]
+    mock_response.set_cookie.assert_called_once()
+
+
+def test_dev_login_database_error_on_user_lookup(monkeypatch, mock_response):
+    """DatabaseError from user_store.get_by_email → translated ApiError."""
+    _enable_dev_login(monkeypatch)
+
+    class FailingUserStore(FakeUserStoreWithEmail):
+        def get_by_email(self, email):
+            raise QueryError("DB fail")
+
+    monkeypatch.setattr(auth_service, "user_store", FailingUserStore())
+    with pytest.raises(ApiError):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_unexpected_error_on_user_lookup(monkeypatch, mock_response):
+    """RuntimeError from user_store.get_by_email → UserOperationError."""
+    _enable_dev_login(monkeypatch)
+
+    class FailingUserStore(FakeUserStoreWithEmail):
+        def get_by_email(self, email):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(auth_service, "user_store", FailingUserStore())
+    with pytest.raises(UserOperationError, match="Failed to look up dev login user"):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_database_error_on_session_create(monkeypatch, mock_response):
+    """DatabaseError from session_store.create → translated ApiError."""
+    _enable_dev_login(monkeypatch)
+    monkeypatch.setattr(
+        auth_service, "user_store", FakeUserStoreWithEmail(user={
+            **_FAKE_USER, "email": "dev@example.com",
+        }),
+    )
+
+    class FailingSessionStore(FakeSessionStore):
+        def create(self, session):
+            raise QueryError("DB fail")
+
+    monkeypatch.setattr(auth_service, "session_store", FailingSessionStore())
+    with pytest.raises(ApiError):
+        auth_service.dev_login(mock_response, "127.0.0.1")
+
+
+def test_dev_login_unexpected_error_on_session_create(monkeypatch, mock_response):
+    """RuntimeError from session_store.create → SessionOperationError."""
+    _enable_dev_login(monkeypatch)
+    monkeypatch.setattr(
+        auth_service, "user_store", FakeUserStoreWithEmail(user={
+            **_FAKE_USER, "email": "dev@example.com",
+        }),
+    )
+
+    class FailingSessionStore(FakeSessionStore):
+        def create(self, session):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(auth_service, "session_store", FailingSessionStore())
+    with pytest.raises(SessionOperationError, match="Failed to create session during dev login"):
+        auth_service.dev_login(mock_response, "127.0.0.1")

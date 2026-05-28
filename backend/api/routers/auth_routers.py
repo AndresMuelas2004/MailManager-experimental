@@ -4,7 +4,7 @@ Authentication router for Google OIDC login, session management.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Cookie, Depends, Response
+from fastapi import APIRouter, Cookie, Depends, Request, Response
 
 from api.routers.routers_helpers import require_session
 from api.schemas.auth import AuthResponse, GoogleLoginRequest, UserOut
@@ -20,6 +20,20 @@ def google_login(payload: GoogleLoginRequest, response: Response) -> AuthRespons
     Verify a Google id_token and create a server-side session.
     """
     return auth_service.google_login(payload.id_token, response)
+
+
+@router.post("/dev-login", response_model=AuthResponse)
+def dev_login(request: Request, response: Response) -> AuthResponse:
+    """
+    Dev-only backdoor that mints a session for ``DEV_LOGIN_EMAIL``.
+
+    Inert in production: ``DEV_LOGIN_ENABLED`` must be truthy AND the
+    request must come from ``DEV_LOGIN_TRUSTED_HOSTS`` (default
+    ``127.0.0.1``, ``::1``, ``localhost``). See ``auth_service.dev_login``
+    for the full guard semantics.
+    """
+    client_host = request.client.host if request.client else None
+    return auth_service.dev_login(response, client_host)
 
 
 @router.get("/me", response_model=UserOut)

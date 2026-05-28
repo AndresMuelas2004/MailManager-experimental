@@ -34,7 +34,9 @@ function buildAuthValue(user: UserOut | null): AuthState {
     loading: false,
     error: null,
     login: () => Promise.resolve(),
+    devLogin: () => Promise.resolve(),
     logout: () => Promise.resolve(),
+    deleteCurrentUser: () => Promise.resolve(true),
   };
 }
 

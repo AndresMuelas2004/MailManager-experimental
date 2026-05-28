@@ -320,6 +320,17 @@ class UserStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_by_email(self, email: str) -> dict[str, Any] | None:
+        """Lookup a user by email. Returns ``None`` when no row matches.
+
+        Used by the dev-login backdoor to resolve the impersonated
+        identity from the ``DEV_LOGIN_EMAIL`` env var. ``email`` is the
+        plain ``users.email`` column — there is no separate unique
+        constraint, so ``LIMIT 1`` keeps the contract single-row.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def delete(self, user_id: str) -> bool:
         raise NotImplementedError
 

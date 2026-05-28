@@ -2,12 +2,15 @@ import { Navigate } from 'react-router-dom';
 
 import { useAuth } from '../../../app/providers/AuthContext';
 import useGoogleLogin from '../hooks/useGoogleLogin';
+import useDevLogin from '../hooks/useDevLogin';
 import LoginBranding from '../components/LoginBranding';
 import GoogleSignInButton from '../components/GoogleSignInButton';
+import DevLoginButton from '../components/DevLoginButton';
 
 export default function LoginPage() {
   const { user, loading: authLoading } = useAuth();
   const { buttonRef, error, loading } = useGoogleLogin();
+  const devLogin = useDevLogin();
 
   if (authLoading) {
     return (
@@ -22,9 +25,18 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen">
-      <LoginBranding />
-      <GoogleSignInButton buttonRef={buttonRef} error={error} loading={loading} />
-    </div>
+    <>
+      <div className="flex min-h-screen">
+        <LoginBranding />
+        <GoogleSignInButton buttonRef={buttonRef} error={error} loading={loading} />
+      </div>
+      {import.meta.env.DEV && (
+        <DevLoginButton
+          onClick={devLogin.trigger}
+          loading={devLogin.loading}
+          error={devLogin.error}
+        />
+      )}
+    </>
   );
 }

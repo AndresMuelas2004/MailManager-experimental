@@ -338,6 +338,29 @@ class InvalidAdminToken(ApiError):
     code = "invalid_admin_token"
 
 
+class DevLoginDisabled(ApiError):
+    """The dev-login endpoint is disabled (``DEV_LOGIN_ENABLED`` is not truthy).
+
+    Mirrors the ``PurgeDisabled`` semantics: 503 means "this deploy was
+    not configured for this operation", which must stay distinct from
+    "your credentials are wrong" (401). Collapsing both would mask a
+    deploy-config error behind a credential-style error.
+    """
+    code = "dev_login_disabled"
+
+
+class DevLoginNotLocalhost(ApiError):
+    """The dev-login endpoint was called from a host outside
+    ``DEV_LOGIN_TRUSTED_HOSTS`` (default ``127.0.0.1``, ``::1``,
+    ``localhost``).
+
+    Defence-in-depth: even if ``DEV_LOGIN_ENABLED`` leaks to a
+    non-local environment, the host check keeps the backdoor
+    unreachable from the outside.
+    """
+    code = "dev_login_not_localhost"
+
+
 # ---------------------------------------------------------------------------
 # Favourites (Gmail STARRED / Outlook flag).
 # ---------------------------------------------------------------------------

@@ -20,6 +20,13 @@ GET_USER_BY_ID = """
     WHERE user_id = %(user_id)s
 """
 
+GET_USER_BY_EMAIL = """
+    SELECT user_id, google_sub, email, name, avatar_url, created_at
+    FROM users
+    WHERE email = %(email)s
+    LIMIT 1
+"""
+
 INSERT_SESSION = """
     INSERT INTO sessions (session_id, user_id, expires_at)
     VALUES (%(session_id)s, %(user_id)s, %(expires_at)s)

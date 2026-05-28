@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { loginWithGoogle, getMe, logout as apiLogout, deleteMe } from '../../api/endpoints/auth';
+import {
+  loginWithGoogle,
+  devLogin as apiDevLogin,
+  getMe,
+  logout as apiLogout,
+  deleteMe,
+} from '../../api/endpoints/auth';
 import { toUiError } from '../../api/client/errors';
 import type { UserOut } from '../../api/types/dto';
 import type { UiError } from '../../api/client/errors';
@@ -42,6 +48,17 @@ export default function AuthProvider({ children }: Props) {
     }
   }, []);
 
+  const devLogin = useCallback(async () => {
+    setError(null);
+    try {
+      const response = await apiDevLogin();
+      setUser(response.user);
+    } catch (err) {
+      setError(toUiError(err));
+      throw err;
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     setError(null);
     try {
@@ -64,8 +81,8 @@ export default function AuthProvider({ children }: Props) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, error, login, logout, deleteCurrentUser }),
-    [user, loading, error, login, logout, deleteCurrentUser],
+    () => ({ user, loading, error, login, devLogin, logout, deleteCurrentUser }),
+    [user, loading, error, login, devLogin, logout, deleteCurrentUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
