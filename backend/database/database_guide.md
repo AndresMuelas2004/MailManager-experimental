@@ -34,6 +34,10 @@
 
 Missing-token scenarios (no row, encrypted columns absent with fallback disabled, etc.) return `None`. The service layer maps `None → AccountNotConnected`. **Input-validation** errors (`TokenValidationError` for blank provider) still propagate — only the absence of a token is expressed as `None`.
 
+## `PgUserStore.get_by_email` omits the `InvalidTextRepresentation` guard its siblings carry
+
+`PgUserStore.get_by_id` and `PgUserStore.delete` both swallow `psycopg2.errors.InvalidTextRepresentation` and collapse to `None` / `False` (a malformed UUID is treated as "not found"). `PgUserStore.get_by_email` deliberately omits that guard: `users.email` is `VARCHAR`, not UUID, so the only way `InvalidTextRepresentation` could surface here is a genuine programming error elsewhere — silencing it would mask real bugs. Do NOT add the guard "for consistency" with the siblings.
+
 ## Trash — `previous_box` + `DELETED` box value (migration 0008)
 
 - `previous_box VARCHAR(20)` nullable, CHECK allows `ALL_MAIL`, `SENT`, `SPAM`. `move_to_trash_batch` copies the current `box` into `previous_box` before setting `box = 'TRASH'`. `restore_from_trash_batch` uses `COALESCE(previous_box, 'ALL_MAIL')`. Rows where `previous_box IS NULL` go through `restore_from_trash_discovered_batch`, which receives the discovered box from the caller.

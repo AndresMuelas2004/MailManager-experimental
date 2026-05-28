@@ -41,6 +41,8 @@ from api.errors.exceptions import (
     DatabaseConnectionError,
     DatabaseMigrationError,
     DatabaseQueryError,
+    DevLoginDisabled,
+    DevLoginNotLocalhost,
     DraftAttachmentNotFound,
     DraftCreationError,
     DraftDeleteError,
@@ -152,6 +154,8 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     RequestTooLarge: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
     PurgeDisabled: status.HTTP_503_SERVICE_UNAVAILABLE,
     InvalidAdminToken: status.HTTP_401_UNAUTHORIZED,
+    DevLoginDisabled: status.HTTP_503_SERVICE_UNAVAILABLE,
+    DevLoginNotLocalhost: status.HTTP_403_FORBIDDEN,
     # Favourites
     FavoriteUpdateError: status.HTTP_502_BAD_GATEWAY,
     FavoriteSyncError: status.HTTP_502_BAD_GATEWAY,

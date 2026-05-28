@@ -16,6 +16,13 @@ export function loginWithGoogle(idToken: string): Promise<AuthResponse> {
   });
 }
 
+export function devLogin(): Promise<AuthResponse> {
+  return request('/auth/dev-login', {
+    method: 'POST',
+    schema: authResponseSchema,
+  });
+}
+
 export function getMe(): Promise<UserOut> {
   return request('/auth/me', { schema: userOutSchema });
 }

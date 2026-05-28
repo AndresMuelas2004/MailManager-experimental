@@ -65,6 +65,24 @@ class PgUserStore(UserStore):
             return None
         return _row_to_dict(row)
 
+    def get_by_email(self, email: str) -> dict[str, Any] | None:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(auth.GET_USER_BY_EMAIL, {"email": email})
+                    row = cur.fetchone()
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to get user by email.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected user get_by_email error ({type(exc).__name__}): {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return _row_to_dict(row)
+
     def delete(self, user_id: str) -> bool:
         try:
             with connection.get_connection() as conn:

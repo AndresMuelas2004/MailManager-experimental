@@ -23,6 +23,7 @@
 | `GET /health` | Unauthenticated health check — no user context needed. |
 | `POST /auth/google` | Creates the session — cannot require a prior one. |
 | `POST /auth/logout` | Must work even with expired sessions. |
+| `POST /auth/dev-login` | Dev-only backdoor gated by `DEV_LOGIN_ENABLED` + `DEV_LOGIN_TRUSTED_HOSTS` host check. It mints the session, so it cannot require one. |
 
 `DELETE /auth/me` requires `require_session`. After deleting the user row, PostgreSQL `CASCADE` takes care of every associated artefact (mailboxes, accounts, tokens, sessions); the service only clears the session cookie afterwards.
 
@@ -188,6 +189,7 @@ All `ApiError` subclasses live in `api/errors/exceptions.py` and must be registe
 - **Status quirks worth remembering:** `DatabaseQueryError` is 503 (transient-from-the-caller perspective, retryable), not 500. `EmailListError` / `DraftListError` are 500 because a listing failure is the only place that specific operation can fail and there is no retry story. 409s (`EmailNotInTrash`, `AccountNotConnected`, `AccountConnectAuthError` is 401) encode state conflicts, not plain missing resources — do not downgrade them to 404 when reusing.
 - **Attachment internals (500):** `AttachmentLookupError`, `AttachmentInsertError`, `AttachmentListingError` cover the unexpected-internal-failure paths of `add_draft_attachment` / `remove_draft_attachment` (lookup-before-insert, the insert itself, the size/count pre-check listing). They mirror `DraftCreationError` semantics — "something went wrong on our side, not the provider's" — and exist so the response code identifies the failed step instead of collapsing every internal hiccup into a generic `DraftDeleteError` / `DraftCreationError`.
 - **Admin purge endpoint:** `PurgeDisabled` is **503**, not 401. The split with `InvalidAdminToken` (401) is intentional: 503 means "this deploy is not configured for purge" (env var unset), 401 means "your token is wrong". Collapsing the two into 401 would mask the deploy-config error behind a credential error and waste on-call time.
+- **Dev-login endpoint:** same shape as the purge split — `DevLoginDisabled` is **503** (deploy not configured, `DEV_LOGIN_ENABLED` not truthy) while `DevLoginNotLocalhost` is **403** (host outside `DEV_LOGIN_TRUSTED_HOSTS`). Collapsing both into 403 would mask the deploy-config error behind a security rejection. The third state of the guard, missing `DEV_LOGIN_EMAIL`, surfaces as `EnvVarError` (500) because at that point the operator has already opted in — a missing email is a config bug, not a security boundary.
 
 ## Extension
 
@@ -197,6 +199,7 @@ All `ApiError` subclasses live in `api/errors/exceptions.py` and must be registe
 - Add `<provider>_login` in `auth_service.py` (catch `AuthError`, translate via `translate_auth_error`).
 - Add request/response schemas in `api/schemas/auth.py`.
 - The existing `AuthTokenError` subclasses are provider-agnostic and reusable. See `auth_guide.md` for the auth-layer side of the checklist.
+- `POST /auth/dev-login` is a test backdoor, not a provider flow. It bypasses OIDC entirely (no `verify_*_token`, no `AuthSettings.client_id`, no `translate_auth_error`) and must NOT be used as a template when adding a real identity provider — copy from `google_login` instead.
 
 ### New draft operation
 
