@@ -32,6 +32,7 @@ type Props = {
   sending: boolean;
   saving: boolean;
   error: UiError | null;
+  recipientError: UiError | null;
   canSendEmail: boolean;
   canSaveDraft: boolean;
   canSendDraft: boolean;
@@ -82,6 +83,7 @@ export default function ComposeOverlay({
   sending,
   saving,
   error,
+  recipientError,
   canSendEmail,
   canSaveDraft,
   canSendDraft,
@@ -282,6 +284,9 @@ export default function ComposeOverlay({
           />
         </div>
 
+        {recipientError && (
+          <p className="text-center text-sm text-red-600">{recipientError.message}</p>
+        )}
         {error && <p className="text-center text-sm text-red-600">{error.message}</p>}
 
         {attachmentsEnabled ? (

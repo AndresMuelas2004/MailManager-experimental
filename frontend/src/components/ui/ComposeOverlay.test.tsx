@@ -66,6 +66,7 @@ function renderOverlay(overrides: RenderOpts = {}) {
     sending: false,
     saving: false,
     error: null,
+    recipientError: null,
     canSendEmail: true,
     canSaveDraft: true,
     canSendDraft: true,

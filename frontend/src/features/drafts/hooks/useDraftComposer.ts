@@ -49,6 +49,7 @@ type UseDraftComposerReturn = {
   sending: boolean;
   saving: boolean;
   error: UiError | null;
+  recipientError: UiError | null;
   canSendEmail: boolean;
   canSaveDraft: boolean;
   canSendDraft: boolean;
@@ -534,10 +535,27 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   const isSendDraftMode =
     mode === 'edit_draft' || mode === 'reply' || mode === 'reply_all' || mode === 'forward';
 
+  // Client-side recipient validation. ``parseRecipients`` strips empty
+  // tokens but does NOT enforce email shape; without this guard the
+  // Send button stays enabled with a malformed address (e.g. ``foo``),
+  // the request hits the provider, and the provider's 400 surfaces as
+  // a 502 with a technical message in the composer. Blocking the send
+  // here keeps the failure local and lets the overlay render a neutral
+  // "dirección de correo no válida" hint.
+  const recipientsInvalid =
+    form.hasInvalidRecipients(form.to) ||
+    form.hasInvalidRecipients(form.cc) ||
+    form.hasInvalidRecipients(form.bcc);
+
+  const recipientError: UiError | null = recipientsInvalid
+    ? { message: 'Dirección de correo no válida.', code: 'invalid_recipient' }
+    : null;
+
   const canSendEmail =
     mode === 'new_email' &&
     form.accountId.length > 0 &&
     form.parseRecipients(form.to).length > 0 &&
+    !recipientsInvalid &&
     !persistence.sending;
 
   const canSaveDraft = isDraftMode && form.accountId.length > 0 && !persistence.saving;
@@ -547,6 +565,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     form.accountId.length > 0 &&
     providerDraftId !== null &&
     form.parseRecipients(form.to).length > 0 &&
+    !recipientsInvalid &&
     !persistence.sending;
 
   const attachmentsEnabled = mode !== null && form.accountId !== '';
@@ -637,6 +656,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     sending: persistence.sending,
     saving: persistence.saving,
     error: persistence.error,
+    recipientError,
     canSendEmail,
     canSaveDraft,
     canSendDraft,

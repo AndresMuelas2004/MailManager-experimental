@@ -76,13 +76,24 @@ export type UseComposerFormReturn = {
   hasAnyContent: () => boolean;
   buildDraftPayload: () => DraftPayload;
   parseRecipients: (value: string) => string[];
+  hasInvalidRecipients: (value: string) => boolean;
 };
+
+// Basic email shape check used to block sending to addresses the provider
+// would reject. Intentionally permissive (no IDN / quoted-local-part
+// support) — the goal is to catch "missing @" or "missing TLD" early
+// without rejecting legitimate addresses the provider would accept.
+const EMAIL_ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function parseRecipientsImpl(value: string): string[] {
   return value
     .split(',')
     .map((r) => r.trim())
     .filter(Boolean);
+}
+
+function hasInvalidRecipientsImpl(value: string): boolean {
+  return parseRecipientsImpl(value).some((token) => !EMAIL_ADDRESS_RE.test(token));
 }
 
 function joinRecipients(items: string[]): string {
@@ -241,5 +252,6 @@ export default function useComposerForm(): UseComposerFormReturn {
     hasAnyContent,
     buildDraftPayload,
     parseRecipients: parseRecipientsImpl,
+    hasInvalidRecipients: hasInvalidRecipientsImpl,
   };
 }
