@@ -1,4 +1,4 @@
-import type { ZodType } from 'zod';
+import type { ZodType, ZodTypeDef } from 'zod';
 import { ApiError, ValidationError, toApiError, toNetworkError } from './errors';
 
 export type BlobDownload = { blob: Blob; filename: string };
@@ -13,7 +13,14 @@ type RequestOptions<T> = {
   headers?: HeadersInit;
   body?: unknown;
   signal?: AbortSignal;
-  schema?: ZodType<T>;
+  // Decouple the schema's Input type (third generic) from its Output (T).
+  // Schemas that use ``.default(...)`` have an optional Input but a required
+  // Output; binding ``ZodType<T>`` (where Input defaults to Output) made TS
+  // infer T from the *Input*, so the returned value (the parsed Output) did
+  // not match the endpoint's declared ``z.infer`` return type. Fixing Input
+  // to ``unknown`` forces T to be inferred from the Output, which is exactly
+  // what ``safeParse`` returns.
+  schema?: ZodType<T, ZodTypeDef, unknown>;
 };
 
 function getBaseUrl(): string {
@@ -167,7 +174,9 @@ export async function requestBlob(
 export type UploadProgressOptions<T> = {
   onProgress?: (percentage: number) => void;
   signal?: AbortSignal;
-  schema: ZodType<T>;
+  // See RequestOptions.schema: Input fixed to ``unknown`` so T is inferred
+  // from the schema's Output (what ``safeParse`` returns), not its Input.
+  schema: ZodType<T, ZodTypeDef, unknown>;
 };
 
 export function requestUploadWithProgress<T>(
