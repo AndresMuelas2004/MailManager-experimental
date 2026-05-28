@@ -44,6 +44,15 @@
             "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-settings-local.py"
           }
         ]
+      },
+      {
+        "matcher": "mcp__playwright__browser_take_screenshot|mcp__playwright__browser_pdf_save",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/normalize-playwright-filename.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -78,6 +87,15 @@
           {
             "type": "command",
             "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/guide-md-discipline-reminder.py"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__playwright__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/sweep-playwright-artifacts.py"
           }
         ]
       }
