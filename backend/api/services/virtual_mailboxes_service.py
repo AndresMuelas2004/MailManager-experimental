@@ -5,13 +5,15 @@ A virtual mailbox is a user-defined filtered view over the messages
 that already live in ``email_metadata``. This module owns:
 
 - CRUD on the ``virtual_mailboxes`` table.
-- The translation from ``scope_payload`` + ``filter_payload`` to
-  ``email_metadata`` predicates at listing time.
+- Cross-checking that every ``account_id`` referenced by a virtual
+  mailbox actually belongs to the requesting user.
+- The translation from ``filter_payload`` to ``email_metadata``
+  predicates at listing time.
 
 It deliberately does NOT touch any provider — virtual mailboxes never
 sync new emails, they only display the ones already pulled by the real
-mailboxes underneath them. See ``Ignore/bandejas-ficticias.md`` for the
-behavioural contract.
+mailboxes underneath them. See ``docs/features/bandejas-ficticias.md``
+for the behavioural contract.
 """
 
 from __future__ import annotations
@@ -24,11 +26,6 @@ logger = logging.getLogger(__name__)
 
 from api.errors.exceptions import (
     AccountNotFound,
-    ApiError,
-    Forbidden,
-    MailboxLookupError,
-    MailboxNotFound,
-    VirtualMailboxInvalid,
     VirtualMailboxListError,
     VirtualMailboxNotFound,
     VirtualMailboxOperationError,
@@ -88,86 +85,72 @@ def _load_owned_virtual_mailbox(
     return record
 
 
-def _validate_scope_against_ownership(
-    payload: VirtualMailboxCreate | VirtualMailboxUpdate,
+def _owned_account_ids(user_id: str) -> set[str]:
+    """Return the set of every ``account_id`` the user owns across all of
+    their real mailboxes.
+
+    Re-resolved on every CRUD and every read because the underlying
+    catalogue is the source of truth: a revoked mailbox or a deleted
+    account must not be exposed through a stale virtual-mailbox
+    definition.
+    """
+    try:
+        user_mailboxes = mailbox_store.list_by_owner(user_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected mailbox listing error during virtual mailbox account resolution (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise VirtualMailboxOperationError(
+            "Failed to list user mailboxes while resolving virtual mailbox accounts."
+        ) from exc
+
+    owned: set[str] = set()
+    for mailbox in user_mailboxes:
+        mid = str(mailbox.get("mailbox_id") or "")
+        if not mid:
+            continue
+        try:
+            accounts = account_store.list_by_mailbox(mid)
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected account listing error during virtual mailbox account resolution (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise VirtualMailboxOperationError(
+                "Failed to list accounts while resolving virtual mailbox accounts."
+            ) from exc
+        for account in accounts:
+            aid = str(account.get("account_id") or "")
+            if aid:
+                owned.add(aid)
+    return owned
+
+
+def _validate_account_ids_owned_by_user(
+    account_ids: list[str],
     user_id: str,
 ) -> None:
-    """Cross-check that the referenced mailboxes / accounts belong to *user_id*.
+    """Reject the payload if any requested ``account_id`` is not owned by
+    *user_id*.
 
-    Pydantic only validates the SHAPE of ``scope_payload``; this is
-    where we resolve the referenced resources against the database and
-    confirm the requesting user actually owns them. Without this step
-    a malicious caller could create a virtual mailbox that aggregates
-    someone else's account ids and read every message they own.
+    Pydantic only validates the shape of ``account_ids``; this is where
+    we resolve the requested ids against the database and confirm the
+    caller actually owns them. Without this step a malicious caller
+    could create a virtual mailbox that aggregates someone else's
+    account ids and read every message they own.
     """
-    scope_kind = payload.scope_kind
-    sp = payload.scope_payload
-
-    if scope_kind == "mailbox":
-        try:
-            mailbox = mailbox_store.get(sp.mailbox_id or "")
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected mailbox lookup error during virtual mailbox validation (%s): %s",
-                type(exc).__name__, exc,
+    owned = _owned_account_ids(user_id)
+    for requested in account_ids:
+        if requested not in owned:
+            raise AccountNotFound(
+                f"Account '{requested}' not found in any of your mailboxes "
+                "while validating virtual mailbox accounts."
             )
-            raise MailboxLookupError("Failed to look up scoped mailbox.") from exc
-        if mailbox is None:
-            raise MailboxNotFound(
-                f"Mailbox '{sp.mailbox_id}' not found while validating "
-                "virtual mailbox scope."
-            )
-        if str(mailbox.get("owner_user_id")) != str(user_id):
-            raise Forbidden(
-                "You do not have access to the mailbox referenced by the virtual mailbox scope."
-            )
-        return
-
-    if scope_kind == "accounts":
-        try:
-            user_mailboxes = mailbox_store.list_by_owner(user_id)
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected mailbox listing error during virtual mailbox validation (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise MailboxLookupError(
-                "Failed to list user mailboxes while validating virtual mailbox scope."
-            ) from exc
-        owned_account_ids: set[str] = set()
-        for mailbox in user_mailboxes:
-            mid = str(mailbox.get("mailbox_id") or "")
-            if not mid:
-                continue
-            try:
-                accounts = account_store.list_by_mailbox(mid)
-            except DatabaseError as exc:
-                raise translate_database_error(exc) from exc
-            except Exception as exc:
-                logger.warning(
-                    "Unexpected account listing error during virtual mailbox validation (%s): %s",
-                    type(exc).__name__, exc,
-                )
-                raise VirtualMailboxOperationError(
-                    "Failed to list accounts while validating virtual mailbox scope."
-                ) from exc
-            for account in accounts:
-                aid = str(account.get("account_id") or "")
-                if aid:
-                    owned_account_ids.add(aid)
-        for requested in sp.account_ids or []:
-            if requested not in owned_account_ids:
-                raise AccountNotFound(
-                    f"Account '{requested}' not found in any of your mailboxes "
-                    "while validating virtual mailbox scope."
-                )
-        return
-
-    # scope_kind == "all" — nothing to cross-check.
 
 
 def create_virtual_mailbox(
@@ -175,13 +158,12 @@ def create_virtual_mailbox(
     payload: VirtualMailboxCreate,
 ) -> VirtualMailboxOut:
     """Insert a new virtual mailbox owned by *user_id*."""
-    _validate_scope_against_ownership(payload, user_id)
+    _validate_account_ids_owned_by_user(payload.account_ids, user_id)
     row_input: dict[str, Any] = {
         "virtual_mailbox_id": str(uuid.uuid4()),
         "owner_user_id": user_id,
         "display_name": payload.display_name.strip(),
-        "scope_kind": payload.scope_kind,
-        "scope_payload": payload.scope_payload.model_dump(exclude_none=True),
+        "account_ids": list(payload.account_ids),
         "filter_payload": payload.filter_payload.model_dump(exclude_none=True),
     }
     try:
@@ -232,12 +214,11 @@ def update_virtual_mailbox(
 ) -> VirtualMailboxOut:
     """Full-field replace of a virtual mailbox's definition."""
     _load_owned_virtual_mailbox(virtual_mailbox_id, user_id)
-    _validate_scope_against_ownership(payload, user_id)
+    _validate_account_ids_owned_by_user(payload.account_ids, user_id)
     row_input: dict[str, Any] = {
         "virtual_mailbox_id": virtual_mailbox_id,
         "display_name": payload.display_name.strip(),
-        "scope_kind": payload.scope_kind,
-        "scope_payload": payload.scope_payload.model_dump(exclude_none=True),
+        "account_ids": list(payload.account_ids),
         "filter_payload": payload.filter_payload.model_dump(exclude_none=True),
     }
     try:
@@ -293,92 +274,23 @@ def delete_virtual_mailbox(virtual_mailbox_id: str, user_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_scope_account_ids(
-    record: dict[str, Any],
+def _filter_account_ids_still_owned(
+    persisted: list[str],
     user_id: str,
 ) -> list[str]:
-    """Translate ``scope_kind`` + ``scope_payload`` into a list of account ids.
+    """Return only the ``account_ids`` from *persisted* that the user still
+    owns.
 
-    Always re-validates ownership at read time — the user might have
-    revoked a mailbox between create and now, and we must never expose
-    foreign emails through a stale virtual mailbox. Missing referenced
-    resources collapse to an empty result (the virtual mailbox stays
-    valid but the listing is empty) instead of raising — the user gets
-    a working but empty view, mirroring the "definition not collection"
-    contract.
+    The persisted list is a snapshot taken at create/update time; the
+    catalogue may have changed since (account disconnected, mailbox
+    deleted). Filtering on every read keeps the virtual mailbox alive
+    with the surviving subset instead of 404'ing — the "definition not
+    collection" contract.
     """
-    scope_kind = str(record.get("scope_kind") or "")
-    scope_payload = record.get("scope_payload") or {}
-
-    if scope_kind == "mailbox":
-        scope_mailbox_id = str(scope_payload.get("mailbox_id") or "")
-        if not scope_mailbox_id:
-            return []
-        try:
-            mailbox = mailbox_store.get(scope_mailbox_id)
-            if mailbox is None or str(mailbox.get("owner_user_id")) != str(user_id):
-                return []
-            accounts = account_store.list_by_mailbox(scope_mailbox_id)
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected scope=mailbox resolution error during virtual mailbox listing (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise VirtualMailboxListError(
-                "Failed to resolve scope=mailbox account ids for virtual mailbox listing."
-            ) from exc
-        return [str(a["account_id"]) for a in accounts]
-
-    if scope_kind == "all":
-        try:
-            user_mailboxes = mailbox_store.list_by_owner(user_id)
-            account_ids: list[str] = []
-            for mailbox in user_mailboxes:
-                mid = str(mailbox.get("mailbox_id") or "")
-                if not mid:
-                    continue
-                accounts = account_store.list_by_mailbox(mid)
-                account_ids.extend(str(a["account_id"]) for a in accounts)
-            return account_ids
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected scope=all resolution error during virtual mailbox listing (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise VirtualMailboxListError(
-                "Failed to resolve scope=all account ids for virtual mailbox listing."
-            ) from exc
-
-    if scope_kind == "accounts":
-        requested = [str(aid) for aid in (scope_payload.get("account_ids") or [])]
-        if not requested:
-            return []
-        try:
-            user_mailboxes = mailbox_store.list_by_owner(user_id)
-            allowed: set[str] = set()
-            for mailbox in user_mailboxes:
-                mid = str(mailbox.get("mailbox_id") or "")
-                if not mid:
-                    continue
-                accounts = account_store.list_by_mailbox(mid)
-                allowed.update(str(a["account_id"]) for a in accounts)
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected scope=accounts resolution error during virtual mailbox listing (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise VirtualMailboxListError(
-                "Failed to resolve scope=accounts account ids for virtual mailbox listing."
-            ) from exc
-        return [aid for aid in requested if aid in allowed]
-
-    return []
+    if not persisted:
+        return []
+    owned = _owned_account_ids(user_id)
+    return [aid for aid in persisted if aid in owned]
 
 
 def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
@@ -427,14 +339,13 @@ def _dedupe_rows_by_provider_message_id(
     The same Gmail / Outlook account can be connected as two distinct
     ``account_id`` rows under two different mailboxes — both syncs land
     the same provider message twice in ``email_metadata`` (PK is
-    ``(account_id, provider_message_id)``). For ``scope='all'`` and
-    ``scope='accounts'`` virtual mailboxes that aggregate across both
-    accounts, the listing surfaces each message twice. A virtual mailbox
-    is a "definition, not a collection" — collapsing the duplicates is a
-    presentation decision that lives here, not in the shared SQL query
-    (which is reused verbatim by regular box listings where the
-    duplication is not possible because each listing is scoped to a
-    single mailbox).
+    ``(account_id, provider_message_id)``). When a virtual mailbox
+    aggregates across both accounts, the listing surfaces each message
+    twice. A virtual mailbox is a "definition, not a collection" —
+    collapsing the duplicates is a presentation decision that lives
+    here, not in the shared SQL query (which is reused verbatim by
+    regular box listings where the duplication is not possible because
+    each listing is scoped to a single mailbox).
 
     Preference: pick the row whose ``to_email`` is a non-empty string
     (synced after migration 0031 with a real ``To`` header). Other rows
@@ -494,7 +405,8 @@ def list_emails_for_virtual_mailbox(
     """Return the filtered listing produced by a virtual mailbox."""
     record = _load_owned_virtual_mailbox(virtual_mailbox_id, user_id)
 
-    account_ids = _resolve_scope_account_ids(record, user_id)
+    persisted = [str(a) for a in (record.get("account_ids") or [])]
+    account_ids = _filter_account_ids_still_owned(persisted, user_id)
     if not account_ids:
         return []
 

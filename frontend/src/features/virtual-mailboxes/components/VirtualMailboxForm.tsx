@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 
 import type {
   AccountOut,
@@ -7,7 +8,6 @@ import type {
   VirtualMailboxFilterBox,
   VirtualMailboxFilterPayload,
   VirtualMailboxOut,
-  VirtualMailboxScopeKind,
 } from '../../../api/types/dto';
 
 type Props = {
@@ -23,7 +23,6 @@ type Props = {
 type FilterDraft = {
   box: VirtualMailboxFilterBox | '';
   from_email: string;
-  from_domain: string;
   subject_contains: string;
   is_read: '' | 'true' | 'false';
   is_favorite: '' | 'true' | 'false';
@@ -32,17 +31,10 @@ type FilterDraft = {
 const EMPTY_FILTER: FilterDraft = {
   box: '',
   from_email: '',
-  from_domain: '',
   subject_contains: '',
   is_read: '',
   is_favorite: '',
 };
-
-const SCOPE_OPTIONS: Array<{ value: VirtualMailboxScopeKind; label: string }> = [
-  { value: 'all', label: 'Todas las bandejas del usuario' },
-  { value: 'mailbox', label: 'Una bandeja concreta' },
-  { value: 'accounts', label: 'Una o varias cuentas seleccionadas' },
-];
 
 const BOX_OPTIONS: Array<{ value: VirtualMailboxFilterBox; label: string }> = [
   { value: 'ALL_MAIL', label: 'Bandeja unificada (sin trash/spam)' },
@@ -55,7 +47,6 @@ function pickFilter(filter: FilterDraft): VirtualMailboxFilterPayload {
   const out: VirtualMailboxFilterPayload = {};
   if (filter.box) out.box = filter.box;
   if (filter.from_email.trim()) out.from_email = filter.from_email.trim();
-  if (filter.from_domain.trim()) out.from_domain = filter.from_domain.trim();
   if (filter.subject_contains.trim()) out.subject_contains = filter.subject_contains.trim();
   if (filter.is_read !== '') out.is_read = filter.is_read === 'true';
   if (filter.is_favorite !== '') out.is_favorite = filter.is_favorite === 'true';
@@ -67,11 +58,14 @@ function readInitialFilter(raw: Record<string, unknown> | undefined): FilterDraf
   const result: FilterDraft = { ...EMPTY_FILTER };
   if (typeof raw.box === 'string') result.box = raw.box as VirtualMailboxFilterBox;
   if (typeof raw.from_email === 'string') result.from_email = raw.from_email;
-  if (typeof raw.from_domain === 'string') result.from_domain = raw.from_domain;
   if (typeof raw.subject_contains === 'string') result.subject_contains = raw.subject_contains;
   if (typeof raw.is_read === 'boolean') result.is_read = raw.is_read ? 'true' : 'false';
   if (typeof raw.is_favorite === 'boolean') result.is_favorite = raw.is_favorite ? 'true' : 'false';
   return result;
+}
+
+function describeAccount(account: AccountOut): string {
+  return account.email_address ?? account.display_label;
 }
 
 export default function VirtualMailboxForm({
@@ -84,15 +78,10 @@ export default function VirtualMailboxForm({
   onCancel,
 }: Props) {
   const [name, setName] = useState(initial?.display_name ?? '');
-  const [scopeKind, setScopeKind] = useState<VirtualMailboxScopeKind>(initial?.scope_kind ?? 'all');
-  const [scopeMailboxId, setScopeMailboxId] = useState<string>(() => {
-    const raw = initial?.scope_payload as Record<string, unknown> | undefined;
-    return typeof raw?.mailbox_id === 'string' ? raw.mailbox_id : '';
-  });
-  const [scopeAccountIds, setScopeAccountIds] = useState<string[]>(() => {
-    const raw = initial?.scope_payload as Record<string, unknown> | undefined;
-    return Array.isArray(raw?.account_ids) ? (raw.account_ids as unknown[]).map(String) : [];
-  });
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
+    () => initial?.account_ids ?? [],
+  );
+  const [expandedMailboxes, setExpandedMailboxes] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState<FilterDraft>(() =>
     readInitialFilter(initial?.filter_payload as Record<string, unknown> | undefined),
   );
@@ -108,15 +97,34 @@ export default function VirtualMailboxForm({
     return map;
   }, [accounts]);
 
+  const accountsById = useMemo(() => {
+    const map = new Map<string, AccountOut>();
+    for (const account of accounts) map.set(account.account_id, account);
+    return map;
+  }, [accounts]);
+
   const sortedMailboxes = useMemo(
     () => [...mailboxes].sort((a, b) => (a.display_name ?? '').localeCompare(b.display_name ?? '')),
     [mailboxes],
   );
 
-  const handleAccountToggle = (accountId: string) => {
-    setScopeAccountIds((prev) =>
-      prev.includes(accountId) ? prev.filter((id) => id !== accountId) : [...prev, accountId],
-    );
+  const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+
+  const handleToggleMailbox = (mailboxId: string) => {
+    setExpandedMailboxes((prev) => {
+      const next = new Set(prev);
+      if (next.has(mailboxId)) next.delete(mailboxId);
+      else next.add(mailboxId);
+      return next;
+    });
+  };
+
+  const handleAddAccount = (accountId: string) => {
+    setSelectedAccountIds((prev) => (prev.includes(accountId) ? prev : [...prev, accountId]));
+  };
+
+  const handleRemoveAccount = (accountId: string) => {
+    setSelectedAccountIds((prev) => prev.filter((id) => id !== accountId));
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -127,23 +135,13 @@ export default function VirtualMailboxForm({
       setSubmitError('Indica un nombre para la bandeja ficticia.');
       return;
     }
-    if (scopeKind === 'mailbox' && !scopeMailboxId) {
-      setSubmitError('Selecciona una bandeja real para el alcance.');
-      return;
-    }
-    if (scopeKind === 'accounts' && scopeAccountIds.length === 0) {
-      setSubmitError('Selecciona al menos una cuenta para el alcance.');
+    if (selectedAccountIds.length === 0) {
+      setSubmitError('Selecciona al menos una cuenta.');
       return;
     }
     const payload: VirtualMailboxCreate = {
       display_name: trimmedName,
-      scope_kind: scopeKind,
-      scope_payload:
-        scopeKind === 'mailbox'
-          ? { mailbox_id: scopeMailboxId }
-          : scopeKind === 'accounts'
-            ? { account_ids: scopeAccountIds }
-            : {},
+      account_ids: selectedAccountIds,
       filter_payload: pickFilter(filter),
     };
     try {
@@ -174,86 +172,117 @@ export default function VirtualMailboxForm({
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-[13px] font-semibold text-zinc-700">Alcance</legend>
-        <div className="flex flex-col gap-2">
-          {SCOPE_OPTIONS.map((option) => (
-            <label key={option.value} className="flex items-center gap-2 text-sm text-zinc-700">
-              <input
-                type="radio"
-                name="vmb-scope"
-                value={option.value}
-                checked={scopeKind === option.value}
-                onChange={() => setScopeKind(option.value)}
-              />
-              {option.label}
-            </label>
-          ))}
+        <legend className="text-[13px] font-semibold text-zinc-700">Cuentas</legend>
+        <p className="text-xs text-zinc-500">
+          Elige una o varias cuentas. Los desplegables agrupan tus cuentas por bandeja real solo
+          para localizarlas — la bandeja ficticia agrega los correos de las cuentas marcadas.
+        </p>
+
+        {/* Chips de cuentas seleccionadas */}
+        <div className="flex min-h-[36px] flex-wrap gap-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-2">
+          {selectedAccountIds.length === 0 ? (
+            <span className="text-xs text-zinc-400">No has añadido ninguna cuenta todavía.</span>
+          ) : (
+            selectedAccountIds.map((aid) => {
+              const account = accountsById.get(aid);
+              const label = account ? describeAccount(account) : aid;
+              const provider = account?.provider;
+              return (
+                <span
+                  key={aid}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs text-blue-800"
+                >
+                  <span className="truncate">{label}</span>
+                  {provider && <span className="text-blue-500">({provider})</span>}
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveAccount(aid)}
+                    aria-label={`Quitar ${label}`}
+                    className="grid h-4 w-4 place-items-center rounded-full text-blue-600 hover:bg-blue-200"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })
+          )}
         </div>
 
-        {scopeKind === 'mailbox' && (
-          <select
-            value={scopeMailboxId}
-            onChange={(e) => setScopeMailboxId(e.target.value)}
-            className="mt-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
-          >
-            <option value="" disabled>
-              Selecciona una bandeja…
-            </option>
-            {sortedMailboxes.map((m) => (
-              <option key={m.mailbox_id} value={m.mailbox_id}>
-                {m.display_name ?? m.mailbox_id}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {scopeKind === 'accounts' && (
-          <div className="mt-1 max-h-56 overflow-auto rounded-md border border-zinc-300 p-2 text-sm">
-            {sortedMailboxes.length === 0 ? (
-              <div className="px-2 py-3 text-xs text-zinc-500">
-                No tienes ninguna cuenta conectada todavía.
-              </div>
-            ) : (
-              sortedMailboxes.map((mailbox) => {
-                const accs = accountsByMailbox.get(mailbox.mailbox_id) ?? [];
-                if (accs.length === 0) return null;
-                return (
-                  <div key={mailbox.mailbox_id} className="mb-2 last:mb-0">
-                    <div className="px-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+        {/* Acordeón por bandeja real */}
+        <div className="mt-1 max-h-72 overflow-auto rounded-md border border-zinc-300 text-sm">
+          {sortedMailboxes.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-zinc-500">
+              No tienes ninguna bandeja conectada todavía.
+            </div>
+          ) : (
+            sortedMailboxes.map((mailbox) => {
+              const accs = accountsByMailbox.get(mailbox.mailbox_id) ?? [];
+              const expanded = expandedMailboxes.has(mailbox.mailbox_id);
+              return (
+                <div key={mailbox.mailbox_id} className="border-b border-zinc-100 last:border-b-0">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleMailbox(mailbox.mailbox_id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-zinc-50"
+                  >
+                    {expanded ? (
+                      <ChevronDown className="h-4 w-4 text-zinc-500" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-zinc-500" />
+                    )}
+                    <span className="font-medium text-zinc-800">
                       {mailbox.display_name ?? mailbox.mailbox_id}
+                    </span>
+                    <span className="text-xs text-zinc-400">
+                      ({accs.length} {accs.length === 1 ? 'cuenta' : 'cuentas'})
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className="flex flex-col">
+                      {accs.length === 0 ? (
+                        <div className="px-9 pb-2 text-xs text-zinc-400">
+                          Esta bandeja no tiene cuentas conectadas.
+                        </div>
+                      ) : (
+                        accs.map((account) => {
+                          const alreadySelected = selectedSet.has(account.account_id);
+                          return (
+                            <button
+                              key={account.account_id}
+                              type="button"
+                              onClick={() =>
+                                alreadySelected ? undefined : handleAddAccount(account.account_id)
+                              }
+                              disabled={alreadySelected}
+                              className="flex items-center gap-2 px-9 py-1.5 text-left hover:bg-zinc-50 disabled:opacity-60 disabled:hover:bg-transparent"
+                            >
+                              {alreadySelected ? (
+                                <span className="text-xs text-zinc-400">añadida</span>
+                              ) : (
+                                <Plus className="h-3.5 w-3.5 text-blue-600" />
+                              )}
+                              <span className="truncate text-sm text-zinc-700">
+                                {describeAccount(account)}
+                              </span>
+                              <span className="text-xs text-zinc-400">({account.provider})</span>
+                            </button>
+                          );
+                        })
+                      )}
                     </div>
-                    {accs.map((account) => {
-                      const checked = scopeAccountIds.includes(account.account_id);
-                      return (
-                        <label
-                          key={account.account_id}
-                          className="flex items-center gap-2 px-1 py-1 text-sm text-zinc-700"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => handleAccountToggle(account.account_id)}
-                          />
-                          <span className="truncate">
-                            {account.email_address ?? account.display_label}{' '}
-                            <span className="text-xs text-zinc-400">({account.provider})</span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </fieldset>
 
       <fieldset className="flex flex-col gap-3">
         <legend className="text-[13px] font-semibold text-zinc-700">Filtros</legend>
         <p className="text-xs text-zinc-500">
-          Si no rellenas ninguno, la bandeja muestra todo el alcance seleccionado (excluyendo
-          papelera y spam salvo que indiques lo contrario).
+          Si no rellenas ninguno, la bandeja muestra todos los correos de las cuentas seleccionadas
+          (excluyendo papelera y spam salvo que indiques lo contrario).
         </p>
 
         <label className="flex flex-col gap-1 text-sm">
@@ -284,17 +313,6 @@ export default function VirtualMailboxForm({
             value={filter.from_email}
             onChange={(e) => setFilter((prev) => ({ ...prev, from_email: e.target.value }))}
             placeholder="alguien@empresa.com"
-            className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-xs font-medium text-zinc-600">Dominio del remitente</span>
-          <input
-            type="text"
-            value={filter.from_domain}
-            onChange={(e) => setFilter((prev) => ({ ...prev, from_domain: e.target.value }))}
-            placeholder="empresa.com"
             className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
           />
         </label>

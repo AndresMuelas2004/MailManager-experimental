@@ -97,10 +97,11 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   const [failedAttachments, setFailedAttachments] = useState<FailedAttachmentDetail[]>([]);
   // Override for cross-mailbox Reply / Reply All / Forward: when the
   // composer opens on an email whose ``mailbox_id`` differs from the
-  // route's ``mailboxId`` (virtual mailbox with ``scope_kind='all'`` /
-  // ``'accounts'``), every backend call from the composer must target
-  // the email's real mailbox, not the URL's. Set in ``openForReplyKind``
-  // before the first fetch and cleared by ``resetAll``.
+  // route's ``mailboxId`` (virtual mailbox aggregating accounts from
+  // several real mailboxes), every backend call from the composer
+  // must target the email's real mailbox, not the URL's. Set in
+  // ``openForReplyKind`` before the first fetch and cleared by
+  // ``resetAll``.
   const [composerMailboxOverride, setComposerMailboxOverride] = useState<string | null>(null);
   const effectiveMailboxId = composerMailboxOverride ?? mailboxId;
   const form = useComposerForm();
@@ -211,10 +212,9 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       persistence.setError(null);
       // The email's real mailbox can diverge from the URL's ``mailboxId``
       // when the listing is a virtual mailbox aggregating accounts from
-      // several real mailboxes (``scope_kind='all'`` / ``'accounts'``).
-      // Every backend call below — and every subsequent composer op
-      // (send / save / delete / attach) — must target the email's real
-      // mailbox via ``effectiveMailboxId``.
+      // several real mailboxes. Every backend call below — and every
+      // subsequent composer op (send / save / delete / attach) — must
+      // target the email's real mailbox via ``effectiveMailboxId``.
       const targetMailboxId = email.mailbox_id;
       setComposerMailboxOverride(targetMailboxId);
       try {

@@ -4,7 +4,7 @@ import { listAccounts } from '../../../api/endpoints/accounts';
 import { listMailboxes } from '../../../api/endpoints/mailboxes';
 import type { AccountOut, MailboxOut } from '../../../api/types/dto';
 
-type UseScopePickerDataReturn = {
+type UseAccountPickerDataReturn = {
   mailboxes: MailboxOut[];
   accounts: AccountOut[];
   loading: boolean;
@@ -12,11 +12,10 @@ type UseScopePickerDataReturn = {
 
 /**
  * Loads the full mailbox/account catalogue for the virtual-mailbox
- * scope picker. The form needs every mailbox + every account at once
- * because ``scope_kind === 'accounts'`` lets the user pick any account
- * across any mailbox.
+ * account picker. The form needs every mailbox + every account at once
+ * so the user can pick any account across any mailbox.
  */
-export default function useScopePickerData(): UseScopePickerDataReturn {
+export default function useAccountPickerData(): UseAccountPickerDataReturn {
   const mailboxesQuery = useQuery({
     queryKey: ['mailboxes'],
     queryFn: () => listMailboxes(),

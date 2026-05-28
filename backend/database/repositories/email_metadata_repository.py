@@ -43,16 +43,6 @@ def _build_from_email_clause(value: Any) -> tuple[str, dict[str, Any]]:
     )
 
 
-def _build_from_domain_clause(value: Any) -> tuple[str, dict[str, Any]]:
-    # Suffix match against ``from_email`` — pattern is ``%@<domain>`` after
-    # escaping LIKE metacharacters in the user-supplied domain.
-    escaped = _escape_like(str(value))
-    return (
-        "lower(coalesce(from_email, '')) LIKE lower(%(extra_from_domain)s)",
-        {"extra_from_domain": f"%@{escaped}"},
-    )
-
-
 def _build_subject_contains_clause(value: Any) -> tuple[str, dict[str, Any]]:
     escaped = _escape_like(str(value))
     return (
@@ -66,7 +56,6 @@ _EXTRA_FILTER_BUILDERS: dict[str, Callable[[Any], tuple[str, dict[str, Any]]]] =
     "is_read": _build_is_read_clause,
     "is_favorite": _build_is_favorite_clause,
     "from_email": _build_from_email_clause,
-    "from_domain": _build_from_domain_clause,
     "subject_contains": _build_subject_contains_clause,
 }
 

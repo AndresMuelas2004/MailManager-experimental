@@ -5,6 +5,9 @@ Covers CRUD and the filtered email listing. Provider clients are NOT
 invoked by this surface, so the standard ``test_client`` fixture (which
 wires fake clients into the manager) is reused only to inherit the
 common monkeypatches; the tests do not exercise the manager itself.
+
+A virtual mailbox is a flat list of ``account_ids`` plus a filter (no
+``scope_kind`` indirection — collapsed by migration 0032).
 """
 
 from __future__ import annotations
@@ -22,49 +25,93 @@ from tests.integration.conftest import (
 VMB_URL = "/virtual-mailboxes"
 
 
+def _reparent_seeded_user(isolated_db, owner_user_id: str) -> None:
+    """Make seeded gmail+outlook mailboxes owned by ``owner_user_id`` so the
+    standard ``test_client`` (authenticated as TEST_USER_ID) can see them."""
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE mailboxes SET owner_user_id = %s "
+            "WHERE mailbox_id IN (%s, %s)",
+            (owner_user_id, _SEEDED_GMAIL_MAILBOX, _SEEDED_OUTLOOK_MAILBOX),
+        )
+
+
+# ---------------------------------------------------------------------------
+# CRUD — happy path and validation
+# ---------------------------------------------------------------------------
+
+
 def test_list_empty_returns_empty_array(test_client):
     resp = test_client.get(VMB_URL)
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_create_scope_all_happy_path(test_client):
+def test_create_happy_path(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     payload = {
         "display_name": "Newsletters",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"subject_contains": "newsletter"},
     }
     resp = test_client.post(VMB_URL, json=payload)
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["display_name"] == "Newsletters"
-    assert body["scope_kind"] == "all"
+    assert body["account_ids"] == [_SEEDED_GMAIL_ACCOUNT]
     assert body["filter_payload"] == {"subject_contains": "newsletter"}
     assert "virtual_mailbox_id" in body
 
 
-def test_create_scope_mailbox_requires_mailbox_id(test_client):
+def test_create_rejects_empty_account_ids(test_client):
+    """A virtual mailbox without any account is meaningless. The Pydantic
+    ``min_length=1`` on the ``account_ids`` field surfaces this at the
+    schema boundary so the API returns 422 instead of silently saving an
+    unusable row."""
     resp = test_client.post(VMB_URL, json={
-        "display_name": "Bad",
-        "scope_kind": "mailbox",
-        "scope_payload": {},
+        "display_name": "Empty",
+        "account_ids": [],
         "filter_payload": {},
     })
-    assert resp.status_code == 422  # Pydantic validation error
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(d.get("loc", [])[-1] == "account_ids" for d in detail)
 
 
-def test_create_rejects_unknown_filter_payload_key(test_client):
+def test_create_rejects_extra_top_level_key(test_client):
+    """``VirtualMailboxCreate`` carries ``extra="forbid"`` so a typo'd
+    top-level key (e.g. ``accountIds`` in camelCase) collapses to 422
+    instead of being silently dropped and persisting an empty list."""
+    resp = test_client.post(VMB_URL, json={
+        "display_name": "Bug-extra-top-key",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {},
+        "accountIds": ["noise"],
+    })
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(
+        d.get("type") == "extra_forbidden"
+        and d.get("loc", [])[-1] == "accountIds"
+        for d in detail
+    )
+
+
+def test_create_rejects_unknown_filter_payload_key(test_client, isolated_db):
     """``filter_payload`` is a closed whitelist (repository_guide.md).
 
     Unknown keys must surface as 422 at the schema boundary, not be
     silently discarded by the repository's ``_EXTRA_FILTER_BUILDERS``
     lookup — otherwise typos hide from the user.
     """
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     resp = test_client.post(VMB_URL, json={
         "display_name": "Unknown filter",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"unknown_filter": "x"},
     })
     assert resp.status_code == 422
@@ -76,17 +123,42 @@ def test_create_rejects_unknown_filter_payload_key(test_client):
     )
 
 
-def test_create_rejects_whitespace_only_display_name(test_client):
+def test_create_rejects_from_domain_filter(test_client, isolated_db):
+    """``from_domain`` was removed in the same change that collapsed
+    ``scope_kind``. The filter never made sense for an account-scoped
+    listing once exact ``from_email`` covered the actual use case.
+    Sending it now must collapse to 422 to surface the deprecation
+    instead of silently ignoring it."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    resp = test_client.post(VMB_URL, json={
+        "display_name": "Old domain filter",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"from_domain": "example.com"},
+    })
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(
+        d.get("type") == "extra_forbidden"
+        and d.get("loc", [])[-1] == "from_domain"
+        for d in detail
+    )
+
+
+def test_create_rejects_whitespace_only_display_name(test_client, isolated_db):
     """``display_name`` collapses to '' after strip ⇒ violates min_length=1.
 
     Without the schema-side strip the row would be persisted with an
     empty name (length 3 passes ``min_length=1``) and the service's
     own ``.strip()`` would silently turn it into ``''``.
     """
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     resp = test_client.post(VMB_URL, json={
         "display_name": "   ",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     assert resp.status_code == 422
@@ -98,30 +170,33 @@ def test_create_rejects_whitespace_only_display_name(test_client):
     )
 
 
-def test_create_strips_padded_display_name(test_client):
+def test_create_strips_padded_display_name(test_client, isolated_db):
     """Leading / trailing whitespace is stripped before persisting."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     resp = test_client.post(VMB_URL, json={
         "display_name": "   Padded   ",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     assert resp.status_code == 201
     assert resp.json()["display_name"] == "Padded"
 
 
-def test_update_rejects_unknown_filter_payload_key(test_client):
+def test_update_rejects_unknown_filter_payload_key(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     create = test_client.post(VMB_URL, json={
         "display_name": "Base",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.patch(f"{VMB_URL}/{vmb_id}", json={
         "display_name": "Base",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"from_email": "a@b.com", "bogus": 1},
     })
     assert resp.status_code == 422
@@ -133,40 +208,39 @@ def test_update_rejects_unknown_filter_payload_key(test_client):
     )
 
 
-def test_create_scope_accounts_rejects_unowned_account(
-    test_client, setup_mailbox_and_account,
-):
+def test_create_rejects_unowned_account(test_client, setup_mailbox_and_account):
     # Create a mailbox/account owned by the test user.
     _mailbox, account_id = setup_mailbox_and_account(test_client, "gmail")
     # The seeded gmail account belongs to a different user (migration 0010).
     resp = test_client.post(VMB_URL, json={
         "display_name": "Mix",
-        "scope_kind": "accounts",
-        "scope_payload": {"account_ids": [account_id, _SEEDED_GMAIL_ACCOUNT]},
+        "account_ids": [account_id, _SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "account_not_found"
 
 
-def test_update_replaces_all_fields(test_client):
+def test_update_replaces_all_fields(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     create = test_client.post(VMB_URL, json={
         "display_name": "Original",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
 
     resp = test_client.patch(f"{VMB_URL}/{vmb_id}", json={
         "display_name": "Renamed",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT],
         "filter_payload": {"is_favorite": True},
     })
     assert resp.status_code == 200
     body = resp.json()
     assert body["display_name"] == "Renamed"
+    assert set(body["account_ids"]) == {_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT}
     assert body["filter_payload"] == {"is_favorite": True}
 
 
@@ -180,9 +254,9 @@ def test_get_foreign_record_collapses_to_404(test_client, isolated_db):
             """
             INSERT INTO virtual_mailboxes
                 (virtual_mailbox_id, owner_user_id, display_name,
-                 scope_kind, scope_payload, filter_payload)
+                 scope_payload, filter_payload)
             VALUES (%s, '11111111-1111-4000-a000-111111111111',
-                    'foreign', 'all', '{}'::jsonb, '{}'::jsonb)
+                    'foreign', '{"account_ids":[]}'::jsonb, '{}'::jsonb)
             """,
             (other_vmb_id,),
         )
@@ -191,11 +265,13 @@ def test_get_foreign_record_collapses_to_404(test_client, isolated_db):
     assert resp.json()["error"]["code"] == "virtual_mailbox_not_found"
 
 
-def test_delete_removes_record(test_client):
+def test_delete_removes_record(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     create = test_client.post(VMB_URL, json={
         "display_name": "X",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -210,18 +286,7 @@ def test_delete_removes_record(test_client):
 # ---------------------------------------------------------------------------
 
 
-def _reparent_seeded_user(isolated_db, owner_user_id: str) -> None:
-    """Make seeded gmail+outlook mailboxes owned by ``owner_user_id`` so the
-    standard ``test_client`` (authenticated as TEST_USER_ID) can see them."""
-    with isolated_db.cursor() as cur:
-        cur.execute(
-            "UPDATE mailboxes SET owner_user_id = %s "
-            "WHERE mailbox_id IN (%s, %s)",
-            (owner_user_id, _SEEDED_GMAIL_MAILBOX, _SEEDED_OUTLOOK_MAILBOX),
-        )
-
-
-def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
+def test_emails_for_virtual_mailbox_aggregates_every_listed_account(
     test_client, isolated_db,
 ):
     from tests.integration.conftest import TEST_USER_ID
@@ -229,8 +294,7 @@ def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Everything",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -238,8 +302,7 @@ def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
     rows = resp.json()
-    # The seeded data has plenty of rows across boxes; the default
-    # filter (no explicit box, no box_not_in) excludes TRASH/SPAM.
+    # Default filter (no explicit box, no box_not_in) excludes TRASH/SPAM.
     boxes = {row["box"] for row in rows}
     assert "TRASH" not in boxes
     assert "SPAM" not in boxes
@@ -249,15 +312,12 @@ def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
     assert _SEEDED_OUTLOOK_ACCOUNT in account_ids
     # Each row carries its real mailbox_id (derived from the JOIN on
     # ``accounts``). The frontend uses it to open / favourite / move
-    # the right email — when ``scope='all'`` aggregates emails from
-    # several real mailboxes, the route's ``mailbox_id`` is not enough
-    # and using it would 404 with ``account_not_found`` on the open
-    # path.
+    # the right email — when aggregating across mailboxes, using the
+    # route's ``mailbox_id`` would 404 with ``account_not_found`` on
+    # the open path.
     mailbox_ids = {row["mailbox_id"] for row in rows}
     assert _SEEDED_GMAIL_MAILBOX in mailbox_ids
     assert _SEEDED_OUTLOOK_MAILBOX in mailbox_ids
-    # And each row's mailbox_id matches its account_id mapping (no
-    # cross-pollination from the join going wrong).
     for row in rows:
         if row["account_id"] == _SEEDED_GMAIL_ACCOUNT:
             assert row["mailbox_id"] == _SEEDED_GMAIL_MAILBOX
@@ -265,15 +325,14 @@ def test_emails_for_virtual_mailbox_with_scope_all_aggregates_every_account(
             assert row["mailbox_id"] == _SEEDED_OUTLOOK_MAILBOX
 
 
-def test_emails_for_virtual_mailbox_filter_by_from_domain(test_client, isolated_db):
+def test_emails_for_virtual_mailbox_filter_by_from_email(test_client, isolated_db):
     from tests.integration.conftest import TEST_USER_ID
     _reparent_seeded_user(isolated_db, TEST_USER_ID)
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Devops alerts",
-        "scope_kind": "all",
-        "scope_payload": {},
-        "filter_payload": {"from_domain": "devops.net"},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"from_email": "jack@devops.net"},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
 
@@ -281,7 +340,7 @@ def test_emails_for_virtual_mailbox_filter_by_from_domain(test_client, isolated_
     assert resp.status_code == 200
     rows = resp.json()
     assert rows  # seeded gmail data contains @devops.net entries
-    assert all(row["from_email"].lower().endswith("@devops.net") for row in rows)
+    assert all(row["from_email"].lower() == "jack@devops.net" for row in rows)
 
 
 def test_emails_for_virtual_mailbox_filter_by_is_favorite(test_client, isolated_db):
@@ -296,8 +355,7 @@ def test_emails_for_virtual_mailbox_filter_by_is_favorite(test_client, isolated_
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Favs",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"is_favorite": True},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -314,8 +372,7 @@ def test_emails_for_virtual_mailbox_explicit_box_overrides_default(test_client, 
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Trash view",
-        "scope_kind": "mailbox",
-        "scope_payload": {"mailbox_id": _SEEDED_GMAIL_MAILBOX},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"box": "TRASH"},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -326,7 +383,7 @@ def test_emails_for_virtual_mailbox_explicit_box_overrides_default(test_client, 
     assert all(row["box"] == "TRASH" for row in rows)
 
 
-def test_emails_for_virtual_mailbox_scope_accounts_filters_to_selected_subset(
+def test_emails_for_virtual_mailbox_filters_to_listed_account_subset(
     test_client, isolated_db,
 ):
     from tests.integration.conftest import TEST_USER_ID
@@ -334,8 +391,7 @@ def test_emails_for_virtual_mailbox_scope_accounts_filters_to_selected_subset(
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Outlook only",
-        "scope_kind": "accounts",
-        "scope_payload": {"account_ids": [_SEEDED_OUTLOOK_ACCOUNT]},
+        "account_ids": [_SEEDED_OUTLOOK_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -354,8 +410,7 @@ def test_emails_for_virtual_mailbox_search_query_combines_with_filter(
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Sprint planning",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -367,21 +422,141 @@ def test_emails_for_virtual_mailbox_search_query_combines_with_filter(
     assert all("sprint" in (row["subject"] or "").lower() for row in rows)
 
 
+def test_filter_by_box_not_in_excludes_only_listed_box(test_client, isolated_db):
+    """``box_not_in=['SPAM']`` excludes SPAM but keeps TRASH (and
+    ALL_MAIL, SENT). The previous default-exclusion branch ate both —
+    only the explicit branch honours per-box opt-out."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Exclude only SPAM",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box_not_in": ["SPAM"]},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    boxes = {r["box"] for r in rows}
+    assert "SPAM" not in boxes
+    assert "TRASH" in boxes
+    assert "ALL_MAIL" in boxes
+
+
+def test_filter_by_empty_box_not_in_includes_trash_and_spam(test_client, isolated_db):
+    """``box_not_in=[]`` means "exclude nothing" — TRASH and SPAM must
+    surface. A refactor that switches the guard to a truthiness check
+    (``if box_not_in:``) would collapse the empty list to the default
+    exclusion and reverse the caller's intent."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Include everything",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box_not_in": []},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    boxes = {r["box"] for r in rows}
+    assert "TRASH" in boxes
+    assert "SPAM" in boxes
+
+
+def test_listing_dedups_same_provider_message_id_across_accounts(test_client, isolated_db):
+    """Two ``account_id``s sharing the same Gmail / Outlook OAuth produce
+    two ``email_metadata`` rows with the same ``provider_message_id``
+    (composite PK is ``(provider_message_id, account_id)``). The virtual
+    mailbox listing must collapse them via the scoring tuple inside
+    ``_dedupe_rows_by_provider_message_id`` — the unit test covers the
+    scoring, this test covers the wiring (SQL really returns both rows,
+    service really runs the helper, response really comes out single)."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('shared-dup-001', %s, NULL, 's@x.com', 'S',
+                    'shared dup test', '2026-05-10T10:00:00+00:00',
+                    FALSE, 'ALL_MAIL', 'real@x.com', 'Real')
+            """,
+            (_SEEDED_GMAIL_ACCOUNT,),
+        )
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('shared-dup-001', %s, NULL, 's@x.com', 'S',
+                    'shared dup test', '2026-05-10T09:00:00+00:00',
+                    FALSE, 'ALL_MAIL', '', '')
+            """,
+            (_SEEDED_OUTLOOK_ACCOUNT,),
+        )
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Dedup test",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT],
+        "filter_payload": {"subject_contains": "shared dup test"},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+
+    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    dup_rows = [r for r in rows if r["provider_message_id"] == "shared-dup-001"]
+    assert len(dup_rows) == 1, "Dedup must collapse the two rows into one"
+    assert dup_rows[0]["to_email"] == "real@x.com"
+    assert dup_rows[0]["account_id"] == _SEEDED_GMAIL_ACCOUNT
+
+
+def test_listing_drops_account_ids_no_longer_owned(test_client, isolated_db):
+    """The vmbox persisted two account_ids but the user no longer owns
+    one of them (the underlying mailbox was reparented to another user).
+    The listing must keep working with only the surviving subset — no
+    404, no 500, no leaked rows from the foreign account."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Mixed",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT, _SEEDED_OUTLOOK_ACCOUNT],
+        "filter_payload": {},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+
+    # Reparent the Outlook mailbox to a different user — the Outlook
+    # account is no longer owned by TEST_USER_ID.
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE mailboxes SET owner_user_id = %s WHERE mailbox_id = %s",
+            ("11111111-1111-4000-a000-111111111111", _SEEDED_OUTLOOK_MAILBOX),
+        )
+
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows
+    assert all(row["account_id"] == _SEEDED_GMAIL_ACCOUNT for row in rows)
+
+
 # ---------------------------------------------------------------------------
 # Filter payload — empty-string criteria are 422 (not silent "match all")
 # ---------------------------------------------------------------------------
 
 
-def test_create_rejects_empty_subject_contains(test_client):
+def test_create_rejects_empty_subject_contains(test_client, isolated_db):
     """``subject_contains=""`` used to produce ``ILIKE '%%'`` matching every
     row, turning "filter by nothing" into a silent full-inbox dump
     indistinguishable from "no filter at all". ``min_length=1`` now
     rejects it at the schema boundary so the user gets explicit feedback.
     """
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     resp = test_client.post(VMB_URL, json={
         "display_name": "Bug-empty-subject",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"subject_contains": ""},
     })
     assert resp.status_code == 422
@@ -393,11 +568,13 @@ def test_create_rejects_empty_subject_contains(test_client):
     )
 
 
-def test_create_rejects_empty_from_email(test_client):
+def test_create_rejects_empty_from_email(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     resp = test_client.post(VMB_URL, json={
         "display_name": "Bug-empty-from-email",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"from_email": ""},
     })
     assert resp.status_code == 422
@@ -409,60 +586,42 @@ def test_create_rejects_empty_from_email(test_client):
     )
 
 
-def test_create_rejects_empty_from_domain(test_client):
-    resp = test_client.post(VMB_URL, json={
-        "display_name": "Bug-empty-from-domain",
-        "scope_kind": "all",
-        "scope_payload": {},
-        "filter_payload": {"from_domain": ""},
-    })
-    assert resp.status_code == 422
-    detail = resp.json()["detail"]
-    assert any(
-        d.get("type") == "string_too_short"
-        and d.get("loc", [])[-1] == "from_domain"
-        for d in detail
-    )
+def test_update_rejects_empty_subject_contains(test_client, isolated_db):
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
 
-
-def test_create_rejects_unknown_scope_payload_key(test_client):
-    """``scope_payload`` was previously open-shape — Pydantic dropped
-    unknown keys silently. That hid typos (e.g. ``accountIds`` camelCase
-    vs the real ``account_ids``) and the user got a "valid" vmbox that
-    returned 0 rows because the real scope key was never set. The fix
-    makes ``VirtualMailboxScopePayload`` carry ``extra='forbid'``, the
-    same closed-whitelist contract that ``filter_payload`` already had.
-    """
-    resp = test_client.post(VMB_URL, json={
-        "display_name": "Bug-extra-scope-key",
-        "scope_kind": "all",
-        "scope_payload": {"extra_unknown_key": "noise"},
-        "filter_payload": {},
-    })
-    assert resp.status_code == 422
-    detail = resp.json()["detail"]
-    assert any(
-        d.get("type") == "extra_forbidden"
-        and d.get("loc", [])[-1] == "extra_unknown_key"
-        for d in detail
-    )
-
-
-def test_update_rejects_empty_subject_contains(test_client):
     create = test_client.post(VMB_URL, json={
         "display_name": "Has filter",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"subject_contains": "sueldos"},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.patch(f"{VMB_URL}/{vmb_id}", json={
         "display_name": "Has filter",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"subject_contains": ""},
     })
     assert resp.status_code == 422
+
+
+def test_create_rejects_box_and_box_not_in_together(test_client, isolated_db):
+    """``VirtualMailboxFilterPayload._validate_box_exclusivity`` rejects
+    payloads that set both ``box`` and a non-empty ``box_not_in``. Without
+    this guard the repository would emit two ``AND box = X`` predicates
+    simultaneously and silently return zero rows — a perpetually-empty
+    bandeja indistinguishable from "no matches"."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    resp = test_client.post(VMB_URL, json={
+        "display_name": "Mutex test",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box": "SENT", "box_not_in": ["TRASH"]},
+    })
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    messages = " ".join(d.get("msg", "") for d in detail)
+    assert "box" in messages and "box_not_in" in messages
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +629,7 @@ def test_update_rejects_empty_subject_contains(test_client):
 # ---------------------------------------------------------------------------
 
 
-def test_patch_after_delete_returns_404_not_500(test_client):
+def test_patch_after_delete_returns_404_not_500(test_client, isolated_db):
     """The vmbox previously surfaced this race as a 500 because the repo
     raised ``QueryError("Virtual mailbox row to update not found.")`` which
     fell through to the generic ``VirtualMailboxOperationError`` handler
@@ -478,10 +637,12 @@ def test_patch_after_delete_returns_404_not_500(test_client):
     service translate that to ``VirtualMailboxNotFound`` (404), keeping
     the contract aligned with GET/DELETE.
     """
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     create = test_client.post(VMB_URL, json={
         "display_name": "Race target",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -490,8 +651,7 @@ def test_patch_after_delete_returns_404_not_500(test_client):
 
     resp = test_client.patch(f"{VMB_URL}/{vmb_id}", json={
         "display_name": "Should not land",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     assert resp.status_code == 404
@@ -534,8 +694,7 @@ def test_pagination_is_deterministic_with_timestamp_ties(
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Tie test",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {"subject_contains": "tie subject"},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
@@ -558,13 +717,15 @@ def test_pagination_is_deterministic_with_timestamp_ties(
     assert {f"qa_tie_{i}" for i in range(4)}.issubset({pair[0] for pair in union})
 
 
-def test_delete_after_delete_returns_404_not_silent_200(test_client):
+def test_delete_after_delete_returns_404_not_silent_200(test_client, isolated_db):
     """A second DELETE must not silently report success — two concurrent
     deletes both replying 200 would hide the conflict from the caller."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
     create = test_client.post(VMB_URL, json={
         "display_name": "Double delete",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
         "filter_payload": {},
     })
     vmb_id = create.json()["virtual_mailbox_id"]

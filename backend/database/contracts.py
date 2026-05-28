@@ -163,8 +163,7 @@ class EmailMetadataStore(ABC):
         ``extra_filters``: optional dict with keys taken from a fixed
         whitelist (see the repository). Today supported: ``is_read``
         (bool), ``is_favorite`` (bool), ``from_email`` (str, exact
-        match, case-insensitive), ``from_domain`` (str, suffix match
-        on ``from_email``), ``subject_contains`` (str, substring).
+        match, case-insensitive), ``subject_contains`` (str, substring).
         Unknown keys are ignored — they cannot inject SQL.
         """
         raise NotImplementedError

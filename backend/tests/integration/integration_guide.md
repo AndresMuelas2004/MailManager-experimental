@@ -67,6 +67,14 @@ Without the `finally`, a test failure leaves the override removed and poisons ev
 
 `test_drafts.py::_insert_draft` accepts an optional `created_at` ISO string. This parameter is essential for any test that asserts a specific `ORDER BY created_at DESC` result: PostgreSQL's `now()` returns the **same value for every statement inside a single transaction**, and the isolated-db fixture wraps each test in one transaction. Without explicit timestamps, rows inserted back-to-back share identical `created_at`, and the ordering becomes non-deterministic.
 
+### Trap — virtual mailbox tests must reparent the seeded mailboxes to `TEST_USER_ID`
+
+Migration `0010` seeds the Gmail and Outlook mailboxes under `SEEDED_USER_ID`, not the per-test `TEST_USER_ID`. Any test that creates a virtual mailbox referencing `SEEDED_GMAIL_ACCOUNT_ID` or `SEEDED_OUTLOOK_ACCOUNT_ID` must first call `_reparent_seeded_user(isolated_db, TEST_USER_ID)` (defined at the top of `test_virtual_mailboxes.py`). Without it `POST /virtual-mailboxes` returns 404 `account_not_found` and the failure gives no indication that an ownership reparenting step is missing. Unique to vmb tests — drafts / emails / attachments tests either own their seeds through `TEST_USER_ID` or create data on the fly.
+
+### Trap — raw SQL inserts into `virtual_mailboxes` must populate `scope_payload`
+
+Migration `0032` dropped `scope_kind` from the API contract but **kept** `scope_payload` as a `NOT NULL` column on the table (renaming it would have broken too many in-flight migrations). Tests that bypass the router to stage a `virtual_mailboxes` row — ownership tests against a foreign record, race-condition setups, etc. — must include `scope_payload` with at least `'{"account_ids":[]}'::jsonb`. Omitting it fails with a constraint violation whose message does not hint at the contract / schema divergence.
+
 ## GET Endpoint Testing Rules (mandatory)
 
 GET endpoints that read exclusively from the database (no provider calls) are covered by integration tests with the same fidelity as E2E. GETs with external dependencies (e.g. cache-aside with provider fallback) need their own strategy documented per-endpoint.
