@@ -28,8 +28,10 @@ from api.errors.exceptions import (
     SpamRestoreError,
     TrashOperationError,
 )
-from core.email import CoreError
-from core.email.helpers import (
+from core.email import (
+    CoreError,
+    EmailManager,
+    SyncResult,
     build_in_reply_to_and_references,
     build_quoted_body,
     build_reply_subject,
@@ -57,8 +59,6 @@ from api.schemas.email import (
     TrashActionRequest,
     TrashActionResult,
 )
-from core.email.email_client import SyncResult
-from core.email.email_manager import EmailManager
 from api.schemas.attachment import AttachmentMetadataOut
 from api.services.services_helpers import (
     build_manager_for_accounts,
@@ -79,6 +79,7 @@ from api.services.services_helpers import (
     recompute_has_attachments,
     restore_from_trash_batch,
     restore_from_trash_discovered_batch,
+    row_to_email_metadata_out,
     sanitize_email_html,
     translate_core_error,
     translate_database_error,
@@ -722,31 +723,6 @@ def _execute_spam_operation(
         raise fallback_error(f"Failed to execute {operation_label}.") from exc
 
 
-def _row_to_email_metadata_out(row: dict[str, Any]) -> EmailMetadataOut:
-    """Map an ``email_metadata`` row dict into the API response model.
-
-    Centralised so the regular box listing AND the virtual-mailbox
-    listing always project the same fields (including ``is_favorite``
-    and ``has_attachments``).
-    """
-    return EmailMetadataOut(
-        provider_message_id=row["provider_message_id"],
-        account_id=str(row["account_id"]),
-        mailbox_id=str(row["mailbox_id"]),
-        thread_id=row.get("thread_id"),
-        from_email=row["from_email"],
-        from_name=row.get("from_name"),
-        to_email=row.get("to_email") or None,
-        to_name=row.get("to_name") or None,
-        subject=row.get("subject"),
-        received_at=row["received_at"],
-        is_read=row["is_read"],
-        box=row["box"],
-        has_attachments=bool(row.get("has_attachments", False)),
-        is_favorite=bool(row.get("is_favorite", False)),
-    )
-
-
 def list_emails(
     mailbox_id: str,
     box: str,
@@ -834,7 +810,7 @@ def list_emails(
             "Failed to list email metadata for filtered listing."
         ) from exc
 
-    return [_row_to_email_metadata_out(row) for row in rows]
+    return [row_to_email_metadata_out(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -65,8 +65,8 @@ from core.email import (
     EmailAttachmentNotFound,
     EmailAttachmentSendFailed,
     is_blocked_extension,
+    sanitize_filename,
 )
-from core.email.helpers import sanitize_filename
 from database import (
     account_store,
     draft_attachment_store,

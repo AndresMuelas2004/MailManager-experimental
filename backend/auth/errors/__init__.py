@@ -2,6 +2,8 @@
 Auth error hierarchy re-exports.
 """
 
+from __future__ import annotations
+
 from auth.errors.errors import (
     AuthError,
     AuthSettingsError,

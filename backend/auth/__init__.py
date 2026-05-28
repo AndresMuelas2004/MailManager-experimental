@@ -2,6 +2,8 @@
 Auth package public surface.
 """
 
+from __future__ import annotations
+
 from auth.errors import (
     AuthError,
     AuthSettingsError,

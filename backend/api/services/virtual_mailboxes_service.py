@@ -40,9 +40,9 @@ from api.schemas.virtual_mailbox import (
     VirtualMailboxOut,
     VirtualMailboxUpdate,
 )
-from api.services.emails_service import _row_to_email_metadata_out
 from api.services.services_helpers import (
     parse_search_tokens,
+    row_to_email_metadata_out,
     translate_database_error,
 )
 from database import (
@@ -519,4 +519,4 @@ def list_emails_for_virtual_mailbox(
         ) from exc
 
     rows = _dedupe_rows_by_provider_message_id(rows)
-    return [_row_to_email_metadata_out(row) for row in rows]
+    return [row_to_email_metadata_out(row) for row in rows]

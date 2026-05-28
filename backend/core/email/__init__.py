@@ -2,6 +2,8 @@
 Core email package public surface.
 """
 
+from __future__ import annotations
+
 from core.email.blocked_extensions import BLOCKED_EXTENSIONS, is_blocked_extension
 from core.email.email_client import (
     AttachmentBinary,
@@ -44,6 +46,15 @@ from core.email.errors import (
     EmailRefreshFailedError,
     EmailReplyContextFetchError,
 )
+from core.email.helpers import (
+    build_in_reply_to_and_references,
+    build_quoted_body,
+    build_reply_subject,
+    compute_reply_recipients,
+    format_content_disposition,
+    sanitize_filename,
+    validate_reply_threading_coherence,
+)
 
 __all__ = [
     "AttachmentBinary",
@@ -84,5 +95,12 @@ __all__ = [
     "EmailReplyContextFetchError",
     "ReplyContext",
     "SyncResult",
+    "build_in_reply_to_and_references",
+    "build_quoted_body",
+    "build_reply_subject",
+    "compute_reply_recipients",
+    "format_content_disposition",
     "is_blocked_extension",
+    "sanitize_filename",
+    "validate_reply_threading_coherence",
 ]

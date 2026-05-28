@@ -11,7 +11,7 @@ from starlette.background import BackgroundTask
 from api.routers.routers_helpers import require_session
 from api.schemas.attachment import PurgeResult
 from api.services import attachments_service
-from core.email.helpers import format_content_disposition
+from api.services.services_helpers import format_content_disposition
 
 
 # Two routers share this module:
