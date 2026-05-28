@@ -236,3 +236,151 @@ def test_sync_favorites_full_replace_for_account(
         for mid in ("m1", "m2", "m3", "m4")
     }
     assert flags == {"m1": True, "m2": False, "m3": True, "m4": False}
+
+
+def test_set_favorite_race_zero_rows_returns_404(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Provider toggle succeeds but the row vanishes before the local UPDATE.
+
+    ``update_favorite`` reports zero rows → 404 ``email_not_found`` instead of
+    a silent 200 (never persist a state the provider/DB disagree on).
+    """
+    from api.services import emails_service
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box)
+            VALUES ('race-1', %s, 't', 'a@b.com', 'A', 's', now(), false, 'ALL_MAIL')
+            """,
+            (account_id,),
+        )
+    # exists() pre-check passes (row seeded), provider toggle succeeds (default
+    # fake), but update_favorite returns falsy → race lost.
+    monkeypatch.setattr(
+        emails_service.email_metadata_store, "update_favorite",
+        lambda _aid, _mid, _fav: False,
+    )
+    resp = test_client.patch(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/race-1/favorite",
+        json={"favorite": True},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "email_not_found"
+
+
+def test_set_favorite_provider_failure_returns_502(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Provider rejects the toggle → 502 ``favorite_update_error`` (Provider-First)."""
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from core.email.errors import EmailExternalAPIError
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box)
+            VALUES ('prov-1', %s, 't', 'a@b.com', 'A', 's', now(), false, 'ALL_MAIL')
+            """,
+            (account_id,),
+        )
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            label = f"{acc.get('mailbox_id')}__{acc.get('account_id')}"
+            manager.add_client(FakeEmailClient(
+                label,
+                set_favorite_exc=EmailExternalAPIError("provider down"),
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.patch(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/prov-1/favorite",
+        json={"favorite": True},
+    )
+    # The provider error maps to 502; the specific external_api_error mapping
+    # in translate_core_error wins over the FavoriteUpdateError fallback.
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "external_api_error"
+    # Provider-First: the local flag must NOT have been flipped.
+    assert _select_is_favorite(isolated_db, account_id, "prov-1") is False
+
+
+def test_sync_favorites_multi_account_aggregates_total(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """``total_synced`` aggregates the rowcount across every account in the mailbox."""
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id_1 = setup_mailbox_and_account(test_client, "gmail")
+    acc2 = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts",
+        json={"provider": "outlook", "display_label": "test-outlook-2"},
+    )
+    account_id_2 = acc2.json()["account_id"]
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, is_favorite)
+            VALUES
+                ('a1', %(a1)s, 't', 'x@y.com', 'X', 's', now(), false, 'ALL_MAIL', false),
+                ('a2', %(a1)s, 't', 'x@y.com', 'X', 's', now(), false, 'ALL_MAIL', false),
+                ('b1', %(a2)s, 't', 'x@y.com', 'X', 's', now(), false, 'ALL_MAIL', false)
+            """,
+            {"a1": account_id_1, "a2": account_id_2},
+        )
+
+    returns = {account_id_1: ["a1"], account_id_2: ["b1"]}
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            aid = str(acc.get("account_id") or "")
+            label = f"{acc.get('mailbox_id')}__{aid}"
+            manager.add_client(FakeEmailClient(
+                label,
+                list_favorite_ids_return=returns.get(aid, []),
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # rowcount across both accounts: 2 (acc1) + 1 (acc2) = 3.
+    assert body["total_synced"] == 3
+    assert len(body["accounts"]) == 2
+    assert _select_is_favorite(isolated_db, account_id_1, "a1") is True
+    assert _select_is_favorite(isolated_db, account_id_2, "b1") is True
+
+
+def test_sync_favorites_unknown_account_returns_404(
+    test_client, setup_mailbox_and_account,
+):
+    """Syncing an account that does not belong to the mailbox → 404."""
+    mailbox_id, _account_id = setup_mailbox_and_account(test_client, "gmail")
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
+        params={"account_id": "cccccccc-cccc-4000-a000-cccccccccccc"},
+    )
+    assert resp.status_code == 404

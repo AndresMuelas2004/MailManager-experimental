@@ -20,6 +20,7 @@ from database.repositories import email_metadata_repository as email_metadata_re
 from database.repositories import mailbox_repository as mailbox_repo_module
 from database.repositories import session_repository as session_repo_module
 from database.repositories import user_repository as user_repo_module
+from database.repositories import virtual_mailbox_repository as virtual_mailbox_repo_module
 from api.routers.routers_helpers import require_session
 from api.services import accounts_service, attachments_service, drafts_service, emails_service, services_helpers
 from core.email import EmailManager
@@ -137,6 +138,10 @@ def isolated_db(monkeypatch):
     # tests because it uses the real pool instead of the per-test transaction.
     monkeypatch.setattr(email_attachment_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(draft_attachment_repo_module.connection, "get_connection", _get_conn)
+    # Virtual mailbox repository: same Trap 1 rationale. Without this patch
+    # the vmbox integration tests leak rows across tests because the
+    # repository uses the real pool instead of the per-test transaction.
+    monkeypatch.setattr(virtual_mailbox_repo_module.connection, "get_connection", _get_conn)
 
     yield conn
 

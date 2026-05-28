@@ -2557,3 +2557,88 @@ class TestGmailSendDraftReplyHeaders:
         mime_text = base64.urlsafe_b64decode(raw_b64 + padding).decode("utf-8", errors="replace")
         assert "In-Reply-To" not in mime_text
         assert "References" not in mime_text
+
+
+class TestClassifyAttachments:
+    """D-13 strict inline-vs-attachment rule (M14).
+
+    Exercises the real classifier with synthetic MIME trees instead of
+    stubbing it, so the four-way decision (inline+referenced, inline+
+    unreferenced, non-image with Content-ID, inline without bytes) is
+    actually covered. ``data="WA"`` is base64url for b"X"; the classifier
+    appends ``"=="`` before decoding, which pads it back to a valid value.
+    """
+
+    @staticmethod
+    def _part(
+        *, mime_type, filename="", cid=None, disposition=None,
+        data="WA", size=1, part_id="1",
+    ):
+        headers = []
+        if cid is not None:
+            headers.append({"name": "Content-ID", "value": f"<{cid}>"})
+        if disposition is not None:
+            headers.append({"name": "Content-Disposition", "value": disposition})
+        body: dict = {"size": size}
+        if data is not None:
+            body["data"] = data
+        return {
+            "mimeType": mime_type,
+            "filename": filename,
+            "headers": headers,
+            "body": body,
+            "partId": part_id,
+        }
+
+    def test_inline_image_referenced_goes_to_cid_map(self, client: GmailClient):
+        payload = {"parts": [self._part(
+            mime_type="image/png", filename="logo.png", cid="logo123",
+            disposition="inline",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", '<img src="cid:logo123">',
+        )
+        assert "logo123" in cid_map
+        assert cid_map["logo123"].startswith("data:image/png;base64,")
+        assert attachments == []
+
+    def test_inline_marked_unreferenced_promoted_to_downloadable(self, client: GmailClient):
+        payload = {"parts": [self._part(
+            mime_type="image/png", filename="orphan.png", cid="orphan",
+            disposition="inline",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", "<p>no inline reference here</p>",
+        )
+        assert cid_map == {}
+        assert len(attachments) == 1
+        assert attachments[0].is_inline is True
+        assert attachments[0].content_id == "orphan"
+
+    def test_pdf_with_content_id_is_downloadable_never_embedded(self, client: GmailClient):
+        # A PDF carrying a Content-ID (but not an inline image) must surface
+        # as a downloadable attachment, never embedded into the HTML.
+        payload = {"parts": [self._part(
+            mime_type="application/pdf", filename="invoice.pdf", cid="pdfcid",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", '<img src="cid:pdfcid">',
+        )
+        assert "pdfcid" not in cid_map
+        assert len(attachments) == 1
+        assert attachments[0].filename == "invoice.pdf"
+        assert attachments[0].mime_type == "application/pdf"
+
+    def test_inline_image_without_bytes_is_skipped(self, client: GmailClient):
+        # Referenced inline image with no inline data and no attachmentId:
+        # _populate_cid_map soft-fails, the part is consumed by the inline
+        # branch, so it appears in neither cid_map nor attachments.
+        payload = {"parts": [self._part(
+            mime_type="image/png", filename="empty.png", cid="nobytes",
+            disposition="inline", data=None, size=0,
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", '<img src="cid:nobytes">',
+        )
+        assert cid_map == {}
+        assert attachments == []

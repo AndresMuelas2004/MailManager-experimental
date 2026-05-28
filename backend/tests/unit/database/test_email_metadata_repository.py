@@ -807,3 +807,159 @@ def test_update_has_attachments_propagates_connection_pool_error(monkeypatch):
     patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool"))
     with pytest.raises(ConnectionPoolError):
         em_module.email_metadata_store.update_has_attachments("acc-1", "msg-1")
+
+
+# ===== update_favorite (M11) =====
+# Provider-First favourite toggle persist. Uses ``RETURNING`` so a zero-row
+# match (race: row deleted between the existence pre-check and the UPDATE)
+# surfaces as ``False`` for the service to map to 404.
+
+
+def test_update_favorite_happy_path_returns_true(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[("msg-1",)])
+    patch_connection(monkeypatch, em_module, [cursor])
+    result = em_module.email_metadata_store.update_favorite("acc-1", "msg-1", True)
+    assert result is True
+    _sql, params = cursor.executed[0]
+    assert params == {
+        "account_id": "acc-1",
+        "provider_message_id": "msg-1",
+        "is_favorite": True,
+    }
+
+
+def test_update_favorite_zero_rows_returns_false(monkeypatch):
+    # RETURNING yields no row → fetchone() is None → race lost → False.
+    cursor = FakeCursor(fetchone_results=[None])
+    patch_connection(monkeypatch, em_module, [cursor])
+    assert em_module.email_metadata_store.update_favorite("acc-1", "msg-1", False) is False
+
+
+def test_update_favorite_db_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("db down"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError):
+        em_module.email_metadata_store.update_favorite("acc-1", "msg-1", True)
+
+
+def test_update_favorite_unexpected_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.update_favorite("acc-1", "msg-1", True)
+
+
+def test_update_favorite_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool"))
+    with pytest.raises(ConnectionPoolError):
+        em_module.email_metadata_store.update_favorite("acc-1", "msg-1", True)
+
+
+# ===== sync_favorites_for_account (M11) =====
+# Single-statement full replacement: every row of the account is set to
+# ``is_favorite = (provider_message_id = ANY(true_ids))``. ``rowcount`` is the
+# total rows touched (drives FavoriteSyncResponse.total_synced).
+
+
+def test_sync_favorites_happy_path_returns_rowcount(monkeypatch):
+    cursor = FakeCursor(rowcounts=[5])
+    patch_connection(monkeypatch, em_module, [cursor])
+    result = em_module.email_metadata_store.sync_favorites_for_account("acc-1", ["m1", "m2"])
+    assert result == 5
+    _sql, params = cursor.executed[0]
+    assert params == {"account_id": "acc-1", "true_ids": ["m1", "m2"]}
+
+
+def test_sync_favorites_clear_all_with_empty_list(monkeypatch):
+    # favorite_ids=[] is valid: ``= ANY('{}')`` is FALSE for every row, so the
+    # statement clears all favourites. rowcount still counts the touched rows.
+    cursor = FakeCursor(rowcounts=[10])
+    patch_connection(monkeypatch, em_module, [cursor])
+    result = em_module.email_metadata_store.sync_favorites_for_account("acc-1", [])
+    assert result == 10
+    _sql, params = cursor.executed[0]
+    assert params["true_ids"] == []
+
+
+def test_sync_favorites_db_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("db down"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError):
+        em_module.email_metadata_store.sync_favorites_for_account("acc-1", ["m1"])
+
+
+def test_sync_favorites_unexpected_error_wrapped(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.sync_favorites_for_account("acc-1", ["m1"])
+
+
+def test_sync_favorites_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool"))
+    with pytest.raises(ConnectionPoolError):
+        em_module.email_metadata_store.sync_favorites_for_account("acc-1", ["m1"])
+
+
+# ===== list_filtered — extra_filters / box_not_in SQL surface (M12) =====
+# The guide flags this builder as the SQL-injection / silent-422 boundary, so
+# the exact clause + parameter emitted for each filter key is asserted here.
+
+
+def test_list_filtered_subject_contains_emits_escaped_ilike(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], None, [], 50, 0,
+        extra_filters={"subject_contains": "50%"},
+    )
+    sql, params = cursor.executed[0]
+    assert "unaccent(lower(coalesce(subject, ''))) ILIKE" in sql
+    # _escape_like("50%") -> "50\%", wrapped as "%50\%%".
+    assert params["extra_subject_contains"] == "%50\\%%"
+
+
+def test_list_filtered_is_favorite_emits_clause_and_param(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], None, [], 50, 0,
+        extra_filters={"is_favorite": True},
+    )
+    sql, params = cursor.executed[0]
+    assert "is_favorite = %(extra_is_favorite)s" in sql
+    assert params["extra_is_favorite"] is True
+
+
+def test_list_filtered_unknown_key_is_dropped(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], None, [], 50, 0,
+        extra_filters={"from_domain": "example.com"},  # legacy / removed key
+    )
+    sql, params = cursor.executed[0]
+    # No clause and no parameter leaks for an unregistered key.
+    assert "from_domain" not in sql
+    assert not any(k.startswith("extra_") for k in params)
+
+
+def test_list_filtered_box_not_in_emits_negated_any(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], None, [], 50, 0,
+        box_not_in=["TRASH", "SPAM"],
+    )
+    sql, params = cursor.executed[0]
+    assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
+    assert params["box_not_in_list"] == ["TRASH", "SPAM"]
+
+
+def test_list_filtered_empty_account_ids_short_circuits(monkeypatch):
+    # No account scope → empty result without touching the connection.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    result = em_module.email_metadata_store.list_filtered([], None, [], 50, 0)
+    assert result == []
+    assert cursor.executed == []

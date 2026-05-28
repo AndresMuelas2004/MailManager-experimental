@@ -13,8 +13,34 @@ the attachment store.
 from __future__ import annotations
 
 import io
+import uuid
+
+import psycopg2
 
 from tests.integration.conftest import MAILBOX_URL as _MAILBOX_URL
+
+
+def _seed_draft_attachment(cur, account_id, provider_draft_id, *, position, size):
+    """Insert a draft_attachment row directly (bypasses the upload endpoint).
+
+    Used to reach the count / cumulative caps without buffering real bytes:
+    the ``size`` column drives the cap checks, so the blob can stay tiny even
+    when ``size`` declares ~25 MB.
+    """
+    cur.execute(
+        """
+        INSERT INTO draft_attachments
+            (draft_attachment_id, account_id, provider_draft_id, filename,
+             mime_type, size, content_id, is_inline, position, blob,
+             blob_storage_kind, blob_ref, provider_attachment_id)
+        VALUES (%s, %s, %s, %s, 'application/pdf', %s, NULL, false, %s,
+                %s, 'db', NULL, NULL)
+        """,
+        (
+            str(uuid.uuid4()), account_id, provider_draft_id,
+            f"seed-{position}.pdf", size, position, psycopg2.Binary(b"x"),
+        ),
+    )
 
 
 def _attachments_url(mailbox_id: str, account_id: str, draft_id: str) -> str:
@@ -140,6 +166,44 @@ class TestAddDraftAttachment:
             responses.append(r.json())
         positions = [r["position"] for r in responses]
         assert positions == [0, 1, 2]
+
+    def test_count_cap_rejected_with_400(
+        self, test_client, setup_mailbox_and_account, isolated_db,
+    ):
+        # D-03: a draft holds at most 25 attachments. Seed 25 directly so the
+        # 26th upload is rejected without buffering 25 real files.
+        mailbox_id, account_id = setup_mailbox_and_account(test_client)
+        draft_id = _create_draft(test_client, mailbox_id, account_id)
+        with isolated_db.cursor() as cur:
+            for i in range(25):
+                _seed_draft_attachment(cur, account_id, draft_id, position=i, size=1)
+
+        response = test_client.post(
+            _attachments_url(mailbox_id, account_id, draft_id),
+            files={"file": ("twenty-sixth.pdf", io.BytesIO(b"x"), "application/pdf")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "attachment_limit_exceeded"
+
+    def test_cumulative_size_cap_rejected_with_400(
+        self, test_client, setup_mailbox_and_account, isolated_db,
+    ):
+        # D-02: the cumulative size of a draft's attachments is capped at
+        # 25 MB. Seed one row whose declared size is 25 MB (tiny blob) so a
+        # small follow-up upload tips the total over the cap.
+        mailbox_id, account_id = setup_mailbox_and_account(test_client)
+        draft_id = _create_draft(test_client, mailbox_id, account_id)
+        with isolated_db.cursor() as cur:
+            _seed_draft_attachment(
+                cur, account_id, draft_id, position=0, size=25 * 1024 * 1024,
+            )
+
+        response = test_client.post(
+            _attachments_url(mailbox_id, account_id, draft_id),
+            files={"file": ("small.pdf", io.BytesIO(b"x" * 1024), "application/pdf")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "attachment_message_size_exceeded"
 
 
 # ── DELETE /attachments/{id} ───────────────────────────────────────

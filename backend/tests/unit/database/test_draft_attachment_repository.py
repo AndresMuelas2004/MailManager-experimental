@@ -13,6 +13,7 @@ import pytest
 
 import psycopg2
 import psycopg2.errors
+import psycopg2.extras
 
 from database.errors import ConnectionPoolError, QueryError
 from database.repositories import draft_attachment_repository as repo_module
@@ -297,3 +298,84 @@ class TestUpdateProviderAttachmentId:
         store = PgDraftAttachmentStore()
         with pytest.raises(QueryError):
             store.update_provider_attachment_id(_DRAFT_ATTACHMENT_ID, "x")
+
+
+def _stub_execute_values(cur, sql, rows, **kwargs):
+    """Stub for psycopg2.extras.execute_values: record the call on the cursor."""
+    cur.executed.append((sql, list(rows)))
+
+
+# ── list_existing_source_attachment_ids (M13, R-12 idempotency) ─────
+
+
+class TestListExistingSourceAttachmentIds:
+
+    def test_returns_set_of_source_ids_skipping_nulls(self, monkeypatch):
+        cursor = FakeCursor(fetchall_results=[[("src-1",), ("src-2",), (None,)]])
+        patch_connection(monkeypatch, repo_module, [cursor])
+        store = PgDraftAttachmentStore()
+        result = store.list_existing_source_attachment_ids(_ACCOUNT_ID, _PROVIDER_DRAFT_ID)
+        assert result == {"src-1", "src-2"}
+
+    def test_invalid_uuid_returns_empty_set(self, monkeypatch):
+        cursor = FakeCursor(
+            execute_side_effect=psycopg2.errors.InvalidTextRepresentation("bad"),
+        )
+        patch_connection(monkeypatch, repo_module, [cursor])
+        store = PgDraftAttachmentStore()
+        assert store.list_existing_source_attachment_ids("not-a-uuid", _PROVIDER_DRAFT_ID) == set()
+
+    def test_db_error_wrapped(self, monkeypatch):
+        cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("down"))
+        patch_connection(monkeypatch, repo_module, [cursor])
+        store = PgDraftAttachmentStore()
+        with pytest.raises(QueryError):
+            store.list_existing_source_attachment_ids(_ACCOUNT_ID, _PROVIDER_DRAFT_ID)
+
+    def test_connection_pool_error_propagates(self, monkeypatch):
+        patch_connection_error(monkeypatch, repo_module, ConnectionPoolError("pool"))
+        store = PgDraftAttachmentStore()
+        with pytest.raises(ConnectionPoolError):
+            store.list_existing_source_attachment_ids(_ACCOUNT_ID, _PROVIDER_DRAFT_ID)
+
+
+# ── batch_update_provider_attachment_ids (M13, D-27 partial-success) ─
+
+
+class TestBatchUpdateProviderAttachmentIds:
+
+    def test_empty_input_returns_zero_without_touching_connection(self, monkeypatch):
+        # The empty-batch guard must short-circuit before acquiring a
+        # connection — patch get_connection to blow up if it is reached.
+        patch_connection_error(
+            monkeypatch, repo_module, ConnectionPoolError("should not be called"),
+        )
+        store = PgDraftAttachmentStore()
+        assert store.batch_update_provider_attachment_ids([]) == 0
+
+    def test_happy_path_returns_rowcount(self, monkeypatch):
+        cursor = FakeCursor(fetchall_results=[[("att-1",), ("att-2",)]])
+        patch_connection(monkeypatch, repo_module, [cursor])
+        monkeypatch.setattr(psycopg2.extras, "execute_values", _stub_execute_values)
+        store = PgDraftAttachmentStore()
+        result = store.batch_update_provider_attachment_ids(
+            [("att-1", "graph-1"), ("att-2", "graph-2")],
+        )
+        assert result == 2
+
+    def test_invalid_uuid_raises_query_error(self, monkeypatch):
+        def _raise(cur, sql, rows, **kwargs):
+            raise psycopg2.errors.InvalidTextRepresentation("bad uuid")
+
+        cursor = FakeCursor()
+        patch_connection(monkeypatch, repo_module, [cursor])
+        monkeypatch.setattr(psycopg2.extras, "execute_values", _raise)
+        store = PgDraftAttachmentStore()
+        with pytest.raises(QueryError):
+            store.batch_update_provider_attachment_ids([("not-a-uuid", "x")])
+
+    def test_connection_pool_error_propagates(self, monkeypatch):
+        patch_connection_error(monkeypatch, repo_module, ConnectionPoolError("pool"))
+        store = PgDraftAttachmentStore()
+        with pytest.raises(ConnectionPoolError):
+            store.batch_update_provider_attachment_ids([("att-1", "graph-1")])

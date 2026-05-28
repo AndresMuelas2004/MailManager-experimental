@@ -424,3 +424,134 @@ def test_missing_source_email_returns_404(
     )
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "email_not_found"
+
+
+def _seed_draft_attachment_chip(
+    isolated_db, *, account_id: str, provider_draft_id: str, position: int, size: int,
+) -> None:
+    """Seed a chip in the TARGET draft to reach the D-02/D-03 caps without
+    buffering real bytes (the ``size`` column drives the cap checks)."""
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO draft_attachments
+                (draft_attachment_id, account_id, provider_draft_id, filename,
+                 mime_type, size, content_id, is_inline, position, blob,
+                 blob_storage_kind, blob_ref, provider_attachment_id)
+            VALUES (%s, %s::uuid, %s, %s, 'application/pdf', %s, NULL, false, %s,
+                    %s, 'db', NULL, NULL)
+            """,
+            (
+                str(uuid4()), account_id, provider_draft_id, f"chip-{position}.pdf",
+                size, position, psycopg2.Binary(b"x"),
+            ),
+        )
+
+
+def test_provider_download_failure_reported_as_skipped(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """A provider error during the per-attachment download surfaces as a
+    structured ``skipped`` entry (200) — it must NOT abort the whole batch
+    with a 502 (the regression this test guards against)."""
+    from core.email.errors import EmailExternalAPIError
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _seed_draft(isolated_db, account_id=account_id, draft_id="drf-pf")
+    _seed_source_email_with_attachment(
+        isolated_db, account_id=account_id, provider_message_id="src-msg",
+        attachment_id=str(uuid4()), blob=None,  # cache miss → provider fetch
+    )
+    _patch_fake_manager(
+        monkeypatch,
+        fetch_attachment_binary_exc=EmailExternalAPIError("provider down"),
+    )
+
+    resp = test_client.post(
+        _copy_url(mailbox_id, account_id, "drf-pf"),
+        json={"source_account_id": account_id, "source_provider_message_id": "src-msg"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["copied_count"] == 0
+    assert any(s.get("reason") == "provider_unavailable" for s in body["skipped"])
+
+
+def test_count_cap_reports_skipped(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """D-03: a draft already holding 25 chips skips a further copy."""
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _seed_draft(isolated_db, account_id=account_id, draft_id="drf-cc")
+    for i in range(25):
+        _seed_draft_attachment_chip(
+            isolated_db, account_id=account_id, provider_draft_id="drf-cc",
+            position=i, size=1,
+        )
+    _seed_source_email_with_attachment(
+        isolated_db, account_id=account_id, provider_message_id="src-msg",
+        attachment_id=str(uuid4()), blob=b"CACHED",
+    )
+    _patch_fake_manager(monkeypatch)
+
+    resp = test_client.post(
+        _copy_url(mailbox_id, account_id, "drf-cc"),
+        json={"source_account_id": account_id, "source_provider_message_id": "src-msg"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["copied_count"] == 0
+    assert any(s.get("reason") == "attachment_limit_exceeded" for s in body["skipped"])
+
+
+def test_cumulative_size_cap_reports_skipped(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """D-02: a draft already holding ~25 MB skips a further copy."""
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _seed_draft(isolated_db, account_id=account_id, draft_id="drf-sz")
+    _seed_draft_attachment_chip(
+        isolated_db, account_id=account_id, provider_draft_id="drf-sz",
+        position=0, size=25 * 1024 * 1024,
+    )
+    _seed_source_email_with_attachment(
+        isolated_db, account_id=account_id, provider_message_id="src-msg",
+        attachment_id=str(uuid4()), blob=b"CACHED",
+    )
+    _patch_fake_manager(monkeypatch)
+
+    resp = test_client.post(
+        _copy_url(mailbox_id, account_id, "drf-sz"),
+        json={"source_account_id": account_id, "source_provider_message_id": "src-msg"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["copied_count"] == 0
+    assert any(s.get("reason") == "message_size_exceeded" for s in body["skipped"])
+
+
+def test_blob_lookup_failure_reported_as_skipped(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """An unexpected (non-DatabaseError) failure reading the cached blob
+    surfaces as ``blob_lookup_failed`` instead of aborting the batch."""
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _seed_draft(isolated_db, account_id=account_id, draft_id="drf-bl")
+    _seed_source_email_with_attachment(
+        isolated_db, account_id=account_id, provider_message_id="src-msg",
+        attachment_id=str(uuid4()), blob=b"CACHED",
+    )
+    _patch_fake_manager(monkeypatch)
+    monkeypatch.setattr(
+        drafts_service.email_attachment_store, "get_blob",
+        lambda _aid: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    resp = test_client.post(
+        _copy_url(mailbox_id, account_id, "drf-bl"),
+        json={"source_account_id": account_id, "source_provider_message_id": "src-msg"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["copied_count"] == 0
+    assert any(s.get("reason") == "blob_lookup_failed" for s in body["skipped"])

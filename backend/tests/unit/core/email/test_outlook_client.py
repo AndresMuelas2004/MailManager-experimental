@@ -2803,3 +2803,74 @@ class TestOutlookSendDraftReplySymmetry:
                 assert "References" not in str(body)
                 assert "threadId" not in (body or {})
                 assert "conversationId" not in (body or {})
+
+
+class TestClassifyAttachments:
+    """D-13 strict inline-vs-attachment rule for Outlook (M14).
+
+    Four conditions must ALL hold for a part to stay inline: ``isInline``,
+    a ``contentId`` referenced by the body, non-empty ``contentBytes`` and an
+    ``image/*`` content type. Anything else surfaces as a downloadable.
+    """
+
+    @staticmethod
+    def _att(
+        *, att_id="att1", name="file", content_type, content_bytes="UE5H",
+        cid=None, is_inline=False, size=3,
+    ):
+        a: dict = {
+            "id": att_id, "name": name, "contentType": content_type,
+            "size": size, "isInline": is_inline,
+        }
+        if content_bytes is not None:
+            a["contentBytes"] = content_bytes
+        if cid is not None:
+            a["contentId"] = f"<{cid}>"
+        return a
+
+    def test_inline_image_referenced_goes_to_cid_map(self, client: OutlookClient):
+        value = [self._att(content_type="image/png", cid="logo123", is_inline=True)]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", '<img src="cid:logo123">', provider_message_id="msg-1",
+            )
+        assert "logo123" in cid_map
+        assert cid_map["logo123"].startswith("data:image/png;base64,")
+        assert downloadable == []
+
+    def test_inline_marked_unreferenced_promoted_to_downloadable(self, client: OutlookClient):
+        value = [self._att(content_type="image/png", cid="orphan", is_inline=True)]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", "<p>no inline reference</p>", provider_message_id="msg-1",
+            )
+        assert cid_map == {}
+        assert len(downloadable) == 1
+        assert downloadable[0].is_inline is True
+        assert downloadable[0].content_id == "orphan"
+
+    def test_pdf_with_content_id_is_downloadable(self, client: OutlookClient):
+        value = [self._att(
+            name="invoice.pdf", content_type="application/pdf",
+            cid="pdfcid", is_inline=True,
+        )]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", '<img src="cid:pdfcid">', provider_message_id="msg-1",
+            )
+        assert "pdfcid" not in cid_map
+        assert len(downloadable) == 1
+        assert downloadable[0].filename == "invoice.pdf"
+        assert downloadable[0].mime_type == "application/pdf"
+
+    def test_inline_image_without_bytes_is_downloadable(self, client: OutlookClient):
+        value = [self._att(
+            content_type="image/png", cid="nobytes", is_inline=True,
+            content_bytes=None,
+        )]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", '<img src="cid:nobytes">', provider_message_id="msg-1",
+            )
+        assert cid_map == {}
+        assert len(downloadable) == 1
