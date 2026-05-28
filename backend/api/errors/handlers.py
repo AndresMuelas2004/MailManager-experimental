@@ -80,7 +80,6 @@ from api.errors.exceptions import (
     Unauthorized,
     UserNotFound,
     UserOperationError,
-    VirtualMailboxInvalid,
     VirtualMailboxListError,
     VirtualMailboxNotFound,
     VirtualMailboxOperationError,
@@ -158,7 +157,6 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     FavoriteSyncError: status.HTTP_502_BAD_GATEWAY,
     # Virtual mailboxes
     VirtualMailboxNotFound: status.HTTP_404_NOT_FOUND,
-    VirtualMailboxInvalid: status.HTTP_400_BAD_REQUEST,
     VirtualMailboxOperationError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }

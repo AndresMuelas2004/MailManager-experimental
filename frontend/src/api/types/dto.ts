@@ -299,23 +299,15 @@ export const favoriteSyncResponseSchema = z.object({
 export type FavoriteSyncResponse = z.infer<typeof favoriteSyncResponseSchema>;
 
 // Virtual mailboxes (fake mailboxes — filtered views over email_metadata).
-export const virtualMailboxScopeKindSchema = z.enum(['mailbox', 'all', 'accounts']);
-export type VirtualMailboxScopeKind = z.infer<typeof virtualMailboxScopeKindSchema>;
-
+// Shape after migration 0032: a virtual mailbox is a flat list of
+// ``account_ids`` plus a filter. There is no ``scope_kind`` indirection.
 export const virtualMailboxFilterBoxSchema = z.enum(['ALL_MAIL', 'SENT', 'SPAM', 'TRASH']);
 export type VirtualMailboxFilterBox = z.infer<typeof virtualMailboxFilterBoxSchema>;
-
-export const virtualMailboxScopePayloadSchema = z.object({
-  mailbox_id: z.string().optional(),
-  account_ids: z.array(z.string()).optional(),
-});
-export type VirtualMailboxScopePayload = z.infer<typeof virtualMailboxScopePayloadSchema>;
 
 export const virtualMailboxFilterPayloadSchema = z.object({
   box: virtualMailboxFilterBoxSchema.optional(),
   box_not_in: z.array(virtualMailboxFilterBoxSchema).optional(),
   from_email: z.string().optional(),
-  from_domain: z.string().optional(),
   subject_contains: z.string().optional(),
   is_read: z.boolean().optional(),
   is_favorite: z.boolean().optional(),
@@ -324,8 +316,7 @@ export type VirtualMailboxFilterPayload = z.infer<typeof virtualMailboxFilterPay
 
 export const virtualMailboxCreateSchema = z.object({
   display_name: z.string().min(1).max(120),
-  scope_kind: virtualMailboxScopeKindSchema,
-  scope_payload: virtualMailboxScopePayloadSchema,
+  account_ids: z.array(z.string()).min(1),
   filter_payload: virtualMailboxFilterPayloadSchema,
 });
 export type VirtualMailboxCreate = z.infer<typeof virtualMailboxCreateSchema>;
@@ -333,15 +324,14 @@ export type VirtualMailboxCreate = z.infer<typeof virtualMailboxCreateSchema>;
 export const virtualMailboxUpdateSchema = virtualMailboxCreateSchema;
 export type VirtualMailboxUpdate = z.infer<typeof virtualMailboxUpdateSchema>;
 
-// The backend stores scope/filter as JSONB and re-emits them; we keep
-// them loosely typed in the OUT shape because the create/update side
+// The backend stores filter_payload as JSONB and re-emits it; we keep
+// it loosely typed in the OUT shape because the create/update side
 // already enforces the constrained schema.
 export const virtualMailboxOutSchema = z.object({
   virtual_mailbox_id: z.string(),
   owner_user_id: z.string(),
   display_name: z.string(),
-  scope_kind: virtualMailboxScopeKindSchema,
-  scope_payload: z.record(z.string(), z.unknown()),
+  account_ids: z.array(z.string()),
   filter_payload: z.record(z.string(), z.unknown()),
   created_at: z.string(),
   updated_at: z.string(),

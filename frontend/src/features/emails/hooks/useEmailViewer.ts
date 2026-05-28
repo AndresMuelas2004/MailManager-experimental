@@ -23,10 +23,10 @@ export default function useEmailViewer(refresh: () => Promise<void>): UseEmailVi
   // Read the mailbox from the email itself (carried in the listing
   // payload). The viewer needs the email's real ``mailbox_id`` — which
   // can diverge from the route's ``mailboxId`` inside a virtual
-  // mailbox whose scope spans multiple real mailboxes (``scope_kind``
-  // ``'all'`` / ``'accounts'``). Using the route param here would
-  // produce a 404 ``account_not_found`` whenever the account lives in
-  // a different mailbox than the one mounted in the sidebar.
+  // mailbox whose accounts span multiple real mailboxes. Using the
+  // route param here would produce a 404 ``account_not_found``
+  // whenever the account lives in a different mailbox than the one
+  // mounted in the sidebar.
   const handleRead = useCallback(
     async (email: EmailMetadataOut) => {
       await updateReadStatus(email.mailbox_id, true, [toItem(email)]);

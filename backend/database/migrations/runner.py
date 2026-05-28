@@ -426,17 +426,18 @@ _DDL_STATEMENTS = [
     "ON email_metadata (account_id, received_at DESC) "
     "WHERE is_favorite = TRUE;",
     "UPDATE alembic_version SET version_num = '0027_add_is_favorite_to_email_metadata';",
-    # Migration 0028: virtual_mailboxes — user-defined filtered views over
-    # email_metadata. The scope/filter are JSONB blobs interpreted by the
-    # service layer; CHECK only enforces the closed enum of scope_kind.
+    # Migration 0028 (+ 0032): virtual_mailboxes — user-defined filtered
+    # views over email_metadata. The current shape is a flat
+    # ``scope_payload = {"account_ids":[...]}`` JSONB + ``filter_payload``;
+    # ``scope_kind`` was dropped by migration 0032 (the indirection
+    # collapsed once the three "scope_kind" branches stopped offering
+    # value over an explicit account list).
     """
     CREATE TABLE IF NOT EXISTS virtual_mailboxes (
         virtual_mailbox_id  UUID         PRIMARY KEY,
         owner_user_id       UUID         NOT NULL
                              REFERENCES users(user_id) ON DELETE CASCADE,
         display_name        VARCHAR(120) NOT NULL,
-        scope_kind          VARCHAR(20)  NOT NULL
-                             CHECK (scope_kind IN ('mailbox', 'all', 'accounts')),
         scope_payload       JSONB        NOT NULL DEFAULT '{}'::jsonb,
         filter_payload      JSONB        NOT NULL DEFAULT '{}'::jsonb,
         created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -476,6 +477,64 @@ _DDL_STATEMENTS = [
     "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS to_email VARCHAR(320) NOT NULL DEFAULT '';",
     "ALTER TABLE email_metadata ADD COLUMN IF NOT EXISTS to_name VARCHAR(200) NOT NULL DEFAULT '';",
     "UPDATE alembic_version SET version_num = '0031_add_to_email_to_email_metadata';",
+    # Migration 0032: collapse scope_kind / scope_payload into a flat
+    # ``scope_payload = {"account_ids":[...]}``. Fresh bootstraps already
+    # get the post-0032 CREATE TABLE shape above (no ``scope_kind``
+    # column), so the DO block below is a no-op for greenfield databases
+    # and applies the snapshot + DROP only on incremental upgrades that
+    # still carry the old column.
+    """
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'virtual_mailboxes' AND column_name = 'scope_kind'
+        ) THEN
+            UPDATE virtual_mailboxes vmb
+            SET scope_payload = jsonb_build_object(
+                'account_ids',
+                COALESCE(
+                    (
+                        SELECT jsonb_agg(a.account_id::text)
+                        FROM mailboxes m
+                        JOIN accounts a ON a.mailbox_id = m.mailbox_id
+                        WHERE m.owner_user_id = vmb.owner_user_id
+                    ),
+                    '[]'::jsonb
+                )
+            )
+            WHERE scope_kind = 'all';
+
+            UPDATE virtual_mailboxes vmb
+            SET scope_payload = jsonb_build_object(
+                'account_ids',
+                COALESCE(
+                    (
+                        SELECT jsonb_agg(a.account_id::text)
+                        FROM accounts a
+                        JOIN mailboxes m ON m.mailbox_id = a.mailbox_id
+                        WHERE m.mailbox_id::text = vmb.scope_payload->>'mailbox_id'
+                          AND m.owner_user_id = vmb.owner_user_id
+                    ),
+                    '[]'::jsonb
+                )
+            )
+            WHERE scope_kind = 'mailbox';
+
+            UPDATE virtual_mailboxes
+            SET scope_payload = jsonb_build_object(
+                'account_ids',
+                COALESCE(scope_payload->'account_ids', '[]'::jsonb)
+            );
+
+            ALTER TABLE virtual_mailboxes
+                DROP CONSTRAINT IF EXISTS virtual_mailboxes_scope_kind_check;
+            ALTER TABLE virtual_mailboxes DROP COLUMN scope_kind;
+        END IF;
+    END
+    $$;
+    """,
+    "UPDATE alembic_version SET version_num = '0032_drop_virtual_mailbox_scope_kind';",
 ]
 
 

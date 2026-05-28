@@ -363,11 +363,6 @@ class VirtualMailboxNotFound(ApiError):
     code = "virtual_mailbox_not_found"
 
 
-class VirtualMailboxInvalid(ApiError):
-    """The provided scope / filter payload is structurally invalid."""
-    code = "virtual_mailbox_invalid"
-
-
 class VirtualMailboxOperationError(ApiError):
     """Unexpected DB-side failure during a virtual mailbox CRUD operation."""
     code = "virtual_mailbox_operation_error"

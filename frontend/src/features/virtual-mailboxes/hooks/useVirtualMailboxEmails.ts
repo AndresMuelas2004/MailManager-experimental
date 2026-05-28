@@ -47,9 +47,8 @@ export default function useVirtualMailboxEmails(
 
   // Accounts are required for the resolveAccount() lookup on the email
   // table — they are fetched across every mailbox the user owns
-  // because scope_kind 'all' and 'accounts' can surface emails whose
-  // account_id belongs to a mailbox other than the one active in the
-  // sidebar; loading only the active mailbox leaves those rows with
+  // because a virtual mailbox can aggregate accounts from several real
+  // mailboxes; loading only the active mailbox leaves those rows with
   // empty provider/email columns.
   const mailboxesQuery = useQuery({
     queryKey: ['mailboxes'],

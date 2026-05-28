@@ -7,6 +7,7 @@ monkeypatch ``get_connection`` to inject :py:class:`FakeCursor`.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import psycopg2
@@ -23,8 +24,9 @@ def _row(**overrides):
         "virtual_mailbox_id": "vmb-1",
         "owner_user_id": "user-1",
         "display_name": "Mis favoritos",
-        "scope_kind": "all",
-        "scope_payload": {},
+        # The SQL projection materialises scope_payload->'account_ids' as a
+        # Postgres text[] which psycopg2 surfaces as a Python list.
+        "account_ids": ["acc-1", "acc-2"],
         "filter_payload": {"is_favorite": True},
         "created_at": datetime(2026, 5, 19, tzinfo=timezone.utc),
         "updated_at": datetime(2026, 5, 19, tzinfo=timezone.utc),
@@ -44,17 +46,19 @@ def test_create_happy_path(monkeypatch):
         "virtual_mailbox_id": "vmb-1",
         "owner_user_id": "user-1",
         "display_name": "Mis favoritos",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": ["acc-1", "acc-2"],
         "filter_payload": {"is_favorite": True},
     })
     assert result["display_name"] == "Mis favoritos"
-    assert result["scope_kind"] == "all"
-    # The repository must serialise the dict payloads to JSON strings
-    # before sending them to psycopg2 (the SQL casts them to JSONB).
+    assert result["account_ids"] == ["acc-1", "acc-2"]
+    # The repository must serialise the JSONB payloads to JSON strings
+    # before sending them to psycopg2.
     _, params = cursor.executed[0]
     assert isinstance(params["scope_payload"], str)
     assert isinstance(params["filter_payload"], str)
+    # ``scope_payload`` wraps the account_ids — the column name is a
+    # historical artifact preserved by migration 0032.
+    assert json.loads(params["scope_payload"]) == {"account_ids": ["acc-1", "acc-2"]}
 
 
 def test_create_returns_normalised_dict_strings_for_ids(monkeypatch):
@@ -64,8 +68,7 @@ def test_create_returns_normalised_dict_strings_for_ids(monkeypatch):
         "virtual_mailbox_id": "vmb-1",
         "owner_user_id": "user-1",
         "display_name": "X",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": ["acc-1"],
         "filter_payload": {},
     })
     assert isinstance(result["virtual_mailbox_id"], str)
@@ -83,8 +86,7 @@ def test_create_psycopg2_error_wraps(monkeypatch):
             "virtual_mailbox_id": "vmb-1",
             "owner_user_id": "user-1",
             "display_name": "X",
-            "scope_kind": "all",
-            "scope_payload": {},
+            "account_ids": ["acc-1"],
             "filter_payload": {},
         })
 
@@ -98,6 +100,18 @@ def test_get_returns_dict_when_found(monkeypatch):
     result = vmb_module.virtual_mailbox_store.get("vmb-1")
     assert result is not None
     assert result["virtual_mailbox_id"] == "vmb-1"
+    assert result["account_ids"] == ["acc-1", "acc-2"]
+
+
+def test_get_normalises_missing_account_ids_to_empty_list(monkeypatch):
+    # psycopg2 can surface a NULL array column as ``None`` in edge cases
+    # (e.g. when the JSONB key is missing). The repository must flatten
+    # that to an empty list so the service receives a stable shape.
+    cursor = FakeCursor(fetchone_results=[_row(account_ids=None)])
+    patch_connection(monkeypatch, vmb_module, [cursor])
+    result = vmb_module.virtual_mailbox_store.get("vmb-1")
+    assert result is not None
+    assert result["account_ids"] == []
 
 
 def test_get_returns_none_when_missing(monkeypatch):
@@ -135,8 +149,7 @@ def test_update_returns_new_row(monkeypatch):
     result = vmb_module.virtual_mailbox_store.update({
         "virtual_mailbox_id": "vmb-1",
         "display_name": "Renamed",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": ["acc-1"],
         "filter_payload": {},
     })
     assert result["display_name"] == "Renamed"
@@ -154,8 +167,7 @@ def test_update_missing_row_returns_none(monkeypatch):
     result = vmb_module.virtual_mailbox_store.update({
         "virtual_mailbox_id": "vmb-x",
         "display_name": "X",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": ["acc-1"],
         "filter_payload": {},
     })
     assert result is None
@@ -169,8 +181,7 @@ def test_update_invalid_uuid_returns_none(monkeypatch):
     result = vmb_module.virtual_mailbox_store.update({
         "virtual_mailbox_id": "not-a-uuid",
         "display_name": "X",
-        "scope_kind": "all",
-        "scope_payload": {},
+        "account_ids": ["acc-1"],
         "filter_payload": {},
     })
     assert result is None

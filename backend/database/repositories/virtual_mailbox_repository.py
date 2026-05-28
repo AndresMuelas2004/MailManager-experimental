@@ -2,7 +2,7 @@
 PostgreSQL virtual-mailbox repository.
 
 Holds only the CRUD over the ``virtual_mailboxes`` table. The actual
-filter translation (scope_payload + filter_payload → predicates against
+filter translation (account_ids + filter_payload → predicates against
 ``email_metadata``) lives in the service layer because it must reuse
 ``EmailMetadataStore.list_filtered`` and resolve mailbox/account
 ownership via the existing stores.
@@ -31,19 +31,37 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     for key in ("created_at", "updated_at"):
         if result.get(key) is not None:
             result[key] = result[key].isoformat()
+    # ``account_ids`` is projected as a Postgres ``text[]`` (see the
+    # ``_SELECT_FIELDS`` SQL fragment) — psycopg2 surfaces it as a Python
+    # list already, but normalise None / non-list inputs to an empty list
+    # so the service layer can rely on a flat list[str].
+    raw_ids = result.get("account_ids")
+    if isinstance(raw_ids, list):
+        result["account_ids"] = [str(aid) for aid in raw_ids]
+    else:
+        result["account_ids"] = []
     # psycopg2 returns JSONB as already-parsed dicts in modern versions,
     # but ``Json`` round-trips (e.g. inside CTEs) sometimes come back as
-    # strings. Normalise both so the service layer always sees a dict.
-    for key in ("scope_payload", "filter_payload"):
-        value = result.get(key)
-        if isinstance(value, str):
-            try:
-                result[key] = json.loads(value)
-            except (ValueError, TypeError):
-                result[key] = {}
-        elif value is None:
-            result[key] = {}
+    # strings. Normalise so the service layer always sees a dict.
+    value = result.get("filter_payload")
+    if isinstance(value, str):
+        try:
+            result["filter_payload"] = json.loads(value)
+        except (ValueError, TypeError):
+            result["filter_payload"] = {}
+    elif value is None:
+        result["filter_payload"] = {}
     return result
+
+
+def _scope_payload_for_account_ids(account_ids: list[str]) -> str:
+    """JSON-encode the ``{account_ids:[...]}`` wrapper persisted in the
+    ``scope_payload`` JSONB column.
+
+    The column name is a historical artifact preserved by migration
+    0032; only the ``account_ids`` key inside it is used today.
+    """
+    return json.dumps({"account_ids": list(account_ids or [])})
 
 
 def _to_json_param(value: Any) -> str:
@@ -58,8 +76,9 @@ class PgVirtualMailboxStore(VirtualMailboxStore):
             "virtual_mailbox_id": virtual_mailbox["virtual_mailbox_id"],
             "owner_user_id": virtual_mailbox["owner_user_id"],
             "display_name": virtual_mailbox["display_name"],
-            "scope_kind": virtual_mailbox["scope_kind"],
-            "scope_payload": _to_json_param(virtual_mailbox.get("scope_payload")),
+            "scope_payload": _scope_payload_for_account_ids(
+                virtual_mailbox.get("account_ids") or [],
+            ),
             "filter_payload": _to_json_param(virtual_mailbox.get("filter_payload")),
         }
         try:
@@ -127,8 +146,9 @@ class PgVirtualMailboxStore(VirtualMailboxStore):
         params = {
             "virtual_mailbox_id": virtual_mailbox["virtual_mailbox_id"],
             "display_name": virtual_mailbox["display_name"],
-            "scope_kind": virtual_mailbox["scope_kind"],
-            "scope_payload": _to_json_param(virtual_mailbox.get("scope_payload")),
+            "scope_payload": _scope_payload_for_account_ids(
+                virtual_mailbox.get("account_ids") or [],
+            ),
             "filter_payload": _to_json_param(virtual_mailbox.get("filter_payload")),
         }
         try:

@@ -1,12 +1,17 @@
 """
 Pydantic schemas for virtual (fake) mailbox endpoints.
 
-The scope/filter language is intentionally constrained at validation
-time — only the keys whitelisted in :data:`ALLOWED_FILTER_KEYS` may
-appear in ``filter_payload``. Unknown keys raise a 422 at the schema
-layer; if they reached the service they would be silently discarded by
-the repository, which is fine for forward compatibility but worse for
+The filter language is intentionally constrained at validation time —
+only the keys whitelisted in :data:`ALLOWED_FILTER_KEYS` may appear in
+``filter_payload``. Unknown keys raise a 422 at the schema layer; if
+they reached the service they would be silently discarded by the
+repository, which is fine for forward compatibility but worse for
 user-facing diagnostics.
+
+A virtual mailbox is a flat list of ``account_ids`` plus a filter.
+There is no "scope kind" — what used to be ``scope_kind='all'`` /
+``scope_kind='mailbox'`` is now snapshot upstream into the explicit
+list at creation time (see migration 0032).
 """
 
 from __future__ import annotations
@@ -17,29 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-ScopeKind = Literal["mailbox", "all", "accounts"]
 FilterBox = Literal["ALL_MAIL", "SENT", "SPAM", "TRASH"]
-
-
-class VirtualMailboxScopePayload(BaseModel):
-    """Closed-shape payload — exact field set depends on ``scope_kind``.
-
-    Cross-field validation (e.g. ``scope_kind='mailbox'`` requires
-    ``mailbox_id``) is enforced one level up by ``VirtualMailboxCreate``
-    / ``VirtualMailboxUpdate``.
-
-    ``extra="forbid"`` makes the schema consistent with
-    :class:`VirtualMailboxFilterPayload` — without it a typo like
-    ``accountIds`` (camelCase) silently slips through, ``scope_payload``
-    is persisted with the unknown key dropped, and the user sees a
-    "valid" virtual mailbox that returns empty results because the
-    real key was never set.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    mailbox_id: str | None = None
-    account_ids: list[str] | None = None
 
 
 class VirtualMailboxFilterPayload(BaseModel):
@@ -57,10 +40,6 @@ class VirtualMailboxFilterPayload(BaseModel):
     # safe for the SQL side but hides typos from API callers.
     model_config = ConfigDict(extra="forbid")
 
-    # box and box_not_in are mutually exclusive — the model_validator
-    # below enforces that. The default (when both are omitted) excludes
-    # TRASH and SPAM, matching the Favourites view (see
-    # Ignore/Favoritos-Funcionalidad.md).
     # ``min_length=1`` on every free-text criterion turns "send empty string
     # to clear the filter" into a 422 at the schema layer. Without it the
     # repository builders translate ``""`` into wildcard SQL — most visibly,
@@ -72,7 +51,6 @@ class VirtualMailboxFilterPayload(BaseModel):
     box: FilterBox | None = None
     box_not_in: list[FilterBox] | None = None
     from_email: str | None = Field(default=None, min_length=1, max_length=320)
-    from_domain: str | None = Field(default=None, min_length=1, max_length=253)
     subject_contains: str | None = Field(default=None, min_length=1, max_length=200)
     is_read: bool | None = None
     is_favorite: bool | None = None
@@ -90,11 +68,10 @@ ALLOWED_FILTER_KEYS = set(VirtualMailboxFilterPayload.model_fields.keys())
 
 
 class VirtualMailboxCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str = Field(..., min_length=1, max_length=120)
-    scope_kind: ScopeKind
-    scope_payload: VirtualMailboxScopePayload = Field(
-        default_factory=VirtualMailboxScopePayload,
-    )
+    account_ids: list[str] = Field(..., min_length=1)
     filter_payload: VirtualMailboxFilterPayload = Field(
         default_factory=VirtualMailboxFilterPayload,
     )
@@ -112,22 +89,6 @@ class VirtualMailboxCreate(BaseModel):
             return value.strip()
         return value
 
-    @model_validator(mode="after")
-    def _validate_scope_payload(self) -> "VirtualMailboxCreate":
-        sp = self.scope_payload
-        if self.scope_kind == "mailbox":
-            if not sp.mailbox_id:
-                raise ValueError(
-                    "scope_kind='mailbox' requires scope_payload.mailbox_id."
-                )
-        elif self.scope_kind == "accounts":
-            if not sp.account_ids:
-                raise ValueError(
-                    "scope_kind='accounts' requires a non-empty scope_payload.account_ids."
-                )
-        # scope_kind == "all" ignores the payload contents.
-        return self
-
 
 class VirtualMailboxUpdate(VirtualMailboxCreate):
     """Full-field replace — same shape as create."""
@@ -137,8 +98,7 @@ class VirtualMailboxOut(BaseModel):
     virtual_mailbox_id: str
     owner_user_id: str
     display_name: str
-    scope_kind: ScopeKind
-    scope_payload: dict[str, Any]
+    account_ids: list[str]
     filter_payload: dict[str, Any]
     created_at: datetime
     updated_at: datetime

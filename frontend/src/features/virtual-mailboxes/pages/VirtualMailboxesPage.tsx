@@ -3,13 +3,12 @@ import { Link, useParams } from 'react-router-dom';
 import { Filter, Pencil, Plus, Trash2 } from 'lucide-react';
 
 import useVirtualMailboxes from '../hooks/useVirtualMailboxes';
-import useScopePickerData from '../hooks/useScopePickerData';
+import useAccountPickerData from '../hooks/useAccountPickerData';
 import VirtualMailboxForm from '../components/VirtualMailboxForm';
 import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
 import type {
   AccountOut,
-  MailboxOut,
   VirtualMailboxCreate,
   VirtualMailboxOut,
   VirtualMailboxUpdate,
@@ -35,39 +34,17 @@ function boxLabel(value: unknown): string {
   return typeof value === 'string' && BOX_LABELS[value] ? BOX_LABELS[value] : String(value ?? '');
 }
 
-function describeScope(
-  record: VirtualMailboxOut,
-  mailboxes: ReadonlyArray<MailboxOut>,
-  accounts: ReadonlyArray<AccountOut>,
-): string {
-  const sp = record.scope_payload ?? {};
-  switch (record.scope_kind) {
-    case 'all':
-      return 'Todas las bandejas';
-    case 'mailbox': {
-      if (typeof sp.mailbox_id !== 'string') return 'Bandeja concreta';
-      const mb = mailboxes.find((m) => m.mailbox_id === sp.mailbox_id);
-      if (mb) return `Bandeja "${mb.display_name}"`;
-      // Stale reference (mailbox was deleted/transferred). Surface
-      // explicitly instead of showing the raw UUID — the listing endpoint
-      // silently drops these references, see repository_guide.md.
-      return 'Bandeja desconocida';
-    }
-    case 'accounts': {
-      if (!Array.isArray(sp.account_ids) || sp.account_ids.length === 0) {
-        return 'Cuentas seleccionadas';
-      }
-      const labels = (sp.account_ids as string[])
-        .map((aid) => accounts.find((a) => a.account_id === aid))
-        .filter((a): a is AccountOut => Boolean(a))
-        .map((a) => a.email_address ?? a.display_label);
-      if (labels.length === 0) return `${sp.account_ids.length} cuentas (sin acceso actual)`;
-      if (labels.length <= 2) return `Cuentas: ${labels.join(', ')}`;
-      return `${labels.slice(0, 2).join(', ')} (+${labels.length - 2} más)`;
-    }
-    default:
-      return record.scope_kind;
-  }
+function describeAccounts(record: VirtualMailboxOut, accounts: ReadonlyArray<AccountOut>): string {
+  const ids = record.account_ids ?? [];
+  if (ids.length === 0) return 'Sin cuentas seleccionadas';
+  const labels = ids
+    .map((aid) => accounts.find((a) => a.account_id === aid))
+    .filter((a): a is AccountOut => Boolean(a))
+    .map((a) => a.email_address ?? a.display_label);
+  if (labels.length === 0)
+    return `${ids.length} ${ids.length === 1 ? 'cuenta' : 'cuentas'} (sin acceso actual)`;
+  if (labels.length <= 2) return labels.join(', ');
+  return `${labels.slice(0, 2).join(', ')} (+${labels.length - 2} más)`;
 }
 
 function describeFilter(record: VirtualMailboxOut): string {
@@ -84,19 +61,18 @@ function describeFilter(record: VirtualMailboxOut): string {
     parts.push(`fuera de ${labels}`);
   }
   if (typeof fp.from_email === 'string') parts.push(`de ${fp.from_email}`);
-  if (typeof fp.from_domain === 'string') parts.push(`dominio ${fp.from_domain}`);
   if (typeof fp.subject_contains === 'string') parts.push(`asunto "${fp.subject_contains}"`);
   if (typeof fp.is_read === 'boolean') parts.push(fp.is_read ? 'leídos' : 'no leídos');
   if (typeof fp.is_favorite === 'boolean')
     parts.push(fp.is_favorite ? 'favoritos' : 'no favoritos');
-  if (parts.length === 0) return 'Sin filtros (todo el alcance)';
+  if (parts.length === 0) return 'Sin filtros';
   return parts.join(' · ');
 }
 
 export default function VirtualMailboxesPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
   const list = useVirtualMailboxes();
-  const picker = useScopePickerData();
+  const picker = useAccountPickerData();
   const [editor, setEditor] = useState<EditorState>({ kind: 'closed' });
 
   const handleSubmit = async (payload: VirtualMailboxCreate) => {
@@ -168,8 +144,7 @@ export default function VirtualMailboxesPage() {
                   {record.display_name}
                 </Link>
                 <div className="text-xs text-zinc-500">
-                  {describeScope(record, picker.mailboxes, picker.accounts)} ·{' '}
-                  {describeFilter(record)}
+                  {describeAccounts(record, picker.accounts)} · {describeFilter(record)}
                 </div>
               </div>
               <button
