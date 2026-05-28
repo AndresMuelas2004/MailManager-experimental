@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Mail } from 'lucide-react';
 
 import { PROVIDER_OPTIONS, getProviderMeta } from '../../../lib/providers';
@@ -10,10 +10,34 @@ type Props = {
 
 export default function ProviderSelect({ value, onChange }: Props) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const selected = value ? getProviderMeta(value) : null;
 
+  useEffect(() => {
+    if (!open) return;
+
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className="relative flex flex-col gap-2">
+    <div ref={containerRef} className="relative flex flex-col gap-2">
       <label className="text-sm font-medium text-zinc-900">Proveedor</label>
       <button
         type="button"
