@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 2080" font-family="'Inter','Segoe UI',system-ui,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-success" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-loop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-stop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#b91c1c"/>
+    </marker>
+    <marker id="arrow-retry" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#9333ea"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="1520" height="2080" fill="#f8fafc"/>
+
+  <text x="760" y="55" text-anchor="middle" font-size="34" font-weight="700" fill="#0f172a">/cycle-autofix-bugs</text>
+  <text x="760" y="88" text-anchor="middle" font-size="15" fill="#64748b">Bucle autónomo de detección, validación, corrección y testing de bugs en una app web</text>
+
+  <g transform="translate(180,130)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#dc2626"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#7f1d1d">bug-detector</text>
+    <text x="22" y="58" font-size="12" fill="#991b1b">Explora la UI con Playwright</text>
+    <text x="22" y="74" font-size="12" fill="#991b1b">y reporta UN bug nuevo</text>
+  </g>
+  <g transform="translate(480,130)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#ca8a04"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#713f12">bug-validador</text>
+    <text x="22" y="58" font-size="12" fill="#854d0e">Filtra falsos positivos</text>
+    <text x="22" y="74" font-size="12" fill="#854d0e">leyendo CLAUDE.md y guías</text>
+  </g>
+  <g transform="translate(780,130)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#ea580c"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#7c2d12">bug-correccion</text>
+    <text x="22" y="58" font-size="12" fill="#9a3412">Aplica el fix mínimo</text>
+    <text x="22" y="74" font-size="12" fill="#9a3412">sin Playwright ni git</text>
+  </g>
+  <g transform="translate(1080,130)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#16a34a"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#14532d">bug-tester</text>
+    <text x="22" y="58" font-size="12" fill="#166534">Reproduce con Playwright</text>
+    <text x="22" y="74" font-size="12" fill="#166534">y commitea local si pasa</text>
+  </g>
+
+  <line x1="80" y1="250" x2="1440" y2="250" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="760" y="285" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">ARRANQUE — UNA SOLA VEZ</text>
+
+  <g filter="url(#shadow)">
+    <rect x="595" y="305" width="330" height="90" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+    <text x="760" y="338" text-anchor="middle" font-size="15" font-weight="700" fill="#1e293b">Preparación inicial</text>
+    <text x="760" y="360" text-anchor="middle" font-size="12" fill="#64748b">Crear bug-analisis/ · verificar .gitignore</text>
+    <text x="760" y="377" text-anchor="middle" font-size="12" fill="#64748b">working tree limpio · app en localhost</text>
+  </g>
+
+  <line x1="760" y1="395" x2="760" y2="485" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="455" width="1440" height="1545" rx="20" fill="#ffffff" fill-opacity="0.5" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+
+  <rect x="675" y="438" width="170" height="20" fill="#f8fafc"/>
+  <text x="760" y="453" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">BUCLE PRINCIPAL</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="485" width="400" height="100" rx="14" fill="#fef2f2" stroke="#dc2626" stroke-width="2.5"/>
+    <text x="575" y="513" font-size="11" font-weight="700" fill="#dc2626" letter-spacing="2">FASE 1 · DETECCIÓN</text>
+    <text x="575" y="545" font-size="18" font-weight="700" fill="#7f1d1d">bug-detector</text>
+    <text x="575" y="568" font-size="12" fill="#991b1b">Navega la UI buscando un fallo nuevo</text>
+  </g>
+  <line x1="760" y1="585" x2="760" y2="640" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="760,640 890,720 760,800 630,720" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="760" y="715" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿Resultado?</text>
+    <text x="760" y="735" text-anchor="middle" font-size="11" fill="#64748b">del detector</text>
+  </g>
+
+  <line x1="630" y1="720" x2="460" y2="720" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="545" y="710" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">contrato no cumplido</text>
+  <g filter="url(#shadow)">
+    <rect x="150" y="685" width="310" height="70" rx="12" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+    <text x="305" y="713" text-anchor="middle" font-size="14" font-weight="700" fill="#7f1d1d">Parada excepcional</text>
+    <text x="305" y="734" text-anchor="middle" font-size="11" fill="#991b1b">aborta y reporta al usuario</text>
+  </g>
+
+  <line x1="890" y1="720" x2="1060" y2="720" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-success)"/>
+  <text x="975" y="710" text-anchor="middle" font-size="11" font-weight="600" fill="#16a34a">NO_BUGS_FOUND</text>
+  <g filter="url(#shadow)">
+    <rect x="1060" y="685" width="310" height="70" rx="12" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="1215" y="713" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">Fin natural del ciclo</text>
+    <text x="1215" y="734" text-anchor="middle" font-size="11" fill="#15803d">no quedan bugs por reportar</text>
+  </g>
+
+  <line x1="760" y1="800" x2="760" y2="855" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="795" y="833" font-size="11" font-weight="600" fill="#1e293b">BUG_FOUND</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="855" width="400" height="100" rx="14" fill="#fefce8" stroke="#ca8a04" stroke-width="2.5"/>
+    <text x="575" y="883" font-size="11" font-weight="700" fill="#ca8a04" letter-spacing="2">FASE 2 · VALIDACIÓN</text>
+    <text x="575" y="915" font-size="18" font-weight="700" fill="#713f12">bug-validador</text>
+    <text x="575" y="938" font-size="12" fill="#854d0e">¿Es realmente un bug o intención de diseño?</text>
+  </g>
+  <line x1="760" y1="955" x2="760" y2="1010" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="760,1010 890,1090 760,1170 630,1090" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="760" y="1085" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿Veredicto?</text>
+    <text x="760" y="1105" text-anchor="middle" font-size="11" fill="#64748b">del validador</text>
+  </g>
+
+  <line x1="630" y1="1090" x2="460" y2="1090" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+  <text x="545" y="1080" text-anchor="middle" font-size="11" font-weight="600" fill="#2563eb">FALSE_POSITIVE</text>
+  <g filter="url(#shadow)">
+    <rect x="150" y="1055" width="310" height="70" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="305" y="1083" text-anchor="middle" font-size="13" font-weight="700" fill="#1e40af">Borra el md del ledger</text>
+    <text x="305" y="1103" text-anchor="middle" font-size="11" fill="#1d4ed8">y vuelve a Fase 1</text>
+  </g>
+
+  <path d="M 150,1090 L 90,1090 L 90,535 L 560,535" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+  <text x="105" y="810" text-anchor="middle" font-size="10" font-style="italic" fill="#2563eb" transform="rotate(-90,105,810)">vuelve a Fase 1</text>
+
+  <line x1="760" y1="1170" x2="760" y2="1225" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="795" y="1203" font-size="11" font-weight="600" fill="#1e293b">REAL_BUG</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="1225" width="400" height="100" rx="14" fill="#fff7ed" stroke="#ea580c" stroke-width="2.5"/>
+    <text x="575" y="1253" font-size="11" font-weight="700" fill="#ea580c" letter-spacing="2">FASE 3 · CORRECCIÓN</text>
+    <text x="575" y="1285" font-size="18" font-weight="700" fill="#7c2d12">bug-correccion</text>
+    <text x="575" y="1308" font-size="12" fill="#9a3412">fix_attempts++ · edita solo lo necesario</text>
+  </g>
+  <line x1="760" y1="1325" x2="760" y2="1380" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="760,1380 890,1460 760,1540 630,1460" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="760" y="1455" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿Veredicto?</text>
+    <text x="760" y="1475" text-anchor="middle" font-size="11" fill="#64748b">del corrector</text>
+  </g>
+
+  <line x1="890" y1="1460" x2="1020" y2="1460" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-retry)"/>
+  <text x="955" y="1450" text-anchor="middle" font-size="11" font-weight="600" fill="#9333ea">FIX_FAILED</text>
+
+  <line x1="760" y1="1540" x2="760" y2="1595" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="795" y="1573" font-size="11" font-weight="600" fill="#1e293b">FIX_APPLIED</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="1595" width="400" height="100" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2.5"/>
+    <text x="575" y="1623" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="2">FASE 4 · TEST + COMMIT</text>
+    <text x="575" y="1655" font-size="18" font-weight="700" fill="#14532d">bug-tester</text>
+    <text x="575" y="1678" font-size="12" fill="#166534">Reproduce con Playwright y commitea si pasa</text>
+  </g>
+  <line x1="760" y1="1695" x2="760" y2="1750" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="760,1750 900,1840 760,1930 620,1840" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="760" y="1835" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿Veredicto?</text>
+    <text x="760" y="1855" text-anchor="middle" font-size="11" fill="#64748b">del tester</text>
+  </g>
+
+  <line x1="620" y1="1840" x2="460" y2="1840" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="540" y="1828" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">TESTER_COMMIT_FAILED</text>
+  <g filter="url(#shadow)">
+    <rect x="150" y="1805" width="310" height="70" rx="12" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+    <text x="305" y="1833" text-anchor="middle" font-size="14" font-weight="700" fill="#7f1d1d">Parada excepcional</text>
+    <text x="305" y="1854" text-anchor="middle" font-size="11" fill="#991b1b">no resuelvas hooks/conflictos</text>
+  </g>
+
+  <path d="M 900,1840 L 980,1840 L 980,1700" fill="none" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-retry)"/>
+  <text x="1000" y="1810" font-size="11" font-weight="600" fill="#9333ea">BUG_STILL_BROKEN</text>
+
+  <line x1="760" y1="1930" x2="760" y2="1995" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+  <text x="795" y="1970" font-size="11" font-weight="600" fill="#16a34a">ÉXITO + commit local hecho</text>
+
+  <path d="M 760,1995 L 1450,1995 L 1450,535 L 960,535" fill="none" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+  <text x="1465" y="1280" text-anchor="middle" font-size="10" font-style="italic" fill="#16a34a" transform="rotate(-90,1465,1280)">vuelve a Fase 1</text>
+
+  <g filter="url(#shadow)">
+    <rect x="1020" y="1380" width="400" height="320" rx="14" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <text x="1220" y="1410" text-anchor="middle" font-size="13" font-weight="700" fill="#6b21a8" letter-spacing="2">MANEJO DE RETRY</text>
+
+    <polygon points="1220,1430 1320,1485 1220,1540 1120,1485" fill="#ffffff" stroke="#9333ea" stroke-width="2"/>
+    <text x="1220" y="1482" text-anchor="middle" font-size="12" font-weight="700" fill="#6b21a8">fix_attempts</text>
+    <text x="1220" y="1502" text-anchor="middle" font-size="12" font-weight="700" fill="#6b21a8">&lt; 3?</text>
+
+    <line x1="1140" y1="1505" x2="1100" y2="1560" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-success)"/>
+    <text x="1098" y="1530" font-size="11" font-weight="700" fill="#16a34a">SÍ</text>
+
+    <rect x="1040" y="1560" width="170" height="60" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="1125" y="1583" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Vuelve a Fase 3</text>
+    <text x="1125" y="1602" text-anchor="middle" font-size="10" fill="#15803d">corrector reintenta</text>
+
+    <line x1="1300" y1="1505" x2="1340" y2="1560" stroke="#dc2626" stroke-width="2" marker-end="url(#arrow-stop)"/>
+    <text x="1315" y="1530" font-size="11" font-weight="700" fill="#dc2626">NO</text>
+
+    <rect x="1230" y="1560" width="170" height="60" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="1315" y="1583" text-anchor="middle" font-size="12" font-weight="700" fill="#7f1d1d">Marca unfixable</text>
+    <text x="1315" y="1602" text-anchor="middle" font-size="10" fill="#991b1b">y vuelve a Fase 1</text>
+
+    <line x1="1040" y1="1638" x2="1400" y2="1638" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="1220" y="1658" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">"unfixable" NO es parada del ciclo:</text>
+    <text x="1220" y="1675" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">se anota el bug y el ciclo sigue</text>
+  </g>
+
+  <text x="760" y="2025" text-anchor="middle" font-size="11" fill="#64748b">Sin sleeps · sin polling · 1 bug por iteración · ledger en bug-analisis/ (gitignored) · sin push automático</text>
+  <text x="760" y="2048" text-anchor="middle" font-size="11" fill="#94a3b8">Parada manual: Esc en cualquier momento durante la ejecución</text>
+</svg>
