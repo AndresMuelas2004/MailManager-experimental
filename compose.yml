@@ -1,0 +1,62 @@
+name: mailmanager
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailmanager
+      POSTGRES_PASSWORD: mailmanager
+      POSTGRES_DB: mailmanager
+    ports:
+      - "5432:5432"
+    volumes:
+      - mailmanager_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailmanager -d mailmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backend:/app
+      - ./frontend:/frontend:ro
+      - "C:/Users/amuel/Desktop/SecureCredentials/MailApp:/secrets:ro"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      uvicorn api.app:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+
+volumes:
+  mailmanager_pgdata:

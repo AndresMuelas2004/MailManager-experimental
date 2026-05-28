@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+Scripts/ejecucion_unica/
+Scripts/EXECUTION_MDs/
+.env
+.env.*
+!.env.docker.example
+*.log
