@@ -147,6 +147,28 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected list provider message IDs error ({type(exc).__name__}): {exc}"
             ) from exc
 
+    def list_provider_message_ids_not_in(
+        self, account_id: str, exclude_ids: list[str],
+    ) -> list[str]:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        queries.LIST_PROVIDER_MESSAGE_IDS_NOT_IN,
+                        {"account_id": account_id, "exclude_ids": list(exclude_ids)},
+                    )
+                    return [row[0] for row in cur.fetchall()]
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list provider message IDs not in exclude set.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected list provider message IDs not-in error ({type(exc).__name__}): {exc}"
+            ) from exc
+
     def exists(self, account_id: str, provider_message_id: str) -> bool:
         try:
             with connection.get_connection() as conn:

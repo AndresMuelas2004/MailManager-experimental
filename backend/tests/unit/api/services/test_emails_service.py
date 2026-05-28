@@ -387,10 +387,11 @@ class TestReconciliation:
             "is_full_sync": True,
             "existing_message_ids": ["m1"],
         })
-        # DB has m1 + m_ghost; bootstrap only returned m1
+        # The SQL set-difference (M8) already excludes the bootstrap ids, so
+        # the suspect loader returns only m_ghost.
         monkeypatch.setattr(
-            emails_service, "load_stored_message_ids",
-            lambda _aid, **_kw: ["m1", "m_ghost"],
+            emails_service, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: ["m_ghost"],
         )
         delete_calls = []
         monkeypatch.setattr(
@@ -408,8 +409,8 @@ class TestReconciliation:
         })
         load_calls = []
         monkeypatch.setattr(
-            emails_service, "load_stored_message_ids",
-            lambda _aid, **_kw: (load_calls.append(_aid), [])[1],
+            emails_service, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: (load_calls.append(_aid), [])[1],
         )
         emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
         assert load_calls == []
@@ -421,23 +422,23 @@ class TestReconciliation:
             "verify_exc": RuntimeError("API down"),
         })
         monkeypatch.setattr(
-            emails_service, "load_stored_message_ids",
-            lambda _aid, **_kw: ["m1", "m_ghost"],
+            emails_service, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: ["m_ghost"],
         )
         # Should not raise
         result = emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
         assert result.total_synced >= 0
 
     def test_no_ghosts_means_no_deletes(self, monkeypatch):
-        """If all stored IDs are in bootstrap set, no deletes should happen."""
+        """If the suspect set is empty, no deletes should happen."""
         _patch_common(monkeypatch, fake_client_kwargs={
             "is_full_sync": True,
             "existing_message_ids": ["m1"],
         })
-        # DB has exactly the same IDs as bootstrap
+        # SQL diff returns no suspects (every stored id was in the bootstrap set).
         monkeypatch.setattr(
-            emails_service, "load_stored_message_ids",
-            lambda _aid, **_kw: ["m1"],
+            emails_service, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: [],
         )
         delete_calls = []
         monkeypatch.setattr(
@@ -456,8 +457,8 @@ class TestReconciliation:
             "existing_message_ids": [],  # nothing exists at provider
         })
         monkeypatch.setattr(
-            emails_service, "load_stored_message_ids",
-            lambda _aid, **_kw: ["m1", "ghost1", "ghost2"],
+            emails_service, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: ["ghost1", "ghost2"],
         )
         delete_calls = []
         monkeypatch.setattr(

@@ -33,25 +33,6 @@ _MAILBOX_ID = "mb-1"
 _ACCOUNT_ID = "acc-1"
 
 
-def _fake_mailbox(mailbox_id=_MAILBOX_ID, owner=_USER_ID):
-    return {
-        "mailbox_id": mailbox_id,
-        "owner_user_id": owner,
-        "display_name": "fake",
-        "created_at": "2026-05-19T00:00:00+00:00",
-    }
-
-
-def _fake_account(account_id=_ACCOUNT_ID, mailbox_id=_MAILBOX_ID):
-    return {
-        "account_id": account_id,
-        "mailbox_id": mailbox_id,
-        "provider": "gmail",
-        "display_label": "test",
-        "email_address": "x@example.com",
-    }
-
-
 def _fake_record(
     *,
     virtual_mailbox_id="vmb-1",
@@ -72,16 +53,19 @@ def _fake_record(
 
 
 def _patch_user_catalogue(monkeypatch, *, accounts=None):
-    """Wire monkeypatches so the user owns ``accounts`` (default: [_ACCOUNT_ID])."""
+    """Wire monkeypatches so the user owns ``accounts`` (default: [_ACCOUNT_ID]).
+
+    Single mock now: ``_owned_account_ids`` uses the JOIN-based
+    ``account_store.list_account_ids_by_user`` instead of the prior
+    ``mailbox_store.list_by_owner`` + per-mailbox ``list_by_mailbox``
+    pattern (N+1 fix). Tests that need to assert the catalogue lookup
+    happens only need to monkeypatch this one entry point.
+    """
     if accounts is None:
         accounts = [_ACCOUNT_ID]
     monkeypatch.setattr(
-        virtual_mailboxes_service.mailbox_store, "list_by_owner",
-        lambda _uid: [_fake_mailbox()],
-    )
-    monkeypatch.setattr(
-        virtual_mailboxes_service.account_store, "list_by_mailbox",
-        lambda _mid: [_fake_account(account_id=aid) for aid in accounts],
+        virtual_mailboxes_service.account_store, "list_account_ids_by_user",
+        lambda _uid: list(accounts),
     )
 
 
@@ -386,7 +370,7 @@ class TestListEmailsForVirtualMailbox:
             lambda _vid: record,
         )
         monkeypatch.setattr(
-            virtual_mailboxes_service.mailbox_store, "list_by_owner",
+            virtual_mailboxes_service.account_store, "list_account_ids_by_user",
             lambda _uid: [],
         )
         called = {"list_filtered": False}

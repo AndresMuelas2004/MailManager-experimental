@@ -60,6 +60,18 @@ class AccountStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_account_ids_by_user(self, user_id: str) -> list[str]:
+        """Single-JOIN listing of every account_id owned by ``user_id``.
+
+        Used by flows that need to validate a flat set of account ids
+        against the user's owned catalogue (virtual mailboxes are the
+        canonical caller). Replaces the prior O(N_mailboxes) pattern of
+        ``mailbox_store.list_by_owner`` followed by one
+        ``account_store.list_by_mailbox`` per mailbox.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -77,6 +89,10 @@ class AccountStore(ABC):
 
     @abstractmethod
     def get_sync_cursor(self, mailbox_id: str, account_id: str) -> str | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_sync_cursors_for_mailbox(self, mailbox_id: str) -> dict[str, str | None]:
         raise NotImplementedError
 
     @abstractmethod
@@ -107,6 +123,12 @@ class EmailMetadataStore(ABC):
 
     @abstractmethod
     def list_provider_message_ids(self, account_id: str) -> list[str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_provider_message_ids_not_in(
+        self, account_id: str, exclude_ids: list[str],
+    ) -> list[str]:
         raise NotImplementedError
 
     @abstractmethod

@@ -74,6 +74,19 @@ LIST_PROVIDER_MESSAGE_IDS_BY_ACCOUNT = """
     WHERE account_id = %(account_id)s
 """
 
+# Ghost-email reconciliation: only the stored ids NOT present in the
+# bootstrap set. Pushing the set-difference into SQL keeps the result bounded
+# to the suspect rows instead of loading every provider_message_id of the
+# account into Python (a full-sync of a large account could be tens of
+# thousands). The ``::text[]`` cast lets an empty exclude list bind cleanly
+# (``!= ALL('{}')`` is TRUE for every row → every stored id is a suspect).
+LIST_PROVIDER_MESSAGE_IDS_NOT_IN = """
+    SELECT provider_message_id
+    FROM email_metadata
+    WHERE account_id = %(account_id)s
+      AND provider_message_id != ALL(%(exclude_ids)s::text[])
+"""
+
 GET_TRASH_EMAILS_BY_IDS = """
     SELECT provider_message_id, account_id, box, previous_box
     FROM email_metadata

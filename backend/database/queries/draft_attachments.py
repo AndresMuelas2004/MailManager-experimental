@@ -73,6 +73,15 @@ GET_DRAFT_ATTACHMENT = """
 # uploads (drag & drop, file picker). The pair backs the R-12
 # idempotency check so a retry of the copy endpoint skips rows that
 # already landed in this draft.
+#
+# N+1 note (M9, deliberately kept): ``position`` is resolved per row by the
+# atomic ``COALESCE((SELECT MAX(position)+1 ...), 0)`` sub-select below, which
+# prevents a naive multi-row ``VALUES`` batch — every row would read the same
+# ``MAX(position)`` and collide. Callers therefore insert in a loop
+# (``copy_attachments_from_email``, ``_persist_outlook_forward_inherited_attachments``).
+# The loop is bounded to 25 inserts by D-03 and, for the copy path, latency is
+# dominated by the per-attachment download, so a ``ROW_NUMBER()``-over-CTE batch
+# is not worth the added complexity here.
 INSERT_DRAFT_ATTACHMENT = """
     INSERT INTO draft_attachments (
         draft_attachment_id, account_id, provider_draft_id,

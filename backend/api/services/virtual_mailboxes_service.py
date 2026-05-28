@@ -46,7 +46,6 @@ from database import (
     account_store,
     DatabaseError,
     email_metadata_store,
-    mailbox_store,
     virtual_mailbox_store,
 )
 
@@ -89,46 +88,25 @@ def _owned_account_ids(user_id: str) -> set[str]:
     """Return the set of every ``account_id`` the user owns across all of
     their real mailboxes.
 
-    Re-resolved on every CRUD and every read because the underlying
-    catalogue is the source of truth: a revoked mailbox or a deleted
-    account must not be exposed through a stale virtual-mailbox
-    definition.
+    Single JOIN query (no N+1) — replaces the prior pattern of one
+    ``mailbox_store.list_by_owner`` plus one ``list_by_mailbox`` per
+    mailbox. Re-resolved on every CRUD and every read because the
+    underlying catalogue is the source of truth: a revoked mailbox or
+    a deleted account must not be exposed through a stale
+    virtual-mailbox definition.
     """
     try:
-        user_mailboxes = mailbox_store.list_by_owner(user_id)
+        return set(account_store.list_account_ids_by_user(user_id))
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
     except Exception as exc:
         logger.warning(
-            "Unexpected mailbox listing error during virtual mailbox account resolution (%s): %s",
+            "Unexpected error listing owned account_ids during virtual mailbox account resolution (%s): %s",
             type(exc).__name__, exc,
         )
         raise VirtualMailboxOperationError(
-            "Failed to list user mailboxes while resolving virtual mailbox accounts."
+            "Failed to list owned accounts while resolving virtual mailbox accounts."
         ) from exc
-
-    owned: set[str] = set()
-    for mailbox in user_mailboxes:
-        mid = str(mailbox.get("mailbox_id") or "")
-        if not mid:
-            continue
-        try:
-            accounts = account_store.list_by_mailbox(mid)
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected account listing error during virtual mailbox account resolution (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise VirtualMailboxOperationError(
-                "Failed to list accounts while resolving virtual mailbox accounts."
-            ) from exc
-        for account in accounts:
-            aid = str(account.get("account_id") or "")
-            if aid:
-                owned.add(aid)
-    return owned
 
 
 def _validate_account_ids_owned_by_user(

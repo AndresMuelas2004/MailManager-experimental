@@ -37,6 +37,19 @@ GET_ACCOUNT_BY_ID_FOR_USER = """
       AND m.owner_user_id = %(user_id)s
 """
 
+# Single-JOIN listing of every account the user owns across all of
+# their mailboxes. Replaces the prior O(1 + N_mailboxes) pattern of
+# ``mailbox_store.list_by_owner`` + one ``account_store.list_by_mailbox``
+# per mailbox used by the virtual-mailbox ownership pre-check. Same
+# JOIN shape as ``GET_ACCOUNT_BY_ID_FOR_USER`` minus the account_id
+# filter.
+LIST_ACCOUNT_IDS_BY_USER = """
+    SELECT a.account_id
+    FROM accounts a
+    INNER JOIN mailboxes m ON m.mailbox_id = a.mailbox_id
+    WHERE m.owner_user_id = %(user_id)s
+"""
+
 UPSERT_ACCOUNT = """
     INSERT INTO accounts (account_id, mailbox_id, provider, display_label, config)
     VALUES (%(account_id)s, %(mailbox_id)s, %(provider)s, %(display_label)s, %(config)s::jsonb)
@@ -123,6 +136,14 @@ BACKFILL_LEGACY_TOKENS = """
 GET_SYNC_CURSOR = """
     SELECT sync_cursor FROM accounts
     WHERE account_id = %(account_id)s AND mailbox_id = %(mailbox_id)s
+"""
+
+# Batch variant: all sync cursors for a mailbox in a single round trip
+# (covered by idx_accounts_mailbox_id). Avoids the N+1 of GET_SYNC_CURSOR
+# once per account during a metadata sync.
+GET_SYNC_CURSORS_BY_MAILBOX = """
+    SELECT account_id, sync_cursor FROM accounts
+    WHERE mailbox_id = %(mailbox_id)s
 """
 
 UPDATE_SYNC_CURSOR = """

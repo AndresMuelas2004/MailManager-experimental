@@ -476,16 +476,27 @@ def load_sync_cursors(
     *,
     fallback: type[ApiError] = ApiError,
 ) -> dict[str, str | None]:
-    """Load the sync cursor for each account, keyed by account label."""
+    """Load the sync cursor for each account, keyed by account label.
+
+    Batches the lookup per distinct mailbox (one query each) instead of one
+    query per account, avoiding the N+1 round trips the previous per-account
+    ``get_sync_cursor`` loop produced.
+    """
+    mailbox_ids = {mailbox_id for (mailbox_id, _aid, _provider) in label_lookup.values()}
+    try:
+        cursors_by_mailbox = {
+            mailbox_id: account_store.get_sync_cursors_for_mailbox(mailbox_id)
+            for mailbox_id in mailbox_ids
+        }
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected sync cursor load error (%s): %s", type(exc).__name__, exc)
+        raise fallback("Failed to load sync cursor.") from exc
+
     cursors: dict[str, str | None] = {}
     for label, (mailbox_id, account_id, _provider) in label_lookup.items():
-        try:
-            cursors[label] = account_store.get_sync_cursor(mailbox_id, account_id)
-        except DatabaseError as exc:
-            raise translate_database_error(exc) from exc
-        except Exception as exc:
-            logger.warning("Unexpected sync cursor load error (%s): %s", type(exc).__name__, exc)
-            raise fallback("Failed to load sync cursor.") from exc
+        cursors[label] = cursors_by_mailbox.get(mailbox_id, {}).get(account_id)
     return cursors
 
 
@@ -591,6 +602,27 @@ def load_stored_message_ids(
     except Exception as exc:
         logger.warning("Unexpected stored message IDs load error (%s): %s", type(exc).__name__, exc)
         raise fallback("Failed to load stored message IDs.") from exc
+
+
+def load_suspect_message_ids(
+    account_id: str,
+    bootstrap_ids: list[str],
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> list[str]:
+    """Load stored provider_message_ids NOT present in ``bootstrap_ids``.
+
+    The set-difference runs server-side (LIST_PROVIDER_MESSAGE_IDS_NOT_IN) so
+    only the suspect rows cross the wire — used by ghost-email reconciliation
+    instead of loading every stored id into memory to diff in Python.
+    """
+    try:
+        return email_metadata_store.list_provider_message_ids_not_in(account_id, bootstrap_ids)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected suspect message IDs load error (%s): %s", type(exc).__name__, exc)
+        raise fallback("Failed to load suspect message IDs.") from exc
 
 
 def get_trash_emails_by_ids(

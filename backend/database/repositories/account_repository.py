@@ -207,6 +207,27 @@ class PgAccountStore(AccountStore):
             return None
         return _row_to_dict(row)
 
+    def list_account_ids_by_user(self, user_id: str) -> list[str]:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        accounts.LIST_ACCOUNT_IDS_BY_USER,
+                        {"user_id": user_id},
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list account_ids by user.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected account list_account_ids_by_user error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return [str(row["account_id"]) for row in rows if row.get("account_id") is not None]
+
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         params = dict(account)
         if isinstance(params.get("config"), dict):
@@ -401,6 +422,27 @@ class PgAccountStore(AccountStore):
         if row is None:
             return None
         return row.get("sync_cursor")
+
+    def get_sync_cursors_for_mailbox(self, mailbox_id: str) -> dict[str, str | None]:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        accounts.GET_SYNC_CURSORS_BY_MAILBOX,
+                        {"mailbox_id": mailbox_id},
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return {}
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to read sync cursors for mailbox.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected sync cursors batch get error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return {str(row["account_id"]): row.get("sync_cursor") for row in rows}
 
     def update_sync_cursor(self, mailbox_id: str, account_id: str, cursor: str) -> None:
         try:

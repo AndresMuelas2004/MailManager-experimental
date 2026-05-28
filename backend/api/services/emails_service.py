@@ -66,7 +66,7 @@ from api.services.services_helpers import (
     ensure_mailbox_access,
     get_email_content,
     get_trash_emails_by_ids,
-    load_stored_message_ids,
+    load_suspect_message_ids,
     load_sync_cursors,
     load_wrapped_account_tokens,
     load_wrapped_app_credentials,
@@ -105,17 +105,19 @@ def _reconcile_ghost_emails(
 ) -> tuple[int, list[str]]:
     """Best-effort: verify DB emails still exist at provider after bootstrap.
     Returns (deleted_count, ghost_ids). Skips on any error."""
+    # Push the set-difference into SQL: only the stored ids absent from the
+    # bootstrap set come back, instead of loading every stored id to diff in
+    # Python (M8 — bounded memory on large full-syncs).
+    bootstrap_ids = [m.provider_message_id for m in sync_result.upserts]
     try:
-        stored_ids = load_stored_message_ids(account_id)
+        suspect_ids = load_suspect_message_ids(account_id, bootstrap_ids)
     except Exception as exc:
         logger.warning(
-            "Reconciliation skipped for %s: failed to load stored IDs (%s): %s",
+            "Reconciliation skipped for %s: failed to load suspect IDs (%s): %s",
             account_id, type(exc).__name__, exc,
         )
         return 0, []
 
-    bootstrap_ids = {m.provider_message_id for m in sync_result.upserts}
-    suspect_ids = [mid for mid in stored_ids if mid not in bootstrap_ids]
     if not suspect_ids:
         return 0, []
 

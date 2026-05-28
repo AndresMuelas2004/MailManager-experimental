@@ -29,6 +29,7 @@ from api.services.services_helpers import (
     get_trash_emails_by_ids,
     is_auth_error,
     load_stored_message_ids,
+    load_suspect_message_ids,
     load_sync_cursors,
     load_wrapped_account_tokens,
     load_wrapped_app_credentials,
@@ -549,21 +550,37 @@ class TestLoadSyncCursors:
     def test_happy_path_returns_cursor_dict(self):
         lookup = {"mb__acc1": ("mb", "acc1", "gmail")}
         with patch("api.services.services_helpers.account_store") as mock_store:
-            mock_store.get_sync_cursor.return_value = "cursor-123"
+            mock_store.get_sync_cursors_for_mailbox.return_value = {"acc1": "cursor-123"}
             result = load_sync_cursors(lookup)
         assert result == {"mb__acc1": "cursor-123"}
+
+    def test_batches_one_query_per_mailbox_for_many_accounts(self):
+        # M7: N accounts in the same mailbox resolve in a SINGLE batch query,
+        # not one query per account.
+        lookup = {
+            "mb__acc1": ("mb", "acc1", "gmail"),
+            "mb__acc2": ("mb", "acc2", "outlook"),
+            "mb__acc3": ("mb", "acc3", "gmail"),
+        }
+        with patch("api.services.services_helpers.account_store") as mock_store:
+            mock_store.get_sync_cursors_for_mailbox.return_value = {
+                "acc1": "c1", "acc2": None, "acc3": "c3",
+            }
+            result = load_sync_cursors(lookup)
+        assert mock_store.get_sync_cursors_for_mailbox.call_count == 1
+        assert result == {"mb__acc1": "c1", "mb__acc2": None, "mb__acc3": "c3"}
 
     def test_database_error_translated(self):
         lookup = {"mb__acc1": ("mb", "acc1", "gmail")}
         with patch("api.services.services_helpers.account_store") as mock_store:
-            mock_store.get_sync_cursor.side_effect = QueryError("DB fail")
+            mock_store.get_sync_cursors_for_mailbox.side_effect = QueryError("DB fail")
             with pytest.raises(DatabaseQueryError):
                 load_sync_cursors(lookup)
 
     def test_generic_exception_raises_api_error(self):
         lookup = {"mb__acc1": ("mb", "acc1", "gmail")}
         with patch("api.services.services_helpers.account_store") as mock_store:
-            mock_store.get_sync_cursor.side_effect = RuntimeError("boom")
+            mock_store.get_sync_cursors_for_mailbox.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to load sync cursor"):
                 load_sync_cursors(lookup)
 
@@ -687,6 +704,34 @@ class TestLoadStoredMessageIds:
             mock_store.list_provider_message_ids.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to load stored message IDs"):
                 load_stored_message_ids("acc-1")
+
+
+# ------------------------------------------------------------------
+# load_suspect_message_ids
+# ------------------------------------------------------------------
+
+class TestLoadSuspectMessageIds:
+
+    def test_happy_path_returns_suspect_ids(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.list_provider_message_ids_not_in.return_value = ["ghost1"]
+            result = load_suspect_message_ids("acc-1", ["boot1", "boot2"])
+        assert result == ["ghost1"]
+        mock_store.list_provider_message_ids_not_in.assert_called_once_with(
+            "acc-1", ["boot1", "boot2"],
+        )
+
+    def test_database_error_translated(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.list_provider_message_ids_not_in.side_effect = QueryError("DB fail")
+            with pytest.raises(DatabaseQueryError):
+                load_suspect_message_ids("acc-1", [])
+
+    def test_generic_exception_raises_api_error(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.list_provider_message_ids_not_in.side_effect = RuntimeError("boom")
+            with pytest.raises(ApiError, match="Failed to load suspect message IDs"):
+                load_suspect_message_ids("acc-1", [])
 
 
 # ------------------------------------------------------------------
