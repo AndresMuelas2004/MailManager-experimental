@@ -137,7 +137,26 @@ If `--ff-only` rejects (local master has commits not on origin/master, which sho
 
 ### 2.3 Remove the worktree
 
-The worktree no longer needs to exist. Remove the git registration first, then the directory:
+The worktree no longer needs to exist. First clean up its Podman stack (idempotent — does nothing if no stack was ever started), then remove the git registration and the directory:
+
+#### 2.3.0 Clean up the Podman stack of the shipped worktree
+
+Compute `<branch-name-lc>` by lowercasing `<branch-name>` (Podman Compose project names only allow lowercase + digits + dash). Then run:
+
+```bash
+podman compose --project-name mailmanager-<branch-name-lc> down -v --remove-orphans
+```
+
+Idempotent: if no containers/volumes/network exist for that project (the worktree was never started, or already cleaned up), it returns `0` with no error. If anything was up, it brings containers down, removes them, deletes the `mailmanager-<branch-name-lc>_mailmanager_pgdata` volume, deletes the `mailmanager-<branch-name-lc>_default` network, and releases bind mounts to the worktree directory.
+
+This step is **mandatory before `git worktree remove`** because:
+1. If the postgres container of the worktree were still up, its bind mount to the worktree directory would hold a file lock that makes `git worktree remove --force` fail and trigger the costly Locked Directory Recovery unnecessarily.
+2. Without it, the volume and any stopped containers would survive the ship as orphans in Podman.
+
+**Output to chat:**
+> Stack Podman cleanup for `mailmanager-<branch-name-lc>`: done (idempotent).
+
+#### 2.3.1 Remove the git worktree
 
 ```bash
 git worktree remove <worktree-path> --force
@@ -208,25 +227,14 @@ foreach ($p in (Get-Process)) {
 } | Format-List
 ```
 
-**Step 2 — Classify each process and act.** The lockers are almost always the same set on this machine:
+**Step 2 — Kill the lockers.** The lockers are almost always orphan MCP servers from previous Claude Code sessions launched in this worktree (typically `glance-mcp` from the `npx → cmd → glance-mcp.mjs` tree, several per session).
 
-| Process pattern | Action | Why |
-|---|---|---|
-| `glance-mcp` (any process whose name matches `glance-mcp` and whose CWD is inside the worktree — typically several from the `npx → cmd → glance-mcp.mjs` tree per Claude session) | Kill with `Stop-Process -Id <pid> -Force` | Orphan MCP servers from previous Claude Code sessions launched in this worktree. Safe to terminate. |
-| `cmd /c postgres.exe -D "C:/Program Files/PostgreSQL/16/data"` (PID of the postmaster wrapper) | **DO NOT kill with `Stop-Process`.** Use the clean stop in Step 3. | This is the shared local PostgreSQL server. A forced kill can corrupt in-flight transactions and violates `common_mistakes.md #3`. |
-| Anything else | Kill with `Stop-Process -Id <pid> -Force` AND notify the user in chat with one line: `Killed unexpected locker: PID=<pid> Name=<name> Cmd=<cmdline>`. The user wants to know about novel offenders so future runs can predict them. | These should not normally appear; surfacing them lets the user investigate or extend this list. |
+| Process pattern | Action |
+|---|---|
+| `glance-mcp` (any process whose name matches `glance-mcp` and whose CWD is inside the worktree) | Kill with `Stop-Process -Id <pid> -Force` |
+| Anything else | Kill with `Stop-Process -Id <pid> -Force` AND notify the user in chat with one line: `Killed unexpected locker: PID=<pid> Name=<name> Cmd=<cmdline>`. Novel offenders are worth surfacing so future runs can predict them. |
 
-Apply the kills in any order; only PostgreSQL is special.
-
-**Step 3 — Stop PostgreSQL cleanly (only if it appeared in Step 1).**
-
-```powershell
-& "C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe" stop -D "C:\Program Files\PostgreSQL\16\data" -m fast
-```
-
-`-m fast` rolls back open transactions and shuts down ordered — it does not corrupt data. Any other process currently connected to the DB will get a connection error and need to reconnect, so warn the user before doing this if there is any chance a long transaction is in flight.
-
-**Step 4 — Delete the orphan directory.**
+**Step 3 — Delete the orphan directory.**
 
 ```bash
 rmdir "<WORKTREE_PATH>"
@@ -234,25 +242,8 @@ rmdir "<WORKTREE_PATH>"
 
 Now that no process holds the CWD handle, this succeeds.
 
-**Step 5 — Restart PostgreSQL from a safe CWD.**
-
-The new postmaster must inherit a CWD outside any worktree. Run from the main MailManager directory:
-
-```powershell
-Set-Location "<REPO_ROOT>"
-& "C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe" start -D "C:\Program Files\PostgreSQL\16\data" -l "C:\Program Files\PostgreSQL\16\data\log\startup.log"
-```
-
-Verify it came back up:
-
-```powershell
-& "C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe" status -D "C:\Program Files\PostgreSQL\16\data"
-```
-
 **Output to chat:**
-> Worktree directory locked. Killed N glance-mcp processes, restarted PostgreSQL cleanly, deleted directory.
-
-If PostgreSQL was not in the locker list, omit Steps 3 and 5.
+> Worktree directory locked. Killed N orphan MCP processes, deleted directory.
 
 ### 2.4 Delete the local branch
 
@@ -401,6 +392,24 @@ git -C <worktree-path> pull --ff-only origin <branch-name>
 > Synced local directory: `<worktree-path>` (branch: `<branch-name>`)  *or*
 > Divergence detected, left intact: `<worktree-path>` — <error>; please reconcile manually.
 
+### 4.5 Policy on the Podman volume of the rebased worktrees
+
+This skill **does not touch** the postgres volumes of the rebased worktrees. If the rebase modified migration files (Type 4 — Migration Chain Fork — auto-resolved by the subagent renumbering `0033_X` → `0034_X`, or Type 2 modifying an existing migration), the `alembic_version` stored in the worktree's postgres volume can be out of sync with the rebased code.
+
+**Visible consequence for the user**: the next time the user starts the stack of that worktree, the backend will run `alembic upgrade head` and fail with `Can't locate revision identified by '<old-id>'`.
+
+**Recommended manual remediation when this occurs**:
+```bash
+cd <rebased-worktree>
+podman compose down -v             # deletes the worktree's postgres volume
+podman compose up -d                # bring up again; the old seed.sql is re-applied,
+                                    # then alembic migrates up to the current head
+```
+
+If the user wants the latest master state (not the master state at the moment the worktree was created), they can regenerate the seed by running `/eliminar-worktree <name>` + `/creacion-worktree <name>` (master postgres up). That is a more radical alternative that loses any local code changes in the worktree — rarely necessary.
+
+This policy is documented here so the user knows what to do when they see the error; the skill itself performs no automatic action on rebased worktrees' volumes.
+
 ---
 
 ## Phase 5 — Final Summary
@@ -424,6 +433,7 @@ After all phases complete, output a structured final summary to chat. This is **
 ### Phase 2 — Merge + Pull + Cleanup
 - Squash merge: completed
 - Pull: `git pull --ff-only origin master` — local master updated to `<short-hash>`
+- Podman stack cleanup: `compose down -v` for `mailmanager-<branch-name-lc>` — done (idempotent)
 - Worktree removed: `<worktree-path>` | required Locked Directory Recovery (killed N glance-mcp + cleanly restarted PostgreSQL) | failed (<reason>)
 - Local branch `<branch-name>`: deleted
 - `git worktree prune`: done
@@ -481,3 +491,4 @@ After all phases complete, output a structured final summary to chat. This is **
 - The worktree path is derived as: `<parent-of-repo-root>/<argument>`.
 - All git operations targeting the main repo can omit `git -C` since we are already in the main directory.
 - All git operations targeting the worktree must use `git -C <worktree-path>`.
+- This skill never starts or stops Podman containers other than via `compose down -v` (an idempotent cleanup, not a process start). All stack lifecycle for master and worktrees is the user's responsibility.
