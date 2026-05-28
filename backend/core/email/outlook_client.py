@@ -1870,13 +1870,18 @@ class OutlookClient(EmailClient):
                     f"Outlook attachment fetch forbidden (HTTP {status}).",
                     {"reason": "forbidden"},
                 )
-            if status not in (429, 500, 502, 503, 504) or attempt == len(_OUTLOOK_RETRY_DELAYS_SECONDS):
+            if status not in (429, 500, 502, 503, 504):
+                # Non-retryable status — fail immediately.
                 raise EmailAttachmentDownloadFailed(
                     f"Outlook attachment fetch failed (HTTP {status}).",
                     {"reason": "unavailable"},
                 )
-            retry_after = _retry_after_seconds(headers)
-            time.sleep(retry_after if retry_after is not None else delay)
+            # Retryable status: back off and retry, unless this was the last
+            # attempt — then fall through to the post-loop raise (now
+            # reachable, instead of the previous dead fallback).
+            if attempt < len(_OUTLOOK_RETRY_DELAYS_SECONDS):
+                retry_after = _retry_after_seconds(headers)
+                time.sleep(retry_after if retry_after is not None else delay)
         raise EmailAttachmentDownloadFailed(
             "Outlook attachment fetch exhausted retries without a final response.",
             {"reason": "unavailable"},
@@ -1926,6 +1931,7 @@ class OutlookClient(EmailClient):
 
         upload_results: list[AttachmentUploadResult] = []
         failed: list[dict[str, Any]] = []
+        last_upload_exc: EmailExternalAPIError | None = None
         for att in attachments:
             if att.provider_attachment_id:
                 # Already at the provider from a prior partial-success run.
@@ -1943,6 +1949,7 @@ class OutlookClient(EmailClient):
                 else:
                     new_id = self._upload_attachment_via_session(provider_draft_id, att)
             except EmailExternalAPIError as exc:
+                last_upload_exc = exc
                 failed.append({
                     "draft_attachment_id": att.draft_attachment_id,
                     "filename": att.filename,
@@ -1957,6 +1964,10 @@ class OutlookClient(EmailClient):
             )
 
         if failed:
+            # Chain from the last per-attachment failure so the original
+            # traceback survives (core/CLAUDE.md §3.4). ``last_upload_exc`` is
+            # guaranteed set whenever ``failed`` is non-empty (both are written
+            # in the same ``except`` branch).
             raise EmailAttachmentSendFailed(
                 "Outlook failed to upload one or more attachments before send.",
                 {"failed_attachments": failed, "succeeded": [
@@ -1964,7 +1975,7 @@ class OutlookClient(EmailClient):
                      "provider_attachment_id": r.provider_attachment_id}
                     for r in upload_results
                 ]},
-            )
+            ) from last_upload_exc
 
         # All attachments are in place — fire the send.
         send_url = (

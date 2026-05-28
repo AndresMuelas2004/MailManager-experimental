@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 logger = logging.getLogger(__name__)
 
@@ -252,8 +252,13 @@ def _is_attachment_download_retryable(exc: Exception) -> bool:
     return False
 
 
-def _raise_attachment_download_error(exc: HttpError) -> None:
+def _raise_attachment_download_error(exc: HttpError) -> NoReturn:
     """Translate an ``HttpError`` from an attachment fetch (D-17).
+
+    Annotated ``NoReturn`` because every branch raises: this lets the type
+    checker treat the code after each ``_raise_attachment_download_error(exc)``
+    call site (e.g. ``response.get(...)`` in ``_fetch``) as unreachable, so
+    ``response`` is never flagged as possibly-unbound.
 
     - ``404``/``410`` → :py:class:`EmailAttachmentNotFound` so the
       service marks the metadata row ``unavailable_at``.
@@ -1435,17 +1440,9 @@ class GmailClient(EmailClient):
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail fetch_drafts requires authentication.")
 
-        try:
-            draft_ids = self._list_all_draft_ids()
-        except HttpError as exc:
-            status, reason = http_error_detail(exc)
-            raise EmailExternalAPIError(
-                f"Gmail failed to list drafts (HTTP {status}: {reason})."
-            ) from exc
-        except Exception as exc:
-            raise EmailExternalAPIError(
-                f"Gmail unexpected drafts.list error ({type(exc).__name__}): {exc}"
-            ) from exc
+        # _list_all_draft_ids translates its own provider exceptions into
+        # EmailExternalAPIError (core/CLAUDE.md §3), so no wrapper is needed here.
+        draft_ids = self._list_all_draft_ids()
 
         if not draft_ids:
             return []
@@ -1483,11 +1480,24 @@ class GmailClient(EmailClient):
         while len(ids) < _DRAFTS_MAX_TOTAL:
             remaining = _DRAFTS_MAX_TOTAL - len(ids)
             page_size = min(500, remaining)
-            response = (
-                self.service.users().drafts()
-                .list(userId="me", maxResults=page_size, pageToken=page_token)
-                .execute()
-            )
+            # Translate the provider exception inside the method that makes the
+            # call (core/CLAUDE.md §3), mirroring _list_message_ids — not two
+            # frames up in fetch_drafts.
+            try:
+                response = (
+                    self.service.users().drafts()
+                    .list(userId="me", maxResults=page_size, pageToken=page_token)
+                    .execute()
+                )
+            except HttpError as exc:
+                status, reason = http_error_detail(exc)
+                raise EmailExternalAPIError(
+                    f"Gmail failed to list drafts (HTTP {status}: {reason})."
+                ) from exc
+            except Exception as exc:
+                raise EmailExternalAPIError(
+                    f"Gmail unexpected drafts.list error ({type(exc).__name__}): {exc}"
+                ) from exc
             for draft in response.get("drafts", []) or []:
                 draft_id = draft.get("id")
                 if draft_id:
@@ -1503,9 +1513,9 @@ class GmailClient(EmailClient):
         """Convert a Gmail drafts.get response (format=full) into DraftMetadata.
 
         Extracts subject/to/cc/bcc from headers, body from the payload parts
-        (prefers text/html, falls back to text/plain). Uses datetime.now()
-        for created_at/updated_at because Gmail does not expose a stable
-        draft timestamp in the Message resource.
+        (prefers text/plain, falls back to the HTML part — D-31). Uses
+        datetime.now() for created_at/updated_at because Gmail does not expose
+        a stable draft timestamp in the Message resource.
         """
         provider_draft_id = str(draft_response.get("id", ""))
         message = draft_response.get("message") or {}

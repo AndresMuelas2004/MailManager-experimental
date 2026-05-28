@@ -349,6 +349,14 @@ def send_email(mailbox_id: str, payload: EmailSendRequest, user_id: str) -> dict
                 fallback=EmailSendError,
                 context={"account_id": payload.account_id, "account_label": account_label},
             ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during provider send_email_from_account (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailSendError(
+                "Unexpected provider failure while sending email from account."
+            ) from exc
 
         # Best-effort: email already sent, don't fail the response on metadata persist failure
         try:
@@ -430,7 +438,21 @@ def manage_trash(mailbox_id: str, payload: TrashActionRequest, user_id: str) -> 
                 trash_data = trash_data_by_account[account_id]
                 provider_items = {mid: trash_data.get(mid) for mid in msg_ids}
 
-                id_mapping = manager.restore_from_trash(account_label, provider_items)
+                try:
+                    id_mapping = manager.restore_from_trash(account_label, provider_items)
+                except CoreError as exc:
+                    raise translate_core_error(
+                        exc, fallback=TrashOperationError,
+                        context={"account_id": account_id, "account_label": account_label},
+                    ) from exc
+                except Exception as exc:
+                    logger.warning(
+                        "Unexpected error during provider restore_from_trash (%s): %s",
+                        type(exc).__name__, exc,
+                    )
+                    raise TrashOperationError(
+                        "Unexpected provider failure while restoring messages from trash."
+                    ) from exc
 
                 # Split: known previous_box vs NULL (needs discovery)
                 known_rows: list[tuple] = []
@@ -446,7 +468,21 @@ def manage_trash(mailbox_id: str, payload: TrashActionRequest, user_id: str) -> 
 
                 if null_old_to_new:
                     new_ids = list(null_old_to_new.values())
-                    metadata_list = manager.fetch_messages_metadata(account_label, new_ids)
+                    try:
+                        metadata_list = manager.fetch_messages_metadata(account_label, new_ids)
+                    except CoreError as exc:
+                        raise translate_core_error(
+                            exc, fallback=TrashOperationError,
+                            context={"account_id": account_id, "account_label": account_label},
+                        ) from exc
+                    except Exception as exc:
+                        logger.warning(
+                            "Unexpected error during provider fetch_messages_metadata for restore (%s): %s",
+                            type(exc).__name__, exc,
+                        )
+                        raise TrashOperationError(
+                            "Unexpected provider failure while fetching restored message metadata."
+                        ) from exc
                     box_map = {m.provider_message_id: m.box for m in metadata_list}
                     discovered_rows = [
                         (old, new, account_id, box_map.get(new, "ALL_MAIL"))
@@ -502,7 +538,21 @@ def move_to_trash(mailbox_id: str, payload: MoveToTrashRequest, user_id: str) ->
         total_affected = 0
         for account_id, msg_ids in items_by_account.items():
             account_label = f"{mailbox_id}__{account_id}"
-            id_mapping = manager.move_to_trash(account_label, msg_ids)
+            try:
+                id_mapping = manager.move_to_trash(account_label, msg_ids)
+            except CoreError as exc:
+                raise translate_core_error(
+                    exc, fallback=MoveToTrashError,
+                    context={"account_id": account_id, "account_label": account_label},
+                ) from exc
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected error during provider move_to_trash (%s): %s",
+                    type(exc).__name__, exc,
+                )
+                raise MoveToTrashError(
+                    "Unexpected provider failure while moving emails to trash."
+                ) from exc
             if id_mapping:
                 rows = [(old, new, account_id) for old, new in id_mapping.items()]
                 affected = move_to_trash_batch(account_id, rows, fallback=MoveToTrashError)
@@ -580,6 +630,14 @@ def update_read_status(
                 raise translate_core_error(
                     exc, fallback=ReadStatusUpdateError,
                     context={"account_id": aid, "account_label": account_label},
+                ) from exc
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected error during provider update_read_status (%s): %s",
+                    type(exc).__name__, exc,
+                )
+                raise ReadStatusUpdateError(
+                    "Unexpected provider failure while updating read status."
                 ) from exc
 
             if updated_ids:
@@ -892,6 +950,14 @@ def set_favorite(
                     "account_id": account_id,
                     "provider_message_id": provider_message_id,
                 },
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during provider set_favorite (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise FavoriteUpdateError(
+                "Unexpected provider failure while toggling favourite at provider."
             ) from exc
 
         try:
