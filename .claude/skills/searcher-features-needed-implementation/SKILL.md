@@ -24,7 +24,7 @@ Al terminar esta fase, escribe un resumen interno de 3-5 líneas en el chat que 
 FASE 2 — Navegación como usuario con Playwright MCP
 ==========================================
 
-Usa el MCP de Playwright (herramientas `mcp__plugin_playwright_playwright__*`) para abrir y navegar la aplicación en la URL identificada en la Fase 1 (típicamente `http://localhost:3000`, `:5173`, `:8080` u otra declarada en la documentación).
+Usa el MCP de Playwright (herramientas `mcp__playwright__*`) para abrir y navegar la aplicación en la URL identificada en la Fase 1 (típicamente `http://localhost:3000`, `:5173`, `:8080` u otra declarada en la documentación).
 
 Si la aplicación no está corriendo, indícalo claramente en el chat y detente — NO intentes arrancar servidores, contenedores ni bases de datos.
 
