@@ -105,7 +105,7 @@ The stamping uses `draft_attachment_store.batch_update_provider_attachment_ids(p
 
 ### Attachment endpoints — Provider-First exception
 
-`POST .../drafts/{id}/attachments` and `DELETE .../drafts/{id}/attachments/{attachment_id}` write **only** to the local `draft_attachments` table. They do NOT call the provider. The push to Gmail/Outlook happens during `send_draft` via `EmailManager.send_draft_with_attachments`. This is the single documented exception in the drafts surface to the Provider-First Rule (Trash's `delete_messages` is the other in the emails surface — see `core_guide.md`). The rationale (Gmail's full-MIME-rebuild on every `drafts.update` plus Outlook's 4-concurrent-requests cap) lives in `docs/features/adjuntos.md` § 6.9 — do not "fix" the asymmetry by uploading per-attachment.
+`POST .../drafts/{id}/attachments` and `DELETE .../drafts/{id}/attachments/{attachment_id}` write **only** to the local `draft_attachments` table. They do NOT call the provider. The push to Gmail/Outlook happens during `send_draft` via `EmailManager.send_draft_with_attachments`. This is the documented exception in the drafts surface to the Provider-First Rule; other Provider-First exceptions (Trash's `delete_messages`, the favourites toggle pre-check) live in the emails surface and are catalogued in `repository_guide.md` § Provider-First Rule. The rationale (Gmail's full-MIME-rebuild on every `drafts.update` plus Outlook's 4-concurrent-requests cap) lives in `docs/features/adjuntos.md` § 6.9 — do not "fix" the asymmetry by uploading per-attachment.
 
 ### `add_draft_attachment` — sanitised filename may differ from upload
 
@@ -170,6 +170,18 @@ The endpoint reads `email_attachments` on **every** request, including cache hit
 Idempotency (R-12) is driven by `source_attachment_id` (migration 0030). A retried call with overlapping source ids skips the duplicates with `reason="already_copied"` instead of inserting twice. The Outlook branch short-circuits before the source attachment query because `createForward` already inherited everything server-side at draft creation; the returned `attachments[]` is the same chip list the composer already has, kept in the response so the frontend never branches on provider type at the call site.
 
 The endpoint authenticates **two** provider clients: the draft's account (for the ownership pre-check) and the **source** account (which may belong to a different mailbox the same user owns). The source account is resolved via `account_store.get_by_id_for_user` — no mailbox id is read from the request body, so a foreign account collapses to 404 `account_not_found` uniformly (D-22 anti-leak via UUID guessing). Do not "optimise" by reading mailbox id from the request to fast-path the lookup — that re-opens the leakage.
+
+### `get_reply_context` is mounted on `favorites_router`, not `emails_router`
+
+`GET .../accounts/{aid}/emails/{pmid}/reply-context?action=reply|reply_all|forward` lives on `favorites_router` (the bare `/mailboxes/{mailbox_id}` prefix router), NOT `emails_router` — its URL shape would otherwise collide with the favourite toggle path. It is read-only and runs the Gmail triple-requirement coherence guard (`validate_reply_threading_coherence`) **only for `reply` / `reply_all`**; `forward` is excluded because the `Fwd:` subject legitimately diverges and Gmail does not require subject parity for forwards — running the guard unconditionally would 502 every Forward against a real Gmail thread. `action` is a `Literal` validated by the router, so an invalid value is a 422, never a 502.
+
+### `set_favorite` — existence pre-check before the provider call
+
+The favourite toggle runs `email_metadata_store.exists` **before** the provider call: a missing row collapses to 404 `email_not_found` without spending a provider round trip (mirrors the `DraftNotFound` pre-check). A successful provider call followed by an `update_favorite` that touches zero rows (row deleted in the race window) also surfaces 404 — never a silent 200.
+
+### Virtual mailboxes — default box exclusion, in-service dedupe, race policy
+
+`_build_filter_args` excludes `TRASH`/`SPAM` by default; a caller opts back in by sending an explicit empty `box_not_in: []`. `box` and `box_not_in` are mutually exclusive at the schema boundary (422 if both arrive). Ownership is re-validated on every read/update/delete AND on the `account_ids` of create/update — a foreign or missing id collapses to 404 (`virtual_mailbox_not_found` for the vmbox, `account_not_found` for an unowned account), never 403, to avoid leaking existence via UUID guessing. Race policy: when the ownership pre-check passes but the row vanishes before the mutating SQL, the repository returns `None` (update) / `False` (delete) and the service surfaces 404 — never a silent 200 on DELETE nor a generic 500 on UPDATE. `_dedupe_rows_by_provider_message_id` runs in the **service** (not SQL) after `list_filtered`, collapsing the same provider message surfaced under two `account_id`s (one provider account connected under two mailboxes); the dedupe preference is non-empty `to_email` > non-empty `to_name` > most recent `received_at`.
 
 ## Email content — HTML sanitization lives outside this file
 

@@ -33,6 +33,8 @@ El usuario no puede adjuntar un único archivo de más de 25 MB. Si lo intenta, 
 
 Es el límite de Gmail estándar y suficientemente cómodo para casi cualquier escenario realista (PDFs, presentaciones, fotos, documentos ofimáticos, vídeos cortos).
 
+A nivel de servidor hay además una segunda línea de defensa distinta: el endpoint de subida rechaza cualquier cuerpo HTTP multipart de más de **30 MB** con `413 request_too_large` antes incluso de leer el archivo. Ese tope (5 MB por encima del límite de 25 MB por fichero) cubre el sobrecoste de las fronteras multipart.
+
 ### 2.2 Tamaño máximo total del mensaje: **25 MB**
 
 El cuerpo del correo + todos los adjuntos juntos no pueden superar **25 MB**, sin distinción entre Gmail y Outlook. Es un límite uniforme.
@@ -142,12 +144,18 @@ Las imágenes embebidas que aparecen dentro del HTML del correo (logos, firmas c
 
 ### Cómo distingue la app entre "imagen inline" y "adjunto descargable"
 
-La regla es estricta: una parte del correo se considera **inline** solo si cumple las **dos** condiciones a la vez:
+La regla es estricta y difiere ligeramente entre proveedores.
 
-1. Está marcada como inline por el remitente (cabecera `Content-Disposition: inline` o el equivalente en Outlook).
-2. Su identificador (`Content-ID`) aparece referenciado dentro del HTML del cuerpo (vía `cid:`).
+En **Gmail**, una parte se considera **inline** (embebida en el cuerpo, no descargable) solo si:
 
-Si solo cumple una de las dos, la app la trata como **adjunto descargable**. Esto evita dos problemas habituales con correos mal construidos: que una imagen marcada como inline pero no referenciada en el HTML "se pierda" sin que el usuario la vea, o que un archivo destinado a ser descargable acabe oculto en el cuerpo por un `Content-ID` despistado.
+1. Está "marcada como inline" — bien porque trae `Content-Disposition: inline`, bien porque es una imagen (`image/…`) que lleva un `Content-ID`.
+2. Ese `Content-ID` aparece referenciado dentro del HTML del cuerpo (vía `cid:`, ya sea en `src=`/`background=` o en `url(cid:…)` del CSS).
+
+La consecuencia importante: una imagen con `Content-ID` referenciado se trata como inline **aunque no traiga** `Content-Disposition: inline` — basta con que sea imagen y esté referenciada.
+
+En **Outlook** la regla añade dos guardas más: además de estar marcada inline (`isInline=true`) y de que su `Content-ID` esté referenciado, la parte debe **tener bytes** y ser de tipo `image/…`. Cualquier otra combinación se promociona a adjunto descargable.
+
+Si una parte no cumple la regla de su proveedor, la app la trata como **adjunto descargable**. Esto evita dos problemas habituales con correos mal construidos: que una imagen marcada como inline pero no referenciada en el HTML "se pierda" sin que el usuario la vea, o que un archivo destinado a ser descargable —un PDF con `Content-ID`, por ejemplo— acabe oculto en el cuerpo.
 
 ---
 
@@ -242,6 +250,17 @@ Hay una razón concreta para Gmail. Su API obliga a que cada actualización de u
 
 En Outlook el problema es distinto pero también real: hay un techo de 4 peticiones concurrentes por par `(app, buzón)`, y los reintentos por throttling (`429`) se acumulan rápido cuando el usuario adjunta varios archivos seguidos.
 
+### 6.10 Adjuntos al responder y reenviar (Reply / Reply All / Forward)
+
+Al **reenviar** (Forward) un correo que traía adjuntos, el composer los pre-rellena como chips ya cargados, descartables igual que cualquier otro. El mecanismo difiere por proveedor:
+
+- **Outlook** hereda los adjuntos **en el lado del proveedor**: el borrador de reenvío se crea con `createForward`, que ya copia los adjuntos del original. Los chips aparecen de inmediato sin descargar nada; el binario vive solo en el borrador del proveedor (no se duplica en local) y la app no lo re-sube al enviar.
+- **Gmail** no tiene copia server-side, así que el composer llama a un endpoint dedicado (`POST .../drafts/{id}/attachments/copy-from-email`) que descarga cada adjunto del original (reusando el cache local si lo hay) y lo vuelve a adjuntar al borrador. Para un borrador de Outlook ese mismo endpoint es un no-op (responde con `copied_count=0`).
+
+El endpoint de copia es **tolerante a fallos parciales**: siempre responde 200 y reporta los adjuntos que no pudo copiar en un array `skipped[]` con el motivo (proveedor caído, cap de 25 MB / 25 adjuntos alcanzado, ya copiado…). Es **idempotente**: reintentarlo tras un corte de red no vuelve a copiar los adjuntos ya copiados.
+
+Responder (Reply / Reply All) **no** arrastra los adjuntos del original — solo el reenvío lo hace, que es la semántica esperada.
+
 El flujo "guardar todo en local y empujar de golpe al proveedor" elimina ambos problemas y se comporta igual de bien con los dos proveedores.
 
 ---
@@ -284,9 +303,10 @@ La purga por TTL es **manual en el MVP**: existe un endpoint admin (`POST /admin
 
 El nombre del archivo que llega al sistema (sea desde un correo recibido o desde el composer) puede contener cualquier cosa: caracteres de control, secuencias de path traversal (`..`), nombres exóticos. La app aplica un **saneamiento mínimo** preservando lo que importa al usuario:
 
-- **Sustituye caracteres peligrosos** (`/`, `\`, caracteres de control, `..`) por `-`.
+- **Sustituye caracteres peligrosos** (`/`, `\`, `:`, `?`, `*`, `<`, `>`, `|`, `"`, caracteres de control, `..`) por `-`.
 - **Preserva acentos y caracteres UTF-8 legítimos** (no es un slugify agresivo).
 - **Preserva la extensión** (la última parte después del último punto).
+- **Neutraliza los nombres reservados de Windows** (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) prefijándolos con `_` (`CON.pdf` → `_CON.pdf`): en Windows esos nombres están prohibidos a nivel de sistema de ficheros y romperían la descarga.
 - **Resuelve duplicados dentro del mismo correo o draft**: si un correo lleva dos adjuntos con el mismo nombre saneado, el segundo se renombra automáticamente añadiendo " (1)" antes de la extensión, igual que hace el explorador de Windows.
 
 El nombre saneado es el que se persiste y el que se devuelve al cliente al descargar.
@@ -365,7 +385,6 @@ Estas decisiones se documentan a propósito como aceptadas para el MVP:
 - **No hay limpieza automática del cache**: la purga por TTL (30 días) se ejecuta manualmente vía endpoint admin protegido por token (`POST /admin/attachments/purge` con header `X-Admin-Token`). El token vive en una variable de entorno del servidor (`ATTACHMENTS_PURGE_TOKEN`); si no está seteada, el endpoint responde como deshabilitado. Cuando llegue el momento, este endpoint se sustituirá por un cron.
 - **No hay descarga masiva**: no existe "descargar todos los adjuntos de este correo" ni "descargar como ZIP". Hay que clicar uno por uno.
 - **No hay vista previa inline para tipos no-imagen**: los PDFs y similares se descargan, no se renderizan dentro de la app.
-- **Reply / Forward NO pre-rellenan adjuntos** (**diferido a v1.1**, no es limitación permanente): el composer no incluye los adjuntos del correo original al responder o reenviar. Si el usuario quiere reenviar un PDF que recibió, tiene que descargarlo y volver a adjuntarlo manualmente. Cuando se aborde la v1.1, los adjuntos del original aparecerán como chips ya cargados, opcionalmente descartables.
 - **No se soporta el caso de archivos enormes vía referencia a Drive / OneDrive**: la app no genera enlaces a Drive cuando el usuario adjunta algo >25 MB; simplemente rechaza el archivo.
 - **No hay métricas custom (Prometheus / OpenTelemetry)**: solo logs estructurados en operaciones críticas (descarga del proveedor, errores).
 - **El cuerpo del composer es texto plano**: el composer es un `<textarea>` plano, no un editor rich-text. El correo se envía siempre como `text/plain` a ambos proveedores. Pegar imágenes desde el portapapeles al cuerpo no funciona — la feature "pegar imagen → inline" requiere el composer rich, que está fuera de scope MVP.

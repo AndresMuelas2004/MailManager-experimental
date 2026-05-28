@@ -75,6 +75,26 @@ Migration `0010` seeds the Gmail and Outlook mailboxes under `SEEDED_USER_ID`, n
 
 Migration `0032` dropped `scope_kind` from the API contract but **kept** `scope_payload` as a `NOT NULL` column on the table (renaming it would have broken too many in-flight migrations). Tests that bypass the router to stage a `virtual_mailboxes` row — ownership tests against a foreign record, race-condition setups, etc. — must include `scope_payload` with at least `'{"account_ids":[]}'::jsonb`. Omitting it fails with a constraint violation whose message does not hint at the contract / schema divergence.
 
+### Trap — `test_dev_login.py`: the TestClient host is `testclient`
+
+Starlette's `TestClient` presents client host `testclient`, not `127.0.0.1`/`localhost`. To exercise the dev-login happy path the test sets `DEV_LOGIN_TRUSTED_HOSTS=testclient`; otherwise every call 403s `dev_login_not_localhost`. The happy path also **removes** the standard `require_session` auth override (which injects a fixed user) and relies on the cookie the endpoint itself sets, restoring the override in a `finally` — dev-login is one of the few endpoints whose entire purpose is to mint the session the override otherwise fakes.
+
+### Trap — `test_admin_purge.py`: the happy path must seed an aged triplet
+
+The purge only deletes blobs whose `email_attachments.last_accessed_at < now() - 30 days`. `_seed_expired_blob` stages the full `email_metadata` + `email_attachments` + `email_attachment_blobs` triplet with `last_accessed_at = now() - 45 days` inside the `isolated_db` transaction. Seeding only the blob without an aged `email_attachments` row would purge nothing and the test would assert `purged_count=0` for the wrong reason. The three states (`purge_disabled` 503 / `invalid_admin_token` 401 / executed) hang off the `ATTACHMENTS_PURGE_TOKEN` env var + `X-Admin-Token` header combination.
+
+### Trap — `test_reply_context_endpoint.py`: 422 (not 502) on bad action, and BOTH builders are patched
+
+`action` is a router-level `Literal`, so an invalid value is rejected by FastAPI with **422** before reaching the service's 502 path. The test named `test_invalid_action_returns_502` actually asserts 422 — the name is historical; do not "fix" it to expect 502. The endpoint resolves a manager through BOTH `emails_service.build_manager_for_accounts` AND `drafts_service.build_manager_for_accounts`, so the fake must be patched on both modules. `_seed_email_metadata` is mandatory (the `exists()` pre-check) and the Reply-All CC dedup only exercises when `email_address` is injected into the account row.
+
+### Trap — `test_copy_attachments_from_email.py`: patch only `drafts_service.build_manager_for_accounts`
+
+The copy endpoint builds its provider clients from `drafts_service`, so the local `_patch_fake_manager` patches only that module. Patching `emails_service` instead leaves the real builder in place and the test falls through to a real provider call. The non-happy paths it covers (Outlook no-op `copied_count=0`, R-12 `already_copied`, `unavailable_at` short-circuit with no provider call, inline filtering) all hinge on the `skipped[]` structured array rather than the response status.
+
+### `test_drafts_reply_metadata.py` is NOT redundant with `test_drafts.py`
+
+It covers two invariants the plain drafts tests do not: the `COALESCE(EXCLUDED.col, drafts.col)` guard on `UPSERT_DRAFTS_BATCH` (a drafts sync must not clobber locally-persisted reply metadata with the NULLs the provider read path carries), and that `send_draft` reads the threading from the **local row**, not from the request body (a tampered client cannot rethread at send time). It asserts against the fake's `send_draft_with_attachments_reply_kwargs` tracker.
+
 ## GET Endpoint Testing Rules (mandatory)
 
 GET endpoints that read exclusively from the database (no provider calls) are covered by integration tests with the same fidelity as E2E. GETs with external dependencies (e.g. cache-aside with provider fallback) need their own strategy documented per-endpoint.

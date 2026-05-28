@@ -22,22 +22,18 @@ The E2E step in the plan must describe **what** will change in the E2E suite and
 
 **Why:** Claude has a recurring tendency to propose unit and integration test updates but silently omit E2E tests, even though root CLAUDE.md § 8 explicitly requires all three layers. The omission is not caused by any rule — it is a behavioral bias toward avoiding the more complex E2E flow. This entry exists to counteract that bias.
 
-### 3. Starting PostgreSQL — use pg_ctl, never Start-Service
+### 3. PostgreSQL runs exclusively in the Podman container — never on the host
 
-When tests fail because PostgreSQL is not running, start it with `pg_ctl.exe` directly:
+The project's PostgreSQL instance is the `postgres` service defined in `compose.yml`. There is no host-side PostgreSQL installation. Any reference to `pg_ctl`, `C:\Program Files\PostgreSQL`, the Windows service `postgresql-x64-16`, or "native PG" is stale and must be removed on sight.
 
-```
-powershell -Command "& 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' start -D 'C:\Program Files\PostgreSQL\16\data' -l 'C:\Program Files\PostgreSQL\16\data\log\startup.log'"
-```
-
-Then verify with:
+To start, stop, or inspect the database use Podman against the container:
 
 ```
-powershell -Command "& 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' status -D 'C:\Program Files\PostgreSQL\16\data'"
+podman compose up -d postgres
+podman compose stop postgres
+podman exec mailmanager-postgres-1 psql -U mailmanager -l
 ```
 
-**Never** use `Start-Service 'postgresql-x64-16'`. PostgreSQL always runs locally on this machine via `pg_ctl`.
+**Where this applies:** Every situation where Claude needs to start, check, dump, or query the database — local development, integration tests, e2e tests, ad-hoc inspection.
 
-**Where this applies:** Any situation where Claude needs to start or check the database — before running integration tests, e2e tests, or any DB-dependent operation.
-
-**Why:** `Start-Service` interacts with the Windows Service Control Manager, which can get stuck in an inconsistent state after an abnormal shutdown and refuse to start. `pg_ctl` bypasses the SCM and starts the PostgreSQL process directly, which is reliable.
+**Why:** A previous setup used a host-side PG 16 alongside the container, which caused port `:5432` collisions and silent data divergence between the two stores. The host instance was decommissioned; only the container remains authoritative.

@@ -53,11 +53,19 @@ may inject text into these slots**; any future filter criterion must
 extend the whitelist (`_EXTRA_FILTER_BUILDERS`) inside the repository
 and the matching key in `ALLOWED_FILTER_KEYS` inside the schema.
 
+One behaviour the virtual listing adds on top of the shared query: the
+same physical email can surface **twice** when the user has connected the
+same provider account under two different real mailboxes (two
+`account_id`s pointing at the same inbox). The service collapses those
+duplicates after the query so the user sees one row per message — the
+implementation detail (which of the duplicate rows wins) lives in
+`api_guide.md` under the virtual-mailboxes trap.
+
 ## Why `filter_payload` lives in JSONB instead of typed columns
 
-Four filter criteria today (`box`, `from_email`, `subject_contains`,
-`is_read`, `is_favorite`), more in the future ("fecha, etiquetas,
-presencia de adjuntos…"). Modelling each future criterion as a schema
+Six filter criteria today (`box`, `box_not_in`, `from_email`,
+`subject_contains`, `is_read`, `is_favorite`), more in the future
+("fecha, etiquetas, presencia de adjuntos…"). Modelling each future criterion as a schema
 column would force a migration per criterion. JSONB keeps the schema
 stable; the Pydantic + repository whitelists provide the type safety
 the column-per-criterion approach would have given. The trade-off: a
@@ -70,6 +78,17 @@ renamed to a `text[]` column) to avoid rippling a column rename
 through every query and repository row at the cost of one extra
 indirection in the SQL projection. The contract surfaces the list as
 a flat `account_ids` field to every consumer.
+
+## `box` and `box_not_in` are mutually exclusive, with a TRASH/SPAM default
+
+A filter may carry **either** `box` (show only that box) **or**
+`box_not_in` (show everything except those boxes), never both — a Pydantic
+validator rejects a payload carrying both with 422. When **neither** is
+present, the listing defaults to excluding `TRASH` and `SPAM` (the same
+active-flow default the Favourites view applies). To opt back into seeing
+trash/spam, the filter sends an explicit empty `box_not_in: []` — "exclude
+nothing". The tempting mistake — sending both `box` and `box_not_in` to
+"narrow twice" — is a 422 at the boundary, not a silently-empty result.
 
 ## Why account ownership is re-validated at every listing call
 

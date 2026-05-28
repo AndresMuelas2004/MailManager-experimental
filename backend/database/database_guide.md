@@ -173,11 +173,25 @@ The two siblings disagree intentionally. The composer's remove flow tolerates a 
 
 There is also a **further asymmetry within `PgDraftAttachmentStore`** itself: `delete` swallows `InvalidTextRepresentation` and returns `False` (a malformed UUID is treated identically to a missing row — the remove flow is idempotent either way), but `update_provider_attachment_id` raises `QueryError` loudly on the same exception. Silence on the update path would break the D-27 partial-success persistence contract by causing a retry to re-upload an already-uploaded attachment. Do not normalise these two handlers.
 
+### `to_email` / `to_name` refresh category (migration 0031) — three distinct UPSERT behaviours
+
+`email_metadata` now has three distinct refresh behaviours on `UPSERT_EMAIL_METADATA_BATCH` conflict, and a new column MUST pick one deliberately:
+
+1. **Refreshed on every conflict** — `to_email` / `to_name` are in the `DO UPDATE SET` list, so a re-sync overwrites them with the latest provider value. They are `VARCHAR NOT NULL DEFAULT ''`; empty string means "not yet synced", never NULL. Only the **first** `To` recipient is stored, not the full list (see `repository_guide.md`).
+2. **Never refreshed** — `from_email` / `from_name` are set on insert and left untouched on conflict (a received email's sender never changes).
+3. **Excluded from the UPSERT entirely** — `has_attachments` is driven only by `recompute_has_attachments` (B.lazy); a sync conflict must not touch it.
+
+Putting a new column in the wrong category silently regresses one of these contracts.
+
+### `virtual_mailboxes` + `PgVirtualMailboxStore` (migration 0032)
+
+The table stores the scope as a `scope_payload` JSONB column shaped `{"account_ids": [...]}`, but the repository projects it back as a flat `account_ids: list[str]` (an artefact of migration 0032, which dropped the old `scope_kind` indirection and snapshotted pre-existing rows into explicit lists). The FK is `users(user_id) ON DELETE CASCADE` — there is **no** FK to `accounts`, so deleting a real account does NOT cascade into the snapshot; the listing path re-validates ownership per read and silently drops accounts the user no longer owns. `update()` swallows `InvalidTextRepresentation` and returns `None` (same shape as `get()`), `delete()` returns `False` — unlike `DraftStore.update`, which raises. The race policy depends on this: when the ownership pre-check passes but the row vanishes before the mutating SQL, `update → None` / `delete → False` lets the service surface 404 instead of a 500 / silent 200.
+
 ## Extension
 
 ### Whenever a new Alembic migration is created
 
-**`migrations/runner.py` must be updated in the same change**: append the equivalent DDL to `_DDL_STATEMENTS` and advance the stamp at the bottom to the new migration name. Forgetting this silently breaks any environment that relies on the fallback runner (local setup without Alembic, some CI configurations). Data-only migrations also belong here — e.g. migration 0014 adds `TRUNCATE TABLE email_content;` immediately before the stamp line, and every subsequent `email_content`-invalidating migration follows the same shape (see `repository_guide.md` § "Email HTML rendering cache"). Pure DDL extensions (e.g. migration 0020 adds `CREATE EXTENSION IF NOT EXISTS unaccent;`, migration 0025 adds the composite index `ix_drafts_account_created` backing the drafts listing queries, migration 0026 adds the partial index `idx_email_attachments_last_accessed` backing the admin TTL purge) do **not** require a `TRUNCATE` — only schema changes that invalidate cached HTML do. Migration 0026 is the current head. Migration 0022 (drafts column rename) is exposed in the runner via an idempotent `DO $$ ... ALTER TABLE drafts RENAME COLUMN body_html TO body ... $$` block so a fresh bootstrap (which already creates the column under the new name) is a no-op while a partially-bootstrapped DB is brought up to date.
+**`migrations/runner.py` must be updated in the same change**: append the equivalent DDL to `_DDL_STATEMENTS` and advance the stamp at the bottom to the new migration name. Forgetting this silently breaks any environment that relies on the fallback runner (local setup without Alembic, some CI configurations). Data-only migrations also belong here — e.g. migration 0014 adds `TRUNCATE TABLE email_content;` immediately before the stamp line, and every subsequent `email_content`-invalidating migration follows the same shape (see `repository_guide.md` § "Email HTML rendering cache"). Pure DDL extensions (e.g. migration 0020 adds `CREATE EXTENSION IF NOT EXISTS unaccent;`, migration 0025 adds the composite index `ix_drafts_account_created` backing the drafts listing queries, migration 0026 adds the partial index `idx_email_attachments_last_accessed` backing the admin TTL purge) do **not** require a `TRUNCATE` — only schema changes that invalidate cached HTML do. Migration 0032 is the current head. Migration 0022 (drafts column rename) is exposed in the runner via an idempotent `DO $$ ... ALTER TABLE drafts RENAME COLUMN body_html TO body ... $$` block so a fresh bootstrap (which already creates the column under the new name) is a no-op while a partially-bootstrapped DB is brought up to date.
 
 ### Adding a new email provider
 

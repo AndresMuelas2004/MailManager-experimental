@@ -18,6 +18,11 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Batch read/unread status management across accounts.
 - Trash management: move emails to trash, permanently delete, or restore.
 - Spam operations: move to spam and restore from spam with cross-provider support.
+- Favourites: per-email star/flag toggle (Provider-First) plus a provider-truth sync and a dedicated favourites listing.
+- Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
+- Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
+- Dev-login backdoor for local development (localhost-only, opt-in via env var).
+- Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow plus silent re-authentication.
 - PostgreSQL persistence for mailboxes, accounts, and tokens.
 - Strict layered architecture with centralized API error mapping.
@@ -64,98 +69,93 @@ MailManager/
 |   |   |-- integration/
 |   |   |-- e2e/
 |   |   `-- shared/
+|   |-- Dockerfile
 |   `-- main.py
 |-- frontend/
 |   |-- src/
+|   |-- Dockerfile
 |   `-- package.json
+|-- compose.yml
 |-- requirements.txt
 `-- README.md
 ```
 
 ## Prerequisites
 
+**Containerised stack (recommended):**
+
+- Podman + `podman compose` (or Docker + `docker compose`).
+- Gmail OAuth app credentials JSON (Google Cloud).
+- Outlook app credentials JSON (Azure app registration).
+
+**Running without containers (for the test suites / host development):**
+
 - Python 3.12+
 - Node.js 18+
-- PostgreSQL
-- Gmail OAuth app credentials JSON (Google Cloud)
-- Outlook app credentials JSON (Azure app registration)
+- PostgreSQL 16 (matches the image the stack runs).
 
 ## Getting Started
 
-### 1. Clone and install backend dependencies
+### Containerised stack (recommended)
 
-```bash
-git clone <your-repo-url>
-cd MailManager
+The whole stack — PostgreSQL, backend, and frontend — runs with one command via `compose.yml`.
 
-python -m venv .venv
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-# Linux/macOS
-source .venv/bin/activate
+1. Copy the backend env template and fill in the secrets (Fernet key, Google client ID, credential paths):
 
-pip install -r requirements.txt
-```
+   ```powershell
+   Copy-Item backend\.env.docker.example backend\.env.docker
+   ```
 
-### 2. Configure environment variables
+   Generate a Fernet key (one-time):
 
-MailManager reads environment variables from the OS environment. The backend also supports a `backend/.env` file via `python-dotenv` (`override=False`, so OS-level variables take precedence). See `backend/.env.example` for a template.
+   ```powershell
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
 
-Required:
+2. Bring the stack up:
 
-- `DATABASE_URL`
-- `MIA_GMAIL_CREDENTIALS_PATH`
-- `MIA_OUTLOOK_CREDENTIALS_PATH`
-- `TOKEN_ENCRYPTION_KEY`
-- `GOOGLE_CLIENT_ID`
+   ```powershell
+   podman compose up --build
+   ```
 
-Example (PowerShell):
+   - Migrations run automatically on backend startup (`DB_AUTO_MIGRATE=true` in `.env.docker`) — there is no separate Alembic step.
+   - The backend is served by `uvicorn` (not `python main.py`).
 
-```powershell
-$env:DATABASE_URL = "postgresql://user:pass@localhost:5432/mailmanager"
-$env:MIA_GMAIL_CREDENTIALS_PATH = "C:\\secrets\\gmail_oauth.json"
-$env:MIA_OUTLOOK_CREDENTIALS_PATH = "C:\\secrets\\outlook_oauth.json"
-$env:TOKEN_ENCRYPTION_KEY = "<FERNET_KEY>"
-$env:GOOGLE_CLIENT_ID = "<YOUR_GOOGLE_CLIENT_ID>"
-```
+Service URLs: backend `http://localhost:8000`, frontend `http://localhost:5173`, PostgreSQL `localhost:5432`.
 
-Generate a Fernet key (one-time):
+### Running without containers (for the test suites)
 
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
+The automated suites run from a host Python environment against a reachable PostgreSQL (the containerised one works — `postgresql://mailmanager:mailmanager@localhost:5432/mailmanager`).
 
-### 3. Apply database migrations
+1. Create a virtualenv and install backend dependencies:
 
-```bash
-python -m alembic -c backend/database/alembic.ini upgrade head
-```
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
 
-For existing databases initialized before Alembic:
+2. Configure environment variables. The backend reads OS env vars and, as a fallback, `backend/.env` via `python-dotenv` (`override=False`, so OS-level variables take precedence). See `backend/.env.example`. The minimum for unit/integration tests is a reachable `DATABASE_URL`; provider credentials and `GOOGLE_CLIENT_ID` are only needed for E2E.
 
-```bash
-python -m alembic -c backend/database/alembic.ini stamp 0001_initial_schema
-python -m alembic -c backend/database/alembic.ini upgrade head
-```
+3. Apply migrations against that database (only needed outside the container, which auto-migrates):
 
-### 4. Run backend
+   ```powershell
+   python -m alembic -c backend/database/alembic.ini upgrade head
+   ```
 
-```bash
-cd backend
-python main.py
-```
+   For databases initialized before Alembic:
 
-Backend URL: `http://localhost:8000`
+   ```powershell
+   python -m alembic -c backend/database/alembic.ini stamp 0001_initial_schema
+   python -m alembic -c backend/database/alembic.ini upgrade head
+   ```
 
-### 5. Run frontend
+4. Optionally run the backend / frontend on the host (the container already serves both):
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend URL: `http://localhost:5173`
+   ```powershell
+   uvicorn api.app:app --app-dir backend --reload
+   cd frontend; npm install; npm run dev
+   ```
 
 ## Environment Variables
 
@@ -179,6 +179,9 @@ Frontend URL: `http://localhost:5173`
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. |
 | `ATTACHMENTS_PURGE_TOKEN` | No | Bearer token for the `POST /admin/attachments/purge` maintenance endpoint. When unset, the endpoint replies 503 `purge_disabled` instead of 401 (deploy is intentionally not configured for this operation). |
+| `DEV_LOGIN_ENABLED` | No | When truthy, enables the `POST /auth/dev-login` backdoor. Unset/falsy → the endpoint replies 503 `dev_login_disabled`. Never enable in production. |
+| `DEV_LOGIN_EMAIL` | No | Email of the existing user the dev-login mints a session for. Required when `DEV_LOGIN_ENABLED` is truthy (500 `env_var_error` if missing). |
+| `DEV_LOGIN_TRUSTED_HOSTS` | No | Comma-separated client hosts allowed to call dev-login. Default: `127.0.0.1`, `::1`, `localhost`. A request from any other host → 403 `dev_login_not_localhost`. |
 
 ### Frontend environment variables
 
@@ -221,10 +224,24 @@ Emails:
 - `POST /mailboxes/{mailbox_id}/emails/move-to-trash`
 - `POST /mailboxes/{mailbox_id}/emails/spam`
 - `POST /mailboxes/{mailbox_id}/emails/restore-from-spam`
-- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `limit` (default 200, max 500), `offset` (default 0). Each row carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`).
+- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `favorite` (when `true`, returns only favourited emails — `box=ALL_MAIL` is the anchor that excludes TRASH/SPAM unless one is requested explicitly), `limit` (default 200, max 500), `offset` (default 0). Each row carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`), `is_favorite`, and the primary recipient `to_email` / `to_name` (the first `To` recipient only).
 - `GET /mailboxes/{mailbox_id}/emails/{provider_message_id}/content` — Required query param: `account_id`. Response includes `attachments[]` (the strict D-13 split between inline images embedded in the body and downloadable parts).
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/attachments/{attachment_id}` — Streams a single attachment binary with `Content-Disposition: attachment` (forced download, never inline). Cache-aside: served from local cache or fetched from the provider on miss.
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/reply-context` — Required query param: `action=reply|reply_all|forward`. Read-only — returns the prefilled `to_recipients` / `cc_recipients` / `subject` / `body` (plain-text quote) the composer needs, plus the RFC 5322 threading strings (`in_reply_to`, `references`, `thread_id`). Gmail-bound `reply` / `reply_all` runs the triple-requirement coherence guard locally before returning (502 `email_reply_context_error` on mismatch).
+
+Favourites:
+
+- `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/favorite` — Toggle the favourite flag (Provider-First: Gmail `STARRED`, Outlook `flag`). Body `{ "favorite": true|false }`. A local existence pre-check returns 404 `email_not_found` before any provider round trip; a zero-row update after a successful provider call (race) also collapses to 404.
+- `POST /mailboxes/{mailbox_id}/favorites/sync` — Reconcile `is_favorite` from provider truth for one account (`account_id` query param) or every account in the mailbox. `total_synced` is the rowcount across the touched accounts; each `accounts[i].favorites_synced` is the count of favourites the provider reported.
+
+Virtual mailboxes (saved filtered views — "bandejas ficticias"):
+
+- `GET /virtual-mailboxes` — List the caller's virtual mailboxes.
+- `POST /virtual-mailboxes` — Create one from `display_name`, `account_ids` (a snapshot of the accounts it spans), and a `filter_payload`.
+- `GET /virtual-mailboxes/{virtual_mailbox_id}` — Fetch one (404 `virtual_mailbox_not_found` for a foreign / missing id).
+- `PATCH /virtual-mailboxes/{virtual_mailbox_id}` — Replace `display_name` / `account_ids` / `filter_payload`.
+- `DELETE /virtual-mailboxes/{virtual_mailbox_id}` — Delete one.
+- `GET /virtual-mailboxes/{virtual_mailbox_id}/emails` — List the emails matching the saved filter across the (still-owned) accounts in the snapshot.
 
 Drafts:
 
@@ -242,6 +259,7 @@ Drafts:
 Auth:
 
 - `POST /auth/google`
+- `POST /auth/dev-login` — Local-development backdoor that mints a session for `DEV_LOGIN_EMAIL` without the interactive Google flow. Inert unless `DEV_LOGIN_ENABLED` is truthy (503 `dev_login_disabled` otherwise) AND the request comes from a trusted host (403 `dev_login_not_localhost` otherwise). Never enable in production.
 - `GET /auth/me`
 - `POST /auth/logout`
 - `DELETE /auth/me`
@@ -270,11 +288,13 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `email_not_found` — 404
 - `draft_not_found` — 404
 - `user_not_found` — 404
+- `virtual_mailbox_not_found` — 404
 - `account_misconfigured` — 400
 - `recipients_missing` — 400
 - `unauthorized` — 401
 - `account_connect_auth_error` — 401
 - `forbidden` — 403
+- `dev_login_not_localhost` — 403
 - `account_not_connected` — 409
 - `email_not_in_trash` — 409
 - `app_credentials_invalid` — 500
@@ -294,6 +314,8 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `account_operation_error` — 500
 - `session_operation_error` — 500
 - `user_operation_error` — 500
+- `virtual_mailbox_operation_error` — 500
+- `virtual_mailbox_list_error` — 500
 - `email_fetch_error` — 502
 - `email_send_error` — 502
 - `external_api_error` — 502
@@ -307,6 +329,9 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `draft_update_error` — 502
 - `draft_delete_error` — 502
 - `draft_sync_error` — 502
+- `draft_send_error` — 502
+- `favorite_update_error` — 502
+- `favorite_sync_error` — 502
 - `attachment_not_found` — 404
 - `attachment_unavailable` — 404
 - `attachment_copy_source_unavailable` — 404
@@ -320,6 +345,7 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `provider_forbidden` — 502 (provider rejected the attachment fetch with 403)
 - `provider_unavailable` — 503 (provider 5xx persistent after retries)
 - `purge_disabled` — 503
+- `dev_login_disabled` — 503
 - `invalid_admin_token` — 401
 
 ## Testing

@@ -76,3 +76,25 @@ Gmail/Outlook web. The single non-obvious wrinkle is the **pre-check
 ordering** documented in `repository_guide.md`: a missing local
 metadata row must collapse to 404 BEFORE the provider call, mirroring
 the `DraftNotFound` pre-check pattern.
+
+## `total_synced` vs `favorites_synced` — deliberately different counts
+
+`POST /favorites/sync` returns two numbers that mean different things and
+are usually NOT equal:
+
+- `total_synced` is the **rowcount** of the single-statement `UPDATE`
+  across the account. The statement sets `is_favorite =
+  (provider_message_id = ANY(favourite_ids))` for **every** row of the
+  account — marking the favourites TRUE and everything else FALSE in one
+  transaction — so it touches (and counts) the whole account.
+- `accounts[i].favorites_synced` is the **count of favourites the provider
+  reported** for that account.
+
+An account with 100 stored emails and 3 provider favourites therefore
+reports `total_synced=100`, `favorites_synced=3`. Reading `total_synced`
+as "favourites synced" is the natural mistake — it is the count of rows
+reconciled, not of favourites.
+
+Edge case: `favourite_ids = []` is valid and means "clear all favourites
+of this account" (`= ANY('{}')` evaluates FALSE for every row); it still
+reports the full account rowcount in `total_synced`.
