@@ -62,6 +62,11 @@ export default function EmailViewer({
     buildAccountMap(accounts),
   );
   const fromLabel = email.from_name ? `${email.from_name} <${email.from_email}>` : email.from_email;
+  const toLabel = email.to_email
+    ? email.to_name && email.to_name !== email.to_email
+      ? `${email.to_name} <${email.to_email}>`
+      : email.to_email
+    : null;
 
   const subject = email.subject ?? '(Sin asunto)';
 
@@ -118,6 +123,12 @@ export default function EmailViewer({
           <span className="text-zinc-300">·</span>
           <span>{formatDate(email.received_at)}</span>
         </div>
+        {toLabel && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-zinc-600">
+            <span className="font-medium text-zinc-900">Para:</span>
+            <span className="truncate">{toLabel}</span>
+          </div>
+        )}
         {accountEmail && (
           <div className="flex items-center gap-2 text-[12px] text-zinc-500">
             <span className="font-medium">Cuenta:</span>
