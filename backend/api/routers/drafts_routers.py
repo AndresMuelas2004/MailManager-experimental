@@ -144,8 +144,20 @@ def add_draft_attachment(
     attachments). Bodies above 30 MB are rejected upstream by
     ``enforce_multipart_size_limit`` (§5.4).
     """
+    # Read the multipart body here so the service receives plain bytes and
+    # stays free of HTTP types (api/CLAUDE.md §3). The synchronous
+    # ``file.file.read()`` keeps this endpoint a sync ``def`` running in the
+    # threadpool — switching to ``await file.read()`` would force ``async def``
+    # and run the blocking DB work in the service on the event loop.
+    content = file.file.read()
     return drafts_service.add_draft_attachment(
-        mailbox_id, account_id, provider_draft_id, file, user_id,
+        mailbox_id,
+        account_id,
+        provider_draft_id,
+        file_content=content,
+        filename=file.filename or "attachment",
+        content_type=file.content_type or "application/octet-stream",
+        user_id=user_id,
     )
 
 

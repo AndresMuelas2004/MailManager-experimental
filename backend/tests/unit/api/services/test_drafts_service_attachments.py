@@ -11,11 +11,9 @@ Patched at the store boundary so no real DB or provider runs.
 
 from __future__ import annotations
 
-import io
 from datetime import datetime
 
 import pytest
-from fastapi import UploadFile
 
 from api.errors.exceptions import (
     AccountNotFound,
@@ -64,11 +62,33 @@ def _fake_draft_row() -> dict:
     }
 
 
-def _make_upload(filename: str, content: bytes, content_type: str = "application/pdf") -> UploadFile:
-    return UploadFile(
+def _make_upload(
+    filename: str, content: bytes, content_type: str = "application/pdf",
+) -> tuple[bytes, str, str]:
+    # ``add_draft_attachment`` now takes plain bytes/str (the router reads the
+    # multipart UploadFile and passes the body through — M6). The test mirrors
+    # that: it provides the same (content, filename, content_type) the router
+    # would have extracted, with no FastAPI UploadFile needed.
+    return (content, filename, content_type)
+
+
+def _call_add(
+    upload: tuple[bytes, str, str],
+    *,
+    mailbox_id: str = _MAILBOX_ID,
+    account_id: str = _ACCOUNT_ID,
+    draft_id: str = _DRAFT_ID,
+    user_id: str = _USER_ID,
+):
+    content, filename, content_type = upload
+    return drafts_service.add_draft_attachment(
+        mailbox_id,
+        account_id,
+        draft_id,
+        file_content=content,
         filename=filename,
-        file=io.BytesIO(content),
-        headers={"content-type": content_type},
+        content_type=content_type,
+        user_id=user_id,
     )
 
 
@@ -135,9 +155,7 @@ class TestAddDraftAttachment:
         _patch_attachment_common(monkeypatch, inserted_overrides={"position": 2})
         upload = _make_upload("report.pdf", b"PDF-bytes")
 
-        result = drafts_service.add_draft_attachment(
-            _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-        )
+        result = _call_add(upload)
         assert result.filename == "report.pdf"
         assert result.mime_type == "application/pdf"
         assert result.size == len(b"PDF-bytes")
@@ -148,25 +166,19 @@ class TestAddDraftAttachment:
         _patch_attachment_common(monkeypatch)
         upload = _make_upload("malware.exe", b"x")
         with pytest.raises(AttachmentBlockedExtension):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_blocked_extension_check_is_case_insensitive(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
         upload = _make_upload("malware.EXE", b"x")
         with pytest.raises(AttachmentBlockedExtension):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_oversize_single_file_raises_attachment_too_large(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
         upload = _make_upload("big.pdf", b"\x00" * (25 * 1024 * 1024 + 1))
         with pytest.raises(AttachmentTooLarge):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_at_25_attachments_raises_limit_exceeded(self, monkeypatch):
         existing = [
@@ -178,9 +190,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("yet-another.pdf", b"x")
         with pytest.raises(AttachmentLimitExceeded):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_cumulative_size_above_25mb_raises_message_size(self, monkeypatch):
         # Existing total is just below 25 MB; the new file pushes it over.
@@ -188,9 +198,7 @@ class TestAddDraftAttachment:
         _patch_attachment_common(monkeypatch, existing_attachments=existing)
         upload = _make_upload("more.pdf", b"\x00" * (6 * 1024 * 1024))  # 6 MB
         with pytest.raises(AttachmentMessageSizeExceeded):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_account_not_found_raises(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
@@ -199,9 +207,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(AccountNotFound):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_draft_not_found_raises(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
@@ -210,9 +216,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(DraftNotFound):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_mailbox_access_denied_raises(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
@@ -223,9 +227,7 @@ class TestAddDraftAttachment:
         monkeypatch.setattr(drafts_service, "ensure_mailbox_access", _raise)
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(Forbidden):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_filename_sanitised_and_collisions_resolved(self, monkeypatch):
         captured: list[dict] = []
@@ -248,9 +250,7 @@ class TestAddDraftAttachment:
         monkeypatch.setattr(drafts_service.draft_attachment_store, "insert", _insert)
         # Filename has reserved chars + collides with existing "report.pdf".
         upload = _make_upload("report.pdf", b"x")
-        result = drafts_service.add_draft_attachment(
-            _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-        )
+        result = _call_add(upload)
         # Collision resolution appends ` (1)` before extension.
         assert result.filename == "report (1).pdf"
         assert captured[0]["filename"] == "report (1).pdf"
@@ -272,9 +272,7 @@ class TestAddDraftAttachment:
 
         monkeypatch.setattr(drafts_service.draft_attachment_store, "insert", _insert)
         upload = _make_upload("../etc/passwd.pdf", b"x")
-        result = drafts_service.add_draft_attachment(
-            _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-        )
+        result = _call_add(upload)
         # `..` is replaced by `-`; path separator likewise.
         assert ".." not in result.filename
         assert "/" not in result.filename
@@ -287,9 +285,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(DatabaseQueryError):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_db_error_on_insert_translated(self, monkeypatch):
         _patch_attachment_common(monkeypatch)
@@ -299,9 +295,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(DatabaseQueryError):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_unexpected_error_on_insert_wrapped(self, monkeypatch):
         # Phase 2.1 fix: insert failures now surface as
@@ -315,9 +309,7 @@ class TestAddDraftAttachment:
         )
         upload = _make_upload("ok.pdf", b"x")
         with pytest.raises(AttachmentInsertError):
-            drafts_service.add_draft_attachment(
-                _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-            )
+            _call_add(upload)
 
     def test_position_resolved_atomically_inside_insert(self, monkeypatch):
         # Phase 2.6 fix: ``position`` is no longer pre-computed by the
@@ -340,9 +332,7 @@ class TestAddDraftAttachment:
 
         monkeypatch.setattr(drafts_service.draft_attachment_store, "insert", _insert)
         upload = _make_upload("ok.pdf", b"x")
-        drafts_service.add_draft_attachment(
-            _MAILBOX_ID, _ACCOUNT_ID, _DRAFT_ID, upload, _USER_ID,
-        )
+        _call_add(upload)
         assert "position" not in captured[0]
 
 

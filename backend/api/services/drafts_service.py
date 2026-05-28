@@ -10,8 +10,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import UploadFile
-
 from api.errors.exceptions import (
     AccountNotFound,
     ApiError,
@@ -164,6 +162,16 @@ def _draft_out_from_row(row: dict[str, Any]) -> DraftOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         attachments=attachments,
+        # Reply / forward threading metadata. The GET / INSERT…RETURNING /
+        # list SELECTs all project these six columns, so the row carries
+        # them — surfacing them lets the composer repopulate the threading
+        # context when a saved reply / forward draft is reopened.
+        reply_kind=row.get("reply_kind"),
+        reply_to_message_id=row.get("reply_to_message_id"),
+        reply_to_account_id=row.get("reply_to_account_id"),
+        thread_id=row.get("thread_id"),
+        in_reply_to=row.get("in_reply_to"),
+        references_header=row.get("references_header"),
     )
 
 
@@ -1198,7 +1206,9 @@ def add_draft_attachment(
     mailbox_id: str,
     account_id: str,
     provider_draft_id: str,
-    upload: UploadFile,
+    file_content: bytes,
+    filename: str,
+    content_type: str,
     user_id: str,
 ) -> DraftAttachmentResponseOut:
     """Persist a new attachment for an existing local draft (D-07).
@@ -1248,13 +1258,15 @@ def add_draft_attachment(
             "during add_draft_attachment."
         )
 
-    raw_filename = (upload.filename or "attachment").strip()
+    raw_filename = (filename or "attachment").strip()
     if is_blocked_extension(raw_filename):
         raise AttachmentBlockedExtension(
             f"Extension blocked for filename '{raw_filename}' on draft '{provider_draft_id}'."
         )
 
-    data = upload.file.read()  # FastAPI buffers below 1 MB; >1 MB hits a SpooledTemporaryFile.
+    # The router has already read the multipart body into ``file_content``
+    # (HTTP concerns stay in the router; the service speaks plain bytes).
+    data = file_content
     if not isinstance(data, (bytes, bytearray)):
         raise AttachmentInsertError(
             "Multipart upload returned a non-bytes payload during add_draft_attachment."
@@ -1304,7 +1316,7 @@ def add_draft_attachment(
         "account_id": account_id,
         "provider_draft_id": provider_draft_id,
         "filename": sanitised_name,
-        "mime_type": upload.content_type or "application/octet-stream",
+        "mime_type": content_type or "application/octet-stream",
         "size": size,
         "content_id": None,
         "is_inline": False,
