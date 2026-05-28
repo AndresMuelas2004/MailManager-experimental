@@ -94,16 +94,28 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [sendFailedOpen, setSendFailedOpen] = useState(false);
   const [failedAttachments, setFailedAttachments] = useState<FailedAttachmentDetail[]>([]);
+  // Override for cross-mailbox Reply / Reply All / Forward: when the
+  // composer opens on an email whose ``mailbox_id`` differs from the
+  // route's ``mailboxId`` (virtual mailbox with ``scope_kind='all'`` /
+  // ``'accounts'``), every backend call from the composer must target
+  // the email's real mailbox, not the URL's. Set in ``openForReplyKind``
+  // before the first fetch and cleared by ``resetAll``.
+  const [composerMailboxOverride, setComposerMailboxOverride] = useState<string | null>(null);
+  const effectiveMailboxId = composerMailboxOverride ?? mailboxId;
   const form = useComposerForm();
   const attachments = useComposerAttachments();
   const persistence = useDraftPersistence();
   const creatingDraftRef = useRef<Promise<string> | null>(null);
   const pendingFilesRef = useRef<File[]>([]);
+  // Tracks which mailbox the cached ``accounts`` state belongs to so a
+  // cross-mailbox Reply (override active) cannot leave the URL mailbox
+  // path reading the wrong cached list on a subsequent open.
+  const accountsMailboxIdRef = useRef<string | null>(null);
 
   const buildAttachmentTarget = useCallback((): AttachmentTarget | null => {
-    if (!mailboxId || !form.accountId || !providerDraftId) return null;
-    return { mailboxId, accountId: form.accountId, providerDraftId };
-  }, [mailboxId, form.accountId, providerDraftId]);
+    if (!effectiveMailboxId || !form.accountId || !providerDraftId) return null;
+    return { mailboxId: effectiveMailboxId, accountId: form.accountId, providerDraftId };
+  }, [effectiveMailboxId, form.accountId, providerDraftId]);
 
   const setRefreshCallback = useCallback((fn: (() => void | Promise<void>) | null) => {
     setRefreshCallbackState(() => fn);
@@ -128,16 +140,18 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     setCloseDialogOpen(false);
     setSendFailedOpen(false);
     setFailedAttachments([]);
+    setComposerMailboxOverride(null);
     creatingDraftRef.current = null;
     pendingFilesRef.current = [];
   }, [form, attachments, persistence]);
 
   const loadAccountsIfNeeded = useCallback(async () => {
     if (!mailboxId) return accounts;
-    if (accounts.length > 0) return accounts;
+    if (accounts.length > 0 && accountsMailboxIdRef.current === mailboxId) return accounts;
     try {
       const accs = await listAccounts(mailboxId);
       setAccounts(accs);
+      accountsMailboxIdRef.current = mailboxId;
       return accs;
     } catch {
       return [] as AccountOut[];
@@ -194,8 +208,28 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       resetAll();
       setReplyContextLoading(true);
       persistence.setError(null);
+      // The email's real mailbox can diverge from the URL's ``mailboxId``
+      // when the listing is a virtual mailbox aggregating accounts from
+      // several real mailboxes (``scope_kind='all'`` / ``'accounts'``).
+      // Every backend call below — and every subsequent composer op
+      // (send / save / delete / attach) — must target the email's real
+      // mailbox via ``effectiveMailboxId``.
+      const targetMailboxId = email.mailbox_id;
+      setComposerMailboxOverride(targetMailboxId);
       try {
-        const accountsList = await loadAccountsIfNeeded();
+        let accountsList: AccountOut[];
+        if (targetMailboxId === mailboxId) {
+          accountsList = await loadAccountsIfNeeded();
+        } else {
+          accountsList = await listAccounts(targetMailboxId).catch(() => [] as AccountOut[]);
+          // Replace the cached account list so the ComposeOverlay
+          // selector renders the email's account label (the URL
+          // mailbox's accounts would not contain it). Track which
+          // mailbox the cache now belongs to so the next open against
+          // ``mailboxId`` refetches instead of reusing stale data.
+          setAccounts(accountsList);
+          accountsMailboxIdRef.current = targetMailboxId;
+        }
         const accountId = email.account_id;
         if (!accountsList.some((a) => a.account_id === accountId)) {
           persistence.setError({
@@ -208,7 +242,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         // 1. Fetch reply context (recipients, subject, quoted body,
         //    threading metadata). ~200ms typical — spinner UI is on.
         const context = await getReplyContext(
-          mailboxId,
+          targetMailboxId,
           accountId,
           email.provider_message_id,
           action as ReplyKindDto,
@@ -227,7 +261,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         //    needs a ``provider_draft_id`` before it can accept
         //    attachments (D-07), and creating the draft pre-emptively
         //    matches Gmail/Outlook web's behaviour.
-        const created = await createDraft(mailboxId, accountId, {
+        const created = await createDraft(targetMailboxId, accountId, {
           to_recipients: context.to_recipients,
           cc_recipients: context.cc_recipients,
           bcc_recipients: context.bcc_recipients,
@@ -263,7 +297,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         if (action === 'forward') {
           try {
             const copyResult = await copyAttachmentsFromEmail(
-              mailboxId,
+              targetMailboxId,
               accountId,
               created.provider_draft_id,
               {
@@ -306,20 +340,20 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   }, [resetAll]);
 
   const handleSendEmail = useCallback(async () => {
-    if (!mailboxId || !form.accountId) return;
+    if (!effectiveMailboxId || !form.accountId) return;
     const recipients = form.parseRecipients(form.to);
     if (recipients.length === 0) return;
     let ok: boolean;
     if (providerDraftId !== null) {
       ok = await persistence.sendDraftNow(
-        mailboxId,
+        effectiveMailboxId,
         form.accountId,
         providerDraftId,
         form.buildDraftPayload(),
       );
     } else {
       ok = await persistence.sendEmailNow(
-        mailboxId,
+        effectiveMailboxId,
         form.accountId,
         recipients,
         form.subject,
@@ -330,23 +364,27 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       close();
       await triggerRefresh();
     }
-  }, [close, form, mailboxId, persistence, providerDraftId, triggerRefresh]);
+  }, [close, effectiveMailboxId, form, persistence, providerDraftId, triggerRefresh]);
 
   const handleSaveDraft = useCallback(async () => {
-    if (!mailboxId || !form.accountId) return;
-    const ok = await persistence.saveDraftNow(mailboxId, form.accountId, form.buildDraftPayload());
+    if (!effectiveMailboxId || !form.accountId) return;
+    const ok = await persistence.saveDraftNow(
+      effectiveMailboxId,
+      form.accountId,
+      form.buildDraftPayload(),
+    );
     if (ok) {
       close();
       await triggerRefresh();
     }
-  }, [close, form, mailboxId, persistence, triggerRefresh]);
+  }, [close, effectiveMailboxId, form, persistence, triggerRefresh]);
 
   const sendDraftCore = useCallback(async (): Promise<boolean> => {
-    if (!mailboxId || !form.accountId || !providerDraftId) return false;
+    if (!effectiveMailboxId || !form.accountId || !providerDraftId) return false;
     const payloadIfDirty = form.isDirty() ? form.buildDraftPayload() : null;
     try {
       const ok = await persistence.sendDraftNow(
-        mailboxId,
+        effectiveMailboxId,
         form.accountId,
         providerDraftId,
         payloadIfDirty,
@@ -366,7 +404,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       }
       return false;
     }
-  }, [form, mailboxId, persistence, providerDraftId]);
+  }, [effectiveMailboxId, form, persistence, providerDraftId]);
 
   const handleSendDraft = useCallback(async () => {
     const ok = await sendDraftCore();
@@ -448,12 +486,12 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
 
   const confirmCloseSave = useCallback(async () => {
     setCloseDialogOpen(false);
-    if (!mailboxId || !form.accountId) {
+    if (!effectiveMailboxId || !form.accountId) {
       close();
       return;
     }
     try {
-      await persistence.persistDraft(mailboxId, form.accountId, form.buildDraftPayload());
+      await persistence.persistDraft(effectiveMailboxId, form.accountId, form.buildDraftPayload());
       await triggerRefresh();
     } catch {
       // Surface error in the composer body via persistence.error; do
@@ -461,23 +499,23 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       return;
     }
     close();
-  }, [close, form, mailboxId, persistence, triggerRefresh]);
+  }, [close, effectiveMailboxId, form, persistence, triggerRefresh]);
 
   const confirmCloseDiscard = useCallback(async () => {
     setCloseDialogOpen(false);
     // For an existing draft, the safest discard is a real DELETE on
     // the provider — that wipes ``draft_attachments`` via CASCADE too.
-    if (mailboxId && form.accountId && providerDraftId) {
+    if (effectiveMailboxId && form.accountId && providerDraftId) {
       try {
         const { deleteDraft } = await import('../../../api/endpoints/drafts');
-        await deleteDraft(mailboxId, form.accountId, providerDraftId);
+        await deleteDraft(effectiveMailboxId, form.accountId, providerDraftId);
       } catch {
         // best-effort; the local draft will linger until next sync
       }
     }
     await triggerRefresh();
     close();
-  }, [close, form.accountId, mailboxId, providerDraftId, triggerRefresh]);
+  }, [close, effectiveMailboxId, form.accountId, providerDraftId, triggerRefresh]);
 
   const cancelClose = useCallback(() => {
     setCloseDialogOpen(false);
@@ -515,16 +553,16 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   const accountSelectorLocked = mode === 'edit_draft' || providerDraftId !== null;
 
   const ensureBootstrappedTarget = useCallback(async (): Promise<AttachmentTarget | null> => {
-    if (!mailboxId || !form.accountId) return null;
+    if (!effectiveMailboxId || !form.accountId) return null;
     if (providerDraftId !== null) {
-      return { mailboxId, accountId: form.accountId, providerDraftId };
+      return { mailboxId: effectiveMailboxId, accountId: form.accountId, providerDraftId };
     }
     if (creatingDraftRef.current) {
       const id = await creatingDraftRef.current;
-      return { mailboxId, accountId: form.accountId, providerDraftId: id };
+      return { mailboxId: effectiveMailboxId, accountId: form.accountId, providerDraftId: id };
     }
     const promise = persistence
-      .ensureProviderDraftId(mailboxId, form.accountId, form.buildDraftPayload())
+      .ensureProviderDraftId(effectiveMailboxId, form.accountId, form.buildDraftPayload())
       .then((id) => {
         setProviderDraftIdState(id);
         return id;
@@ -532,15 +570,15 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     creatingDraftRef.current = promise;
     try {
       const id = await promise;
-      return { mailboxId, accountId: form.accountId, providerDraftId: id };
+      return { mailboxId: effectiveMailboxId, accountId: form.accountId, providerDraftId: id };
     } finally {
       creatingDraftRef.current = null;
     }
-  }, [form, mailboxId, persistence, providerDraftId]);
+  }, [effectiveMailboxId, form, persistence, providerDraftId]);
 
   const addAttachmentFiles = useCallback(
     (files: File[]) => {
-      if (!mailboxId) return;
+      if (!effectiveMailboxId) return;
       if (!form.accountId) {
         pendingFilesRef.current = [...pendingFilesRef.current, ...files];
         return;
@@ -554,7 +592,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
           // ensureProviderDraftId already routed the error to persistence.error
         });
     },
-    [attachments, ensureBootstrappedTarget, form.accountId, mailboxId],
+    [attachments, effectiveMailboxId, ensureBootstrappedTarget, form.accountId],
   );
 
   const removeAttachmentChip = useCallback(
@@ -567,11 +605,11 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   );
 
   useEffect(() => {
-    if (!mailboxId || !form.accountId || pendingFilesRef.current.length === 0) return;
+    if (!effectiveMailboxId || !form.accountId || pendingFilesRef.current.length === 0) return;
     const pending = pendingFilesRef.current;
     pendingFilesRef.current = [];
     addAttachmentFiles(pending);
-  }, [mailboxId, form.accountId, addAttachmentFiles]);
+  }, [effectiveMailboxId, form.accountId, addAttachmentFiles]);
 
   useEffect(() => {
     if (mode === null) {
