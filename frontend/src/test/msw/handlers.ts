@@ -57,6 +57,9 @@ export const handlers = [
   http.post(`${API_BASE}/mailboxes/:mailboxId/emails/move-to-trash`, () =>
     HttpResponse.json({ affected: 0 }),
   ),
+  http.post(`${API_BASE}/mailboxes/:mailboxId/emails/trash`, () =>
+    HttpResponse.json({ affected: 0 }),
+  ),
   http.post(`${API_BASE}/mailboxes/:mailboxId/emails/spam`, () =>
     HttpResponse.json({ moved_count: 0, accounts: [] }),
   ),
@@ -71,6 +74,70 @@ export const handlers = [
   http.get(`${API_BASE}/mailboxes/:mailboxId/drafts`, () => HttpResponse.json([])),
   http.post(`${API_BASE}/mailboxes/:mailboxId/drafts/sync`, () =>
     HttpResponse.json({ total_synced: 0, accounts: [] }),
+  ),
+  // Per-draft endpoints. These are also stubbed inside individual specs
+  // via ``installBootstrapHandlers()`` for cases that need richer fakes;
+  // these defaults exist so any spec that mounts a page touching drafts
+  // does not hit an unhandled-request warning.
+  http.post(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts`,
+    async ({ params, request }) => {
+      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+      return HttpResponse.json({
+        provider_draft_id: 'pdraft_test',
+        account_id: String(params.accountId),
+        to_recipients: Array.isArray(body.to_recipients) ? body.to_recipients : [],
+        cc_recipients: Array.isArray(body.cc_recipients) ? body.cc_recipients : [],
+        bcc_recipients: Array.isArray(body.bcc_recipients) ? body.bcc_recipients : [],
+        subject: typeof body.subject === 'string' ? body.subject : '',
+        body: typeof body.body === 'string' ? body.body : '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        attachments: [],
+        reply_kind: null,
+        reply_to_message_id: null,
+        reply_to_account_id: null,
+        thread_id: null,
+        in_reply_to: null,
+        references_header: null,
+      });
+    },
+  ),
+  http.patch(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts/:draftId`,
+    async ({ params, request }) => {
+      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+      return HttpResponse.json({
+        provider_draft_id: String(params.draftId),
+        account_id: String(params.accountId),
+        to_recipients: Array.isArray(body.to_recipients) ? body.to_recipients : [],
+        cc_recipients: Array.isArray(body.cc_recipients) ? body.cc_recipients : [],
+        bcc_recipients: Array.isArray(body.bcc_recipients) ? body.bcc_recipients : [],
+        subject: typeof body.subject === 'string' ? body.subject : '',
+        body: typeof body.body === 'string' ? body.body : '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        attachments: [],
+        reply_kind: null,
+        reply_to_message_id: null,
+        reply_to_account_id: null,
+        thread_id: null,
+        in_reply_to: null,
+        references_header: null,
+      });
+    },
+  ),
+  http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts/:draftId`, () =>
+    HttpResponse.json({ status: 'deleted' }),
+  ),
+  http.post(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts/:draftId/send`,
+    ({ params }) =>
+      HttpResponse.json({
+        provider_message_id: `msg_${String(params.draftId)}`,
+        provider: 'gmail',
+        status: 'sent',
+      }),
   ),
 
   // Reply / Reply All / Forward
@@ -118,5 +185,49 @@ export const handlers = [
 
   // Virtual mailboxes
   http.get(`${API_BASE}/virtual-mailboxes`, () => HttpResponse.json([])),
+  http.post(`${API_BASE}/virtual-mailboxes`, async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      virtual_mailbox_id: 'vmb_test',
+      owner_user_id: 'u_test',
+      display_name: typeof body.display_name === 'string' ? body.display_name : 'Test vmbox',
+      account_ids: Array.isArray(body.account_ids) ? body.account_ids : [],
+      filter_payload:
+        body.filter_payload && typeof body.filter_payload === 'object'
+          ? (body.filter_payload as Record<string, unknown>)
+          : {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.get(`${API_BASE}/virtual-mailboxes/:virtualMailboxId`, ({ params }) =>
+    HttpResponse.json({
+      virtual_mailbox_id: String(params.virtualMailboxId),
+      owner_user_id: 'u_test',
+      display_name: 'Test vmbox',
+      account_ids: [],
+      filter_payload: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  ),
+  http.patch(`${API_BASE}/virtual-mailboxes/:virtualMailboxId`, async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      virtual_mailbox_id: String(params.virtualMailboxId),
+      owner_user_id: 'u_test',
+      display_name: typeof body.display_name === 'string' ? body.display_name : 'Test vmbox',
+      account_ids: Array.isArray(body.account_ids) ? body.account_ids : [],
+      filter_payload:
+        body.filter_payload && typeof body.filter_payload === 'object'
+          ? (body.filter_payload as Record<string, unknown>)
+          : {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.delete(`${API_BASE}/virtual-mailboxes/:virtualMailboxId`, () =>
+    HttpResponse.json({ status: 'deleted' }),
+  ),
   http.get(`${API_BASE}/virtual-mailboxes/:virtualMailboxId/emails`, () => HttpResponse.json([])),
 ];

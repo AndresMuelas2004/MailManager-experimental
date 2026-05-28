@@ -13,10 +13,11 @@ type Props = {
 // Headless container that bridges the drafts feature into the cross-cutting
 // DraftComposerContext provided by `app/providers/DraftComposerProvider`.
 // Architectural exception to features/CLAUDE.md §5.1 ("components do not call
-// hooks that fetch data") — this component's whole job is to wire the hook
-// into a context the layout consumes via the register pattern, keeping the
-// `features/` imports out of `app/providers/`. Mount once inside the layout
-// scope where `mailboxId` is known (MailboxLayoutPage).
+// hooks that fetch data"). Documented in `frontend/frontend_guide.md` §1.1 —
+// the host's job is to wire the hook into the context the layout consumes
+// via the register pattern, keeping `features/` imports out of `app/providers/`.
+// Mount once inside the layout scope where `mailboxId` is known
+// (MailboxLayoutPage).
 export default function DraftComposerHost({ mailboxId }: Props) {
   const composer = useDraftComposer(mailboxId);
   const { __register } = useDraftComposerContext();

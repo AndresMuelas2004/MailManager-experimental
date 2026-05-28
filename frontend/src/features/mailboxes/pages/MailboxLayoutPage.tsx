@@ -6,7 +6,6 @@ import type { ComponentType } from 'react';
 import { useAuth } from '../../../app/providers/AuthContext';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import Sidebar from '../../../components/ui/Sidebar';
-import DraftComposerHost from '../../drafts/components/DraftComposerHost';
 import useMailboxList from '../hooks/useMailboxList';
 
 // Inline because the array is mailbox-feature-only and the features layer's
@@ -78,7 +77,6 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
       <div className="relative flex-1">
         <Outlet />
       </div>
-      <DraftComposerHost mailboxId={mailboxId} />
     </div>
   );
 }

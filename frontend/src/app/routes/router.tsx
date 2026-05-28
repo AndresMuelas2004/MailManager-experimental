@@ -7,6 +7,7 @@ import LoginPage from '../../features/auth/pages/LoginPage';
 import CreateMailboxPage from '../../features/mailboxes/pages/CreateMailboxPage';
 import MailboxGatewayPage from '../../features/mailboxes/pages/MailboxGatewayPage';
 import MailboxLayoutPage from '../../features/mailboxes/pages/MailboxLayoutPage';
+import DraftComposerMount from '../../features/drafts/pages/DraftComposerMount';
 
 const ConnectedAccountsPage = lazy(
   () => import('../../features/accounts/pages/ConnectedAccountsPage'),
@@ -16,11 +17,9 @@ const AccountInboxPage = lazy(() => import('../../features/emails/pages/AccountI
 const DraftsPage = lazy(() => import('../../features/drafts/pages/DraftsPage'));
 const AccountDraftsPage = lazy(() => import('../../features/drafts/pages/AccountDraftsPage'));
 const FavoritesPage = lazy(() => import('../../features/emails/pages/FavoritesPage'));
-const VirtualMailboxesPage = lazy(
-  () => import('../../features/virtual-mailboxes/pages/VirtualMailboxesPage'),
-);
+const VirtualMailboxesPage = lazy(() => import('../../features/emails/pages/VirtualMailboxesPage'));
 const VirtualMailboxViewPage = lazy(
-  () => import('../../features/virtual-mailboxes/pages/VirtualMailboxViewPage'),
+  () => import('../../features/emails/pages/VirtualMailboxViewPage'),
 );
 
 const router = createBrowserRouter([
@@ -38,27 +37,35 @@ const router = createBrowserRouter([
             path: 'm/:mailboxId',
             element: <MailboxLayoutPage />,
             children: [
-              { path: 'accounts', element: <ConnectedAccountsPage /> },
-              { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
-              { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
-              { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
-              { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
-              { path: 'drafts', element: <DraftsPage /> },
-              { path: 'favorites', element: <FavoritesPage /> },
-              { path: 'virtual-mailboxes', element: <VirtualMailboxesPage /> },
+              // Pathless layout that keeps the singleton draft composer mounted
+              // across every mailbox content route. Lives in features/drafts so
+              // the cross-feature import of DraftComposerHost is avoided.
               {
-                path: 'virtual-mailboxes/:virtualMailboxId',
-                element: <VirtualMailboxViewPage />,
-              },
-              {
-                path: 'account/:accountId',
+                element: <DraftComposerMount />,
                 children: [
-                  { index: true, element: <Navigate to="inbox" replace /> },
-                  { path: 'inbox', element: <AccountInboxPage box="ALL_MAIL" /> },
-                  { path: 'sent', element: <AccountInboxPage box="SENT" /> },
-                  { path: 'spam', element: <AccountInboxPage box="SPAM" /> },
-                  { path: 'trash', element: <AccountInboxPage box="TRASH" /> },
-                  { path: 'drafts', element: <AccountDraftsPage /> },
+                  { path: 'accounts', element: <ConnectedAccountsPage /> },
+                  { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
+                  { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
+                  { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
+                  { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
+                  { path: 'drafts', element: <DraftsPage /> },
+                  { path: 'favorites', element: <FavoritesPage /> },
+                  { path: 'virtual-mailboxes', element: <VirtualMailboxesPage /> },
+                  {
+                    path: 'virtual-mailboxes/:virtualMailboxId',
+                    element: <VirtualMailboxViewPage />,
+                  },
+                  {
+                    path: 'account/:accountId',
+                    children: [
+                      { index: true, element: <Navigate to="inbox" replace /> },
+                      { path: 'inbox', element: <AccountInboxPage box="ALL_MAIL" /> },
+                      { path: 'sent', element: <AccountInboxPage box="SENT" /> },
+                      { path: 'spam', element: <AccountInboxPage box="SPAM" /> },
+                      { path: 'trash', element: <AccountInboxPage box="TRASH" /> },
+                      { path: 'drafts', element: <AccountDraftsPage /> },
+                    ],
+                  },
                 ],
               },
             ],
