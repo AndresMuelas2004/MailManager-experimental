@@ -9,7 +9,7 @@ import FavoriteButton from './FavoriteButton';
 import type { HeaderCheckboxState } from '../../../lib/hooks/useSelection';
 import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
 
-type EmailTableView = 'individual' | 'unified';
+type EmailTableView = 'individual' | 'unified' | 'mixed';
 
 type Props = {
   emails: EmailMetadataOut[];
@@ -32,7 +32,11 @@ type Props = {
 // rules: individual mailboxes only need the "other" side of the message
 // (the user's account email is always the same in DE/PARA otherwise),
 // while unified mailboxes need both columns to disambiguate which of the
-// user's accounts is involved.
+// user's accounts is involved. The 'mixed' mode is used by listings that
+// mix received + sent rows (e.g. Favoritos): both columns are shown and
+// the cell values are decided per-row from ``email.box`` so a sent
+// favourite shows its real recipient under PARA instead of degrading to
+// the user's own account email.
 function resolveColumnLayout(
   view: EmailTableView,
   isSent: boolean,
@@ -125,8 +129,16 @@ export default function EmailTable({
           //    (which is the inbox the message landed in).
           //  - "De" in a SENT view shows the user's own account (who sent
           //    it); otherwise it shows the message's actual sender.
-          const toCell = isSent ? (email.to_email ?? '') : accountEmail;
-          const fromCell = isSent ? accountEmail : email.from_email;
+          //
+          // 'mixed' view ignores the table-level isSent and resolves the
+          // cell sense per-row from ``email.box``: SENT rows put the real
+          // recipient under PARA, every other row keeps the inbound
+          // semantics. This is the only place that consults the row's box
+          // directly — everywhere else the (view, isSent) matrix decides
+          // for the whole table.
+          const rowIsSent = view === 'mixed' ? email.box === 'SENT' : isSent;
+          const toCell = rowIsSent ? (email.to_email ?? '') : accountEmail;
+          const fromCell = rowIsSent ? accountEmail : email.from_email;
 
           const openable = Boolean(onOpen);
           return (

@@ -1,12 +1,12 @@
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import EmailTable from '../../emails/components/EmailTable';
-import ViewerMount from '../../emails/components/ViewerMount';
-import SearchInput from '../../emails/components/SearchInput';
-import useEmailViewer from '../../emails/hooks/useEmailViewer';
-import useBulkBar from '../../emails/hooks/useBulkBar';
-import useDebounce from '../../emails/hooks/useDebounce';
-import useFavorite from '../../emails/hooks/useFavorite';
+import EmailTable from '../components/EmailTable';
+import ViewerMount from '../components/ViewerMount';
+import SearchInput from '../components/SearchInput';
+import useEmailViewer from '../hooks/useEmailViewer';
+import useBulkBar from '../hooks/useBulkBar';
+import useDebounce from '../hooks/useDebounce';
+import useFavorite from '../hooks/useFavorite';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
@@ -45,8 +45,15 @@ export default function VirtualMailboxViewPage() {
     refresh,
   });
 
-  const viewer = useEmailViewer(refresh);
-  const favorites = useFavorite(mailboxId!);
+  const viewer = useEmailViewer();
+  // ``useFavorite`` is no longer parameterised by mailboxId: the toggle
+  // path passes ``email.mailbox_id`` per call (see ``handleToggleFavorite``
+  // below), which is the only correct mailbox in a virtual-mailbox view
+  // that may aggregate accounts across several real mailboxes. A sync
+  // button is intentionally NOT exposed here — a vmbox-scoped sync would
+  // need a fan-out over every (mailbox_id, account_id) pair the vmbox
+  // covers, which is a separate user surface decision.
+  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -73,7 +80,7 @@ export default function VirtualMailboxViewPage() {
       .catch(() => {});
   };
 
-  const combinedError = error || bulkError || favorites.error;
+  const combinedError = error || bulkError || favorites.error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);

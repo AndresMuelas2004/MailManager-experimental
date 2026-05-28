@@ -40,8 +40,8 @@ export default function FavoritesPage() {
     refresh,
   });
 
-  const viewer = useEmailViewer(refresh);
-  const favorites = useFavorite(mailboxId!);
+  const viewer = useEmailViewer();
+  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -69,10 +69,10 @@ export default function FavoritesPage() {
   };
 
   const handleSync = () => {
-    favorites.sync().catch(() => {});
+    favorites.sync({ mailboxId: mailboxId! }).catch(() => {});
   };
 
-  const combinedError = error || bulkError || favorites.error;
+  const combinedError = error || bulkError || favorites.error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -117,7 +117,7 @@ export default function FavoritesPage() {
           emails={emails}
           accounts={accounts}
           loading={loading}
-          view="unified"
+          view="mixed"
           isSent={false}
           hasSelection={selection.size > 0}
           isSelected={selection.isSelected}

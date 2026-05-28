@@ -40,8 +40,8 @@ export default function UnifiedInboxPage({ box }: Props) {
     refresh,
   });
 
-  const viewer = useEmailViewer(refresh);
-  const favorites = useFavorite(mailboxId!);
+  const viewer = useEmailViewer();
+  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -68,7 +68,7 @@ export default function UnifiedInboxPage({ box }: Props) {
       .catch(() => {});
   };
 
-  const combinedError = error || bulkError || favorites.error;
+  const combinedError = error || bulkError || favorites.error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);

@@ -1,6 +1,9 @@
 import { useCallback, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { updateReadStatus } from '../../../api/endpoints/emails';
+import { toUiError } from '../../../api/client/errors';
+import type { UiError } from '../../../api/client/errors';
 import type { EmailMetadataOut, EmailItemRef } from '../../../api/types/dto';
 
 function toItem(e: EmailMetadataOut): EmailItemRef {
@@ -12,10 +15,13 @@ export type UseEmailViewerReturn = {
   open: (email: EmailMetadataOut) => void;
   close: () => void;
   handleRead: (email: EmailMetadataOut) => Promise<void>;
+  marking: boolean;
+  error: UiError | null;
 };
 
-export default function useEmailViewer(refresh: () => Promise<void>): UseEmailViewerReturn {
+export default function useEmailViewer(): UseEmailViewerReturn {
   const [openedEmail, setOpenedEmail] = useState<EmailMetadataOut | null>(null);
+  const queryClient = useQueryClient();
 
   const open = useCallback((email: EmailMetadataOut) => setOpenedEmail(email), []);
   const close = useCallback(() => setOpenedEmail(null), []);
@@ -27,13 +33,33 @@ export default function useEmailViewer(refresh: () => Promise<void>): UseEmailVi
   // route param here would produce a 404 ``account_not_found``
   // whenever the account lives in a different mailbox than the one
   // mounted in the sidebar.
+  const readMutation = useMutation({
+    mutationFn: (email: EmailMetadataOut) =>
+      updateReadStatus(email.mailbox_id, true, [toItem(email)]),
+    // Mark-as-read can surface on any listing (regular box or virtual
+    // mailbox), so a blanket invalidation of both prefixes is the only
+    // safe move — it mirrors useFavorite and keeps the read state
+    // consistent across every mounted listing without threading a
+    // per-page ``refresh`` callback through the hook.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] });
+    },
+  });
+
   const handleRead = useCallback(
     async (email: EmailMetadataOut) => {
-      await updateReadStatus(email.mailbox_id, true, [toItem(email)]);
-      await refresh();
+      await readMutation.mutateAsync(email);
     },
-    [refresh],
+    [readMutation],
   );
 
-  return { openedEmail, open, close, handleRead };
+  return {
+    openedEmail,
+    open,
+    close,
+    handleRead,
+    marking: readMutation.isPending,
+    error: readMutation.error ? toUiError(readMutation.error) : null,
+  };
 }

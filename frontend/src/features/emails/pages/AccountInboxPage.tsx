@@ -44,8 +44,8 @@ export default function AccountInboxPage({ box }: Props) {
     refresh,
   });
 
-  const viewer = useEmailViewer(refresh);
-  const favorites = useFavorite(mailboxId!);
+  const viewer = useEmailViewer();
+  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -84,7 +84,7 @@ export default function AccountInboxPage({ box }: Props) {
     return { title: computedTitle, bandejaLabel: computedBandeja };
   }, [accounts, accountId]);
 
-  const combinedError = error || bulkError || favorites.error;
+  const combinedError = error || bulkError || favorites.error || viewer.error;
   const basePath = `/m/${mailboxId}/account/${accountId}`;
 
   const handleSearchChange = (next: string) => {
