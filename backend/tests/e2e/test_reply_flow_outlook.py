@@ -20,6 +20,7 @@ the same ``thread_id`` (= ``conversationId``) as the original message.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 
 import psycopg2
@@ -165,21 +166,34 @@ def test_48_reply_flow_outlook(e2e_client):
         finally:
             conn.close()
 
-        # Threading assertion: the sent message belongs to the same
-        # conversation as the original (Graph stitched it server-side
-        # at createReply time).
-        conn = _db_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT thread_id FROM email_metadata "
-                    "WHERE account_id = %s AND provider_message_id = %s",
-                    (OUTLOOK_ACCOUNT_ID, sent_pmid),
-                )
-                row = cur.fetchone()
-                if row is not None:
-                    assert row[0] == original_thread_id
-        finally:
-            conn.close()
+        # Threading assertion (M18): the sent message row MUST be persisted
+        # and belong to the same conversation as the original (Graph stitched
+        # it server-side at createReply time). The post-send persist is
+        # best-effort, so poll a bounded number of sync-metadata cycles, then
+        # assert hard — the previous ``if row is not None`` verified nothing
+        # whenever the persist soft-failed.
+        deadline = time.time() + 60
+        thread_id = None
+        found = False
+        while time.time() < deadline:
+            conn = _db_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT thread_id FROM email_metadata "
+                        "WHERE account_id = %s AND provider_message_id = %s",
+                        (OUTLOOK_ACCOUNT_ID, sent_pmid),
+                    )
+                    row = cur.fetchone()
+            finally:
+                conn.close()
+            if row is not None:
+                thread_id = row[0]
+                found = True
+                break
+            e2e_client.post(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata")
+            time.sleep(4)
+        assert found, "sent reply was never persisted to email_metadata"
+        assert thread_id == original_thread_id
     finally:
         _delete_draft_row_locally(provider_draft_id, OUTLOOK_ACCOUNT_ID)

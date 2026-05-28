@@ -97,6 +97,29 @@ def _force_has_attachments(account_id: str, provider_message_id: str) -> None:
                 "WHERE account_id = %s AND provider_message_id = %s",
                 (account_id, provider_message_id),
             )
+            # M19: keep the forced flag consistent with the has_attachments
+            # invariant — a TRUE flag MUST be backed by at least one
+            # non-inline email_attachments row. Without this row the
+            # integration test test_has_attachments_invariant goes red on the
+            # shared DB after a forward-flow run (it scans every row, not just
+            # migration-0010 seeds). ``ON CONFLICT DO NOTHING`` keeps the
+            # bootstrap idempotent across repeated runs / retries.
+            cur.execute(
+                """
+                INSERT INTO email_attachments
+                    (attachment_id, account_id, provider_message_id, part_id,
+                     provider_attachment_id, filename, mime_type, size,
+                     content_id, is_inline, position, last_accessed_at)
+                VALUES (%s, %s, %s, 'bootstrap', NULL, %s, %s, %s,
+                        NULL, FALSE, 0, now())
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    str(uuid.uuid4()), account_id, provider_message_id,
+                    _BOOTSTRAP_ATTACHMENT_FILENAME, _BOOTSTRAP_ATTACHMENT_MIME,
+                    len(_BOOTSTRAP_ATTACHMENT_BYTES),
+                ),
+            )
         conn.commit()
     finally:
         conn.close()

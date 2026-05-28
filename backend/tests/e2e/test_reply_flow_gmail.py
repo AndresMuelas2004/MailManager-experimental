@@ -24,6 +24,7 @@ the Gmail web inbox.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 
 import psycopg2
@@ -171,26 +172,34 @@ def test_47_reply_flow_gmail(e2e_client):
         finally:
             conn.close()
 
-        # Threading assertion: the persisted sent email row carries the
-        # same thread_id as the original message (Gmail stitched the
-        # reply into the thread server-side via the ``threadId`` we
-        # injected in step 2).
-        conn = _db_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT thread_id FROM email_metadata "
-                    "WHERE account_id = %s AND provider_message_id = %s",
-                    (GMAIL_ACCOUNT_ID, sent_pmid),
-                )
-                row = cur.fetchone()
-                if row is not None:
-                    # Best-effort: the sent message may not be persisted
-                    # if the metadata-persist step soft-failed. When
-                    # present, the thread id must match.
-                    assert row[0] == original_thread_id
-        finally:
-            conn.close()
+        # Threading assertion (M18): the sent email row MUST be persisted and
+        # carry the original thread_id. The post-send metadata persist is
+        # best-effort, so poll a bounded number of sync-metadata cycles until
+        # the row appears, then assert hard. The previous ``if row is not
+        # None`` silently verified nothing whenever the persist soft-failed.
+        deadline = time.time() + 60
+        thread_id = None
+        found = False
+        while time.time() < deadline:
+            conn = _db_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT thread_id FROM email_metadata "
+                        "WHERE account_id = %s AND provider_message_id = %s",
+                        (GMAIL_ACCOUNT_ID, sent_pmid),
+                    )
+                    row = cur.fetchone()
+            finally:
+                conn.close()
+            if row is not None:
+                thread_id = row[0]
+                found = True
+                break
+            e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata")
+            time.sleep(4)
+        assert found, "sent reply was never persisted to email_metadata"
+        assert thread_id == original_thread_id
     finally:
         # Safety-net cleanup if a step above failed mid-flow.
         _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)

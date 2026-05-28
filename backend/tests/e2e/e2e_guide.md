@@ -91,7 +91,16 @@ When drafts are **synced** from the provider (Section 5c), the draft is intentio
 
 ### Forward tests bootstrap real provider state
 
-`test_forward_flow_gmail.py` and `test_forward_flow_outlook.py` need an inbox row with `has_attachments = TRUE`. When the account does not have one (clean machine, first run), `bootstrap_attachment_message` in `_forward_helpers.py` sends a real self-addressed email with a PDF attachment from the test account to its own `email_address`, polls `sync-metadata` until the SENT `provider_message_id` lands locally, primes the cache-aside content endpoint, and — for Outlook — forces `has_attachments = TRUE` via direct SQL because Outlook's `GET /me/messages/{id}/attachments` returns an empty list for the SENT folder copy even when the draft had uploaded one (the binary is preserved at the provider, so the downstream forward flow still works against Graph in real time; the force-flip only bridges the local metadata gap). The side effect is that each run leaves at least one self-addressed message in the real test account.
+`test_forward_flow_gmail.py` and `test_forward_flow_outlook.py` need an inbox row with `has_attachments = TRUE`. When the account does not have one (clean machine, first run), `bootstrap_attachment_message` in `_forward_helpers.py` sends a real self-addressed email with a PDF attachment from the test account to its own `email_address`, polls `sync-metadata` until the SENT `provider_message_id` lands locally, primes the cache-aside content endpoint, and forces `has_attachments = TRUE` via direct SQL (the `_force_has_attachments` workaround applies to any provider that comes back without the flag after priming — typically Outlook, whose `GET /me/messages/{id}/attachments` returns an empty list for the SENT folder copy even when the draft had uploaded one; the binary is preserved at the provider so the downstream forward flow still works against Graph in real time). **`_force_has_attachments` ALSO inserts a non-inline `email_attachments` row** alongside the flag flip: without it the forced `has_attachments=TRUE` would have zero backing attachment rows and turn the integration test `test_has_attachments_invariant.py::test_seeded_state_satisfies_invariant` red on the shared DB (it scans every row, not just migration-0010 seeds — see `repository_guide.md`). The side effect is that each run leaves at least one self-addressed message in the real test account.
+
+### Reply / Forward flow tests — threading assertion and provider asymmetries
+
+`test_reply_flow_gmail.py` / `test_reply_flow_outlook.py` and the two forward-flow files exercise the full `reply-context → create draft → send` path against the real provider. Contracts worth knowing:
+
+- **Threading assertion is a bounded poll, not a soft skip.** The post-send `email_metadata` persist is best-effort, so the test re-runs `sync-metadata` in a bounded loop until the sent `provider_message_id` row appears, then asserts hard that its `thread_id` equals the original. An earlier `if row is not None: assert …` shape verified nothing when the persist soft-failed — do not regress to it.
+- **Outlook Forward: do NOT edit the subject beyond `Fwd:`.** Editing the subject of a `createForward` draft makes Graph reassign a new `conversationId` on save, detaching the sent message from the original thread. Gmail does not exhibit this (forwards may start a new thread).
+- **`copy-from-email` asymmetry.** The forward flow asserts `copied_count >= 1` for Gmail (download + re-upload) but `copied_count == 0` for Outlook (`createForward` already inherited the attachments server-side — the endpoint is a no-op).
+- Endpoints first exercised end-to-end here: `GET .../reply-context` and `POST .../drafts/{pdid}/attachments/copy-from-email`.
 
 ### Safety-net cleanup in fixture teardown
 
@@ -114,6 +123,8 @@ When adding a new provider:
 - [ ] Add a draft update test for the provider — must create a draft first and clean up the local row afterward.
 - [ ] Add a draft deletion test for the provider.
 - [ ] Add a draft send test for the provider — must create a draft first, send it, and verify the local row was deleted. Safety-net cleanup in a `finally` block.
+- [ ] Add a reply flow test for the provider (`reply-context → create reply draft → send → threading assertion via bounded sync-metadata poll`).
+- [ ] Add a forward flow test for the provider (bootstrap an inbox message with an attachment, then `reply-context?action=forward → create forward draft → copy-from-email → send`, asserting the provider's `copied_count` expectation).
 - [ ] Ensure flow assertions include the new provider behavior.
 
 The E2E suite should always represent the full set of supported providers.
