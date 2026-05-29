@@ -74,7 +74,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         onLogout={handleLogout}
         onDeleteAccount={handleDeleteAccount}
       />
-      <div className="relative flex-1">
+      <div className="relative min-w-0 flex-1 overflow-x-auto">
         <Outlet />
       </div>
     </div>
