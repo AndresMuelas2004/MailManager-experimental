@@ -46,7 +46,7 @@ export default function Sidebar({
   const { search } = useLocation();
 
   return (
-    <aside className="sticky top-0 flex h-screen max-h-screen w-[260px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-zinc-200 bg-white px-4 py-6">
+    <aside className="sticky top-0 flex h-screen max-h-screen w-[260px] shrink-0 flex-col gap-1 overflow-visible border-r border-zinc-200 bg-white px-4 py-6">
       <div className="flex items-center gap-2.5 px-2 pb-5">
         <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg">
           <img src="/logo.png" alt="MailManager" className="h-full w-full object-cover" />
