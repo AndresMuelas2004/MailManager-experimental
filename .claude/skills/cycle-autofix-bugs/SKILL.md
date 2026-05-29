@@ -83,15 +83,21 @@ Un hook `Stop` en el frontmatter evita paradas espurias: si terminas el turno si
    if (-not (Select-String -Path ".gitignore" -Pattern "^bug-analisis/?$" -Quiet)) { Add-Content -Path ".gitignore" -Value "bug-analisis/" }
    ```
 
-4. **Limpia screenshots residuales de Playwright en la raíz** — si un ciclo anterior dejó archivos `.png` untracked en la raíz del repo (capturas de `browser_take_screenshot` no barridas por interrupción manual, abort de Esc, o por venir de antes del parche del bug-tester), elimínalos ahora para que la verificación del working tree en el paso siguiente no aborte el ciclo falsamente:
+4. **Limpia residuos de Playwright en la raíz (`.png` y volcados `.md`)** — si un ciclo anterior dejó archivos untracked en la raíz del repo, elimínalos ahora para que la verificación del working tree en el paso siguiente no aborte el ciclo falsamente. Son de dos tipos: (a) capturas `.png` de `browser_take_screenshot`; (b) volcados `.md` del árbol de accesibilidad que el detector/validador a veces escriben (su primera línea tiene firma de snapshot, p. ej. `- generic [ref=e2]:`). Barre ambos:
    ```powershell
    git status --porcelain | ForEach-Object {
        if ($_ -match '^\?\? ([^/\\]+\.png)$') {
            Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       } elseif ($_ -match '^\?\? ([^/\\]+\.md)$') {
+           $f = $matches[1]
+           $firstLine = (Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue)
+           if ($firstLine -match '\[ref=e' -or $firstLine -match '^\s*- generic') {
+               Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+           }
        }
    }
    ```
-   Restricción: borra **únicamente** `.png` **untracked en la raíz** (línea `?? <nombre>.png` sin barras). Nunca toca `.png` versionados ni `.png` dentro de subdirectorios (p. ej. `frontend/public/`, `frontend/src/assets/`).
+   Restricción: borra **únicamente** archivos **untracked en la raíz** (línea `?? <nombre>` sin barras). Los `.png` se borran sin condición; los `.md` **solo** si su primera línea tiene firma de snapshot (`[ref=e` o `- generic`), para nunca tocar un `.md` legítimo de la raíz. Nunca toca archivos versionados, ni nada dentro de subdirectorios (p. ej. `frontend/public/`, `frontend/src/assets/`), ni `bug-analisis/` (gitignored).
 
 5. **Verifica que el working tree NO tiene cambios sin commit relacionados con la app** (`git status --porcelain` excluyendo `bug-analisis/`). Si los hay → para con condición excepcional informando al usuario; un working tree dirty contamina el primer commit del ciclo.
 

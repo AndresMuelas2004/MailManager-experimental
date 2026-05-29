@@ -66,6 +66,7 @@ Si tras re-navegar dudas si el comportamiento es intencional, en este orden:
 - PUEDES re-navegar con Playwright (cambio respecto a versión anterior del agente).
 - PUEDES leer código de la app para confirmar intención, **pero solo para confirmar/descartar intencionalidad**, no para diagnosticar la causa raíz ni preparar un fix.
 - NO escribas nuevos mds desde cero; solo enriqueces el existente (Edit) o lo borras (FALSE_POSITIVE).
+- **NUNCA vuelques snapshots ni scratch de Playwright como archivos en disco** (`.md` u otros) en la raíz del repo ni en ninguna ruta versionada. Tu única escritura es editar (Edit) el md existente en `bug-analisis/` (gitignored). Mantén los snapshots de `browser_snapshot` en tu contexto; volcarlos a la raíz ensucia el working tree y rompe los chequeos de árbol limpio del ciclo.
 - NO hagas operaciones git.
 - NO propongas solución técnica al corrector (ni en el md ni en el contrato de salida).
 - NO menciones rutas de archivos del repo ni nombres de funciones internas en el md enriquecido.

@@ -54,15 +54,21 @@ Si todos los pasos de reproducción ya muestran el `comportamiento esperado`:
    ```
    `bug-analisis/` está gitignored (cubre los 3 subdirectorios), así que el move NO afecta al diff de git.
 
-2. **Limpia screenshots residuales de Playwright (pre-commit)** — `browser_take_screenshot` vuelca archivos `.png` en la raíz del repo durante la reproducción. Bórralos ANTES de inspeccionar el diff para que `git status` solo muestre los cambios reales del fix:
+2. **Limpia residuos de Playwright (pre-commit): `.png` y volcados `.md`** — durante la reproducción `browser_take_screenshot` vuelca `.png` en la raíz; además el bug-detector/bug-validador de las fases anteriores a veces dejan volcados `.md` del árbol de accesibilidad en la raíz (primera línea con firma de snapshot, p. ej. `- generic [ref=e2]:`). Tú no creas `.md` (no tienes Write), pero SÍ debes barrer los que ellos dejaron, ANTES de inspeccionar el diff, para que `git status` solo muestre los cambios reales del fix:
    ```powershell
    git status --porcelain | ForEach-Object {
        if ($_ -match '^\?\? ([^/\\]+\.png)$') {
            Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       } elseif ($_ -match '^\?\? ([^/\\]+\.md)$') {
+           $f = $matches[1]
+           $firstLine = (Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue)
+           if ($firstLine -match '\[ref=e' -or $firstLine -match '^\s*- generic') {
+               Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+           }
        }
    }
    ```
-   Borra **únicamente** `.png` **untracked en la raíz** del repo (línea `?? <nombre>.png` en `git status --porcelain`, sin barras). Nunca toca `.png` versionados, ni `.png` dentro de subdirectorios (p.ej. `frontend/public/`, `frontend/src/assets/`).
+   Borra **únicamente** archivos **untracked en la raíz** del repo (línea `?? <nombre>` en `git status --porcelain`, sin barras). Los `.png` sin condición; los `.md` **solo** si su primera línea tiene firma de snapshot (`[ref=e` o `- generic`), para nunca tocar un `.md` legítimo. Nunca toca archivos versionados, ni nada en subdirectorios (p.ej. `frontend/public/`, `frontend/src/assets/`), ni `bug-analisis/` (gitignored).
 
 3. **Verifica el estado git**:
    ```powershell
@@ -85,11 +91,17 @@ Si todos los pasos de reproducción ya muestran el `comportamiento esperado`:
    - NUNCA uses `-a`.
    - NO hagas push.
 
-6. **Limpia screenshots residuales de Playwright (post-commit)** — repite el barrido por defensa en profundidad. Garantiza que ningún `.png` untracked queda en la raíz cuando devuelvas el control al orquestador; sin esta segunda pasada, la preparación inicial del siguiente ciclo (que rechaza working tree dirty, ver SKILL.md § Preparación inicial y § Condiciones excepcionales) abortaría el bucle:
+6. **Limpia residuos de Playwright (post-commit): `.png` y volcados `.md`** — repite el barrido por defensa en profundidad. Garantiza que ningún `.png` ni `.md` de snapshot untracked queda en la raíz cuando devuelvas el control al orquestador; sin esta segunda pasada, la preparación inicial del siguiente ciclo (que rechaza working tree dirty, ver SKILL.md § Preparación inicial y § Condiciones excepcionales) abortaría el bucle:
    ```powershell
    git status --porcelain | ForEach-Object {
        if ($_ -match '^\?\? ([^/\\]+\.png)$') {
            Remove-Item -LiteralPath $matches[1] -Force -ErrorAction SilentlyContinue
+       } elseif ($_ -match '^\?\? ([^/\\]+\.md)$') {
+           $f = $matches[1]
+           $firstLine = (Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue)
+           if ($firstLine -match '\[ref=e' -or $firstLine -match '^\s*- generic') {
+               Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+           }
        }
    }
    ```

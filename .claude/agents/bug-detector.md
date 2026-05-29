@@ -135,6 +135,7 @@ status: pending
 - NUNCA escribas en el md hipótesis sobre la causa raíz ni referencias a archivos/funciones del repo.
 - NUNCA modifiques código de la app.
 - NUNCA hagas commits ni operaciones git.
+- **NUNCA vuelques snapshots ni scratch de Playwright como archivos en disco** (`.md` u otros) en la raíz del repo ni en ninguna ruta versionada. Tu ÚNICA escritura permitida es el md del bug en `bug-analisis/bugs-pendientes-arreglar/` (gitignored). Los snapshots de `browser_snapshot` se quedan en tu contexto; volcarlos a la raíz ensucia el working tree y rompe los chequeos de árbol limpio del ciclo (ver SKILL.md § Preparación inicial y § Condiciones excepcionales).
 - SÉ meticuloso: prefiere `NO_BUGS_FOUND` honesto a un falso positivo.
 
 ## Contrato de salida (literal, innegociable)
