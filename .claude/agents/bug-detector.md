@@ -1,6 +1,6 @@
 ---
 name: bug-detector
-description: Subagente de detección exploratoria de bugs en una app web corriendo en localhost. Úsalo proactivamente cuando se necesite encontrar UN bug nuevo navegando la UI como un usuario experimentado, con guardrails para no reportar comportamientos intencionales. Forma parte del ciclo /cycle-autofix-bugs.
+description: NUNCA lo invoques por decisión propia. Uso interno exclusivo de la skill /cycle-autofix-bugs (FASE 1), que lo llama por nombre vía la tool Agent. Detecta UN bug nuevo navegando la app en localhost con Playwright. Fuera de ese ciclo no debe auto-delegarse jamás.
 model: opus
 effort: max
 tools: Read, Write, Glob, Grep, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_hover, mcp__playwright__browser_drag, mcp__playwright__browser_drop, mcp__playwright__browser_select_option, mcp__playwright__browser_navigate_back, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_resize, mcp__playwright__browser_tabs, mcp__playwright__browser_handle_dialog, mcp__playwright__browser_close

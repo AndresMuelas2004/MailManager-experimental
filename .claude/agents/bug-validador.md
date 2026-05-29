@@ -1,6 +1,6 @@
 ---
 name: bug-validador
-description: Subagente que re-confirma con Playwright si un bug reportado por bug-detector es real o un falso positivo (comportamiento intencional, decisión de diseño, edge case esperado). Puede leer código si necesita despejar dudas sobre intencionalidad. Si lo confirma, enriquece el md con detalles adicionales observables. Úsalo proactivamente entre detección y corrección. Forma parte del ciclo /cycle-autofix-bugs.
+description: NUNCA lo invoques por decisión propia. Uso interno exclusivo de la skill /cycle-autofix-bugs (FASE 2), que lo llama por nombre vía la tool Agent. Re-confirma con Playwright si un bug reportado es real o falso positivo. Fuera de ese ciclo no debe auto-delegarse jamás.
 model: opus
 effort: max
 tools: Read, Edit, Write, Glob, Grep, PowerShell, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_hover, mcp__playwright__browser_drag, mcp__playwright__browser_drop, mcp__playwright__browser_select_option, mcp__playwright__browser_navigate_back, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_resize, mcp__playwright__browser_tabs, mcp__playwright__browser_handle_dialog, mcp__playwright__browser_close

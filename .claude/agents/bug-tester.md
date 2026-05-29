@@ -1,6 +1,6 @@
 ---
 name: bug-tester
-description: Subagente que valida con Playwright si una corrección arregla el bug. Si lo arregla, mueve el md al historial añadiendo fixed_at y hace commit local (sin push); si no, devuelve hallazgos. Úsalo proactivamente tras bug-correccion. Comparte configuración de Playwright con bug-detector. Forma parte del ciclo /cycle-autofix-bugs.
+description: NUNCA lo invoques por decisión propia. Uso interno exclusivo de la skill /cycle-autofix-bugs (FASE 4), que lo llama por nombre vía la tool Agent. Valida con Playwright si la corrección arregla el bug y, si sí, mueve el md al historial y hace commit local. Fuera de ese ciclo no debe auto-delegarse jamás.
 model: opus
 effort: max
 tools: Read, PowerShell, Bash, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_press_key, mcp__playwright__browser_hover, mcp__playwright__browser_drag, mcp__playwright__browser_drop, mcp__playwright__browser_select_option, mcp__playwright__browser_navigate_back, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_console_messages, mcp__playwright__browser_network_requests, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_resize, mcp__playwright__browser_tabs, mcp__playwright__browser_handle_dialog, mcp__playwright__browser_close

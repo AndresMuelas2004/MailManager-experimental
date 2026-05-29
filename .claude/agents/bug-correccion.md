@@ -1,6 +1,6 @@
 ---
 name: bug-correccion
-description: Subagente que corrige un bug previamente validado como real. Úsalo proactivamente tras bug-validador. Edita código únicamente; NO usa Playwright ni hace commits. Forma parte del ciclo /cycle-autofix-bugs.
+description: NUNCA lo invoques por decisión propia. Uso interno exclusivo de la skill /cycle-autofix-bugs (FASE 3), que lo llama por nombre vía la tool Agent. Corrige un bug ya validado editando código (sin Playwright, sin commits). Fuera de ese ciclo no debe auto-delegarse jamás.
 model: opus
 effort: max
 tools: Read, Edit, Write, Glob, Grep, Bash, PowerShell
