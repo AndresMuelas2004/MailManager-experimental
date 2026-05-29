@@ -1,100 +1,202 @@
-# Favourites
+# Características de favoritos — comportamiento (MVP)
 
-Cross-provider abstraction over Gmail's `STARRED` label and Outlook's
-message `flag` property. The feature surface lives in three places:
+Este documento describe **qué hace** la app cuando un usuario marca correos como favoritos: cómo se marca y desmarca un correo, cómo se ve la bandeja de Favoritos, qué pasa cuando se reconcilia el estado con el proveedor y qué casos borde están aceptados. No entra en código: es una guía de comportamiento para que cualquier persona del equipo entienda cómo se va a comportar la funcionalidad cuando se siente delante de la app.
 
-- Database: `email_metadata.is_favorite` (migration 0027) plus a partial
-  index `(account_id, received_at DESC) WHERE is_favorite = TRUE`.
-- Backend API:
-  - `PATCH /mailboxes/{mid}/accounts/{aid}/emails/{message_id}/favorite`
-  - `POST  /mailboxes/{mid}/favorites/sync`
-  - `GET   /mailboxes/{mid}/emails?favorite=true`
-- Frontend: `FavoriteButton` on every row of `EmailTable`, `FavoritesPage`
-  with a "Sincronizar favoritos" button, `useFavorite` hook.
+Para los topes exactos y la lista de "qué NO soporta", consulta [`../limits/favoritos.md`](../limits/favoritos.md).
 
-The end-to-end contract is summarised in `repository_guide.md`. This
-file captures the **non-obvious design decisions** that informed the
-implementation; nothing here is "what the code does" — open the source
-for that.
+---
 
-## Why `is_favorite` is a column, not a value of `box`
+## 1. Qué es un favorito en MailManager
 
-`box` records WHERE the email lives (`INBOX`, `SENT`, `SPAM`, `TRASH`).
-`is_favorite` records a marking the user applied to the email.
-Collapsing the two would lose the real location every time the user
-favourites a message — Gmail and Outlook both model the favourite as
-ORTHOGONAL state, so we mirror them.
+Un favorito es una **marca personal** que el usuario pone sobre un correo concreto para encontrarlo rápido más tarde. Visualmente es la **estrella** que aparece al principio de cada fila del listado: rellena en ámbar cuando el correo es favorito, contorneada en gris cuando no lo es.
 
-## Why the sync does NOT import new metadata rows
+MailManager no inventa este concepto: lo mapea sobre lo que cada proveedor ya ofrece.
 
-Two options were considered (`Ignore/Favoritos-Funcionalidad.md` §
-"Cuestiones técnicas"):
+- En **Gmail**, un favorito es la etiqueta **`STARRED`** (la estrella de Gmail).
+- En **Outlook**, un favorito es la **bandera de seguimiento** del mensaje (`flag`, con estado "marcado").
 
-- **A**: sync only updates rows already present locally; provider-only
-  favourites are ignored.
-- **B**: sync imports missing metadata too, inserting new rows with
-  `is_favorite = TRUE`.
+El usuario no tiene que saber nada de esto: marca la estrella en MailManager y el cambio se refleja tanto en MailManager como en Gmail/Outlook web, y al revés.
 
-We picked **A**. Reasons:
+### 1.1 El favorito es ortogonal a la ubicación del correo
 
-1. The provider call that backs `/favorites/sync` is `messages.list`
-   (Gmail) / `messages` with `$filter` (Outlook). Both return only the
-   id; importing would force a second per-id metadata fetch and turn a
-   cheap label-reconciliation into a metadata-sync ghost.
-2. The general `/emails/sync-metadata` endpoint already owns the
-   responsibility of importing new rows; doing it from two endpoints
-   risks divergence.
-3. The user-visible effect of "you favourited an email at the provider
-   that we haven't synced yet" is "the favourite shows up after the
-   next refresh", which is acceptable for a manual reconciliation
-   endpoint.
+Esta es la decisión de diseño más importante de la feature, y conviene entenderla bien.
 
-## Why TRASH and SPAM are excluded by default
+Cada correo tiene una **ubicación** (`box`): bandeja de entrada, enviados, spam o papelera. El estado de favorito es **independiente** de esa ubicación. Un correo puede estar a la vez en la papelera y marcado como favorito; puede moverse de la bandeja de entrada a spam sin perder la estrella.
 
-When the user trashes a favourite, they implicitly told the system
-"this is not in my active flow anymore". The Favourites view respects
-that decision: `GET /emails?favorite=true` forces `box NOT IN
-('TRASH','SPAM')` unless `box` explicitly targets one of those. The
-same default applies to virtual mailboxes whose `filter_payload`
-contains no `box` clause.
+Esto se hizo así porque **los dos proveedores lo modelan exactamente igual**:
 
-## Bulk operations — out of scope for the MVP
+- En Gmail, la etiqueta `STARRED` convive con cualquier otra etiqueta (`INBOX`, `SENT`, `SPAM`, `TRASH`). Marcar una estrella no mueve el correo de carpeta.
+- En Outlook, la bandera viaja con el mensaje aunque éste cambie de carpeta.
 
-The frontend that needs to mark multiple emails as favourite iterates
-and calls `PATCH /favorite` N times. The bulk endpoints exposed by both
-providers (`users.messages.batchModify` / Graph `$batch`) would be a
-trivial addition later and do not block any other feature. The
-no-bulk choice keeps the API surface small and the error model simple
-(no partial-success contract to design).
+**Por qué no se modeló como un valor más de `box`**: si "favorito" fuese una ubicación más, marcar un correo como favorito borraría su ubicación real (perderíamos el dato de que ese correo estaba, por ejemplo, en Enviados). Mantenerlos separados respeta la realidad de ambos proveedores y permite la bandeja de Favoritos que mezcla correos de cualquier ubicación.
 
-## Provider-First Rule
+### 1.2 Ejemplo
 
-Both `/favorite` and `/favorites/sync` follow Provider-First — the
-provider is the source of truth, and a provider failure aborts the
-local persistence so we never drift away from what the user sees in
-Gmail/Outlook web. The single non-obvious wrinkle is the **pre-check
-ordering** documented in `repository_guide.md`: a missing local
-metadata row must collapse to 404 BEFORE the provider call, mirroring
-the `DraftNotFound` pre-check pattern.
+- El usuario marca como favorito un correo que está en su bandeja de entrada → aparece con estrella ámbar en la bandeja **y** en la pestaña Favoritos **y** en Gmail web (con su estrella) o en Outlook web (con su bandera).
+- Ese mismo correo se mueve a la papelera → sigue siendo favorito (la estrella se conserva), pero **deja de aparecer en la bandeja de Favoritos** por defecto (ver § 4.2).
 
-## `total_synced` vs `favorites_synced` — deliberately different counts
+---
 
-`POST /favorites/sync` returns two numbers that mean different things and
-are usually NOT equal:
+## 2. Dónde puede el usuario marcar y desmarcar favoritos
 
-- `total_synced` is the **rowcount** of the single-statement `UPDATE`
-  across the account. The statement sets `is_favorite =
-  (provider_message_id = ANY(favourite_ids))` for **every** row of the
-  account — marking the favourites TRUE and everything else FALSE in one
-  transaction — so it touches (and counts) the whole account.
-- `accounts[i].favorites_synced` is the **count of favourites the provider
-  reported** for that account.
+La estrella aparece al principio de cada fila en **todos** los listados de correos donde tiene sentido:
 
-An account with 100 stored emails and 3 provider favourites therefore
-reports `total_synced=100`, `favorites_synced=3`. Reading `total_synced`
-as "favourites synced" is the natural mistake — it is the count of rows
-reconciled, not of favourites.
+- La **bandeja de una cuenta** concreta.
+- La **bandeja unificada** del mailbox (varias cuentas a la vez).
+- Las **bandejas ficticias** (virtual mailboxes).
+- La propia **pestaña de Favoritos**.
 
-Edge case: `favourite_ids = []` is valid and means "clear all favourites
-of this account" (`= ANY('{}')` evaluates FALSE for every row); it still
-reports the full account rowcount in `total_synced`.
+Un clic en la estrella alterna el estado. El clic está **aislado del resto de la fila**: pulsar la estrella nunca abre el correo, solo cambia el favorito (y al revés, abrir el correo no toca la estrella).
+
+El visor de correo abierto **no** muestra botón de favorito hoy — la marca se gestiona desde el listado. Es una limitación aceptada, recogida en [`../limits/favoritos.md`](../limits/favoritos.md).
+
+---
+
+## 3. Cómo se comporta la estrella al marcar (respuesta instantánea + confirmación con el proveedor)
+
+Cuando el usuario pulsa la estrella, la app aplica un **cambio optimista**: la estrella se rellena (o se vacía) **al instante**, sin esperar a que el proveedor confirme. El usuario no percibe la latencia de Gmail/Outlook.
+
+Por debajo, la app sigue la **Regla Provider-First**: primero llama al proveedor para aplicar la etiqueta/bandera y **solo si el proveedor confirma** persiste el cambio en la base de datos local. El proveedor es la fuente de verdad; nunca guardamos un favorito que el proveedor rechazó.
+
+### 3.1 Qué ve el usuario en cada desenlace
+
+- **Todo va bien** (lo normal): la estrella ya estaba puesta optimistamente; al confirmar el proveedor, el listado se refresca con el dato real y la estrella se queda como está. Transparente.
+- **El proveedor falla** (cuenta sin permisos, proveedor caído, correo que ya no existe en el proveedor): la app **revierte** la estrella a su estado anterior y muestra el error. El usuario ve que su marca "no cuajó" y puede reintentar. La base de datos local nunca llega a cambiar.
+
+### 3.2 La marca es idempotente
+
+Marcar como favorito un correo que **ya** era favorito (o desmarcar uno que ya no lo era) no produce ningún error: ambos proveedores tratan la operación como un no-op. El usuario puede pulsar dos veces seguidas sin romper nada.
+
+### 3.3 Correo que ya no existe localmente
+
+Si el usuario intenta marcar un correo que ya no está en la base de datos local (caso de carrera raro: el correo se borró entre que se pintó el listado y el clic), la app responde **"correo no encontrado"** sin gastar siquiera una llamada al proveedor. La comprobación de existencia local ocurre **antes** de tocar Gmail/Outlook, igual que en el resto de acciones por correo. Si la fila desaparece justo en el instante intermedio (entre la comprobación y la escritura), también se reporta como "no encontrado" en lugar de fingir un éxito.
+
+---
+
+## 4. La pestaña de Favoritos
+
+Existe una pestaña dedicada que lista **únicamente** los correos marcados como favoritos. Es el equivalente a "Destacados" de Gmail o a la vista de elementos marcados de Outlook.
+
+### 4.1 Qué muestra
+
+- Una cabecera "Favoritos" con el subtítulo "Correos marcados con estrella en Gmail o con bandera en Outlook".
+- Un botón **"Sincronizar favoritos"** (ver § 5).
+- Una **lupa de búsqueda** que filtra dentro de los favoritos (mismas reglas que la lupa general: literal, sin tildes/mayúsculas, mínimo 2 caracteres, debounce; ver [`lupa.md`](lupa.md)).
+- La tabla de correos favoritos, ordenados por fecha de recepción descendente.
+
+La pestaña hereda el modo del listado: en vista unificada de un mailbox lista los favoritos de **todas** las cuentas del mailbox; en una cuenta concreta, solo los de esa cuenta.
+
+Como la pestaña mezcla correos recibidos y enviados, **cada fila resuelve por sí misma** qué columna mostrar ("De" para los recibidos, "Para" para los enviados) en lugar de asumir un único sentido para toda la tabla.
+
+### 4.2 Spam y papelera quedan fuera por defecto
+
+La bandeja de Favoritos **excluye** los correos que están en spam o en la papelera, aunque sigan marcados como favoritos.
+
+**Por qué**: cuando el usuario manda un favorito a la papelera, implícitamente está diciendo "esto ya no está en mi flujo activo". La vista de Favoritos respeta esa decisión y no se los vuelve a poner delante. La estrella se conserva (no se pierde el favorito), simplemente no se lista aquí.
+
+Esta exclusión también aplica a las **bandejas ficticias** cuyo filtro no especifica explícitamente una ubicación.
+
+**Cómo verlos igualmente**: si el usuario quiere ver los favoritos que están en spam o en la papelera, tiene que pedir explícitamente esa ubicación. El listado solo trae favoritos de spam/papelera cuando se selecciona esa caja de forma explícita; en cualquier otro caso se queda en "todo menos spam y papelera".
+
+### 4.3 Ejemplo del comportamiento de la caja
+
+- Vista de Favoritos por defecto (ancla "todo menos spam/papelera") → trae los favoritos de la bandeja de entrada y de enviados, **no** los de spam/papelera.
+- Vista de Favoritos pidiendo explícitamente "Enviados" → trae **solo** los favoritos que están en Enviados (no se cuelan los del resto de cajas). Esta separación estricta evita un bug sutil en el que la vista de "favoritos enviados" acababa mostrando también favoritos de la bandeja general.
+
+---
+
+## 5. Sincronizar favoritos con el proveedor
+
+El botón **"Sincronizar favoritos"** existe porque MailManager y el proveedor pueden desincronizarse: el usuario pudo marcar una estrella desde Gmail web, desde el móvil, o desde otra app, sin pasar por MailManager. La sincronización **reconcilia** el estado local con lo que el proveedor considera la verdad.
+
+### 5.1 Qué hace exactamente
+
+1. Pregunta al proveedor (a cada cuenta del mailbox) **qué correos tiene marcados como favoritos** ahora mismo.
+2. Para cada cuenta, en una sola operación: marca como favoritos en la base de datos local **todos** los correos que el proveedor reporta como favoritos, y marca como **no favoritos** absolutamente todos los demás correos de esa cuenta.
+
+Es una **reconciliación completa**, no un "añadir lo nuevo": si el usuario desmarcó una estrella en Gmail web, tras sincronizar ese correo deja de ser favorito también en MailManager.
+
+### 5.2 La sincronización NO importa correos nuevos (decisión deliberada)
+
+Esta es una asimetría importante y consciente. Si el proveedor reporta como favorito un correo que **MailManager todavía no tiene** en su base de datos local, la sincronización lo **ignora en silencio**. No crea una fila nueva.
+
+**Por qué** (se evaluaron dos opciones; se eligió la "Opción A"):
+
+- La llamada que respalda la sincronización solo devuelve **identificadores** de correos favoritos, no su contenido ni su metadata (asunto, remitente, fecha). Importar esos correos obligaría a una segunda ronda de llamadas por cada identificador, convirtiendo una reconciliación barata de etiquetas en una sincronización de metadata encubierta.
+- Importar metadata nueva ya es responsabilidad de **otra** operación (la sincronización general de la bandeja). Hacerlo desde dos sitios distintos arriesga divergencias.
+- El efecto visible para el usuario —"marqué un favorito en Gmail web que MailManager aún no había descargado"— es simplemente "el favorito aparece tras la próxima sincronización de la bandeja", que es aceptable para una reconciliación manual.
+
+**Ejemplo**: el usuario marca en Gmail web un correo muy antiguo que MailManager nunca llegó a descargar. Pulsa "Sincronizar favoritos" en MailManager → ese correo **no** aparece en Favoritos todavía. Tiene que sincronizar primero la bandeja (que baja la metadata) y luego ya aparecerá como favorito.
+
+### 5.3 Dos números que cuentan cosas distintas
+
+La sincronización informa de dos cantidades que **casi nunca coinciden** y conviene no confundir:
+
+- El total de **filas reconciliadas**, que es un agregado de **todo el mailbox**: la suma, sobre todas las cuentas sincronizadas, de cuántas filas se han tocado en cada una. Como la operación recorre y reescribe el estado de favorito de **todas** las filas de cada cuenta (poniendo unas a verdadero y el resto a falso en la misma transacción), este número es esencialmente "cuántos correos en total se han tocado".
+- Los **favoritos que el proveedor reportó**, que sí se desglosa **por cuenta** (cada cuenta lleva su propio recuento).
+
+**Ejemplo**: una cuenta con 100 correos almacenados de los cuales 3 están marcados en el proveedor → la sincronización reporta 100 filas reconciliadas y 3 favoritos del proveedor. Leer el primer número como "favoritos sincronizados" es el error natural: es el recuento de filas reconciliadas, no de favoritos. (Con varias cuentas en el mailbox, el total de filas es la suma de las filas de todas; el desglose por cuenta solo acompaña al segundo número.)
+
+**Caso borde**: que el proveedor no reporte **ningún** favorito es válido y significa "esta cuenta no tiene favoritos" → la sincronización pone a no-favorito todas las filas de la cuenta y aun así informa del recuento completo de filas tocadas.
+
+### 5.4 Qué ve el usuario
+
+El botón muestra "Sincronizando…" con un icono girando mientras dura, y al terminar el listado se refresca solo. Si una cuenta falla la autenticación o el proveedor responde con error, la sincronización completa se aborta y se muestra el error. No hay confirmación de éxito con números en pantalla: el usuario percibe el resultado en el propio listado actualizado.
+
+---
+
+## 6. Multi-cuenta y bandejas ficticias
+
+El estado de favorito se gestiona **por cuenta y por correo**, no por mailbox. Esto tiene una consecuencia práctica importante en vistas que mezclan cuentas de varios mailboxes reales (las bandejas ficticias):
+
+- Cada fila del listado lleva la información de **a qué mailbox real pertenece** el correo. Cuando el usuario marca una estrella, la app dirige la llamada al mailbox real que posee la cuenta de ese correo, **no** al mailbox de la URL.
+- Si no lo hiciera así, marcar como favorito un correo cuya cuenta vive en otro mailbox fallaría con "cuenta no encontrada", porque el backend valida que la cuenta pertenezca al mailbox indicado.
+
+La sincronización funciona por mailbox: la pestaña de Favoritos sincroniza el mailbox actual. Reconciliar cuentas repartidas entre varios mailboxes reales requeriría disparar una sincronización por cada mailbox implicado.
+
+---
+
+## 7. No hay marca de favoritos en bloque
+
+El MVP **no** tiene ninguna operación de favorito multi-selección. El favorito **solo** se alterna correo a correo, pulsando la estrella de su fila: no existe un botón de "marcar como favorito" en la barra de acciones en bloque (esa barra cubre papelera, leído/no leído y spam, pero no favoritos) ni hay un endpoint de marca por lotes en el backend.
+
+**Por qué se dejó así**: las dos APIs (Gmail y Outlook) ofrecen operaciones de modificación por lotes que serían una mejora trivial de añadir más adelante y que no bloquean ninguna otra funcionalidad. No tenerlas mantiene la superficie de la API pequeña y el modelo de errores simple: no hay que diseñar un contrato de "éxito parcial" (qué pasa si 3 de 5 se marcan y 2 fallan). Para el volumen del MVP, alternar la estrella de una en una es suficiente.
+
+Las implicaciones cuantitativas (ausencia de batch y de acción multi-selección) están en [`../limits/favoritos.md`](../limits/favoritos.md).
+
+---
+
+## 8. Robustez y casos borde
+
+- **Cambio optimista con reversión**: como se explica en § 3, la estrella se actualiza al instante y se revierte sola si el proveedor rechaza el cambio. El usuario nunca se queda con una estrella "mentirosa" de forma permanente.
+- **Reconciliación tras el fallo**: tras cualquier marca (tenga éxito o se revierta), la app vuelve a pedir al servidor el estado real de los listados afectados, de modo que la pantalla siempre acaba reflejando la verdad del backend.
+- **Favorito que se mueve de caja**: marcar un favorito y luego moverlo a spam/papelera conserva la estrella pero lo saca de la vista de Favoritos por defecto (§ 4.2). Restaurarlo a la bandeja lo devuelve a la vista.
+- **Idempotencia**: doble clic accidental, reenvío de la misma marca, o sincronizaciones repetidas no producen estados inconsistentes.
+
+---
+
+## 9. Qué pasa "por debajo" de un vistazo
+
+### 9.1 Al marcar una estrella
+
+1. El usuario pulsa la estrella → se rellena al instante (cambio optimista).
+2. La app comprueba que el correo existe localmente; si no, corta con "no encontrado" sin llamar al proveedor.
+3. La app pide al proveedor aplicar la etiqueta `STARRED` (Gmail) o la bandera (Outlook).
+4. Si el proveedor confirma → se guarda el favorito en local y el listado se reconcilia.
+5. Si el proveedor falla → la estrella se revierte y se muestra el error; la base de datos local no cambia.
+
+### 9.2 Al sincronizar
+
+1. El usuario pulsa "Sincronizar favoritos".
+2. La app pregunta a cada cuenta del mailbox qué correos están marcados ahora mismo.
+3. Por cada cuenta, en una sola transacción, marca como favoritos los que el proveedor reporta y desmarca todos los demás.
+4. Los correos que el proveedor reporta pero que MailManager no tiene en local se ignoran (§ 5.2).
+5. El listado se refresca con el estado reconciliado.
+
+---
+
+## 10. Resumen en una frase
+
+> Un favorito es la estrella de Gmail (`STARRED`) o la bandera de Outlook proyectada como un estado **ortogonal a la ubicación** del correo, que el usuario marca y desmarca con respuesta instantánea (optimista, con reversión si el proveedor falla) desde cualquier listado; la pestaña de Favoritos lista todos los favoritos del mailbox ordenados por fecha excluyendo por defecto spam y papelera; el botón de sincronizar reconcilia por completo el estado local con el del proveedor sin importar correos nuevos (Opción A); y todo se aplica Provider-First, alternando la estrella correo a correo (sin acción multi-selección ni marca en bloque en el MVP), respetando idénticamente cómo modelan el favorito ambos proveedores.
+
+Eso es todo lo que necesita saber un programador (o cualquier persona del equipo) para entender cómo se va a comportar la gestión de favoritos en el MVP.
