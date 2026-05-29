@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { Inbox, Send, Link, Settings, ChevronDown } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -42,8 +42,32 @@ export default function Sidebar({
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
   const base = `/m/${mailboxId}`;
   const { search } = useLocation();
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    function handleClickOutside(e: MouseEvent) {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false);
+      }
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setSettingsOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [settingsOpen]);
 
   return (
     <aside className="sticky top-0 flex h-screen max-h-screen w-[260px] shrink-0 flex-col gap-1 overflow-visible border-r border-zinc-200 bg-white px-4 py-6">
@@ -130,7 +154,7 @@ export default function Sidebar({
         </button>
       </div>
 
-      <div className="relative px-1 py-2">
+      <div ref={settingsRef} className="relative px-1 py-2">
         <button
           type="button"
           onClick={() => setSettingsOpen((v) => !v)}
