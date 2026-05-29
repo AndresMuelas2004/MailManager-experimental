@@ -259,10 +259,20 @@ Procedimiento:
 
 ## Matching de cadenas (regla del orquestador)
 
-- **Igualdad exacta tras trim**: la frase de éxito del tester debe igualar carácter por carácter, ignorando solo whitespace en bordes (espacios, saltos de línea, tabs). Sin trim intermedio. Sin regex laxa. Es la única vía de éxito y por eso se valida con la regla más estricta.
-- **Prefijo tras trim**: para todas las demás cadenas del contrato (`BUG_FOUND: `, `NO_BUGS_FOUND`, `REAL_BUG: `, `FALSE_POSITIVE: `, `FIX_APPLIED: `, `FIX_FAILED: `, `BUG_STILL_BROKEN: `, `TESTER_COMMIT_FAILED: `), se comprueba `startswith` tras trim de bordes.
-- `NO_BUGS_FOUND` se comprueba como **igualdad exacta tras trim** (sin payload).
-- Si dudas, **categoriza como CONDICIÓN EXCEPCIONAL** que continuar con un mensaje ambiguo.
+> **⚠️ Realidad del harness (esto MANDA sobre la lectura literal de las reglas de abajo).** Todo resultado de subagente que recibes llega con dos contaminaciones que hacen IMPOSIBLE el match literal del mensaje completo:
+> 1. **Preámbulo**: los subagentes anteponen un resumen conversacional antes de su token de contrato, pese a que su contrato les pide devolver solo el token. Por eso el mensaje casi nunca *empieza* por `BUG_FOUND: ` / `REAL_BUG: ` / etc.
+> 2. **Coletilla del harness**: la tool `Agent` SIEMPRE concatena al final del mensaje algo como `...agentId: <id> (use SendMessage with to: '<id>' to continue this agent)`. No lo controla el subagente; aparece siempre. Por eso la *igualdad exacta* con la frase de éxito del tester es literalmente inalcanzable (la coletilla queda pegada tras `...detector.`).
+>
+> **Regla operativa real**: enruta por la **presencia inequívoca de UN único token de contrato bien formado** dentro del mensaje, no por igualdad de la cadena completa ni por `startswith` del mensaje crudo. Para los tokens con prefijo, localiza la línea/segmento que empieza por el token (`BUG_FOUND: <slug>` + su YAML, `REAL_BUG: `, `FIX_APPLIED: <slug>: `, etc.). Parar como CONDICIÓN EXCEPCIONAL por un preámbulo cosmético o por la coletilla `agentId` haría el ciclo inoperante.
+>
+> **Éxito del tester (caso crítico, anti-falso-positivo)**: NO lo valides por string. (a) Confirma que la frase `El bug ha sido solucionado correctamente. Vuelve a empezar el ciclo lanzando el subagente detector.` aparece **verbatim** como contenido operativo final del mensaje, **y** (b) **verifica los efectos reales con git** antes de declarar éxito: `git log -1` muestra el commit del fix con mensaje natural, `git show --stat HEAD` muestra solo el/los fichero(s) del fix, `git status --porcelain` está limpio. La verificación con git es MÁS estricta que el match de string y preserva mejor la intención original (no cantar un éxito que no ocurrió).
+
+Las reglas de abajo describen la **intención** del contrato (lo que el subagente *debería* devolver). Aplícalas sobre el token ya localizado dentro del mensaje, nunca sobre el mensaje crudo:
+
+- **Igualdad exacta (intención)**: la frase de éxito del tester es la única vía de éxito; por eso, además del git-check de arriba, su texto debe coincidir **verbatim** (no una paráfrasis ni un equivalente).
+- **Prefijo**: para las demás cadenas del contrato (`BUG_FOUND: `, `NO_BUGS_FOUND`, `REAL_BUG: `, `FALSE_POSITIVE: `, `FIX_APPLIED: `, `FIX_FAILED: `, `BUG_STILL_BROKEN: `, `TESTER_COMMIT_FAILED: `), identifica el token por su prefijo **dentro** del mensaje.
+- `NO_BUGS_FOUND` es el único sin payload: trátalo como fin natural solo si aparece como token operativo y NO hay un `BUG_FOUND: ` compitiendo en el mismo mensaje.
+- Si dudas —output **genuinamente ambiguo o contradictorio**, no un simple preámbulo o coletilla—, **categoriza como CONDICIÓN EXCEPCIONAL** antes que continuar con un mensaje confuso.
 
 ## Paradas (formales)
 
