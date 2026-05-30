@@ -1,8 +1,8 @@
-# Características de adjuntos — comportamiento (MVP)
+# Adjuntos — comportamiento (MVP)
 
 Este documento describe **qué hace** la app respecto a los archivos adjuntos: cómo se reciben, cómo se ven, cómo se añaden a un borrador, cómo se envían y qué pasa cuando algo falla. No entra en código: es una guía de comportamiento para que cualquier persona del equipo entienda cómo se va a comportar la funcionalidad cuando se siente delante de la app.
 
-Recoge los comportamientos derivados de las decisiones D-01 a D-30 del documento `externalAPIinformation/decisiones-adjuntos-app.md`.
+Los topes numéricos exactos (tamaños, cantidades, TTL, reintentos, concurrencia) y la lista de "lo que NO hace" viven en un documento aparte para no repetir cifras aquí: **[../limits/adjuntos.md](../limits/adjuntos.md)**. Este fichero solo menciona los límites de pasada y enlaza a ese catálogo cuando hace falta.
 
 ---
 
@@ -10,392 +10,260 @@ Recoge los comportamientos derivados de las decisiones D-01 a D-30 del documento
 
 La app trata dos tipos de "archivo dentro de un correo":
 
-- **Imágenes embebidas en el cuerpo HTML** (referenciadas con `cid:` desde un `<img>`). Ya estaban soportadas antes de esta feature: el correo se ve correctamente con su logo, su firma con foto, etc. La lógica de imágenes embebidas **no cambia**.
-- **Archivos adjuntos descargables** (PDFs, documentos de Word/Excel, imágenes sueltas, ZIPs, etc.). Esto es la novedad.
+- **Imágenes embebidas en el cuerpo HTML** (referenciadas con `cid:` desde un `<img>` o desde CSS). Ya estaban soportadas antes de esta feature: el correo se ve correctamente con su logo, su firma con foto, los banners del newsletter, etc. Esa lógica **no cambia** con los adjuntos.
+- **Archivos adjuntos descargables** (PDFs, documentos de Word/Excel, imágenes sueltas, ZIPs, etc.). Esto es la parte que añade la feature.
 
 La app cubre tres flujos completos:
 
 1. **Recibir** correos con adjuntos y poder verlos / descargarlos.
 2. **Componer** correos nuevos con adjuntos.
-3. **Editar borradores** añadiendo, quitando y conservando adjuntos entre sesiones.
+3. **Editar borradores** añadiendo, quitando y conservando adjuntos entre sesiones, incluido responder y reenviar.
 
-Funciona igual para cuentas Gmail y para cuentas Outlook, salvo en los puntos donde un proveedor impone un comportamiento distinto (los puntos exactos están marcados a lo largo del documento).
-
----
-
-## 2. Límites de tamaño y cantidad
-
-La app aplica **tres límites** a la hora de enviar (no a la hora de recibir):
-
-### 2.1 Tamaño máximo por archivo individual: **25 MB**
-
-El usuario no puede adjuntar un único archivo de más de 25 MB. Si lo intenta, la app rechaza el archivo en cuanto el usuario lo selecciona o lo arrastra al composer, sin esperar a llegar al servidor del proveedor.
-
-Es el límite de Gmail estándar y suficientemente cómodo para casi cualquier escenario realista (PDFs, presentaciones, fotos, documentos ofimáticos, vídeos cortos).
-
-A nivel de servidor hay además una segunda línea de defensa distinta: el endpoint de subida rechaza cualquier cuerpo HTTP multipart de más de **30 MB** con `413 request_too_large` antes incluso de leer el archivo. Ese tope (5 MB por encima del límite de 25 MB por fichero) cubre el sobrecoste de las fronteras multipart.
-
-### 2.2 Tamaño máximo total del mensaje: **25 MB**
-
-El cuerpo del correo + todos los adjuntos juntos no pueden superar **25 MB**, sin distinción entre Gmail y Outlook. Es un límite uniforme.
-
-El composer muestra siempre "X / 25 MB usados", y el contador no cambia al cambiar la cuenta de origen seleccionada.
-
-**Por qué uniforme y no asimétrico**: Outlook permite por defecto hasta 35 MB y configurable hasta 150 MB. Mantener un techo distinto por proveedor introducía complejidad real (contador que cambia con la cuenta, casos del cambio de cuenta con exceso de adjuntos cargados, dos números en pantalla) a cambio de 10 MB extra que solo aprovechan correos cercanos al techo. Para casos por encima de 25 MB la respuesta correcta sigue siendo Drive/OneDrive — capacidad que la app tampoco implementa con 35 MB.
-
-**Caveat aceptado**: si el tenant Outlook está configurado con un límite **inferior a 25 MB** (raro: el default histórico es 35 MB), la app no lo detecta y los correos pueden rebotar con NDR. Si está configurado por encima (50 MB, 150 MB), la app limita falsamente — pero esos clientes tienen Drive/OneDrive disponible para los casos extremos.
-
-### 2.3 Número máximo de adjuntos por correo: **25**
-
-Aunque la suma de tamaños permita más, **un correo no puede llevar más de 25 archivos adjuntos**. Es un límite duro y la app rechaza el archivo número 26 con un error explícito en el composer.
-
-Es un techo cómodo para casos realistas y evita sorpresas en la UI cuando alguien arrastra una carpeta entera de 200 ficheros.
+Funciona igual para cuentas Gmail y para cuentas Outlook, salvo en los puntos donde un proveedor impone un comportamiento distinto (esos puntos están marcados a lo largo del documento — son la parte más interesante).
 
 ---
 
-## 3. Qué archivos se pueden adjuntar al enviar
+## 2. Recibir y ver adjuntos
 
-La app aplica una **blocklist** (lista de bloqueo) que **combina** las dos listas oficiales — la de Gmail y la de Microsoft Exchange Online. El mismo archivo se rechaza independientemente de la cuenta de origen.
+Lo más importante de la recepción: **el binario de un adjunto solo se descarga del proveedor cuando el usuario lo clica explícitamente**, nunca antes. El proceso ocurre en tres momentos distintos y solo el último gasta cuota del proveedor.
 
-### Por qué la lista es combinada y no una por proveedor
+### 2.1 Momento 1 — sincronizar la bandeja
 
-Las dos listas oficiales **no coinciden**. Outlook bloquea una superlista que incluye casi todo lo de Gmail más extensiones extra (`.py`, `.pyc`, `.mht`, `.mhtml`, `.mdb`, `.mde`, `.csh`, `.ksh`, `.url`, `.theme`, `.scf`, etc.). Si la app respetase la lista de cada proveedor por separado, el mismo `.py` se enviaría desde una cuenta Gmail y se rechazaría desde una Outlook — UX inconsistente y confusa para el usuario.
+Al sincronizar, la app baja únicamente la **metadata de los correos** (asunto, remitente, fecha y el flag "tiene adjuntos"). No descarga adjuntos, ni siquiera la lista de adjuntos de cada correo.
 
-Aplicando la **unión** se garantiza que cualquier archivo que pase la validación del cliente llegará al destinatario sin que ningún proveedor lo bloquee. La regla es la más estricta de las dos, lo cual es la postura segura.
+A nivel visual, la lista del buzón muestra un **icono de clip** junto al asunto cuando el correo tiene al menos un adjunto descargable. Un correo que solo trae imágenes inline (logos, firmas con foto) **no** muestra clip — igual que hacen Gmail y Outlook web. Esa distinción importa: si todos los newsletters mostrasen clip, el icono perdería su valor de señal.
 
-La lista combinada incluye, entre otras: ejecutables y scripts (`.exe`, `.bat`, `.cmd`, `.com`, `.scr`, `.vbs`, `.vbe`, `.js`, `.jse`, `.wsf`, `.wsh`, `.msi`, `.dll`, `.pif`, `.jar`, `.lnk`, `.reg`), bibliotecas (`.appx`, `.appxbundle`, `.cab`, `.dmg`), shells y scripts de PowerShell/Python/Perl (`.ps1`, `.ps1xml`, `.py`, `.pyc`, `.pl`, `.csh`, `.ksh`), archivos de Office Access (`.mdb`, `.mde`, `.mdt`, `.mdw`), formatos de Outlook (`.pst`, `.mht`, `.mhtml`), instaladores e imágenes de disco (`.msi`, `.msu`, `.iso`, `.img`, `.vhd`, `.vhdx`), atajos del sistema y configuraciones (`.url`, `.lnk`, `.scf`, `.settingcontent-ms`, `.theme`), y un largo etcétera (la lista exacta y autoritativa vive en una constante centralizada del código).
+Un matiz deliberado: ese flag arranca en `false` y solo pasa a `true` **la primera vez que alguien abre el correo** y la app descubre que tenía partes descargables (momento 2). Es decir, justo después de sincronizar, un correo con adjuntos que nadie ha abierto todavía puede no mostrar clip aún. Es una simplificación consciente del MVP (el "porqué" está en [../limits/adjuntos.md](../limits/adjuntos.md)).
 
-### Cuándo se valida
+### 2.2 Momento 2 — abrir un correo
 
-La validación ocurre **en el cliente, antes de subir el archivo** al backend. El usuario que arrastra `virus.exe` recibe un mensaje inmediato ("Este tipo de archivo no se puede enviar por correo") sin que el archivo viaje por la red. El backend vuelve a validar como segunda red de seguridad.
+Al hacer clic en un correo, la app descarga el contenido (HTML + texto) **junto con la lista detallada de adjuntos**: nombre, tipo, tamaño y si la parte es inline o descargable. Esa lista se persiste localmente, así que abrir el mismo correo una segunda vez es instantáneo.
 
-### Por qué la validación es en cliente y no solo en servidor
+Lo que **no** se descarga aquí son los binarios. Solo el "menú": *"factura.pdf · 1,2 MB · PDF"*. El PDF en sí sigue en el proveedor. Resultado: abrir un correo con cinco adjuntos pesados es igual de rápido que abrir uno sin adjuntos.
 
-Hay una razón concreta para los dos proveedores:
+Debajo del cuerpo, el visor pinta una **lista de tarjetas**, una por adjunto descargable. Cada tarjeta muestra un icono según el tipo (PDF, imagen, Word, Excel, genérico, o un icono de aviso si el adjunto está marcado como no disponible), el nombre (truncado, con el nombre completo en tooltip), el tamaño formateado y un botón de descarga. Un clic en cualquier punto de la tarjeta dispara la descarga.
 
-- **Gmail rechaza síncronamente**: si la app sube el `.exe` igualmente, Gmail responde con `400 badRequest "The attachment is invalid"`.
-- **Outlook NO rechaza síncronamente**: el endpoint `sendMail` devuelve `202 Accepted` aunque el adjunto sea de un tipo bloqueado. El usuario cree que el correo se envió, pero minutos más tarde recibe un NDR (mensaje de error diferido) en su bandeja de entrada.
+### 2.3 Momento 3 — clicar un adjunto concreto
 
-La única forma de dar al usuario un error inmediato y consistente entre Gmail y Outlook es validar en el cliente. La validación del backend existe igualmente como segunda red de seguridad.
+Solo entonces la app pide el binario al proveedor, lo persiste localmente y se lo entrega al navegador como descarga al disco. Mientras llega, la tarjeta muestra un spinner en su botón; la primera descarga puede tardar uno o dos segundos (hay que ir al proveedor), las siguientes son instantáneas porque el binario ya está cacheado.
 
-### Lo que NO hace la app por ahora
+Si el usuario clica varios adjuntos seguidos, la app procesa unas pocas descargas en paralelo y deja el resto en cola visible como "En cola" (el tope concreto y su porqué están en [../limits/adjuntos.md](../limits/adjuntos.md)). Esta cola acotada existe para no acercarse a los límites de concurrencia de Microsoft Graph y mantener estable la respuesta del proveedor.
 
-- No analiza los archivos buscando virus.
-- No verifica que el contenido del fichero corresponde a su extensión (un `.pdf` que en realidad sea un ejecutable renombrado pasaría el filtro). La protección frente a malware queda fuera del MVP.
+A partir de ahí ese adjunto queda cacheado: si el usuario lo vuelve a clicar mañana o la semana que viene, se sirve directo desde el almacenamiento local **sin volver a llamar al proveedor** — hasta que la purga por TTL libere el binario por falta de uso (sección 7.3).
 
----
+#### Ejemplo
 
-## 4. Qué archivos se pueden descargar al recibir
+> El usuario abre un correo con `informe.pdf` (8 MB) y `logo.png` (12 KB, embebido en la firma). El visor renderiza el cuerpo con el logo ya visible dentro del HTML y pinta **una sola** tarjeta de adjunto: `informe.pdf`. El logo NO aparece como tarjeta (es inline). Al clicar `informe.pdf`, spinner ~1 s y descarga al disco. Segundo clic: descarga instantánea.
 
-**Todos los adjuntos que lleguen** se muestran en la app y se pueden descargar, sin filtrado adicional. La app no bloquea ni esconde tipos de archivo "peligrosos" en correos recibidos.
+### 2.4 Qué se puede descargar: todo lo que llegue
 
-Es la postura que adopta Gmail web: si el correo trajo un `.exe` adjunto, el usuario lo ve y decide qué hacer con él. Filtrar la recepción introduciría falsos negativos (esconder cosas legítimas que el usuario necesita) y falsos positivos (mostrar cosas que el usuario debería ignorar) sin valor real.
+**Todos los adjuntos que lleguen** se muestran y se pueden descargar, sin filtrado adicional. La app no esconde tipos "peligrosos" en correos recibidos: si el correo trajo un `.exe`, el usuario lo ve y decide. Es la postura de Gmail web; la protección frente a contenido malicioso se delega al sistema operativo y al navegador del usuario en el momento de abrir el fichero descargado. Filtrar la recepción solo introduciría falsos negativos (esconder cosas legítimas) sin valor real.
 
-La protección frente a contenido malicioso queda **delegada al sistema operativo y al navegador** del usuario en el momento en que abre el archivo descargado.
+### 2.5 Cómo distingue la app entre "imagen inline" y "adjunto descargable"
 
----
+La regla es **estricta** y difiere ligeramente entre proveedores. El objetivo es no caer en dos errores típicos de correos mal construidos: que una imagen marcada como inline pero no usada en el cuerpo "se pierda" sin que el usuario la vea, o que un fichero pensado para descargar (un PDF con `Content-ID`, por ejemplo) acabe escondido dentro del HTML.
 
-## 5. Cómo se reciben y se ven los adjuntos
+En **Gmail**, una parte se considera inline (embebida, no descargable) solo si cumple **a la vez** dos cosas: está marcada como inline —bien por traer disposición `inline`, bien por ser una imagen con `Content-ID`— **y** ese `Content-ID` aparece referenciado en el HTML del cuerpo (en `src=`/`background=` o en `url(cid:…)` del CSS). La consecuencia útil: una imagen con `Content-ID` referenciado se trata como inline aunque no traiga disposición `inline`; basta con que sea imagen y esté referenciada.
 
-El proceso ocurre en **tres momentos** distintos, y solo el último gasta cuota del proveedor.
+En **Outlook** la regla añade dos guardas más: además de estar marcada inline y de que su `Content-ID` esté referenciado, la parte debe **tener bytes** y ser de tipo `image/…`. Cualquier otra combinación se promociona a adjunto descargable.
 
-### Momento 1: el usuario sincroniza la bandeja (`sync_emails`)
-
-La app baja únicamente la **metadata de los correos** (asunto, remitente, fecha, y el flag `tiene adjuntos`). **No descarga ningún adjunto** ni siquiera la lista de adjuntos de cada correo. Es lo que ya hacía antes de esta feature.
-
-A nivel visual, la lista del buzón muestra el icono de **clip 📎** al lado del asunto cuando el correo tiene al menos un adjunto descargable. Si el correo solo tiene imágenes inline (logos del newsletter, firmas con foto), NO se muestra clip — coincide con cómo lo hacen Gmail y Outlook web. Esa distinción es importante: si todos los newsletters mostrasen clip, el icono perdería valor.
-
-### Momento 2: el usuario abre un correo concreto
-
-Cuando el usuario hace clic en un correo, la app descarga el contenido HTML + texto **junto con la lista detallada de adjuntos** (nombre, tipo, tamaño, si es inline o no). Esa lista se persiste localmente para que abrir el mismo correo una segunda vez sea instantáneo.
-
-Lo que **no** se descarga en este momento son **los binarios** de los adjuntos. Solo el "menú": "factura.pdf, 1,2 MB, PDF". El PDF en sí se queda en el proveedor.
-
-Resultado: abrir un correo con 5 adjuntos pesados es igual de rápido que abrir uno sin adjuntos.
-
-#### Cómo se ve la lista de adjuntos en el visor
-
-Debajo del cuerpo del correo, el visor pinta una **lista de tarjetas** — una por adjunto descargable. Cada tarjeta muestra:
-
-- Icono según el tipo (PDF rojo, imagen, Word, Excel, ZIP, genérico).
-- Nombre del archivo (truncado si es largo, con el nombre completo en tooltip).
-- Tamaño formateado ("1,2 MB", "523 KB").
-- Botón de descarga visible (icono flecha hacia abajo).
-
-Click en cualquier sitio de la tarjeta dispara la descarga del adjunto.
-
-### Momento 3: el usuario clica un adjunto concreto
-
-Solo cuando el usuario clica un adjunto específico, la app:
-
-1. Pide ese binario al proveedor (Gmail o Outlook).
-2. Lo persiste localmente.
-3. Se lo entrega al navegador como descarga al disco.
-
-Mientras llega el binario, la tarjeta del adjunto muestra un spinner pequeño en su botón. Si la primera descarga tarda 1-2 segundos (porque hay que ir al proveedor), el usuario ve esa espera; las siguientes veces es instantáneo.
-
-Si el usuario clica varios adjuntos seguidos, la app procesa **hasta 2 descargas en paralelo** y deja el resto en cola. Las tarjetas en cola muestran "En cola" sin spinner hasta que les llega el turno. Esta limitación evita acercarse a los topes de concurrencia que impone Microsoft Graph (4 peticiones simultáneas por buzón) y mantiene la respuesta del proveedor estable.
-
-A partir de ese momento, ese adjunto está cacheado: si el mismo usuario vuelve a clicar el mismo adjunto otra vez (mañana, la semana que viene), la app lo sirve directamente desde su almacenamiento local **sin volver a llamar al proveedor**.
-
-### Imágenes embebidas en el cuerpo: sin cambios
-
-Las imágenes embebidas que aparecen dentro del HTML del correo (logos, firmas con foto, banners de newsletters, etc.) se siguen resolviendo en el momento 2, exactamente como antes. El usuario no nota ninguna diferencia: el correo se renderiza con sus imágenes, y la lista de "adjuntos descargables" del momento 2 NO incluye las imágenes que ya están embebidas en el HTML.
-
-### Cómo distingue la app entre "imagen inline" y "adjunto descargable"
-
-La regla es estricta y difiere ligeramente entre proveedores.
-
-En **Gmail**, una parte se considera **inline** (embebida en el cuerpo, no descargable) solo si:
-
-1. Está "marcada como inline" — bien porque trae `Content-Disposition: inline`, bien porque es una imagen (`image/…`) que lleva un `Content-ID`.
-2. Ese `Content-ID` aparece referenciado dentro del HTML del cuerpo (vía `cid:`, ya sea en `src=`/`background=` o en `url(cid:…)` del CSS).
-
-La consecuencia importante: una imagen con `Content-ID` referenciado se trata como inline **aunque no traiga** `Content-Disposition: inline` — basta con que sea imagen y esté referenciada.
-
-En **Outlook** la regla añade dos guardas más: además de estar marcada inline (`isInline=true`) y de que su `Content-ID` esté referenciado, la parte debe **tener bytes** y ser de tipo `image/…`. Cualquier otra combinación se promociona a adjunto descargable.
-
-Si una parte no cumple la regla de su proveedor, la app la trata como **adjunto descargable**. Esto evita dos problemas habituales con correos mal construidos: que una imagen marcada como inline pero no referenciada en el HTML "se pierda" sin que el usuario la vea, o que un archivo destinado a ser descargable —un PDF con `Content-ID`, por ejemplo— acabe oculto en el cuerpo.
+En ambos proveedores, cualquier parte que no cumpla su regla de inline se trata como **adjunto descargable**. Esta política es la misma que se documenta como D-13 a lo largo del repositorio.
 
 ---
 
-## 6. Cómo se gestionan los adjuntos al componer y editar borradores
+## 3. Qué se puede adjuntar al enviar
 
-El comportamiento es distinto del de los recibidos porque aquí el usuario es quien aporta el archivo.
+Al enviar (no al recibir) la app aplica una **blocklist** de extensiones que **combina** las dos listas oficiales — la de Gmail y la de Microsoft Exchange Online. El mismo archivo se rechaza independientemente de si la cuenta de origen es Gmail u Outlook. La lista exacta y su motivación viven en [../limits/adjuntos.md](../limits/adjuntos.md).
 
-### 6.1 Cómo se ve la zona de adjuntos en el composer
+### 3.1 Por qué la lista es combinada y no una por proveedor
 
-El composer tiene **dos formas de añadir** adjuntos + un **listado visual** + un **contador de capacidad**, y todas están disponibles en los tres flujos en los que se abre el composer: "Nuevo mensaje", "Nuevo borrador" y "Editar borrador". La zona de adjuntos no espera a que el usuario haya guardado nada — está activa desde que el composer aparece con una cuenta de origen ya cargada.
+Las dos listas oficiales no coinciden: Outlook bloquea una superlista que incluye casi todo lo de Gmail más extensiones extra (`.py`, `.pyc`, `.mht`, `.mdb`, `.url`, `.theme`, etc.). Si la app respetase la lista de cada proveedor por separado, el mismo `.py` se enviaría desde una cuenta Gmail y se rechazaría desde una Outlook: UX inconsistente y confusa. Aplicando la **unión** se garantiza que cualquier archivo que pase la validación llegará al destinatario sin que ningún proveedor lo bloquee. Es la regla más estricta de las dos, que es la postura segura.
 
-**Punto de entrada**:
-- **Botón "Adjuntar"** (icono clip 📎) en la barra inferior del composer, al lado del botón "Enviar". Click abre el selector de archivos del sistema operativo.
-- **Drag and drop** directamente sobre el composer. Mientras el usuario arrastra, el composer muestra un overlay con texto "Suelta el archivo para adjuntarlo".
+### 3.2 Cuándo se valida y por qué en el cliente
 
-**Listado**: cada adjunto aparece como un **chip compacto** entre el campo "Asunto" y el cuerpo. El chip lleva icono según el tipo, nombre del archivo (truncado a ~20 caracteres), tamaño en pequeño y un botón "X" para quitarlo.
+La validación ocurre **en el cliente, antes de subir el archivo**. Quien arrastra `virus.exe` recibe un mensaje inmediato ("Este tipo de archivo no se puede enviar por correo") sin que el archivo viaje por la red. El backend vuelve a validar como segunda red de seguridad.
 
-**Contador de capacidad**: en la barra inferior, un contador discreto del tipo "12,4 / 25 MB". El número total es uniforme (D-02) — no cambia al cambiar la cuenta de origen seleccionada. Se pinta en rojo si el siguiente archivo excedería el límite.
+Hay un motivo concreto para validar en el cliente, y es una asimetría entre proveedores:
 
-### 6.2 Añadir un adjunto
+- **Gmail rechaza síncronamente**: si la app subiese el `.exe`, Gmail responde con un error inmediato.
+- **Outlook NO rechaza síncronamente**: el envío devuelve `202 Accepted` aunque el adjunto sea de un tipo bloqueado. El usuario creería que el correo salió, pero minutos más tarde recibe un NDR (mensaje de error diferido).
 
-Cuando el usuario arrastra un archivo al composer (o lo selecciona desde el botón), pasan estas cosas en orden:
+La única forma de dar un error inmediato y consistente entre ambos proveedores es validar antes de subir. La revalidación del backend existe igualmente.
 
-1. **Validación cliente-side instantánea**: extensión, tamaño individual, tamaño total acumulado, número de adjuntos. Si algo falla, mensaje en rojo con la razón concreta y el archivo NO viaja al backend.
-2. **Bootstrap silencioso del borrador (solo la primera vez en "Nuevo mensaje" o "Nuevo borrador")**: si el composer todavía no tiene un borrador asociado en el proveedor, la app crea uno con cuerpo, destinatarios y asunto vacíos para tener un identificador real al que asociar el adjunto. Es invisible para el usuario en la app (no aparece como entrada nueva en su lista local hasta que pulse "Guardar borrador"), pero sí queda creado en Gmail/Outlook web durante la composición. Si la cuenta de origen aún no se ha cargado en ese momento, los archivos arrastrados se encolan unos milisegundos y se procesan en cuanto la cuenta está lista. A partir de este bootstrap, el selector de cuenta de origen queda bloqueado: cambiarlo implicaría mover los adjuntos a otra cuenta y la app prefiere forzar al usuario a descartar y empezar de cero.
-3. **Si pasa la validación**: el archivo viaja al backend de MailManager y se guarda **en local** (en la base de datos de la app). El composer lo muestra inmediatamente como un chip; mientras la subida está en curso, el chip lleva un spinner pequeño y, si el archivo es grande (>5 MB), una barra de progreso.
-4. **Cuando la subida termina**: el chip se asienta sin spinner. Ya está persistido.
+### 3.3 Lo que la app NO comprueba al enviar
 
-Después del bootstrap, el proveedor (Gmail o Outlook) ya tiene un borrador "vacío" asociado, pero **el adjunto en sí no viaja** al proveedor todavía. El cuerpo, los destinatarios, el asunto y los archivos siguen viviendo solo en la app hasta que el usuario pulse "Guardar borrador" o "Enviar". Esto preserva el lazy push de la sección 6.9.
+No analiza los archivos buscando virus ni verifica que el contenido corresponde a la extensión (un `.pdf` que en realidad sea un ejecutable renombrado pasaría el filtro). La protección frente a malware queda fuera del MVP — ver [../limits/adjuntos.md](../limits/adjuntos.md).
 
-### 6.3 Quitar un adjunto
+---
 
-Click en la "X" del chip lo elimina inmediatamente del composer y del backend. No se pide confirmación (es una operación trivial). El proveedor sigue sin saber nada hasta el siguiente "Guardar" / "Enviar".
+## 4. Componer y editar borradores con adjuntos
 
-### 6.4 Cerrar y volver al borrador
+El comportamiento difiere del de los recibidos porque aquí el usuario es quien aporta el archivo.
 
-Si el usuario cierra el composer (o cierra el navegador) sin enviar, **los adjuntos se mantienen** asociados al borrador en la app. Cuando el usuario vuelve a abrir el borrador, ve los mismos adjuntos que dejó. Esto también aplica a los composers que se abrieron como "Nuevo mensaje" en cuanto se haya producido el bootstrap silencioso de 6.2: a partir de ese punto hay un borrador real en la app y el cierre con X dispara el diálogo de la sección 6.5 igual que con cualquier otro borrador.
+### 4.1 La zona de adjuntos del composer
 
-### 6.5 Cerrar el composer con cambios pendientes
+El composer ofrece dos formas de añadir adjuntos, un listado visual y un contador de capacidad, y todo está disponible en los tres flujos en los que se abre: "Nuevo mensaje", "Nuevo borrador" y "Editar borrador". La zona está activa desde que el composer aparece con una cuenta de origen cargada; no espera a que el usuario guarde nada.
 
-Si el usuario intenta cerrar el composer (X de la ventana, Esc, o navegando fuera) y hay cambios no guardados —incluyendo adjuntos no sincronizados con el proveedor— la app muestra un **diálogo de confirmación** con tres opciones:
+- **Botón "Adjuntar"** (icono clip) en la barra inferior, junto a "Enviar": abre el selector de archivos del sistema.
+- **Arrastrar y soltar** sobre el composer: mientras se arrastra, aparece un overlay ("Suelta el archivo para adjuntarlo").
+- **Listado**: cada adjunto es un **chip compacto** con icono según el tipo, nombre truncado, tamaño y un botón "✕" para quitarlo. Mientras se sube, el chip lleva spinner y, si el archivo es grande, una barra de progreso.
+- **Contador de capacidad**: discreto, del tipo «usado / límite» (p. ej. «12,4 MB / límite»). El total es uniforme y **no cambia** al cambiar la cuenta de origen; se pinta en rojo si el siguiente archivo excedería el límite (el tope exacto vive en [../limits/adjuntos.md](../limits/adjuntos.md)).
 
-- **"Guardar y cerrar"** — la app guarda el borrador (lo que internamente sube los adjuntos al proveedor) y cierra. Si el guardado falla, el diálogo se queda abierto con el error.
-- **"Descartar"** — la app borra el borrador entero, adjuntos incluidos. Si el cierre se produce tras un bootstrap silencioso desde "Nuevo mensaje", "Descartar" también borra ese borrador del proveedor para no dejar restos en Gmail/Outlook web.
-- **"Cancelar"** — vuelve al composer sin cerrar.
+### 4.2 Añadir un adjunto
 
-Este diálogo aplica igual a los tres flujos del composer: editar un borrador con cambios, redactar un nuevo borrador con contenido, y redactar un "Nuevo mensaje" en el que ya se hayan adjuntado archivos (porque el bootstrap silencioso de 6.2 ya creó un borrador real con trabajo asociado).
+Cuando el usuario arrastra (o selecciona) un archivo, pasan estas cosas en orden:
 
-Si NO hay cambios respecto a la última versión guardada, el cierre es directo, sin preguntar.
+1. **Validación cliente-side instantánea**: extensión, tamaño individual, tamaño total acumulado y número de adjuntos. Si algo falla, aparece un chip en rojo con la razón concreta durante unos segundos y el archivo NO viaja al backend.
+2. **Bootstrap silencioso del borrador** (solo la primera vez, en "Nuevo mensaje" o "Nuevo borrador"): si el composer todavía no tiene un borrador asociado en el proveedor, la app crea uno —con cuerpo, destinatarios y asunto vacíos— para tener un identificador real al que asociar el adjunto. Es invisible en la propia app (no aparece en la lista local hasta que el usuario pulse "Guardar borrador"), pero **sí queda creado en Gmail/Outlook web** durante la composición. Si la cuenta de origen aún no se ha cargado, los archivos arrastrados se encolan unos milisegundos y se procesan en cuanto la cuenta está lista. Dos arrastres simultáneos no crean dos borradores: la app colapsa las llamadas concurrentes en una sola.
+3. **Subida al backend**: si pasa la validación, el archivo viaja al backend de MailManager y se guarda **en local** (en la base de datos de la app). El chip aparece al instante con su spinner.
+4. **Fin de la subida**: el chip se asienta sin spinner. Ya está persistido.
 
-### 6.6 Guardar el borrador o enviarlo
+Tras el bootstrap, el proveedor ya tiene un borrador "vacío", pero **el adjunto en sí no viaja al proveedor todavía**. Cuerpo, destinatarios, asunto y binarios siguen viviendo solo en la app hasta "Guardar borrador" o "Enviar" (lazy push, sección 4.8).
 
-Cuando el usuario pulsa **"Guardar borrador"** o **"Enviar"**, la app:
+Un efecto colateral del bootstrap: a partir de ese punto, el **selector de cuenta de origen queda bloqueado**. Cambiar de cuenta implicaría mover los adjuntos a otra cuenta; la app prefiere forzar a descartar y empezar de cero.
 
-1. Toma todos los adjuntos almacenados localmente para ese borrador.
-2. Construye el mensaje completo (cuerpo + adjuntos).
-3. Lo sube al proveedor con la estrategia adecuada por proveedor (ver sección 10):
-   - **En cuentas Gmail**, la app usa una sola llamada atómica que combina la actualización del borrador con el envío. Es una operación única; si falla, el borrador del proveedor no queda en estado intermedio.
-   - **En cuentas Outlook**, la app sube primero los adjuntos al borrador del proveedor (uno por uno) y después emite la orden de envío. Si la subida de un adjunto falla, los que ya estaban subidos quedan asociados al borrador en el proveedor — al reintentar el envío la app los detecta y NO los re-sube. La operación es reanudable.
-4. Si todo va bien, guarda el cambio localmente. Si no, deja el borrador como estaba y muestra un error.
+### 4.3 Quitar un adjunto
 
-A partir de ese momento, el borrador del proveedor sí tiene los adjuntos y se puede ver desde Gmail web o Outlook web con normalidad.
+Un clic en la "✕" del chip lo elimina al instante del composer y del backend, sin pedir confirmación (es una operación trivial). La UI es optimista: si el borrado en el backend fallara, el chip reaparece con una marca de error. El proveedor sigue sin saber nada hasta el siguiente "Guardar"/"Enviar".
 
-**Nota técnica**: las operaciones locales (añadir o quitar un adjunto, editar texto/recipients/asunto del borrador) **no tocan al proveedor** mientras el usuario está componiendo, salvo el bootstrap silencioso de 6.2 (creación de un borrador vacío para tener un identificador al que asociar los adjuntos). El push real del cuerpo, los destinatarios, el asunto y los binarios al proveedor solo ocurre al "Guardar y cerrar" o al "Enviar".
+### 4.4 Cerrar y volver al borrador
 
-**Nota sobre "Nuevo mensaje" con adjuntos**: cuando el usuario pulsa "Enviar" desde un "Nuevo mensaje" que ya tiene adjuntos —y por tanto un borrador silencioso creado—, internamente la app reutiliza la operación de envío de borrador en lugar del envío directo de correo. Es transparente para el usuario y para el destinatario, y garantiza que los adjuntos lazy-pushed viajan en el mismo envío atómico (Gmail) o reanudable (Outlook) que el resto del mensaje.
+Si el usuario cierra el composer (o el navegador) sin enviar, **los adjuntos se mantienen** asociados al borrador en la app. Al reabrir el borrador, ve los mismos adjuntos que dejó. Esto aplica también a un "Nuevo mensaje" en cuanto se haya producido el bootstrap de 4.2: a partir de ese punto hay un borrador real y el cierre se comporta como con cualquier otro.
 
-### 6.7 Cuando el envío falla porque algún adjunto no llega al proveedor
+### 4.5 Cerrar con cambios pendientes
 
-Si al pulsar "Enviar" alguno de los adjuntos pendientes falla al subir al proveedor (después de los reintentos automáticos), el envío entero **se aborta**. El correo NO se manda. El destinatario NO recibe nada parcial.
+Si hay cambios no guardados —incluidos adjuntos no sincronizados con el proveedor— al intentar cerrar (✕, Esc o navegar fuera), la app muestra un **diálogo de confirmación** con tres opciones:
 
-La app muestra al usuario un mensaje claro: "El correo no se pudo enviar porque uno o más adjuntos fallaron al subir", listando los archivos concretos que fallaron, con dos opciones:
+- **"Guardar y cerrar"** — guarda el borrador (lo que internamente sube los adjuntos al proveedor) y cierra. Si el guardado falla, el diálogo se queda abierto con el error.
+- **"Descartar"** — borra el borrador entero, adjuntos incluidos. Si el cierre se produce tras un bootstrap silencioso desde "Nuevo mensaje", "Descartar" **también borra ese borrador del proveedor** para no dejar restos en Gmail/Outlook web.
+- **"Cancelar"** — vuelve al composer.
+
+Si no hay cambios respecto a la última versión guardada, el cierre es directo, sin preguntar.
+
+### 4.6 Guardar o enviar el borrador
+
+Al pulsar "Guardar borrador" o "Enviar", la app toma todos los adjuntos locales del borrador, construye el mensaje completo (cuerpo + adjuntos) y lo sube al proveedor con una estrategia distinta según el proveedor:
+
+- **Gmail**: una **sola llamada atómica** que combina la actualización del borrador con el envío. Si falla, el borrador del proveedor no queda en un estado intermedio.
+- **Outlook**: **no atómico**. Sube primero los adjuntos al borrador del proveedor (uno a uno) y después emite la orden de envío. Si la subida de un adjunto falla, los que ya estaban subidos **quedan asociados** al borrador en el proveedor; al reintentar, la app los detecta y **no los re-sube**. La operación es reanudable.
+
+Si todo va bien, la app sincroniza el estado local. Si no, deja el borrador como estaba y muestra el error.
+
+**Nota sobre "Nuevo mensaje" con adjuntos**: cuando el usuario pulsa "Enviar" desde un "Nuevo mensaje" que ya tiene adjuntos —y, por tanto, un borrador silencioso creado—, internamente la app reutiliza la operación de **envío de borrador** en lugar del envío directo de correo. Es transparente para el usuario y el destinatario, y garantiza que los adjuntos lazy-pushed viajan en el mismo envío atómico (Gmail) o reanudable (Outlook) que el resto del mensaje. Una regresión que se saltase este reencaminamiento enviaría un correo de cuerpo vacío y dejaría los adjuntos huérfanos.
+
+### 4.7 Cuando el envío falla porque un adjunto no llega al proveedor
+
+Si al enviar algún adjunto pendiente falla tras los reintentos automáticos, **el envío entero se aborta**: el correo NO se manda y el destinatario NO recibe nada parcial. La app muestra los archivos concretos que fallaron y ofrece dos opciones:
 
 - **"Reintentar enviar"** — vuelve a intentar el envío completo.
-- **"Quitar adjuntos fallidos y enviar"** — elimina del borrador los archivos que fallaron y reintenta el envío sin ellos.
+- **"Quitar adjuntos fallidos y enviar"** — elimina del borrador los que fallaron y reintenta sin ellos.
 
-El borrador queda intacto durante todo este proceso (los adjuntos siguen ahí en local hasta que el usuario decida).
+El borrador queda intacto durante todo el proceso. El porqué de abortar en lugar de enviar a medias: enviar un correo sin uno de los adjuntos prometidos es peor que no enviarlo —el destinatario no sabe que faltó algo, el remitente cree que llegó completo—, así que la app fuerza la decisión explícita.
 
-**Por qué se aborta el envío entero en lugar de mandar a medias**: enviar un correo sin uno de los adjuntos prometidos es peor que no enviarlo. El destinatario no sabe que faltó algo; el sender cree que llegó completo. La app fuerza la decisión explícita.
+### 4.8 Por qué lazy push y no subir cada adjunto al instante
 
-### 6.8 Edge case aceptado: edición simultánea desde dos sitios
+Hay un motivo concreto por proveedor:
 
-Si el usuario está editando un borrador en MailManager y al mismo tiempo abre Gmail web (o Outlook web) y mira el mismo borrador, **no verá los adjuntos** que ha añadido en MailManager hasta que pulse "Guardar borrador" o "Enviar" desde MailManager. Los dos lados se sincronizan en cuanto eso ocurre.
+- **Gmail** obliga a que cada actualización de un borrador **reconstruya el mensaje completo**: añadir el quinto adjunto a un borrador que ya tiene cuatro implica volver a subir los cinco. Subir cada adjunto al instante haría que redactar un correo con cinco adjuntos costara 5+4+3+2+1 = 15 subidas en lugar de una.
+- **Outlook** tiene un techo de peticiones concurrentes por buzón y los reintentos por throttling se acumulan rápido cuando el usuario adjunta varios archivos seguidos.
 
-Esta inconsistencia temporal es **intencional** y el precio que se paga por una experiencia rápida en el composer (cada arrastre no tiene que esperar al proveedor) y por evitar gastar cuota innecesaria del proveedor durante la composición.
+Guardar todo en local y empujarlo de golpe al proveedor elimina ambos problemas y se comporta igual de bien con los dos proveedores. El precio aceptado es la inconsistencia temporal de la sección 4.9.
 
-**Variante a tener en cuenta tras el bootstrap silencioso (6.2)**: el borrador en sí (vacío de contenido) **sí es visible** en Gmail/Outlook web durante la composición de un "Nuevo mensaje" o un "Nuevo borrador" en el que ya se hayan adjuntado archivos, porque la creación se hace en el momento de aceptar el primer adjunto. Sus adjuntos siguen siendo invisibles desde el lado web hasta el "Guardar borrador" o "Enviar". Si el usuario cierra el composer eligiendo "Descartar" en el diálogo de 6.5, ese borrador silencioso se elimina por completo del proveedor para no dejar restos.
+### 4.9 Edge case aceptado: edición simultánea desde dos sitios
 
-### 6.9 Por qué este flujo (lazy push) en lugar de subir cada adjunto al proveedor inmediatamente
+Si el usuario edita un borrador en MailManager y a la vez lo mira en Gmail/Outlook web, **no verá los adjuntos** que ha añadido en MailManager hasta que pulse "Guardar borrador" o "Enviar". Los dos lados se sincronizan en ese momento. Es intencional: es el precio del composer rápido (cada arrastre no espera al proveedor) y de no gastar cuota durante la composición.
 
-Hay una razón concreta para Gmail. Su API obliga a que cada actualización de un borrador **reconstruya el mensaje completo**: añadir el quinto adjunto a un borrador que ya tiene cuatro implica volver a subir los cinco. Si la app subiese cada adjunto inmediatamente al proveedor, redactar un correo con 5 adjuntos costaría 5 + 4 + 3 + 2 + 1 = 15 subidas en lugar de una. Es un gasto enorme de tiempo y cuota sin ningún beneficio para el usuario.
-
-En Outlook el problema es distinto pero también real: hay un techo de 4 peticiones concurrentes por par `(app, buzón)`, y los reintentos por throttling (`429`) se acumulan rápido cuando el usuario adjunta varios archivos seguidos.
-
-### 6.10 Adjuntos al responder y reenviar (Reply / Reply All / Forward)
-
-Al **reenviar** (Forward) un correo que traía adjuntos, el composer los pre-rellena como chips ya cargados, descartables igual que cualquier otro. El mecanismo difiere por proveedor:
-
-- **Outlook** hereda los adjuntos **en el lado del proveedor**: el borrador de reenvío se crea con `createForward`, que ya copia los adjuntos del original. Los chips aparecen de inmediato sin descargar nada; el binario vive solo en el borrador del proveedor (no se duplica en local) y la app no lo re-sube al enviar.
-- **Gmail** no tiene copia server-side, así que el composer llama a un endpoint dedicado (`POST .../drafts/{id}/attachments/copy-from-email`) que descarga cada adjunto del original (reusando el cache local si lo hay) y lo vuelve a adjuntar al borrador. Para un borrador de Outlook ese mismo endpoint es un no-op (responde con `copied_count=0`).
-
-El endpoint de copia es **tolerante a fallos parciales**: siempre responde 200 y reporta los adjuntos que no pudo copiar en un array `skipped[]` con el motivo (proveedor caído, cap de 25 MB / 25 adjuntos alcanzado, ya copiado…). Es **idempotente**: reintentarlo tras un corte de red no vuelve a copiar los adjuntos ya copiados.
-
-Responder (Reply / Reply All) **no** arrastra los adjuntos del original — solo el reenvío lo hace, que es la semántica esperada.
-
-El flujo "guardar todo en local y empujar de golpe al proveedor" elimina ambos problemas y se comporta igual de bien con los dos proveedores.
+Una variante a tener clara tras el bootstrap silencioso (4.2): el borrador **vacío** sí es visible en Gmail/Outlook web durante la composición de un "Nuevo mensaje"/"Nuevo borrador" en el que ya se hayan adjuntado archivos, porque se crea al aceptar el primer adjunto. Sus adjuntos siguen invisibles desde el lado web hasta el "Guardar"/"Enviar". Si el usuario elige "Descartar", ese borrador silencioso se elimina por completo del proveedor.
 
 ---
 
-## 7. Robustez ante errores
+## 5. Responder y reenviar (Reply / Reply All / Forward)
 
-### 7.1 Reintentos al descargar adjuntos del proveedor
+Responder (Reply / Reply All) **no** arrastra los adjuntos del original — es la semántica esperada. **Reenviar** (Forward) sí: el composer los pre-rellena como chips ya cargados, descartables como cualquier otro. El mecanismo difiere fuertemente por proveedor.
 
-Cuando el usuario clica un adjunto que aún no está cacheado, la app llama al proveedor para bajarlo. Si la llamada falla por una causa transitoria (caída momentánea del proveedor, throttling, error de red), la app reintenta automáticamente:
+- **Outlook** hereda los adjuntos **en el lado del proveedor**: el borrador de reenvío se crea con un primitivo que ya copia los adjuntos del original. Los chips aparecen de inmediato sin descargar nada; el binario vive solo en el borrador del proveedor (no se duplica en local) y la app no lo re-sube al enviar.
+- **Gmail** no tiene copia server-side, así que el composer llama a un endpoint dedicado que **descarga cada adjunto del original** (reutilizando el cache local si lo hay) y lo vuelve a adjuntar al borrador. Para un borrador de Outlook ese mismo endpoint es un **no-op** (no copia nada y devuelve la lista actual de chips).
 
-- **3 intentos** en total.
-- **Espera creciente**: 1 segundo, 2 segundos, 4 segundos.
-- Si el proveedor responde con un `Retry-After` específico (típico en throttling de Microsoft Graph), la app lo respeta en lugar de la espera por defecto.
+El frontend llama a ese endpoint de copia **siempre** tras crear un borrador de reenvío, sea Gmail u Outlook — la asimetría queda escondida detrás de una llamada uniforme. El endpoint es:
 
-Solo se reintenta sobre errores transitorios (`429`, `500`, `502`, `503`, `504`, errores de red). Errores permanentes (`400`, `401`, `403`, `404`, `410`) NO se reintentan — la app reporta el problema directamente.
+- **Tolerante a fallos parciales**: responde siempre con éxito y reporta los adjuntos que no pudo copiar en una lista de "saltados" con su motivo (proveedor caído, cap de tamaño/cantidad alcanzado, ya copiado, fuente no disponible…), en lugar de fallar el reenvío entero.
+- **Idempotente**: reintentarlo tras un corte de red no vuelve a copiar lo ya copiado.
 
-### 7.2 Comportamiento ante errores irrecuperables
+#### Ejemplo
 
-Si tras los reintentos el adjunto sigue sin poder descargarse, la app distingue tres casos:
+> El usuario reenvía un correo de Gmail con `contrato.pdf` (2 MB) y `anexo.docx` (500 KB). El composer se abre, llama al endpoint de copia, que descarga ambos del original y los re-adjunta: dos chips aparecen ya cargados. El usuario añade un tercer archivo desde su disco y envía: los tres viajan juntos en el envío atómico de Gmail.
 
-- **El adjunto ya no existe en el proveedor (`404` / `410`)**: por ejemplo, el remitente borró el correo enviado de su buzón, o el admin del tenant purgó el contenido. La app marca ese adjunto como "no disponible" en su base de datos y, la próxima vez que el usuario lo clica, le muestra: **"Este adjunto ya no está disponible en el servidor"**. La fila no se borra (la metadata sigue ahí), pero ese adjunto concreto queda inutilizable.
-- **Sin permisos al adjunto (`403`)**: típicamente un problema de tokens caducados o de permisos del tenant. La app muestra: **"No se pudo acceder al adjunto"** y deja registro detallado del error para investigación.
-- **El proveedor está caído (`5xx` persistente)**: la app muestra: **"Inténtalo de nuevo en unos minutos"** y deja un botón para reintentar. NO marca el adjunto como inutilizable: probablemente vuelve a funcionar al rato.
+### 5.1 Trampas conocidas del reenvío
 
-### 7.3 TTL del cache de adjuntos descargados
-
-Los binarios cacheados localmente tienen una vida útil de **30 días desde el último acceso**. Si un adjunto no se abre durante 30 días, su binario se purga del almacenamiento (la metadata se queda). Si el usuario lo abre después, la app lo vuelve a descargar del proveedor y lo cachea de nuevo — es transparente.
-
-Esta política de expiración mantiene la base de datos manejable sin penalizar al usuario que vuelve a pedir un adjunto antiguo.
-
-La purga por TTL es **manual en el MVP**: existe un endpoint admin (`POST /admin/attachments/purge`) protegido por un token configurado en variable de entorno (`ATTACHMENTS_PURGE_TOKEN`). Si la variable no está seteada en el servidor, el endpoint responde como deshabilitado. Las foreign keys de la base de datos sí limpian automáticamente cuando se desconecta una cuenta o se borra un correo, sin necesidad de intervención. Cuando llegue el momento de automatizar la purga por TTL, se hará con un cron sustituyendo el endpoint manual.
-
-**Sobre el almacenamiento técnico**: los binarios viven hoy en una columna `bytea` de PostgreSQL. Al servirlos al cliente, la app responde con un `StreamingResponse` que envía bytes por chunks al navegador, pero el `bytea` se carga completo en RAM del proceso al hacer el SELECT (no es streaming desde la base de datos). El tope de 25 MB por adjunto (D-01) acota el coste de RAM por descarga. Si en el futuro el cache crece más allá de unos ~50 GB, las tablas están preparadas para migrar los binarios a sistema de ficheros local o S3 sin romper la API.
+- **Outlook + editar el asunto**: si el usuario edita el `Subject` del reenvío más allá del prefijo `Fwd:`, Graph reasigna la conversación al guardar y el mensaje enviado se "desengancha" visualmente del hilo original en Outlook web. Es comportamiento aceptado del MVP; Gmail no lo sufre porque a un reenvío se le permite iniciar un hilo nuevo.
+- **Nombres duplicados en un mismo reenvío de Outlook**: si el original lleva dos adjuntos con el mismo nombre, la copia server-side puede dejar uno sin su identificador de proveedor y el envío lo trataría como "pendiente de subir" (re-subida redundante de bytes que el proveedor ya tiene). Es vanishingly raro y el peor caso es benigno.
 
 ---
 
-## 8. Seguridad
+## 6. Robustez ante errores en la descarga
 
-### 8.1 Saneamiento del nombre del archivo
+### 6.1 Reintentos al descargar del proveedor
 
-El nombre del archivo que llega al sistema (sea desde un correo recibido o desde el composer) puede contener cualquier cosa: caracteres de control, secuencias de path traversal (`..`), nombres exóticos. La app aplica un **saneamiento mínimo** preservando lo que importa al usuario:
+Cuando el usuario clica un adjunto que aún no está cacheado y la llamada al proveedor falla por una causa **transitoria** (caída momentánea, throttling, error de red), la app reintenta automáticamente con una espera creciente y respetando el `Retry-After` del proveedor cuando lo envía (típico en el throttling de Microsoft Graph). Los errores **permanentes** no se reintentan: se reportan de inmediato. Las cifras exactas (número de intentos, esperas, códigos retryables vs. permanentes) están en [../limits/adjuntos.md](../limits/adjuntos.md).
 
-- **Sustituye caracteres peligrosos** (`/`, `\`, `:`, `?`, `*`, `<`, `>`, `|`, `"`, caracteres de control, `..`) por `-`.
+### 6.2 Errores irrecuperables
+
+Tras agotar los reintentos, la app distingue tres casos y da un mensaje distinto a cada uno:
+
+- **El adjunto ya no existe en el proveedor** (el remitente borró el correo, el admin purgó el contenido…): la app marca ese adjunto como "no disponible" en su base de datos y, la próxima vez que se clique, muestra *"Este adjunto ya no está disponible en el servidor"*. La fila no se borra (la metadata sigue), pero ese adjunto concreto queda inutilizable y su tarjeta aparece deshabilitada. A partir de ese momento, **ni siquiera se intenta** ir al proveedor: la app corta de raíz.
+- **Sin permisos al adjunto** (tokens caducados, permisos del tenant): *"No se pudo acceder al adjunto"*, con registro detallado para investigación.
+- **El proveedor está caído** (error de servidor persistente): *"Inténtalo de nuevo en unos minutos"*, con botón de reintento. NO se marca el adjunto como inutilizable: probablemente vuelva a funcionar al rato.
+
+### 6.3 TTL del cache de descargados
+
+Los binarios cacheados localmente tienen una vida útil **desde el último acceso** (el plazo concreto está en [../limits/adjuntos.md](../limits/adjuntos.md)). Si un adjunto no se abre durante ese tiempo, su binario se purga del almacenamiento; la metadata se queda. Si el usuario lo abre después, la app lo vuelve a descargar del proveedor y lo cachea de nuevo — transparente para el usuario. La purga es **manual en el MVP** (un endpoint de administración protegido por un token de variable de entorno, sin cron). Las foreign keys de la base de datos sí limpian automáticamente cuando se desconecta una cuenta o se borra un correo.
+
+---
+
+## 7. Seguridad
+
+### 7.1 Saneamiento del nombre del archivo
+
+El nombre que llega (de un correo recibido o del composer) puede contener cualquier cosa. La app aplica un saneamiento **mínimo** preservando lo que importa al usuario:
+
+- Sustituye caracteres peligrosos y secuencias de path traversal (`..`) por `-`.
 - **Preserva acentos y caracteres UTF-8 legítimos** (no es un slugify agresivo).
-- **Preserva la extensión** (la última parte después del último punto).
+- **Preserva la extensión** (lo que va tras el último punto).
 - **Neutraliza los nombres reservados de Windows** (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) prefijándolos con `_` (`CON.pdf` → `_CON.pdf`): en Windows esos nombres están prohibidos a nivel de sistema de ficheros y romperían la descarga.
-- **Resuelve duplicados dentro del mismo correo o draft**: si un correo lleva dos adjuntos con el mismo nombre saneado, el segundo se renombra automáticamente añadiendo " (1)" antes de la extensión, igual que hace el explorador de Windows.
+- **Resuelve duplicados** dentro del mismo correo o borrador: dos adjuntos con el mismo nombre saneado se renombran añadiendo " (1)", " (2)"… antes de la extensión, igual que el explorador de Windows.
 
-El nombre saneado es el que se persiste y el que se devuelve al cliente al descargar.
+#### Ejemplo
 
-### 8.2 Cómo se sirve el binario al navegador
+> Un correo trae dos adjuntos llamados ambos `informe.pdf`. La app los persiste como `informe.pdf` y `informe (1).pdf`. Un adjunto llamado `..\..\secreto.pdf` se persiste como `-secreto.pdf`. Un adjunto llamado `NUL.txt` se persiste como `_NUL.txt`.
 
-Cuando el frontend pide descargar un adjunto, el backend responde con cabeceras estrictas de seguridad:
+### 7.2 Cómo se sirve el binario al navegador
 
-- **`Content-Disposition: attachment`** — fuerza al navegador a descargar el archivo, NUNCA a renderizarlo inline. Esto es importante: si la app sirviese un HTML como inline, el navegador lo ejecutaría — un agujero XSS de manual.
-- **`X-Content-Type-Options: nosniff`** — impide que el navegador "adivine" el tipo del fichero y lo trate como otra cosa.
+Al descargar un adjunto, el backend responde con cabeceras estrictas:
+
+- **`Content-Disposition: attachment`** — fuerza la descarga, nunca el render inline. Importante: servir un HTML como inline permitiría que el navegador lo ejecutara — un agujero XSS de manual. El nombre de archivo se emite en doble forma (ASCII de respaldo + UTF-8 percent-encoded) para que todos los clientes muestren el nombre correcto con acentos.
+- **`X-Content-Type-Options: nosniff`** — impide que el navegador "adivine" el tipo y lo trate como otra cosa.
 - **`Cache-Control: private, no-cache`** — ningún proxy intermedio guarda el contenido.
 
-### 8.3 Autenticación del endpoint de descarga
+### 7.3 Autenticación del endpoint de descarga
 
-La descarga usa la **cookie de sesión** existente de la app. NO hay URLs firmadas con tokens en query string ni descargas anónimas.
-
-Antes de servir el binario, el backend valida que:
-
-1. Hay sesión activa (la cookie es válida).
-2. El `mailbox_id` y `account_id` de la URL pertenecen al usuario logueado.
-3. El adjunto pertenece a un correo de ese `account_id`.
-
-Si cualquiera falla, la respuesta es `404 attachment_not_found` (no `403`) — para no filtrar la existencia de adjuntos ajenos.
+La descarga usa la **cookie de sesión** existente. No hay URLs firmadas con tokens en query string ni descargas anónimas. Antes de servir el binario, el backend valida que haya sesión activa, que el `mailbox_id`/`account_id` de la URL pertenezcan al usuario logueado y que el adjunto pertenezca a un correo de esa cuenta. Si cualquiera falla, la respuesta es `404` (no `403`) para no filtrar la existencia de adjuntos ajenos.
 
 ---
 
-## 9. Cómo se almacenan los adjuntos por dentro (visión técnica resumida)
+## 8. Cómo se almacenan por dentro (visión técnica resumida)
 
 Aunque el usuario no se entera, conviene que el equipo lo tenga claro:
 
-- **Los adjuntos recibidos** se cachean en la base de datos de MailManager (PostgreSQL) en una **tabla dedicada al binario** (`email_attachment_blobs`), separada de la tabla con los metadatos (`email_attachments`). Eso permite listar adjuntos sin cargar accidentalmente megabytes en memoria.
-- **El identificador del cache depende del proveedor**, porque los IDs no son igual de estables en uno y otro:
-  - **En Gmail**, la documentación oficial NO declara que `attachmentId` sea estable, y hay reportes de que cambia entre llamadas. La app usa `(account_id, provider_message_id, partId)` como clave (el `partId` sí es inmutable según la doc) y se vuelve a descubrir el `attachmentId` cuando hace falta descargar.
-  - **En Outlook**, los IDs cambian si el usuario mueve el mensaje entre carpetas. Para estabilizarlos, **todas** las llamadas a attachments envían el header `Prefer: IdType="ImmutableId"` (igual que ya se hace para mensajes y borradores). Con eso, `attachment.id` es estable mientras el mensaje permanezca en el mismo buzón.
-  - Como red de seguridad, cada fila guarda también la tripleta `(content_id, filename, size)` que permite re-emparejar local↔remoto si los IDs cambian inesperadamente.
-- **La columna `email_metadata.has_attachments`** (boolean denormalizado) sirve para que la lista del inbox pinte el icono de clip sin tener que hacer `JOIN` con la tabla de adjuntos en cada listado.
-- **El orden de los adjuntos** se preserva con una columna `position INT` en cada fila: respeta el orden en que el proveedor los devolvió (recibidos) o el orden en que el usuario los añadió (drafts).
-- **Los adjuntos de borradores** viven en una **tabla aparte** (`draft_attachments`), también en PostgreSQL, también con el binario en `bytea`. Están vinculados al borrador que los contiene: si el borrador se borra o se envía, los adjuntos del borrador se van con él (cascade).
-- **No se deduplica nada**. Si el mismo PDF llega a tres cuentas distintas conectadas a la misma instalación de MailManager, se guardan tres copias. Es una decisión consciente para mantener la implementación simple en el MVP. Se reevaluará si el cache crece más allá de unos 50 GB.
-- **Las tablas están preparadas para migrar**: tienen columnas (`blob_storage_kind`, `blob_ref`) que permiten en el futuro mover los binarios fuera de PostgreSQL (a sistema de ficheros local o a almacenamiento externo tipo S3) sin romper la API ni la lógica de la app. Hoy no se usan: todos los binarios viven en `bytea`.
+- **Los adjuntos recibidos** se cachean en PostgreSQL con el binario en una **tabla dedicada**, separada de la de metadatos. Eso permite listar adjuntos sin cargar megabytes en memoria y deja que la purga por TTL borre el binario conservando la metadata (el flag "descargado" vuelve a `false` y el siguiente clic lo re-descarga).
+- **El identificador del cache depende del proveedor**, porque los IDs no son igual de estables: en Gmail no se confía en el `attachmentId` (no está declarado estable y se ha visto cambiar entre llamadas), así que se cachea por la parte MIME inmutable y se redescubre el `attachmentId` cuando hay que descargar; en Outlook los IDs cambian si el mensaje se mueve de carpeta, así que **todas** las llamadas a adjuntos piden el "ID inmutable" para estabilizarlos.
+- **El flag denormalizado "tiene adjuntos"** evita un JOIN por fila al pintar la lista del inbox.
+- **El orden de los adjuntos** se preserva: el orden en que el proveedor los devolvió (recibidos) o el orden en que el usuario los añadió (borradores).
+- **Los adjuntos de borradores** viven en su **propia tabla**, con el binario inline; si el borrador se borra o se envía, sus adjuntos se van con él (cascade).
+- **No se deduplica nada**: el mismo PDF en tres cuentas ocupa tres copias. Decisión consciente del MVP — ver [../limits/adjuntos.md](../limits/adjuntos.md).
+- **Las tablas están preparadas para migrar** los binarios fuera de PostgreSQL (sistema de ficheros o almacenamiento externo) sin romper la API; hoy todos viven en la base de datos.
 
 ---
 
-## 10. Qué pasa "por debajo" cuando llega un correo con adjuntos
+## 9. Resumen en una frase
 
-Para entender el flujo completo de un vistazo:
-
-1. Sincronización de la bandeja → la app baja la metadata de los correos, incluyendo el flag `has_attachments`. Ningún binario.
-2. El usuario clica un correo concreto → la app pide al proveedor el contenido HTML/texto + la lista de adjuntos de ese correo. Persiste todo en local. Renderiza el correo con su lista de adjuntos.
-3. El usuario clica un adjunto → la app pide ese binario al proveedor (con reintentos automáticos si falla por causa transitoria; cuando el proveedor devuelve `Retry-After`, la app lo respeta literalmente en lugar de aplicar su backoff por defecto), lo persiste, y se lo entrega al navegador con cabeceras de descarga forzada.
-4. El usuario clica el mismo adjunto otra vez (mañana) → la app lo sirve directo desde su cache local. El proveedor no se entera.
-5. El usuario clica un adjunto **distinto** del mismo correo → vuelve al paso 3 con ese binario nuevo.
-6. Pasados 30 días sin acceso → un administrador puede invocar la limpieza manual y los binarios sin uso reciente se purgan. La metadata permanece. La próxima vez que el usuario clique uno purgado, se redescarga desde el proveedor.
-
----
-
-## 11. Qué pasa "por debajo" cuando se envía o se guarda un correo con adjuntos
-
-1. El usuario abre el composer y arrastra un PDF → la app valida cliente-side (extensión, tamaño individual, tamaño total, conteo) → si OK, sube el binario al backend → se guarda en local, asociado al borrador. UI lo refleja al instante con un chip.
-2. El usuario sigue añadiendo o quitando adjuntos → todo ocurre en local. El proveedor sigue sin saber nada.
-3. El usuario pulsa "Guardar borrador" → la app construye el mensaje completo con cuerpo + todos los adjuntos y lo sube al proveedor en una sola operación. Si va bien, sincroniza el estado local. Si falla, deja todo como estaba.
-4. El usuario pulsa "Enviar" → mismo proceso que "Guardar borrador" pero, si el proveedor confirma envío, se eliminan los adjuntos locales del borrador (ya viven en el correo enviado del proveedor) y la entrada de borrador correspondiente se elimina.
-
-Si el archivo es grande (>5 MB en Gmail, >3 MB en Outlook), la subida al proveedor usa internamente el mecanismo "resumable" / "uploadSession" del proveedor, troceando el archivo. El usuario no percibe diferencia más allá de la barra de progreso del chip.
-
-Si **un solo adjunto** falla al subir al proveedor durante el envío (después de reintentos), todo el envío se aborta: el correo NO se manda y el usuario decide explícitamente entre reintentar o quitar los archivos fallidos.
-
----
-
-## 12. Lo que NO hace la app por ahora (limitaciones aceptadas para el MVP)
-
-Estas decisiones se documentan a propósito como aceptadas para el MVP:
-
-- **No hay deduplicación**: dos copias del mismo binario ocupan dos veces el espacio.
-- **No hay protección antivirus** ni verificación de "magic bytes" para detectar archivos cuyo tipo real no coincide con la extensión declarada.
-- **No hay limpieza automática del cache**: la purga por TTL (30 días) se ejecuta manualmente vía endpoint admin protegido por token (`POST /admin/attachments/purge` con header `X-Admin-Token`). El token vive en una variable de entorno del servidor (`ATTACHMENTS_PURGE_TOKEN`); si no está seteada, el endpoint responde como deshabilitado. Cuando llegue el momento, este endpoint se sustituirá por un cron.
-- **No hay descarga masiva**: no existe "descargar todos los adjuntos de este correo" ni "descargar como ZIP". Hay que clicar uno por uno.
-- **No hay vista previa inline para tipos no-imagen**: los PDFs y similares se descargan, no se renderizan dentro de la app.
-- **No se soporta el caso de archivos enormes vía referencia a Drive / OneDrive**: la app no genera enlaces a Drive cuando el usuario adjunta algo >25 MB; simplemente rechaza el archivo.
-- **No hay métricas custom (Prometheus / OpenTelemetry)**: solo logs estructurados en operaciones críticas (descarga del proveedor, errores).
-- **El cuerpo del composer es texto plano**: el composer es un `<textarea>` plano, no un editor rich-text. El correo se envía siempre como `text/plain` a ambos proveedores. Pegar imágenes desde el portapapeles al cuerpo no funciona — la feature "pegar imagen → inline" requiere el composer rich, que está fuera de scope MVP.
-- **No se valida `Origin` ni `Referer` en el endpoint de descarga** (mejora futura): el endpoint usa la cookie de sesión y verifica pertenencia, pero no añade defensas extra contra exfiltración cross-site del binario por una pestaña pirata que ya tenga sesión válida.
-
-Si más adelante los usuarios reportan que necesitan algo de lo anterior, hay un plan de fases futuras para añadirlo.
-
----
-
-## 13. Resumen en una frase
-
-> La app acepta hasta 25 archivos por correo, 25 MB por archivo, con un techo total de 25 MB por mensaje sin distinción entre proveedores; bloquea ejecutables al enviar pero acepta cualquier cosa al recibir; descarga los binarios del proveedor solo cuando el usuario los clica (con un máximo de 2 descargas concurrentes en cola) y los cachea localmente con un TTL de 30 días sin acceso; mantiene los adjuntos de borradores en su propia base de datos hasta que el usuario decide guardarlos o enviarlos, momento en el que se suben todos juntos al proveedor (atómicamente en Gmail, reanudable adjunto a adjunto en Outlook); aborta cualquier envío en el que falle algún adjunto, dejando el borrador intacto para reintentar; y delega la protección frente a contenido malicioso al sistema operativo del usuario, igual que hace Gmail web.
-
-Eso es todo lo que necesita saber un programador (o cualquier persona del equipo) para entender cómo se va a comportar la gestión de adjuntos en el MVP.
+> La app acepta un puñado de archivos por correo dentro de un techo de tamaño uniforme entre proveedores, bloquea ejecutables al enviar pero acepta cualquier cosa al recibir, descarga los binarios del proveedor solo cuando el usuario los clica (con una cola acotada de descargas concurrentes) y los cachea localmente con un TTL desde el último acceso; mantiene los adjuntos de borradores en su propia base de datos hasta que el usuario decide guardarlos o enviarlos, momento en el que se suben todos juntos al proveedor —atómicamente en Gmail, reanudable adjunto a adjunto en Outlook—; hereda los adjuntos al reenviar (server-side en Outlook, descarga-y-recopia en Gmail); aborta cualquier envío en el que falle algún adjunto dejando el borrador intacto para reintentar; y delega la protección frente a contenido malicioso al sistema operativo del usuario, igual que Gmail web. Los números exactos están en [../limits/adjuntos.md](../limits/adjuntos.md).

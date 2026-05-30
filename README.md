@@ -372,6 +372,10 @@ Testing docs:
 
 ## Additional Documentation
 
+### Feature & limits catalog (behavior and "how far it goes")
+
+Narrative, behavior-level documentation of every feature — what it does and what the user experiences — lives in [`docs/features/`](docs/features/README.md). The exact caps, quotas, retries and "what it does NOT support" for each feature live in the paired [`docs/limits/`](docs/limits/README.md). Each feature has a 1:1 file in both folders; start at either `README.md` index.
+
 ### Layer guides (project-specific)
 
 - API layer guide: `backend/api/api_guide.md`

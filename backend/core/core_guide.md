@@ -72,15 +72,14 @@ Both Gmail and Outlook use a **no-op** approach for `delete_messages`: the provi
 
 `POST /me/messages/{id}/move` returns a new message object with a new `id`. Any code that moves a message between folders (spam, trash, any future operation) **must** capture the new ID from the response and propagate it to the service layer for DB persistence. Do not assume `new_id == old_id` on Outlook — that assumption is true only on Gmail.
 
-## Send retry asymmetry — Gmail vs Outlook
+## Send retry — back-off shape and the Gmail vs Outlook asymmetry
 
-Both providers retry sends with `_SEND_DRAFT_MAX_ATTEMPTS = 3`, but the back-off shapes differ:
+Both providers retry sends with `_SEND_DRAFT_MAX_ATTEMPTS = 3` and `_SEND_DRAFT_RETRY_DELAY = 1.0s`. The back-off **shape is identical across providers**; the real split is between the bare and the with-attachments path, not between Gmail and Outlook:
 
-- **Gmail** uses a fixed `_SEND_DRAFT_RETRY_DELAY = 1.0s` between attempts in the bare-text `send_draft` path.
-- **Gmail with attachments** (`_send_draft_simple` and the resumable variant) uses a linearly escalating `delay * attempt` (1s, 2s, 3s). The intra-Gmail asymmetry exists because the with-attachments path stays under load longer (full-MIME rebuild) and the linear back-off matches Graph's behaviour the user already sees on the Outlook side.
-- **Outlook** uses a linearly escalating `delay * attempt` (so 1s, 2s, 3s) for `send_draft` and the dedicated `_OUTLOOK_RETRY_DELAYS_SECONDS` tuple for attachment fetches.
+- **Bare `send_draft`** (no attachments) sleeps a **fixed** `_SEND_DRAFT_RETRY_DELAY` between attempts → 1s, 1s.
+- **`send_draft_with_attachments`** (both providers) sleeps a linearly escalating `delay * attempt`. With 3 attempts this fires only **1s then 2s** — the 3rd and final attempt raises without sleeping, so a "3s" wait **never happens**. This path escalates because it stays under load longer (full-MIME rebuild / chunked upload).
 
-Don't normalise these — Gmail's per-user-rate-limit pushes back faster than Outlook's per-tenant throttling, and Outlook's escalation matches Graph's documented Retry-After hints when no header is present.
+The genuine Gmail-vs-Outlook asymmetry is in **which** errors retry, not the timing: Gmail retries only `_is_send_retryable` failures (429/5xx, excluding the daily-quota 429 — see below); Outlook retries every `EmailExternalAPIError`, because Graph returns a narrower error surface. Don't normalise the error filters — Gmail's per-user rate limit pushes back faster than Outlook's per-tenant throttling. (`_OUTLOOK_RETRY_DELAYS_SECONDS` is a separate tuple used by attachment *fetches*, not by the send path.)
 
 ## Gmail send-time 429 — `user-rate limit exceeded (mail sending)` is non-retryable
 
