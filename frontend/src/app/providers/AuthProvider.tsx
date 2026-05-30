@@ -22,16 +22,34 @@ export default function AuthProvider({ children }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    getMe()
-      .then((u) => {
-        if (!cancelled) setUser(u);
-      })
-      .catch(() => {
+
+    async function bootstrapAuth() {
+      try {
+        const current = await getMe();
+        if (!cancelled) setUser(current);
+        return;
+      } catch {
+        // Not authenticated. In local development only, optionally skip the
+        // login screen by minting a session through the dev-login backdoor
+        // (opt-in via VITE_DEV_AUTO_LOGIN). Any failure — endpoint disabled
+        // in the deploy, dev user missing — silently falls back to the
+        // normal unauthenticated state and the login surface renders.
+        if (import.meta.env.DEV && import.meta.env.VITE_DEV_AUTO_LOGIN === 'true') {
+          try {
+            const response = await apiDevLogin();
+            if (!cancelled) setUser(response.user);
+            return;
+          } catch {
+            // dev-login unavailable → fall through to unauthenticated
+          }
+        }
         if (!cancelled) setUser(null);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    }
+
+    void bootstrapAuth();
     return () => {
       cancelled = true;
     };

@@ -28,6 +28,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+# Versioned: dev-only auto-login flag, no secrets (see AuthProvider).
+!.env.development
 
 # Playwright
 e2e/.artifacts

@@ -21,7 +21,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Favourites: per-email star/flag toggle (Provider-First) plus a provider-truth sync and a dedicated favourites listing.
 - Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
-- Dev-login backdoor for local development (localhost-only, opt-in via env var).
+- Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow plus silent re-authentication.
 - PostgreSQL persistence for mailboxes, accounts, and tokens.
@@ -190,6 +190,7 @@ The following variable is consumed only by the Vite dev server / frontend bundle
 | Variable | Required | Description |
 |---|---|---|
 | `VITE_API_BASE_URL` | No | Frontend override for the backend URL. Defaults to `http://localhost:8000`. |
+| `VITE_DEV_AUTO_LOGIN` | No | When `"true"`, the dev server auto-logs-in through the backend dev-login backdoor on boot, skipping the login screen. Set in `frontend/.env.development` (not in compose env — see `repository_guide.md`). Requires `DEV_LOGIN_ENABLED` + `DEV_LOGIN_EMAIL` in the backend. Gated by `import.meta.env.DEV`, so production builds ignore it. |
 
 Outlook credential file keys: `client_id`, `client_secret`, `tenant`, `redirect_uri`, `scopes`.
 
