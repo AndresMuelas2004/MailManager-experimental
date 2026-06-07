@@ -62,7 +62,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   );
 
   return (
-    <div className="flex min-h-screen bg-[#F9FAFB]">
+    <div className="flex h-screen bg-[#F9FAFB]">
       <Sidebar
         mailboxId={mailboxId}
         mailboxName={currentMailboxName}
@@ -74,7 +74,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         onLogout={handleLogout}
         onDeleteAccount={handleDeleteAccount}
       />
-      <div className="relative min-w-0 flex-1 overflow-x-auto">
+      <div className="relative min-w-0 flex-1 overflow-auto">
         <Outlet />
       </div>
     </div>

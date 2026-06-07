@@ -225,7 +225,7 @@ Emails:
 - `POST /mailboxes/{mailbox_id}/emails/move-to-trash`
 - `POST /mailboxes/{mailbox_id}/emails/spam`
 - `POST /mailboxes/{mailbox_id}/emails/restore-from-spam`
-- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `favorite` (when `true`, returns only favourited emails — `box=ALL_MAIL` is the anchor that excludes TRASH/SPAM unless one is requested explicitly), `limit` (default 200, max 500), `offset` (default 0). Each row carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`), `is_favorite`, and the primary recipient `to_email` / `to_name` (the first `To` recipient only).
+- `GET /mailboxes/{mailbox_id}/emails` — Required query param: `box=ALL_MAIL|SENT|SPAM|TRASH`. Optional: `account_id`, `q` (free-text search, 2-200 chars, accent/case-insensitive substring across subject + sender), `favorite` (when `true`, returns only favourited emails — `box=ALL_MAIL` is the anchor that excludes TRASH/SPAM unless one is requested explicitly), `limit` (default 50, max 500), `offset` (default 0). Returns a paginated envelope `{ items, total, limit, offset }` where `total` is the exact size of the whole filtered set in the local copy (not the page, not the provider's live mailbox). Each row in `items` carries `has_attachments` (B.lazy: starts `false`, flips to `true` on first `get_email_content`), `is_favorite`, and the primary recipient `to_email` / `to_name` (the first `To` recipient only).
 - `GET /mailboxes/{mailbox_id}/emails/{provider_message_id}/content` — Required query param: `account_id`. Response includes `attachments[]` (the strict D-13 split between inline images embedded in the body and downloadable parts).
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/attachments/{attachment_id}` — Streams a single attachment binary with `Content-Disposition: attachment` (forced download, never inline). Cache-aside: served from local cache or fetched from the provider on miss.
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/reply-context` — Required query param: `action=reply|reply_all|forward`. Read-only — returns the prefilled `to_recipients` / `cc_recipients` / `subject` / `body` (plain-text quote) the composer needs, plus the RFC 5322 threading strings (`in_reply_to`, `references`, `thread_id`). Gmail-bound `reply` / `reply_all` runs the triple-requirement coherence guard locally before returning (502 `email_reply_context_error` on mismatch).
@@ -242,7 +242,7 @@ Virtual mailboxes (saved filtered views — "bandejas ficticias"):
 - `GET /virtual-mailboxes/{virtual_mailbox_id}` — Fetch one (404 `virtual_mailbox_not_found` for a foreign / missing id).
 - `PATCH /virtual-mailboxes/{virtual_mailbox_id}` — Replace `display_name` / `account_ids` / `filter_payload`.
 - `DELETE /virtual-mailboxes/{virtual_mailbox_id}` — Delete one.
-- `GET /virtual-mailboxes/{virtual_mailbox_id}/emails` — List the emails matching the saved filter across the (still-owned) accounts in the snapshot.
+- `GET /virtual-mailboxes/{virtual_mailbox_id}/emails` — List the emails matching the saved filter across the (still-owned) accounts in the snapshot. Same paginated `{ items, total, limit, offset }` envelope as `GET /emails` (`limit` default 50, max 500); `total` is deduplicated across accounts that share a provider message.
 
 Drafts:
 

@@ -53,8 +53,8 @@ Comparte el mismo motor de listado y la misma lupa que los buzones normales; por
 | Longitud máxima del término de lupa | **200 caracteres** | Backend | Rechazado en el borde de la API antes de tokenizar. |
 | Debounce de la lupa | **300 ms** | Frontend | Pausa al teclear antes de lanzar la petición. |
 | Máximo de palabras (tokens) por búsqueda | **10** | Backend | A partir de la 11.ª palabra el resto se descarta **silenciosamente**. |
-| Resultados por carga | **200** | Backend (límite por defecto) | Una apertura devuelve como mucho los 200 correos más recientes que casan. |
-| Tope técnico del parámetro de límite | **500** | Backend | El endpoint acepta `limit` hasta 500, pero el frontend siempre usa 200 — no expone forma de subirlo. |
+| Correos por **página** | **50** | Backend (`limit` por defecto) = tamaño de página del frontend | La bandeja se **pagina** igual que el listado general: 50 mensajes **distintos** por página (ya deduplicados), los más recientes primero. El total exacto (también deduplicado) viaja aparte y alimenta el indicador "X–Y de Z". Mismo tamaño de página que el listado — ver [listado-de-correos.md](listado-de-correos.md). |
+| Tope técnico del parámetro de límite | **500** | Backend | El endpoint acepta `limit` hasta 500, pero el frontend siempre usa el tamaño de página (50) — no expone forma de subirlo. |
 | Frescura de la caché de la vista | **0 s (siempre refresca)** | Frontend | Al reabrir la bandeja, vuelve a pedir la lista al instante en vez de servir caché. El resto de listados usan 30 s; aquí se anula a propósito porque son vistas curadas y sensibles al tiempo. |
 
 ---
@@ -85,7 +85,7 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 | **Acciones en bloque propias** | No hay un "vaciar bandeja ficticia" | La bandeja es de solo lectura respecto a su definición; las acciones (papelera, leído, favorito) operan sobre los correos reales subyacentes mediante los endpoints normales por mensaje. |
 | **`from_email` por subcadena o por dominio** | `@empresa.com` no trae todos los de ese dominio | El filtro de remitente es **igualdad exacta** de la dirección completa. El filtro `from_domain` existió y se retiró. Para "contiene", está la lupa de texto libre. |
 | **Filtros por fecha, etiquetas o presencia de adjuntos** | No se puede crear "correos con adjunto del último mes" | Solo existen los 6 criterios de § 2. Son ampliaciones previstas pero fuera del MVP. |
-| **Ordenación por relevancia / scroll infinito** | Más de 200 resultados no se pueden "cargar más" | Hereda el listado normal: orden por fecha descendente y una sola carga de hasta 200. Para acotar, se afinan los filtros o la lupa. |
+| **Ordenación por relevancia / scroll infinito** | No se reordena por remitente/asunto y no hay scroll continuo | Hereda el listado normal: orden por fecha descendente y **navegación por páginas numeradas** (sí hay paginación). Para acotar, se afinan los filtros o la lupa. |
 | **Tolerancia a erratas / plurales / sinónimos en la lupa** | `facutra` no encuentra `factura` | La lupa interna es por subcadena literal (ver [lupa.md](../features/lupa.md)). |
 
 ---
@@ -96,7 +96,7 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 |-----------|-----------|---------|
 | Cuenta de la bandeja desconectada o sin acceso | La bandeja sigue viva y muestra **solo** las cuentas supervivientes | Se revalida la propiedad en **cada** apertura; las cuentas perdidas se ignoran en silencio (no 404, no 500). |
 | Todas las cuentas de la bandeja dejan de ser del usuario | Listado **vacío** (no error) | Sin cuentas válidas no hay nada que mostrar, pero la definición sigue existiendo. |
-| El mismo mensaje llega por dos cuentas (misma cuenta de proveedor bajo dos bandejas reales) | Se muestra **una sola fila** | Deduplicación en el servidor. Preferencia de la copia superviviente: **destinatario (`to_email`) no vacío > nombre de destinatario (`to_name`) no vacío > `received_at` más reciente**. Exclusivo de bandejas ficticias (en un buzón de una sola cuenta no puede ocurrir). |
+| El mismo mensaje llega por dos cuentas (misma cuenta de proveedor bajo dos bandejas reales) | Se muestra **una sola fila** | Deduplicación en el servidor, **antes** de cortar la página (no después): así una página nunca queda corta por un duplicado y el total es correcto. El total se cuenta como `COUNT(DISTINCT provider_message_id)`. Preferencia de la copia superviviente: **destinatario (`to_email`) no vacío > nombre de destinatario (`to_name`) no vacío > `received_at` más reciente**. Exclusivo de bandejas ficticias (en un buzón de una sola cuenta no puede ocurrir). |
 | Bandeja con `box` = `TRASH`/`SPAM`/`SENT` | Muestra solo esa carpeta, ignorando la exclusión por defecto | `box` explícito tiene prioridad sobre el "excluye papelera/spam por defecto". |
 
 ---
@@ -107,4 +107,4 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 
 ---
 
-> Una bandeja ficticia llega hasta: **nombre de 1–120 caracteres, al menos 1 cuenta (sin tope superior, lista fija sin autoexpansión), exactamente 6 criterios de filtro combinados con AND (`box`/`box_not_in` excluyentes, papelera y spam fuera por defecto), `from_email` por igualdad exacta y `subject_contains` por subcadena, más la lupa interna (2 caracteres mínimo, 10 palabras, 200 resultados por carga sin scroll infinito) y refresco inmediato al reabrir** — y deliberadamente no descarga correo nuevo, no autoexpande cuentas, no filtra por fecha/etiquetas/adjuntos ni ordena por relevancia. El comportamiento completo está en [../features/bandejas-ficticias.md](../features/bandejas-ficticias.md).
+> Una bandeja ficticia llega hasta: **nombre de 1–120 caracteres, al menos 1 cuenta (sin tope superior, lista fija sin autoexpansión), exactamente 6 criterios de filtro combinados con AND (`box`/`box_not_in` excluyentes, papelera y spam fuera por defecto), `from_email` por igualdad exacta y `subject_contains` por subcadena, más la lupa interna (2 caracteres mínimo, 10 palabras), navegación por páginas de 50 mensajes distintos (deduplicados antes de paginar) con total exacto y sin scroll infinito, y refresco inmediato al reabrir** — y deliberadamente no descarga correo nuevo, no autoexpande cuentas, no filtra por fecha/etiquetas/adjuntos ni ordena por relevancia. El comportamiento completo está en [../features/bandejas-ficticias.md](../features/bandejas-ficticias.md).

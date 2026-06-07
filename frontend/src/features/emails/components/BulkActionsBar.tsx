@@ -67,7 +67,7 @@ export default function BulkActionsBar({
   const allows = (action: BulkAction) => allowed.includes(action);
 
   return (
-    <div className="flex w-full items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <button
         type="button"
         onClick={onClear}

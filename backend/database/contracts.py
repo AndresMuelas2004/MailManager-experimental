@@ -122,10 +122,6 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_provider_message_ids(self, account_id: str) -> list[str]:
-        raise NotImplementedError
-
-    @abstractmethod
     def list_provider_message_ids_not_in(
         self, account_id: str, exclude_ids: list[str],
     ) -> list[str]:
@@ -167,6 +163,7 @@ class EmailMetadataStore(ABC):
         extra_filters: dict[str, Any] | None = None,
         box_in: list[str] | None = None,
         box_not_in: list[str] | None = None,
+        distinct_provider_message_id: bool = False,
     ) -> list[dict[str, Any]]:
         """List email metadata for the given accounts, optionally filtered.
 
@@ -187,6 +184,46 @@ class EmailMetadataStore(ABC):
         (bool), ``is_favorite`` (bool), ``from_email`` (str, exact
         match, case-insensitive), ``subject_contains`` (str, substring).
         Unknown keys are ignored — they cannot inject SQL.
+
+        ``distinct_provider_message_id``: when ``True``, collapse rows
+        sharing a ``provider_message_id`` (the same provider message
+        surfaced under two ``account_id`` rows, i.e. one provider account
+        connected under two mailboxes) into a single row BEFORE applying
+        ``LIMIT``/``OFFSET``. The surviving row prefers a populated
+        ``to_email``, then a populated ``to_name``, then the most recent
+        ``received_at``. Only virtual mailboxes need this — the regular
+        box listing is always scoped to a single mailbox where the
+        duplication is impossible, so it leaves the flag ``False``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_filtered(
+        self,
+        account_ids: list[str],
+        box: str | None,
+        tokens: list[str],
+        *,
+        extra_filters: dict[str, Any] | None = None,
+        box_in: list[str] | None = None,
+        box_not_in: list[str] | None = None,
+        distinct_provider_message_id: bool = False,
+    ) -> int:
+        """Count the email metadata rows that match ``list_filtered``.
+
+        Returns the exact size of the filtered set for the SAME
+        ``box`` / ``tokens`` / ``extra_filters`` / ``box_in`` /
+        ``box_not_in`` predicates, ignoring ``LIMIT``/``OFFSET``. Backs
+        the ``total`` of the paginated listing envelope. The predicates
+        are built by the same private helper that feeds ``list_filtered``
+        so the count always matches what the listing would return.
+
+        ``distinct_provider_message_id``: when ``True``, count distinct
+        ``provider_message_id`` values (matching the deduplicated virtual
+        mailbox listing) instead of raw rows.
+
+        Returns ``0`` without touching the database when ``account_ids``
+        is empty (mirrors ``list_filtered`` returning ``[]``).
         """
         raise NotImplementedError
 

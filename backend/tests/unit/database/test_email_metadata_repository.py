@@ -196,48 +196,6 @@ def test_update_labels_batch_propagates_connection_pool_error(monkeypatch):
         em_module.email_metadata_store.update_labels_batch("acc1", [("m1",)])
 
 
-# ===== list_provider_message_ids =====
-
-
-def test_list_provider_message_ids_happy_path(monkeypatch):
-    cursor = FakeCursor(fetchall_results=[[("m1",), ("m2",)]])
-    patch_connection(monkeypatch, em_module, [cursor])
-
-    result = em_module.email_metadata_store.list_provider_message_ids("acc1")
-    assert result == ["m1", "m2"]
-    assert len(cursor.executed) == 1
-
-
-def test_list_provider_message_ids_empty_result(monkeypatch):
-    cursor = FakeCursor(fetchall_results=[[]])
-    patch_connection(monkeypatch, em_module, [cursor])
-
-    assert em_module.email_metadata_store.list_provider_message_ids("acc1") == []
-
-
-def test_list_provider_message_ids_invalid_text_returns_empty(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
-    patch_connection(monkeypatch, em_module, [cursor])
-
-    assert em_module.email_metadata_store.list_provider_message_ids("not-a-uuid") == []
-
-
-def test_list_provider_message_ids_psycopg2_error_raises_query_error(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
-    patch_connection(monkeypatch, em_module, [cursor])
-
-    with pytest.raises(QueryError, match="Failed to list provider message IDs"):
-        em_module.email_metadata_store.list_provider_message_ids("acc1")
-
-
-def test_list_provider_message_ids_generic_raises_query_error(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
-    patch_connection(monkeypatch, em_module, [cursor])
-
-    with pytest.raises(QueryError, match="RuntimeError"):
-        em_module.email_metadata_store.list_provider_message_ids("acc1")
-
-
 # ===== get_trash_emails_by_ids =====
 
 
@@ -963,3 +921,182 @@ def test_list_filtered_empty_account_ids_short_circuits(monkeypatch):
     result = em_module.email_metadata_store.list_filtered([], None, [], 50, 0)
     assert result == []
     assert cursor.executed == []
+
+
+# ===== list_filtered — distinct_provider_message_id (vmbox dedup) =====
+# The Python dedup was removed; dedup now happens in SQL. These lock the
+# SQL surface of the DISTINCT variant and its tie-break parity with the
+# old _dedupe_rows_by_provider_message_id (.strip() == btrim(coalesce)).
+
+
+def test_list_filtered_distinct_uses_distinct_on_and_btrim_tiebreak(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1", "acc2"], None, [], 50, 0,
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+    )
+    sql, params = cursor.executed[0]
+    # Dedups by provider_message_id in SQL before paginating.
+    assert "DISTINCT ON (em.provider_message_id)" in sql
+    # Parity with the removed Python ``isinstance(str) and col.strip()``:
+    # NULL, '' and whitespace-only all score as empty → btrim(coalesce()).
+    assert "btrim(coalesce(em.to_email, '')) <> ''" in sql
+    assert "btrim(coalesce(em.to_name,  '')) <> ''" in sql
+    # Outer ORDER BY restores presentation order WITH the PK tie-break the
+    # Python sort lacked, so OFFSET paging is total/stable.
+    assert "ORDER BY d.received_at DESC, d.account_id, d.provider_message_id" in sql
+    # Shared predicates still apply through the same helper.
+    assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
+    assert params["box_not_in_list"] == ["TRASH", "SPAM"]
+    assert params["limit"] == 50
+    assert params["offset"] == 0
+
+
+def test_list_filtered_non_distinct_does_not_dedup(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(["acc1"], "ALL_MAIL", [], 50, 0)
+    sql, _ = cursor.executed[0]
+    # The regular listing must use the plain LIST_FILTERED (no DISTINCT ON).
+    assert "DISTINCT ON" not in sql
+
+
+# ===== count_filtered =====
+
+
+def test_count_filtered_empty_account_ids_returns_zero_without_db_call(monkeypatch):
+    # Mirror list_filtered: empty scope short-circuits to 0 BEFORE the
+    # connection is touched (no leaking an unauthorized count).
+    def _explode():
+        raise AssertionError("get_connection must not be called for empty account_ids")
+
+    monkeypatch.setattr(em_module.connection, "get_connection", _explode)
+    assert em_module.email_metadata_store.count_filtered([], "ALL_MAIL", []) == 0
+
+
+def test_count_filtered_returns_total_from_first_column(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(42,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    total = em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])
+    assert total == 42
+    sql, params = cursor.executed[0]
+    assert "COUNT(*)" in sql
+    # No ORDER BY / LIMIT / OFFSET on the count.
+    assert "ORDER BY" not in sql
+    assert "LIMIT" not in sql
+    assert "OFFSET" not in sql
+    assert params["account_ids"] == ["acc1"]
+    assert params["box"] == "ALL_MAIL"
+
+
+def test_count_filtered_no_row_returns_zero(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[None])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", []) == 0
+
+
+def test_count_filtered_shares_token_predicate_with_listing(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(3,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.count_filtered(
+        ["acc1"], "ALL_MAIL", ["foo", "bar"],
+    )
+    sql, params = cursor.executed[0]
+    # Same per-token placeholders + 3-column OR block as the listing.
+    assert params["tok0"] == "%foo%"
+    assert params["tok1"] == "%bar%"
+    assert sql.count("ILIKE") == 6
+
+
+def test_count_filtered_escapes_token_metacharacters(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(0,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.count_filtered(
+        ["acc1"], "ALL_MAIL", ["50%_off\\bar"],
+    )
+    _, params = cursor.executed[0]
+    assert params["tok0"] == "%50\\%\\_off\\\\bar%"
+
+
+def test_count_filtered_subject_contains_emits_escaped_ilike(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(0,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.count_filtered(
+        ["acc-1"], None, [],
+        extra_filters={"subject_contains": "50%"},
+    )
+    sql, params = cursor.executed[0]
+    assert "unaccent(lower(coalesce(subject, ''))) ILIKE" in sql
+    assert params["extra_subject_contains"] == "%50\\%%"
+
+
+def test_count_filtered_box_not_in_emits_negated_any(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(0,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.count_filtered(
+        ["acc-1"], None, [],
+        box_not_in=["TRASH", "SPAM"],
+    )
+    sql, params = cursor.executed[0]
+    assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
+    assert params["box_not_in_list"] == ["TRASH", "SPAM"]
+
+
+def test_count_filtered_distinct_uses_count_distinct(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(7,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    total = em_module.email_metadata_store.count_filtered(
+        ["acc1", "acc2"], None, [],
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+    )
+    assert total == 7
+    sql, _ = cursor.executed[0]
+    # Deduplicated count collapses the same provider message across two
+    # accounts into one — must NOT over-count.
+    assert "COUNT(DISTINCT em.provider_message_id)" in sql
+    # No tie-break ORDER BY needed: it only counts distinct keys.
+    assert "DISTINCT ON" not in sql
+
+
+def test_count_filtered_invalid_uuid_returns_zero(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.count_filtered(
+        ["not-a-uuid"], "ALL_MAIL", [],
+    ) == 0
+
+
+def test_count_filtered_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to count filtered email metadata"):
+        em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])
+
+
+def test_count_filtered_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])
+
+
+def test_count_filtered_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])

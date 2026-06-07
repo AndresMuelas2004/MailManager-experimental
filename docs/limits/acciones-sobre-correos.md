@@ -10,14 +10,15 @@ El toggle de favorito tiene su propio catálogo: ver [favoritos.md](favoritos.md
 
 | Concepto | Valor exacto | Dónde aplica |
 |---|---|---|
-| Selección "todos" desde la casilla de cabecera | **50** correos (los más recientes de la lista) | Tabla de correos; la casilla de cabecera selecciona como mucho los primeros 50 |
+| Selección "todos" desde la casilla de cabecera | **50** correos (los de la **página actual**) | Tabla de correos; la casilla de cabecera marca como mucho la página visible (50 = tamaño de página) |
+| Selección acumulada entre páginas | **Sin tope fijo** (suma de lo marcado en cada página) | La selección **persiste** al cambiar de página; el usuario puede acumular más de 50 marcando en varias páginas |
 | Mínimo de correos por petición | **1** (lista no vacía) | Toda petición de papelera / spam / leído rechaza una lista vacía con 422 (la lista `items` exige `min_length=1`) |
 | Tope de items por petición HTTP | **Sin límite explícito** | El backend no impone un máximo de correos por llamada; el único límite práctico es la selección de 50 de la UI |
 | Troceo interno (Gmail) | Lotes de **100** mensajes por operación batch | Gmail agrupa internamente las modificaciones de etiqueta / papelera en chunks de 100 |
 | Reintentos por lote (Gmail, solo etiquetas) | Hasta **5 intentos** (1 inicial + **4** reintentos), con **1 s** de espera entre ellos | Solo las operaciones de etiqueta (leído, spam, restaurar de spam); ver § 2 |
 | Llamadas por acción masiva | **Una por mailbox real** presente en la selección | El frontend agrupa por `mailbox_id` y abre las llamadas en paralelo |
 
-> Nota: no hay paginación ni "cargar más" en estas acciones — operan sobre lo que está listado. El listado en sí está acotado por su propio límite de resultados (ver [listado-de-correos.md](listado-de-correos.md) para el tope del listado y [lupa.md](lupa.md) para el de búsqueda).
+> Nota: las acciones operan sobre la **selección**, no sobre "lo que está listado". El listado se navega por **páginas numeradas** (ver [listado-de-correos.md](listado-de-correos.md), y [lupa.md](lupa.md) para la búsqueda), y la selección **sobrevive al cambio de página**: una acción masiva puede afectar a correos marcados en páginas distintas. Lo que cada pulsación de "seleccionar todo" abarca es la página actual (50), no todas las páginas.
 
 ---
 
@@ -105,7 +106,7 @@ Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (
 - **No hay "deshacer" para el borrado definitivo dentro de la app.** La recuperación solo es posible restaurando el correo en el cliente original y resincronizando.
 - **Restaurar de spam no devuelve a la carpeta original concreta**, siempre a la bandeja principal. Solo la papelera recuerda el origen exacto.
 - **No hay papelera "real" propia de MailManager ni purga manual de correos.** La papelera de la app es un reflejo de la del proveedor; la limpieza definitiva la hace el proveedor por retención. (La purga manual existe solo para los **binarios de adjuntos** cacheados — ver [../limits/adjuntos.md](../limits/adjuntos.md) — no para correos.)
-- **No hay selección "de toda la bandeja" más allá de 50.** La casilla de cabecera abarca como mucho los 50 correos más recientes listados; no existe un "seleccionar los 5.000 correos del buzón".
+- **No hay un "seleccionar toda la bandeja" de un clic.** La casilla de cabecera abarca como mucho la **página actual** (50 correos); no existe un "seleccionar los 5.000 correos del buzón" en una sola acción. Sí se puede acumular una selección mayor marcando correos a mano en varias páginas (la selección persiste entre páginas), pero no con una única pulsación de "seleccionar todo".
 - **No hay acción por fila independiente** para papelera / spam / borrado: todo pasa por la barra de selección (una selección de un solo correo usa la misma barra). La única acción "por fila" automática es marcar como leído al abrir, y el toggle de favorito (documentado aparte).
 - **No hay archivado, ni etiquetas/categorías personalizadas, ni mover a carpetas arbitrarias.** El conjunto de destinos se limita a las bandejas modeladas (principal, enviados, spam, papelera). Fuera del MVP.
 - **No hay reversión atómica de operaciones parciales.** Si una acción masiva falla a medias, los correos que sí se procesaron quedan procesados; no se revierten. La respuesta reporta el recuento real de afectados.
@@ -114,6 +115,6 @@ Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (
 
 ## Resumen de topes en una frase
 
-> La selección masiva llega hasta **50** correos (los más recientes listados); Gmail trocea en lotes de **100** y reintenta lo idempotente (leído, spam) pero **no** la papelera; Outlook va best-effort por correo; las acciones masivas hacen **una llamada por cada mailbox real** de la selección; y el "borrado definitivo" es un **no-op uniforme** que nunca toca el proveedor —el correo sobrevive en su papelera—, irreversible desde la app y recuperable solo desde el cliente original.
+> Cada "seleccionar todo" abarca **50** correos (la página actual), pero la selección **persiste entre páginas** y puede acumular más marcando a mano; Gmail trocea en lotes de **100** y reintenta lo idempotente (leído, spam) pero **no** la papelera; Outlook va best-effort por correo; las acciones masivas hacen **una llamada por cada mailbox real** de la selección; y el "borrado definitivo" es un **no-op uniforme** que nunca toca el proveedor —el correo sobrevive en su papelera—, irreversible desde la app y recuperable solo desde el cliente original.
 
 Volver al comportamiento: **[../features/acciones-sobre-correos.md](../features/acciones-sobre-correos.md)**.

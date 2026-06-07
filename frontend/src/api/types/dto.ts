@@ -131,6 +131,18 @@ export type EmailMetadataOut = z.infer<typeof emailMetadataOutSchema>;
 
 export const emailMetadataListSchema = z.array(emailMetadataOutSchema);
 
+// Paginated listing envelope. The backend wraps the page of emails in
+// ``{ items, total, limit, offset }``: ``total`` is the exact count of
+// the full filtered set in the local copy (not just this page), while
+// ``limit`` / ``offset`` echo back the values the backend applied.
+export const emailPageSchema = z.object({
+  items: z.array(emailMetadataOutSchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+});
+export type EmailPage = z.infer<typeof emailPageSchema>;
+
 export const emailContentOutSchema = z.object({
   html_body: z.string().nullable(),
   text_body: z.string().nullable(),

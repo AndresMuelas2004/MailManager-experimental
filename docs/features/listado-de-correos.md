@@ -2,7 +2,7 @@
 
 Este documento describe **qué hace** la app cuando un usuario abre una bandeja y **qué experimenta** delante de la pantalla: qué correos ve, en qué orden, con qué indicadores por fila, y cómo cada acción que dispara desde la lista acaba en el buzón correcto. No entra en cómo está cableado el código: es una guía de comportamiento para que cualquier persona del equipo entienda cómo se comporta la lista de correos.
 
-Los topes concretos (tope de resultados por carga, ausencia de paginación, frescura del caché) y la lista exhaustiva de "qué NO soporta" viven en un documento aparte para no repetir cifras aquí: **[../limits/listado-de-correos.md](../limits/listado-de-correos.md)**. Este fichero solo los menciona de pasada y enlaza a ese catálogo cuando hace falta.
+Los topes concretos (tamaño de página, frescura del caché) y la lista exhaustiva de "qué NO soporta" viven en un documento aparte para no repetir cifras aquí: **[../limits/listado-de-correos.md](../limits/listado-de-correos.md)**. Este fichero solo los menciona de pasada y enlaza a ese catálogo cuando hace falta.
 
 Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 
@@ -56,7 +56,7 @@ MailManager agrupa varias cuentas de correo bajo un mismo **mailbox**. El listad
 - **Vista unificada del mailbox**: muestra los correos de **todas** las cuentas conectadas de ese mailbox, mezclados en una sola lista ordenada por fecha. Es la vista por defecto cuando el usuario entra al mailbox.
 - **Vista de una cuenta concreta**: el usuario selecciona una de sus cuentas (mediante las pestañas de cuenta) y la lista se restringe **solo a esa cuenta**.
 
-La diferencia no es solo de filtrado: cambia también qué columnas tienen sentido mostrar (sección 4.2). El resto del comportamiento — orden, indicadores, tope de resultados — es idéntico en ambas vistas.
+La diferencia no es solo de filtrado: cambia también qué columnas tienen sentido mostrar (sección 4.2). El resto del comportamiento — orden, indicadores, paginación — es idéntico en ambas vistas.
 
 ### 3.1 Cuando el mailbox no tiene cuentas
 
@@ -126,11 +126,31 @@ Dentro de una misma sesión, si el usuario sale y vuelve a la bandeja en un inte
 
 ---
 
-## 7. Cuántos correos se ven: tope por carga y sin scroll infinito
+## 7. Cómo se navega: páginas numeradas, no scroll infinito
 
-El listado trae **un tope de correos por carga** (los más recientes) y **no tiene scroll infinito ni botón de "cargar más"** en el MVP. En la práctica, el usuario ve hasta ese tope de correos por bandeja; si necesita encontrar algo más antiguo que no entra en el tope, la vía natural es **acotar con la lupa** (ver [lupa.md](lupa.md)) en lugar de paginar. La cifra exacta del tope y el motivo de no implementar paginación están en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).
+El listado se recorre **por páginas numeradas**, no con scroll infinito ni con un botón de "cargar más". Cada página muestra un bloque fijo de correos (los más recientes primero); el tamaño de página exacto está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md). Debajo de la tabla aparece una **barra de paginación** con tres elementos:
 
-> Aclaración para evitar confusión: la casilla de "seleccionar todo" de la cabecera selecciona como mucho un tope de los correos más recientes de la lista para acciones en bloque (la cifra exacta está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md)). Es un límite de **selección**, no de cuántos correos se cargan ni se muestran. La selección y las acciones en bloque se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
+- **"Anterior" / "Siguiente"**, para moverse una página atrás o adelante. Quedan **deshabilitados** en los extremos (en la primera página no se puede ir atrás; en la última, adelante).
+- Un indicador **"X–Y de Z"** (por ejemplo, `1–50 de 1.234`) que dice qué rango de correos se está viendo y, sobre todo, **cuántos correos hay en total** en esa bandeja/vista. Los miles se agrupan con punto.
+- **Números de página** clicables que saltan directamente a una página concreta. Cuando hay muchas páginas, los tramos intermedios se resumen con puntos suspensivos (`1 … 4 5 6 … 25`), mostrando siempre la primera, la última y una ventana alrededor de la actual.
+
+Esto cambia un comportamiento anterior del MVP: antes la lista solo dejaba ver un primer bloque de los correos más recientes y **los siguientes no eran alcanzables** desde la interfaz. Ahora el usuario puede **recorrer página a página todo lo que la app tiene sincronizado** de esa bandeja. En la práctica se ven **más correos que antes**, no menos.
+
+Una sutileza importante: ese total "Z" es el de la **copia local** sincronizada, no el del buzón real en el proveedor (ver § 1). Si Gmail tiene decenas de miles de correos pero la app solo ha sincronizado los más recientes, el indicador muestra el total **sincronizado**. El motivo —que ni Gmail ni Outlook permiten pedir "la página N" ni un total exacto en vivo, así que la paginación numerada se construye sobre la copia local— está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).
+
+### 7.1 La página vive en la URL y se reinicia al cambiar de contexto
+
+La página actual se guarda en la dirección (`?page=...`), igual que el término de búsqueda. Recargar o compartir el enlace conserva la página. Al **cambiar de bandeja, de cuenta o de búsqueda**, la navegación **vuelve a la página 1** automáticamente: el contexto cambió, así que empezar por el principio es lo predecible (y evita aterrizar en una página que no existe para el nuevo filtro).
+
+### 7.2 Si la página deja de existir, la app reencuadra a la última válida
+
+Como la paginación es por posición, el número total de páginas puede encogerse mientras el usuario navega — por ejemplo, tras una sincronización en segundo plano o un borrado masivo. Si el usuario está en la página 5 y, de pronto, ya no hay tantas páginas, la app lo lleva sola a la **última página válida** en lugar de mostrar una página vacía. Una bandeja que se queda sin correos aterriza en la página 1.
+
+### 7.3 Mientras carga la página siguiente, no parpadea
+
+Al pulsar "Siguiente" o un número, la página que ya se veía **se mantiene en pantalla** hasta que llega la nueva, en lugar de vaciarse y mostrar un spinner. Los controles de paginación se deshabilitan momentáneamente durante esa transición. Es una navegación fluida, sin saltos de "tabla en blanco" entre páginas.
+
+> Aclaración para evitar confusión: la casilla de "seleccionar todo" de la cabecera selecciona los correos de **la página actual** (no "todos los de todas las páginas"); la cifra exacta de cuántos caben en una página está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md). Es un límite de **selección por página**, no de cuántos correos existen. Eso sí, la selección **se conserva al cambiar de página**, de modo que una acción en bloque puede afectar a correos marcados en páginas distintas. La selección y las acciones en bloque se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
 
 ---
 
@@ -154,12 +174,13 @@ Lo mismo aplica a las **acciones en bloque**: si el usuario selecciona correos d
 
 - **Cargando (primera vez):** mientras llega la primera carga, se muestra un spinner centrado en lugar de la tabla.
 - **Sincronizando (en segundo plano):** la lista ya visible se mantiene intacta y usable; el refresco con el proveedor ocurre de forma silenciosa, sin indicador visible en estas bandejas. Cuando la sincronización termina, la lista se reemplaza sola con los correos nuevos.
-- **Bandeja vacía:** si no hay correos, se muestra "No hay correos en esta bandeja".
-- **Búsqueda sin resultados:** si hay una búsqueda activa y no casa nada, el mensaje es **distinto** — "No se encontraron correos para tu búsqueda" — para que el usuario distinga "no hay nada que coincida" de "la bandeja está vacía". (La lupa: [lupa.md](lupa.md).)
-- **Error:** si la carga falla, se muestra un mensaje de error legible en lugar de una pantalla rota; la lista no se pinta a medias.
+- **Bandeja vacía:** si no hay correos, se muestra "No hay correos en esta bandeja" y **sin barra de paginación** (no tiene sentido paginar cero correos).
+- **Búsqueda sin resultados:** si hay una búsqueda activa y no casa nada, el mensaje es **distinto** — "No se encontraron correos para tu búsqueda" — para que el usuario distinga "no hay nada que coincida" de "la bandeja está vacía", y tampoco hay barra de paginación. (La lupa: [lupa.md](lupa.md).)
+- **Una sola página:** si todos los correos caben en una página, la barra muestra el rango ("1–37 de 37") pero "Anterior/Siguiente" quedan deshabilitados; no hay nada a lo que saltar.
+- **Error:** si la carga falla, se muestra un mensaje de error legible en lugar de una pantalla rota; la lista no se pinta a medias y la barra de paginación no aparece.
 
 ---
 
 ## 10. Resumen en una frase
 
-> El listado es la tabla de una bandeja real (principal, enviados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena siempre por fecha de recepción descendente con un desempate estable, marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, muestra hasta un tope de correos sin scroll infinito, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).
+> El listado es la tabla de una bandeja real (principal, enviados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena siempre por fecha de recepción descendente con un desempate estable, marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, se navega **por páginas numeradas** con barra "Anterior/Siguiente" e indicador "X–Y de Z" (total exacto de lo **sincronizado**, no del proveedor en vivo) reiniciando a la página 1 al cambiar de contexto y reencuadrando a la última página válida si el total encoge, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).

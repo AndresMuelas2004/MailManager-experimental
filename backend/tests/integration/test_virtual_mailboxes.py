@@ -301,7 +301,7 @@ def test_emails_for_virtual_mailbox_aggregates_every_listed_account(
 
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     # Default filter (no explicit box, no box_not_in) excludes TRASH/SPAM.
     boxes = {row["box"] for row in rows}
     assert "TRASH" not in boxes
@@ -338,7 +338,7 @@ def test_emails_for_virtual_mailbox_filter_by_from_email(test_client, isolated_d
 
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert rows  # seeded gmail data contains @devops.net entries
     assert all(row["from_email"].lower() == "jack@devops.net" for row in rows)
 
@@ -361,9 +361,12 @@ def test_emails_for_virtual_mailbox_filter_by_is_favorite(test_client, isolated_
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    body = resp.json()
+    rows = body["items"]
     ids = {row["provider_message_id"] for row in rows}
     assert ids == {"gmail-allmail-001", "gmail-allmail-002"}
+    # COUNT(DISTINCT provider_message_id) over the favourite-filtered set.
+    assert body["total"] == 2
 
 
 def test_emails_for_virtual_mailbox_explicit_box_overrides_default(test_client, isolated_db):
@@ -378,7 +381,7 @@ def test_emails_for_virtual_mailbox_explicit_box_overrides_default(test_client, 
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert rows  # seeded data has TRASH rows for the gmail account
     assert all(row["box"] == "TRASH" for row in rows)
 
@@ -397,7 +400,7 @@ def test_emails_for_virtual_mailbox_filters_to_listed_account_subset(
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert rows
     assert all(row["account_id"] == _SEEDED_OUTLOOK_ACCOUNT for row in rows)
 
@@ -416,7 +419,7 @@ def test_emails_for_virtual_mailbox_search_query_combines_with_filter(
     vmb_id = create.json()["virtual_mailbox_id"]
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "sprint"})
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     # Search tokens AND-combined with the (empty) filter — must still
     # return only matching rows.
     assert all("sprint" in (row["subject"] or "").lower() for row in rows)
@@ -435,7 +438,7 @@ def test_filter_by_box_not_in_excludes_only_listed_box(test_client, isolated_db)
         "filter_payload": {"box_not_in": ["SPAM"]},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
-    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()["items"]
     boxes = {r["box"] for r in rows}
     assert "SPAM" not in boxes
     assert "TRASH" in boxes
@@ -456,7 +459,7 @@ def test_filter_by_empty_box_not_in_includes_trash_and_spam(test_client, isolate
         "filter_payload": {"box_not_in": []},
     })
     vmb_id = create.json()["virtual_mailbox_id"]
-    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()["items"]
     boxes = {r["box"] for r in rows}
     assert "TRASH" in boxes
     assert "SPAM" in boxes
@@ -466,10 +469,14 @@ def test_listing_dedups_same_provider_message_id_across_accounts(test_client, is
     """Two ``account_id``s sharing the same Gmail / Outlook OAuth produce
     two ``email_metadata`` rows with the same ``provider_message_id``
     (composite PK is ``(provider_message_id, account_id)``). The virtual
-    mailbox listing must collapse them via the scoring tuple inside
-    ``_dedupe_rows_by_provider_message_id`` — the unit test covers the
-    scoring, this test covers the wiring (SQL really returns both rows,
-    service really runs the helper, response really comes out single)."""
+    mailbox listing must collapse them in SQL via
+    ``LIST_FILTERED_DISTINCT`` (``DISTINCT ON (provider_message_id)`` with
+    the ``btrim(coalesce(to_email,''))<>''`` completeness tie-break) and
+    report ``total=1`` via ``COUNT(DISTINCT provider_message_id)``. The
+    winner must be the row with the real ``to_email`` (Gmail, 10:00), not
+    the empty Outlook one (09:00). This pins the SQL dedup end-to-end:
+    real PostgreSQL returns both rows, the DISTINCT collapses them, and
+    the count does NOT over-count to 2."""
     from tests.integration.conftest import TEST_USER_ID
     _reparent_seeded_user(isolated_db, TEST_USER_ID)
     with isolated_db.cursor() as cur:
@@ -503,11 +510,14 @@ def test_listing_dedups_same_provider_message_id_across_accounts(test_client, is
     })
     vmb_id = create.json()["virtual_mailbox_id"]
 
-    rows = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    body = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    rows = body["items"]
     dup_rows = [r for r in rows if r["provider_message_id"] == "shared-dup-001"]
     assert len(dup_rows) == 1, "Dedup must collapse the two rows into one"
     assert dup_rows[0]["to_email"] == "real@x.com"
     assert dup_rows[0]["account_id"] == _SEEDED_GMAIL_ACCOUNT
+    # COUNT(DISTINCT provider_message_id) must NOT over-count the duplicate.
+    assert body["total"] == 1
 
 
 def test_listing_drops_account_ids_no_longer_owned(test_client, isolated_db):
@@ -535,7 +545,7 @@ def test_listing_drops_account_ids_no_longer_owned(test_client, isolated_db):
 
     resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails")
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert rows
     assert all(row["account_id"] == _SEEDED_GMAIL_ACCOUNT for row in rows)
 
@@ -699,8 +709,14 @@ def test_pagination_is_deterministic_with_timestamp_ties(
     })
     vmb_id = create.json()["virtual_mailbox_id"]
 
-    p1 = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"limit": 2, "offset": 0}).json()
-    p2 = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"limit": 2, "offset": 2}).json()
+    p1_json = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"limit": 2, "offset": 0}).json()
+    p2_json = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"limit": 2, "offset": 2}).json()
+    p1 = p1_json["items"]
+    p2 = p2_json["items"]
+
+    # total counts all 4 inserted rows (single account, no cross-account
+    # duplicate), stable across both pages.
+    assert p1_json["total"] == p2_json["total"] == 4
 
     ids_p1 = [(r["provider_message_id"], r["account_id"]) for r in p1]
     ids_p2 = [(r["provider_message_id"], r["account_id"]) for r in p2]

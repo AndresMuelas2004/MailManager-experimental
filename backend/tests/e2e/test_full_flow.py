@@ -1165,9 +1165,13 @@ def test_38_list_emails_gmail(e2e_client):
         f"?box=ALL_MAIL&account_id={GMAIL_ACCOUNT_ID}",
     )
     _assert_ok(resp)
-    emails = resp.json()
+    body = resp.json()
+    # Paginated envelope (EmailPageOut): items page + exact total.
+    emails = body["items"]
     assert isinstance(emails, list)
     assert len(emails) >= 1, "Gmail account should have at least one email in ALL_MAIL after sync"
+    # total counts the whole filtered set, so it is at least the page size.
+    assert body["total"] >= len(emails)
     # Every returned row must belong to the requested account and box.
     for e in emails:
         assert e["account_id"] == GMAIL_ACCOUNT_ID
@@ -1195,7 +1199,7 @@ def test_38a_search_emails_single_account(e2e_client):
         },
     )
     _assert_ok(resp)
-    data = resp.json()
+    data = resp.json()["items"]
     assert isinstance(data, list)
     # The list may be empty in a hypothetical pristine inbox; what cannot
     # happen is a row that does not match the filter contract.
@@ -1234,7 +1238,7 @@ def test_38b_search_emails_unified_mailbox(e2e_client):
         params={"box": "ALL_MAIL", "q": needle},
     )
     _assert_ok(resp)
-    data = resp.json()
+    data = resp.json()["items"]
     assert isinstance(data, list)
     needle_lc = needle.lower()
     for e in data:
@@ -1246,6 +1250,46 @@ def test_38b_search_emails_unified_mailbox(e2e_client):
             (e.get("from_name") or ""),
         ]).lower()
         assert needle_lc in haystack
+
+
+def test_38c_pagination_pages_do_not_overlap(e2e_client):
+    """Paginate the Gmail ALL_MAIL listing with two adjacent pages and
+    verify the envelope contract end-to-end against the real account:
+    both responses carry a coherent ``total`` and the two pages share no
+    ``provider_message_id`` (OFFSET paging is stable thanks to the total
+    ordering tie-break). Skips gracefully when the real account has too
+    few emails to fill two pages."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    base = (
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails"
+        f"?box=ALL_MAIL&account_id={GMAIL_ACCOUNT_ID}"
+    )
+    first = e2e_client.get(f"{base}&limit=2&offset=0")
+    _assert_ok(first)
+    first_body = first.json()
+    if first_body["total"] < 3:
+        pytest.skip("Gmail account has fewer than 3 ALL_MAIL emails to paginate.")
+
+    second = e2e_client.get(f"{base}&limit=2&offset=2")
+    _assert_ok(second)
+    second_body = second.json()
+
+    # Both responses are the EmailPageOut envelope with a stable total.
+    assert set(first_body.keys()) == {"items", "total", "limit", "offset"}
+    assert first_body["total"] == second_body["total"]
+    assert first_body["limit"] == 2 and first_body["offset"] == 0
+    assert second_body["offset"] == 2
+
+    first_ids = {e["provider_message_id"] for e in first_body["items"]}
+    second_ids = {e["provider_message_id"] for e in second_body["items"]}
+    assert len(first_body["items"]) == 2
+    assert first_ids.isdisjoint(second_ids), (
+        "Adjacent pages must not overlap — total ordering tie-break broken."
+    )
 
 
 def test_39_get_email_content_gmail(e2e_client):
@@ -1262,7 +1306,7 @@ def test_39_get_email_content_gmail(e2e_client):
         f"?box=ALL_MAIL&account_id={GMAIL_ACCOUNT_ID}",
     )
     _assert_ok(list_resp)
-    emails = list_resp.json()
+    emails = list_resp.json()["items"]
     if not emails:
         pytest.skip("No Gmail emails available for content fetch test.")
 

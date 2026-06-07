@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import EmailTable from '../components/EmailTable';
@@ -9,6 +10,7 @@ import useDebounce from '../hooks/useDebounce';
 import useFavorite from '../hooks/useFavorite';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
+import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -24,13 +26,11 @@ export default function VirtualMailboxViewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
+  const page = parsePageParam(searchParams);
   const { record, error: loadError } = useVirtualMailbox(virtualMailboxId ?? '');
 
-  const { emails, accounts, loading, error, refresh } = useVirtualMailboxEmails(
-    virtualMailboxId!,
-    mailboxId!,
-    debouncedQ,
-  );
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
+    useVirtualMailboxEmails(virtualMailboxId!, mailboxId!, debouncedQ, page);
 
   // Bulk actions on a virtual mailbox view still operate on real emails
   // — the underlying email is a real provider message in a real
@@ -41,9 +41,21 @@ export default function VirtualMailboxViewPage() {
   // baseline.
   const { selection, bulkError, bulkBar } = useBulkBar({
     box: 'ALL_MAIL',
-    emails,
     refresh,
+    searchKey: debouncedQ,
   });
+
+  const handlePageChange = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete('page');
+    else params.set('page', String(next));
+    setSearchParams(params);
+  };
+
+  useEffect(() => {
+    if (!loading && !isPlaceholder && page > totalPages) handlePageChange(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
   // ``useFavorite`` is no longer parameterised by mailboxId: the toggle
@@ -86,6 +98,7 @@ export default function VirtualMailboxViewPage() {
     const params = new URLSearchParams(searchParams);
     if (next.length === 0) params.delete('q');
     else params.set('q', next);
+    params.delete('page');
     setSearchParams(params, { replace: true });
   };
 
@@ -161,22 +174,29 @@ export default function VirtualMailboxViewPage() {
       {combinedError ? (
         <div className="px-8 text-sm text-red-600">{combinedError.message}</div>
       ) : (
-        <EmailTable
-          emails={emails}
-          accounts={accounts}
-          loading={loading}
-          view="unified"
-          isSent={record?.filter_payload?.box === 'SENT'}
-          hasSelection={selection.size > 0}
-          isSelected={selection.isSelected}
-          onToggle={selection.toggle}
-          onToggleAll={() => selection.toggleTopN(emails)}
-          onOpen={viewer.open}
-          onToggleFavorite={handleToggleFavorite}
-          headerCheckboxState={selection.headerState(emails)}
-          bulkBar={bulkBar}
-          emptyMessage={emptyMessage}
-        />
+        <>
+          <EmailTable
+            emails={emails}
+            accounts={accounts}
+            loading={loading}
+            view="unified"
+            isSent={record?.filter_payload?.box === 'SENT'}
+            hasSelection={selection.size > 0}
+            isSelected={selection.isSelected}
+            onToggle={selection.toggle}
+            onToggleAll={() => selection.toggleTopN(emails)}
+            onOpen={viewer.open}
+            onToggleFavorite={handleToggleFavorite}
+            headerCheckboxState={selection.headerState(emails)}
+            bulkBar={bulkBar}
+            emptyMessage={emptyMessage}
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={handlePageChange}
+            paginationDisabled={loading || isPlaceholder}
+          />
+        </>
       )}
       <ViewerMount
         openedEmail={viewer.openedEmail}

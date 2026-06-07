@@ -43,7 +43,7 @@ from api.schemas.email import (
     AccountSpamDetail,
     AccountSyncDetail,
     EmailContentOut,
-    EmailMetadataOut,
+    EmailPageOut,
     EmailSendRequest,
     FavoriteSyncAccountDetail,
     FavoriteSyncResponse,
@@ -759,6 +759,14 @@ def _execute_spam_operation(
                     exc, fallback=fallback_error,
                     context={"account_id": aid, "account_label": account_label},
                 ) from exc
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected error during provider %s (%s): %s",
+                    manager_method, type(exc).__name__, exc,
+                )
+                raise fallback_error(
+                    f"Unexpected provider failure during {operation_label}."
+                ) from exc
 
             if results:
                 update_email_spam_status_batch(aid, results, target_box, fallback=fallback_error)
@@ -792,8 +800,14 @@ def list_emails(
     limit: int = 200,
     offset: int = 0,
     favorite: bool | None = None,
-) -> list[EmailMetadataOut]:
-    """List email metadata for a mailbox, with optional search and pagination.
+) -> EmailPageOut:
+    """List a page of email metadata for a mailbox, with the exact total.
+
+    Returns an :class:`EmailPageOut` envelope: the requested page of
+    rows plus ``total`` — the count of the WHOLE filtered set (same
+    ``box`` / ``q`` / ``favorite`` / accounts), used by the frontend to
+    render numbered pagination. ``total`` reflects only the locally
+    synced copy, never the provider's live mailbox size.
 
     When ``favorite=True``, the listing only returns favourite messages
     and TRASH / SPAM are excluded by default (matching the dedicated
@@ -835,7 +849,7 @@ def list_emails(
             ) from exc
         account_ids = [str(a["account_id"]) for a in accounts]
         if not account_ids:
-            return []
+            return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
 
     extra_filters: dict[str, Any] = {}
     box_arg: str | None = box
@@ -852,8 +866,13 @@ def list_emails(
             box_arg = None
             box_not_in = ["TRASH", "SPAM"]
 
+    # ``tokens`` is a pure string split (no DB) computed once and shared
+    # by BOTH calls below, so ``count_filtered`` counts EXACTLY the set
+    # ``list_filtered`` lists (same box / tokens / extra_filters /
+    # box_not_in). Two separate try blocks keep the failure messages
+    # unique per raise site (API CLAUDE.md §7).
+    tokens = parse_search_tokens(q)
     try:
-        tokens = parse_search_tokens(q)
         rows = email_metadata_store.list_filtered(
             account_ids, box_arg, tokens, limit, offset,
             extra_filters=extra_filters or None,
@@ -870,7 +889,29 @@ def list_emails(
             "Failed to list email metadata for filtered listing."
         ) from exc
 
-    return [row_to_email_metadata_out(row) for row in rows]
+    try:
+        total = email_metadata_store.count_filtered(
+            account_ids, box_arg, tokens,
+            extra_filters=extra_filters or None,
+            box_not_in=box_not_in,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected email metadata count error for mailbox '%s' (%s): %s",
+            mailbox_id, type(exc).__name__, exc,
+        )
+        raise EmailListError(
+            "Failed to count emails while paginating the mailbox listing."
+        ) from exc
+
+    return EmailPageOut(
+        items=[row_to_email_metadata_out(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1192,6 +1233,14 @@ def get_email_full_content(
             content = manager.fetch_email_content(account_label, provider_message_id)
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during provider fetch_email_content (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailContentFetchError(
+                "Unexpected provider failure while fetching email content."
+            ) from exc
 
         # D-06 + D-13 cache miss: discover attachments at the same time
         # as the body. The provider call is one round trip more than
@@ -1203,6 +1252,14 @@ def get_email_full_content(
             )
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during provider list_message_attachments (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailContentFetchError(
+                "Unexpected provider failure while listing message attachments."
+            ) from exc
 
         sanitized_html = sanitize_email_html(content.html_body) if content.html_body else None
 
@@ -1261,14 +1318,14 @@ def get_reply_context(
     matches the favourites toggle pattern: a missing row collapses
     to 404 without spending a provider round trip.
     """
+    ensure_mailbox_access(mailbox_id, user_id)
+
     if action not in ("reply", "reply_all", "forward"):
         raise EmailReplyContextError(
             f"Invalid reply action '{action}' while preparing reply context "
             f"for message '{provider_message_id}'.",
             detail={"action": action},
         )
-
-    ensure_mailbox_access(mailbox_id, user_id)
 
     try:
         account = account_store.get(mailbox_id, account_id)
@@ -1378,6 +1435,14 @@ def get_reply_context(
             )
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailReplyContextError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during reply threading coherence check (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailReplyContextError(
+                "Unexpected failure during reply threading coherence check."
+            ) from exc
 
     return ReplyContextOut(
         to_recipients=to_recipients,

@@ -16,8 +16,8 @@ Todos estos valores están **hardcodeados** y aplican por igual a todos los usua
 | Longitud máxima del término | **200 caracteres** | Backend (validación del parámetro `q`) | Un término de más de 200 caracteres es rechazado en el borde de la API antes de tokenizar. |
 | Debounce (pausa antes de buscar) | **300 ms** | Frontend | Tiempo que el usuario debe dejar de teclear para que salga la petición. Cada nueva pulsación reinicia el contador; solo la última cuenta. |
 | Máximo de palabras (tokens) por búsqueda | **10** | Backend (tokenización) | A partir de la 11.ª palabra, el resto se descarta **silenciosamente** (sin error ni aviso). Los espacios sobrantes no cuentan como tokens. |
-| Resultados por carga | **200** | Backend (límite por defecto del listado) | Una búsqueda devuelve como mucho los 200 correos más recientes que casan. El frontend no pide más de esos 200. |
-| Tope técnico del parámetro de límite | **500** | Backend (validación del listado) | El endpoint acepta un `limit` de hasta 500, pero el frontend de la lupa siempre usa el valor por defecto (200) — no expone forma de subirlo. |
+| Resultados por **página** | **50** | Backend (`limit` por defecto) = tamaño de página del frontend | La búsqueda se **pagina** igual que el listado: cada página muestra 50 correos que casan, los más recientes primero. El total exacto de coincidencias se devuelve aparte (campo `total`) y alimenta el indicador "X–Y de Z". Ver [listado-de-correos.md](listado-de-correos.md). |
+| Tope técnico del parámetro de límite | **500** | Backend (validación del listado) | El endpoint acepta un `limit` de hasta 500, pero el frontend de la lupa siempre usa el tamaño de página (50) — no expone forma de subirlo. |
 
 ### Notas sobre los topes
 
@@ -47,7 +47,8 @@ Todos estos valores están **hardcodeados** y aplican por igual a todos los usua
 | **Stemming / plurales / raíces** | `facturas` no encuentra `factura`; `comprar` no encuentra `compra` | No hay análisis lingüístico; se busca la secuencia exacta de letras, no la raíz. Se descartó `tsvector`/full-text search para el MVP. |
 | **Sinónimos / significado** | `pedido` no encuentra correos sobre `compra` u `orden` | La lupa no entiende el significado; solo busca las letras escritas. |
 | **Ordenación por relevancia** | Un correo con 5 coincidencias no sale antes que uno con 1 | El único criterio de orden es la fecha de recepción (descendente). Implementar ranking requeriría full-text search, fuera de scope MVP. |
-| **Scroll infinito / paginación** | Más de 200 resultados no se pueden "cargar más" | El MVP muestra una sola carga de hasta 200. La vía para acotar es añadir más palabras a la búsqueda. |
+| **Scroll infinito** | Los resultados no se cargan en scroll continuo | Los resultados se recorren por **páginas numeradas** (sí hay paginación), no por scroll infinito. Es el modelo de Gmail/Outlook web. |
+| **Buscar más allá de lo sincronizado** | Un correo antiguo que la app no bajó no aparece por mucho que se pagine | La lupa filtra solo la copia local; paginar no baja más histórico del proveedor. El total "Z" es el de lo sincronizado, no el del buzón en vivo. |
 | **Búsqueda en el cuerpo del correo** | El texto del mensaje no se busca | El cuerpo no se sincroniza en el listado (se baja al abrir cada correo); buscar en él obligaría a descargar todos los correos. |
 | **Búsqueda en destinatarios / CC / BCC** | Un correo "Para: ana@..." no aparece al buscar `ana` salvo que `ana` esté en asunto/remitente | Solo se indexan los tres campos de cabecera del remitente y el asunto. |
 | **Comodines (`%`, `_`, `\`)** | `50%` busca literalmente "50%", no actúa como comodín | Esos caracteres se escapan y se tratan como texto literal; el usuario no puede inyectar patrones ni romper la consulta. |
@@ -61,4 +62,4 @@ Todos estos valores están **hardcodeados** y aplican por igual a todos los usua
 
 ---
 
-> La lupa llega hasta: **2 caracteres mínimo, 300 ms de debounce, 10 palabras como máximo, 200 resultados por carga sin scroll infinito, solo sobre asunto/email/nombre del remitente del box y las cuentas actuales en la base de datos local** — y deliberadamente no ofrece tolerancia a erratas, plurales, sinónimos ni ordenación por relevancia. El comportamiento completo está en [../features/lupa.md](../features/lupa.md).
+> La lupa llega hasta: **2 caracteres mínimo, 300 ms de debounce, 10 palabras como máximo, resultados paginados de 50 por página (sin scroll infinito) con total exacto de coincidencias, solo sobre asunto/email/nombre del remitente del box y las cuentas actuales en la base de datos local** — y deliberadamente no ofrece tolerancia a erratas, plurales, sinónimos ni ordenación por relevancia. El comportamiento completo está en [../features/lupa.md](../features/lupa.md).

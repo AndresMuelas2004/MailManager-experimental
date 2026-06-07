@@ -28,7 +28,6 @@ from api.services.services_helpers import (
     get_email_content,
     get_trash_emails_by_ids,
     is_auth_error,
-    load_stored_message_ids,
     load_suspect_message_ids,
     load_sync_cursors,
     load_wrapped_account_tokens,
@@ -679,31 +678,6 @@ class TestUpdateEmailSpamStatusBatch:
             mock_store.update_spam_status_batch.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to update email spam status"):
                 update_email_spam_status_batch("acc-1", results, "SPAM")
-
-
-# ------------------------------------------------------------------
-# load_stored_message_ids
-# ------------------------------------------------------------------
-
-class TestLoadStoredMessageIds:
-
-    def test_happy_path_returns_ids(self):
-        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
-            mock_store.list_provider_message_ids.return_value = ["m1", "m2"]
-            result = load_stored_message_ids("acc-1")
-        assert result == ["m1", "m2"]
-
-    def test_database_error_translated(self):
-        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
-            mock_store.list_provider_message_ids.side_effect = QueryError("DB fail")
-            with pytest.raises(DatabaseQueryError):
-                load_stored_message_ids("acc-1")
-
-    def test_generic_exception_raises_api_error(self):
-        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
-            mock_store.list_provider_message_ids.side_effect = RuntimeError("boom")
-            with pytest.raises(ApiError, match="Failed to load stored message IDs"):
-                load_stored_message_ids("acc-1")
 
 
 # ------------------------------------------------------------------

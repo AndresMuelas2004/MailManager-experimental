@@ -52,6 +52,27 @@ def _fake_record(
     }
 
 
+def _listing_row(*, pmid, account_id=_ACCOUNT_ID):
+    """A minimal ``email_metadata`` row dict shaped for
+    ``row_to_email_metadata_out`` (all the keys it reads)."""
+    return {
+        "provider_message_id": pmid,
+        "account_id": account_id,
+        "thread_id": None,
+        "from_email": "a@x.com",
+        "from_name": "A",
+        "subject": "shared",
+        "received_at": datetime(2026, 5, 10, tzinfo=timezone.utc),
+        "is_read": False,
+        "box": "ALL_MAIL",
+        "has_attachments": False,
+        "is_favorite": False,
+        "to_email": "",
+        "to_name": "",
+        "mailbox_id": _MAILBOX_ID,
+    }
+
+
 def _patch_user_catalogue(monkeypatch, *, accounts=None):
     """Wire monkeypatches so the user owns ``accounts`` (default: [_ACCOUNT_ID]).
 
@@ -277,7 +298,10 @@ class TestGetVirtualMailbox:
 
 class TestListEmailsForVirtualMailbox:
 
-    def _patch_listing(self, monkeypatch, *, record, rows=None, list_exc=None, owned=None):
+    def _patch_listing(
+        self, monkeypatch, *, record, rows=None, list_exc=None, owned=None,
+        total=None, count_captured=None,
+    ):
         captured = {}
         monkeypatch.setattr(
             virtual_mailboxes_service.virtual_mailbox_store, "get",
@@ -285,7 +309,11 @@ class TestListEmailsForVirtualMailbox:
         )
         _patch_user_catalogue(monkeypatch, accounts=owned if owned is not None else [_ACCOUNT_ID])
 
-        def _list(account_ids, box, tokens, limit, offset, *, extra_filters=None, box_in=None, box_not_in=None):
+        def _list(
+            account_ids, box, tokens, limit, offset, *,
+            extra_filters=None, box_in=None, box_not_in=None,
+            distinct_provider_message_id=False,
+        ):
             captured["account_ids"] = account_ids
             captured["box"] = box
             captured["tokens"] = tokens
@@ -294,12 +322,31 @@ class TestListEmailsForVirtualMailbox:
             captured["extra_filters"] = extra_filters
             captured["box_in"] = box_in
             captured["box_not_in"] = box_not_in
+            captured["distinct_provider_message_id"] = distinct_provider_message_id
             if list_exc:
                 raise list_exc
             return rows or []
 
+        def _count(
+            account_ids, box, tokens, *,
+            extra_filters=None, box_in=None, box_not_in=None,
+            distinct_provider_message_id=False,
+        ):
+            if count_captured is not None:
+                count_captured["account_ids"] = account_ids
+                count_captured["box"] = box
+                count_captured["tokens"] = tokens
+                count_captured["extra_filters"] = extra_filters
+                count_captured["box_in"] = box_in
+                count_captured["box_not_in"] = box_not_in
+                count_captured["distinct_provider_message_id"] = distinct_provider_message_id
+            return total if total is not None else len(rows or [])
+
         monkeypatch.setattr(
             virtual_mailboxes_service.email_metadata_store, "list_filtered", _list,
+        )
+        monkeypatch.setattr(
+            virtual_mailboxes_service.email_metadata_store, "count_filtered", _count,
         )
         return captured
 
@@ -373,20 +420,29 @@ class TestListEmailsForVirtualMailbox:
             virtual_mailboxes_service.account_store, "list_account_ids_by_user",
             lambda _uid: [],
         )
-        called = {"list_filtered": False}
+        called = {"list_filtered": False, "count_filtered": False}
 
-        def _fail(*args, **kwargs):
+        def _fail_list(*args, **kwargs):
             called["list_filtered"] = True
             raise AssertionError("list_filtered must not be called")
 
+        def _fail_count(*args, **kwargs):
+            called["count_filtered"] = True
+            raise AssertionError("count_filtered must not be called")
+
         monkeypatch.setattr(
-            virtual_mailboxes_service.email_metadata_store, "list_filtered", _fail,
+            virtual_mailboxes_service.email_metadata_store, "list_filtered", _fail_list,
+        )
+        monkeypatch.setattr(
+            virtual_mailboxes_service.email_metadata_store, "count_filtered", _fail_count,
         )
         result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
             "vmb-1", _USER_ID,
         )
-        assert result == []
+        assert result.items == []
+        assert result.total == 0
         assert called["list_filtered"] is False
+        assert called["count_filtered"] is False
 
     def test_unexpected_listing_error_translated(self, monkeypatch):
         record = _fake_record()
@@ -396,108 +452,75 @@ class TestListEmailsForVirtualMailbox:
                 "vmb-1", _USER_ID,
             )
 
+    def test_requests_distinct_dedup_on_both_calls(self, monkeypatch):
+        # The vmbox listing dedups in SQL now (the Python
+        # _dedupe_rows_by_provider_message_id is gone). The contract is
+        # that BOTH list_filtered AND count_filtered are asked for the
+        # deduplicated variant — otherwise the page and its total would
+        # disagree on cross-account duplicates.
+        record = _fake_record()
+        count_captured: dict = {}
+        captured = self._patch_listing(
+            monkeypatch, record=record, count_captured=count_captured,
+        )
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
+        assert captured["distinct_provider_message_id"] is True
+        assert count_captured["distinct_provider_message_id"] is True
 
-# ---------------------------------------------------------------------------
-# Dedup helper — collapses duplicate provider_message_id across accounts
-# ---------------------------------------------------------------------------
+    def test_returns_envelope_with_total_from_count(self, monkeypatch):
+        record = _fake_record()
+        rows = [_listing_row(pmid="m1")]
+        result = self._run_listing_with_total(monkeypatch, record, rows, total=9)
+        assert result.total == 9
+        assert len(result.items) == 1
+        assert result.items[0].provider_message_id == "m1"
 
+    def test_count_filtered_shares_predicates_with_list(self, monkeypatch):
+        record = _fake_record(
+            filter_payload={"subject_contains": "factura", "is_favorite": True},
+        )
+        count_captured: dict = {}
+        captured = self._patch_listing(
+            monkeypatch, record=record, count_captured=count_captured,
+        )
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="foo",
+        )
+        for key in ("account_ids", "box", "tokens", "extra_filters", "box_not_in"):
+            assert count_captured[key] == captured[key]
 
-class TestDedupeRowsByProviderMessageId:
-    """Cover the scoring tuple inside ``_dedupe_rows_by_provider_message_id``.
+    def test_limit_and_offset_echoed_in_envelope(self, monkeypatch):
+        record = _fake_record()
+        self._patch_listing(monkeypatch, record=record)
+        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, limit=15, offset=30,
+        )
+        assert result.limit == 15
+        assert result.offset == 30
 
-    The helper only runs when a virtual mailbox aggregates two accounts
-    that share the same provider message (same Gmail / Outlook OAuth
-    connected twice). None of the existing tests feed rows with a
-    duplicated ``provider_message_id``, so the scoring tuple — and the
-    ``ts is None`` fallback — would silently regress.
-    """
+    def test_unexpected_count_error_translated(self, monkeypatch):
+        record = _fake_record()
+        self._patch_listing(monkeypatch, record=record)
 
-    def _row(
-        self,
-        *,
-        pmid,
-        account_id,
-        to_email="",
-        to_name="",
-        received_at=None,
-    ):
-        return {
-            "provider_message_id": pmid,
-            "account_id": account_id,
-            "thread_id": None,
-            "from_email": "a@x.com",
-            "from_name": "A",
-            "subject": "shared",
-            "received_at": received_at or datetime(2026, 5, 10, tzinfo=timezone.utc),
-            "is_read": False,
-            "box": "ALL_MAIL",
-            "has_attachments": False,
-            "is_favorite": False,
-            "to_email": to_email,
-            "to_name": to_name,
-            "mailbox_id": _MAILBOX_ID,
-        }
+        def _raise(*_a, **_kw):
+            raise RuntimeError("count boom")
 
-    def _patch_listing(self, monkeypatch, *, rows):
-        record = _fake_record(account_ids=[_ACCOUNT_ID, "acc-2"])
         monkeypatch.setattr(
-            virtual_mailboxes_service.virtual_mailbox_store, "get",
-            lambda _vid: record,
+            virtual_mailboxes_service.email_metadata_store, "count_filtered", _raise,
         )
-        _patch_user_catalogue(monkeypatch, accounts=[_ACCOUNT_ID, "acc-2"])
-        monkeypatch.setattr(
-            virtual_mailboxes_service.email_metadata_store, "list_filtered",
-            lambda *a, **kw: rows,
-        )
+        with pytest.raises(
+            VirtualMailboxListError,
+            match="Failed to count emails while paginating the virtual mailbox listing",
+        ):
+            virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+                "vmb-1", _USER_ID,
+            )
 
-    def test_populated_to_email_wins_over_empty(self, monkeypatch):
-        rows = [
-            self._row(pmid="dup-1", account_id=_ACCOUNT_ID, to_email=""),
-            self._row(pmid="dup-1", account_id="acc-2", to_email="real@x.com"),
-        ]
-        self._patch_listing(monkeypatch, rows=rows)
-        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+    def _run_listing_with_total(self, monkeypatch, record, rows, *, total):
+        self._patch_listing(monkeypatch, record=record, rows=rows, total=total)
+        return virtual_mailboxes_service.list_emails_for_virtual_mailbox(
             "vmb-1", _USER_ID,
         )
-        assert len(result) == 1
-        assert result[0].to_email == "real@x.com"
-
-    def test_populated_to_name_breaks_tie_when_to_email_empty(self, monkeypatch):
-        rows = [
-            self._row(pmid="dup-1", account_id=_ACCOUNT_ID, to_email="", to_name=""),
-            self._row(pmid="dup-1", account_id="acc-2", to_email="", to_name="Real Name"),
-        ]
-        self._patch_listing(monkeypatch, rows=rows)
-        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
-            "vmb-1", _USER_ID,
-        )
-        assert len(result) == 1
-        assert result[0].to_name == "Real Name"
-
-    def test_received_at_breaks_full_tie(self, monkeypatch):
-        older = datetime(2026, 5, 9, tzinfo=timezone.utc)
-        newer = datetime(2026, 5, 10, tzinfo=timezone.utc)
-        rows = [
-            self._row(pmid="dup-1", account_id=_ACCOUNT_ID, received_at=older),
-            self._row(pmid="dup-1", account_id="acc-2", received_at=newer),
-        ]
-        self._patch_listing(monkeypatch, rows=rows)
-        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
-            "vmb-1", _USER_ID,
-        )
-        assert len(result) == 1
-        assert result[0].received_at == newer
-
-    def test_row_with_null_provider_message_id_is_dropped(self, monkeypatch):
-        rows = [
-            self._row(pmid=None, account_id=_ACCOUNT_ID),
-            self._row(pmid="real-1", account_id="acc-2"),
-        ]
-        self._patch_listing(monkeypatch, rows=rows)
-        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
-            "vmb-1", _USER_ID,
-        )
-        assert [r.provider_message_id for r in result] == ["real-1"]
 
 
 # ---------------------------------------------------------------------------

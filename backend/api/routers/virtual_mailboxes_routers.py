@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from api.routers.routers_helpers import require_session
-from api.schemas.email import EmailMetadataOut
+from api.schemas.email import EmailPageOut
 from api.schemas.virtual_mailbox import (
     VirtualMailboxCreate,
     VirtualMailboxOut,
@@ -69,14 +69,14 @@ def delete_virtual_mailbox(
     return {"status": "deleted"}
 
 
-@router.get("/{virtual_mailbox_id}/emails", response_model=list[EmailMetadataOut])
+@router.get("/{virtual_mailbox_id}/emails", response_model=EmailPageOut)
 def list_emails_for_virtual_mailbox(
     virtual_mailbox_id: str,
     q: str | None = Query(default=None, min_length=2, max_length=200),
-    limit: int = Query(default=200, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     user_id: str = Depends(require_session),
-) -> list[EmailMetadataOut]:
+) -> EmailPageOut:
     return virtual_mailboxes_service.list_emails_for_virtual_mailbox(
         virtual_mailbox_id, user_id, q, limit, offset,
     )

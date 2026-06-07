@@ -165,6 +165,27 @@ class EmailMetadataOut(BaseModel):
     is_favorite: bool = False
 
 
+class EmailPageOut(BaseModel):
+    """Paginated listing envelope for email metadata.
+
+    Wraps the page of rows with the exact ``total`` of the filtered set
+    so the frontend can render "X–Y of Z" and numbered pages. ``total``
+    is the count of the WHOLE filtered set (same ``box`` / ``q`` /
+    ``favorite`` / accounts), NOT of this page, and reflects only what
+    is synced into the local copy — it is never the provider's live
+    mailbox size. ``limit`` / ``offset`` echo the values actually
+    applied, so the client derives ``page = offset / limit + 1`` and
+    ``total_pages = ceil(total / limit)`` without ambiguity. "Has more"
+    is derivable (``offset + len(items) < total``) and intentionally not
+    a separate field.
+    """
+
+    items: list[EmailMetadataOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class FavoriteUpdateRequest(BaseModel):
     """Request body for the ``PATCH .../{message_id}/favorite`` endpoint."""
 
