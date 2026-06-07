@@ -69,6 +69,22 @@ En **Outlook** la regla añade dos guardas más: además de estar marcada inline
 
 En ambos proveedores, cualquier parte que no cumpla su regla de inline se trata como **adjunto descargable**. Esta política es la misma que se documenta como D-13 a lo largo del repositorio.
 
+### 2.6 Nombre y tipo correctos del adjunto descargado
+
+La app garantiza que **un adjunto recibido se guarda en el disco con su nombre y su extensión reales** (`factura.pdf` se descarga como `factura.pdf`, `informe.xlsx` como `informe.xlsx`), de modo que el sistema operativo lo reconoce y lo abre con el programa adecuado. Esto vale por igual para Gmail y Outlook.
+
+Tres reglas trabajan juntas para conseguirlo, en el momento en que la app lista los adjuntos de un correo (momento 2):
+
+- **Tipo de archivo fiable**: cuando el proveedor declara un tipo de archivo **específico** (p. ej. `application/pdf`), la app lo respeta tal cual. Cuando el proveedor declara un tipo **genérico** —el típico "archivo binario sin especificar"— pero el nombre tiene una extensión reconocible (`presupuesto.xlsx`), la app deduce el tipo real **a partir de la extensión** en lugar de tratarlo como un binario sin identificar. Un tipo específico nunca lo pisa la extensión, y un tipo genérico nunca tapa una extensión reconocible. Esto también unifica una asimetría histórica: antes Outlook normalizaba el tipo a minúsculas y Gmail no; ahora ambos preservan el tipo declarado tal cual el proveedor lo envía (el conjunto exacto de tipos considerados "genéricos" y las extensiones que la app reconoce de fábrica están en [../limits/adjuntos.md](../limits/adjuntos.md)).
+- **Recuperación del nombre en correos Gmail mal construidos**: algunos remitentes dejan el campo de nombre del adjunto vacío y ponen el nombre solo en una cabecera secundaria del correo (`Content-Disposition: filename=` o, en su defecto, `Content-Type: name=`). Antes esos adjuntos quedaban con un nombre sintético sin extensión; ahora la app rescata el nombre real de esas cabeceras (decodificando nombres con acentos y juegos de caracteres no latinos). Es **específico de Gmail**: Outlook expone siempre el nombre de forma directa, así que no necesita este rescate.
+- **Saneamiento del nombre**: ya descrito en la sección 7.1; los nombres de los adjuntos recibidos se limpian igual que los de borradores antes de persistirse.
+
+El flujo visual del usuario no cambia: las mismas tarjetas, el mismo botón, la misma cola y el mismo cacheo. La única diferencia perceptible es que el archivo descargado tiene ahora el nombre y la extensión correctos. El contenido binario nunca estuvo afectado por este problema: solo el nombre/tipo con que se guardaba.
+
+#### Ejemplo
+
+> El usuario recibe un correo con `contrato.pdf`. **Antes**: al descargar aparecía en su carpeta un archivo tipo `attachment-7f3a2b1c…` sin extensión, que Windows no sabía abrir. **Después**: aparece `contrato.pdf`, que Windows abre directamente con el lector de PDF. El binario es idéntico en ambos casos.
+
 ---
 
 ## 3. Qué se puede adjuntar al enviar
@@ -224,7 +240,7 @@ Los binarios cacheados localmente tienen una vida útil **desde el último acces
 
 ### 7.1 Saneamiento del nombre del archivo
 
-El nombre que llega (de un correo recibido o del composer) puede contener cualquier cosa. La app aplica un saneamiento **mínimo** preservando lo que importa al usuario:
+El nombre que llega puede contener cualquier cosa. La app aplica el **mismo saneamiento mínimo** tanto a los adjuntos que se añaden a un borrador como a los adjuntos de un correo **recibido** (antes solo se saneaban los de borradores; ahora la regla es simétrica), preservando lo que importa al usuario:
 
 - Sustituye caracteres peligrosos y secuencias de path traversal (`..`) por `-`.
 - **Preserva acentos y caracteres UTF-8 legítimos** (no es un slugify agresivo).
@@ -243,6 +259,13 @@ Al descargar un adjunto, el backend responde con cabeceras estrictas:
 - **`Content-Disposition: attachment`** — fuerza la descarga, nunca el render inline. Importante: servir un HTML como inline permitiría que el navegador lo ejecutara — un agujero XSS de manual. El nombre de archivo se emite en doble forma (ASCII de respaldo + UTF-8 percent-encoded) para que todos los clientes muestren el nombre correcto con acentos.
 - **`X-Content-Type-Options: nosniff`** — impide que el navegador "adivine" el tipo y lo trate como otra cosa.
 - **`Cache-Control: private, no-cache`** — ningún proxy intermedio guarda el contenido.
+
+**El navegador tiene que poder leer ese nombre.** El backend siempre envió el nombre correcto en `Content-Disposition`, pero ese encabezado **no** está en la lista de cabeceras que un navegador puede leer por defecto en una respuesta de otro origen (el frontend corre en un puerto y el backend en otro, sin proxy intermedio). El resultado del bug original: el navegador no podía leer el nombre y caía en un nombre de reserva sin extensión. La corrección lo blinda por **dos vías complementarias**, de modo que basta una para que la descarga conserve su nombre:
+
+1. El backend **expone explícitamente** `Content-Disposition` (y `Content-Length`) al navegador, para que pueda leer el nombre real que ya venía en la respuesta.
+2. El frontend, además, pasa como **respaldo** el nombre real que ya tiene en la metadata del adjunto (el que se ve en la tarjeta). Si por cualquier motivo el navegador no consiguiera leer la cabecera, la descarga usa ese nombre de respaldo en lugar de uno genérico.
+
+Con la cabecera expuesta, el navegador usa el nombre de la respuesta; si faltara, usa el respaldo del frontend. Solo se cae al nombre genérico (`attachment-<id>`) si ambas vías fallasen a la vez, algo que ya no debería ocurrir.
 
 ### 7.3 Autenticación del endpoint de descarga
 
@@ -266,4 +289,4 @@ Aunque el usuario no se entera, conviene que el equipo lo tenga claro:
 
 ## 9. Resumen en una frase
 
-> La app acepta un puñado de archivos por correo dentro de un techo de tamaño uniforme entre proveedores, bloquea ejecutables al enviar pero acepta cualquier cosa al recibir, descarga los binarios del proveedor solo cuando el usuario los clica (con una cola acotada de descargas concurrentes) y los cachea localmente con un TTL desde el último acceso; mantiene los adjuntos de borradores en su propia base de datos hasta que el usuario decide guardarlos o enviarlos, momento en el que se suben todos juntos al proveedor —atómicamente en Gmail, reanudable adjunto a adjunto en Outlook—; hereda los adjuntos al reenviar (server-side en Outlook, descarga-y-recopia en Gmail); aborta cualquier envío en el que falle algún adjunto dejando el borrador intacto para reintentar; y delega la protección frente a contenido malicioso al sistema operativo del usuario, igual que Gmail web. Los números exactos están en [../limits/adjuntos.md](../limits/adjuntos.md).
+> La app acepta un puñado de archivos por correo dentro de un techo de tamaño uniforme entre proveedores, bloquea ejecutables al enviar pero acepta cualquier cosa al recibir, descarga los binarios del proveedor solo cuando el usuario los clica (con una cola acotada de descargas concurrentes) y los guarda en el disco con su **nombre y extensión reales** y un tipo fiable (preservando el tipo específico que declara el proveedor, deduciéndolo de la extensión cuando es genérico, y rescatando el nombre de las cabeceras del correo en Gmail mal construidos); cachea los binarios localmente con un TTL desde el último acceso; mantiene los adjuntos de borradores en su propia base de datos hasta que el usuario decide guardarlos o enviarlos, momento en el que se suben todos juntos al proveedor —atómicamente en Gmail, reanudable adjunto a adjunto en Outlook—; hereda los adjuntos al reenviar (server-side en Outlook, descarga-y-recopia en Gmail); aborta cualquier envío en el que falle algún adjunto dejando el borrador intacto para reintentar; y delega la protección frente a contenido malicioso al sistema operativo del usuario, igual que Gmail web. Los números exactos están en [../limits/adjuntos.md](../limits/adjuntos.md).

@@ -1354,6 +1354,18 @@ class TestListEmails:
         with pytest.raises(Exception):
             emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
 
+    def test_unexpected_error_on_account_lookup_raises_email_list_error(self, monkeypatch):
+        _patch_list_emails(monkeypatch)
+
+        def _raise(_mb, _aid):
+            raise RuntimeError("unexpected")
+
+        monkeypatch.setattr(emails_service.account_store, "get", _raise)
+        with pytest.raises(
+            EmailListError, match="Failed to look up account for email listing",
+        ):
+            emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+
     def test_db_error_on_list_filtered_translated(self, monkeypatch):
         from database.errors.exceptions import QueryError as DbQueryError
         _patch_list_emails(monkeypatch)
@@ -1770,6 +1782,113 @@ class TestGetEmailFullContent:
             emails_service.get_email_full_content(
                 _MAILBOX_ID, "m1", _ACCOUNT_ID, _USER_ID,
             )
+
+
+# ==================================================================
+# _persist_attachment_metadata — B-SANITIZE (D-20 applied to received
+# attachments). The filename of every discovered attachment goes through
+# ``sanitize_filename`` with per-message dedup before it is upserted.
+# ==================================================================
+
+
+def _attachment_meta(
+    *, filename, part_id="0.1", provider_attachment_id=None,
+    mime_type="application/pdf", size=1024, content_id=None,
+    is_inline=False, position=0,
+):
+    """Build an ``AttachmentMetadata`` instance for persistence tests."""
+    from core.email import AttachmentMetadata
+    return AttachmentMetadata(
+        provider_message_id="m1",
+        part_id=part_id,
+        provider_attachment_id=provider_attachment_id,
+        filename=filename,
+        mime_type=mime_type,
+        size=size,
+        content_id=content_id,
+        is_inline=is_inline,
+        position=position,
+    )
+
+
+class TestPersistAttachmentMetadata:
+
+    def _capture_rows(self, monkeypatch):
+        captured: list[list[dict]] = []
+        monkeypatch.setattr(
+            emails_service.email_attachment_store, "upsert_batch",
+            lambda rows: captured.append(rows),
+        )
+        return captured
+
+    def test_empty_list_does_not_call_store(self, monkeypatch):
+        captured = self._capture_rows(monkeypatch)
+        emails_service._persist_attachment_metadata(_ACCOUNT_ID, "m1", [])
+        assert captured == []
+
+    def test_clean_filename_passes_through(self, monkeypatch):
+        captured = self._capture_rows(monkeypatch)
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1", [_attachment_meta(filename="report.pdf")],
+        )
+        assert captured[0][0]["filename"] == "report.pdf"
+
+    def test_path_traversal_is_neutralised(self, monkeypatch):
+        captured = self._capture_rows(monkeypatch)
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1", [_attachment_meta(filename="../../etc/passwd")],
+        )
+        persisted = captured[0][0]["filename"]
+        assert ".." not in persisted
+        assert "/" not in persisted
+
+    def test_windows_reserved_name_is_prefixed(self, monkeypatch):
+        captured = self._capture_rows(monkeypatch)
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1", [_attachment_meta(filename="CON.pdf")],
+        )
+        assert captured[0][0]["filename"].startswith("_")
+
+    def test_duplicate_names_within_message_are_deduped(self, monkeypatch):
+        captured = self._capture_rows(monkeypatch)
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1",
+            [
+                _attachment_meta(filename="doc.pdf", part_id="0.1", position=0),
+                _attachment_meta(filename="doc.pdf", part_id="0.2", position=1),
+            ],
+        )
+        names = [row["filename"] for row in captured[0]]
+        assert names == ["doc.pdf", "doc (1).pdf"]
+
+    def test_mime_type_is_persisted_verbatim(self, monkeypatch):
+        # mime_type is resolved upstream in the provider client (B-MIME);
+        # _persist_attachment_metadata must not touch it.
+        captured = self._capture_rows(monkeypatch)
+        resolved_mime = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1",
+            [_attachment_meta(filename="sheet.xlsx", mime_type=resolved_mime)],
+        )
+        assert captured[0][0]["mime_type"] == resolved_mime
+
+    def test_upsert_database_error_is_swallowed(self, monkeypatch):
+        # Persistence is best-effort (soft-fail) — a DatabaseError must not
+        # propagate out of the helper.
+        from database.errors.exceptions import QueryError as DbQueryError
+
+        def _raise(_rows):
+            raise DbQueryError("upsert failed")
+
+        monkeypatch.setattr(
+            emails_service.email_attachment_store, "upsert_batch", _raise,
+        )
+        # No exception expected.
+        emails_service._persist_attachment_metadata(
+            _ACCOUNT_ID, "m1", [_attachment_meta(filename="report.pdf")],
+        )
 
 
 # ==================================================================

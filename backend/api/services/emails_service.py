@@ -36,6 +36,7 @@ from core.email import (
     build_quoted_body,
     build_reply_subject,
     compute_reply_recipients,
+    sanitize_filename,
     validate_reply_threading_coherence,
 )
 from api.schemas.email import (
@@ -1380,6 +1381,14 @@ def get_reply_context(
             reply_context = manager.fetch_reply_context(account_label, provider_message_id)
         except CoreError as exc:
             raise translate_core_error(exc, fallback=EmailReplyContextError) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected error during provider fetch_reply_context (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailReplyContextError(
+                "Unexpected provider failure while fetching reply context."
+            ) from exc
     except ApiError:
         raise
     except Exception as exc:
@@ -1473,22 +1482,32 @@ def _persist_attachment_metadata(
     """
     if not metadata_list:
         return
-    rows = [
-        {
-            "attachment_id": str(uuid.uuid4()),
-            "account_id": account_id,
-            "provider_message_id": provider_message_id,
-            "part_id": meta.part_id,
-            "provider_attachment_id": meta.provider_attachment_id,
-            "filename": meta.filename,
-            "mime_type": meta.mime_type,
-            "size": meta.size,
-            "content_id": meta.content_id,
-            "is_inline": meta.is_inline,
-            "position": meta.position,
-        }
-        for meta in metadata_list
-    ]
+    # B-SANITIZE: received attachments must go through the same filename
+    # sanitisation as drafts (D-20) — neutralise path traversal / reserved
+    # characters / reserved Windows names and resolve duplicates within the
+    # same message with `` (1)``, `` (2)``. ``mime_type`` is already resolved
+    # in the provider client (B-MIME / B-OUTLOOK-LOWER), so it is persisted
+    # as-is.
+    seen_names: list[str] = []
+    rows = []
+    for meta in metadata_list:
+        safe_name = sanitize_filename(meta.filename, existing=seen_names)
+        seen_names.append(safe_name)
+        rows.append(
+            {
+                "attachment_id": str(uuid.uuid4()),
+                "account_id": account_id,
+                "provider_message_id": provider_message_id,
+                "part_id": meta.part_id,
+                "provider_attachment_id": meta.provider_attachment_id,
+                "filename": safe_name,
+                "mime_type": meta.mime_type,
+                "size": meta.size,
+                "content_id": meta.content_id,
+                "is_inline": meta.is_inline,
+                "position": meta.position,
+            }
+        )
     try:
         email_attachment_store.upsert_batch(rows)
     except DatabaseError as exc:
@@ -1515,9 +1534,15 @@ def _load_email_attachments_out(
     """
     try:
         rows = email_attachment_store.list_by_message(account_id, provider_message_id)
-    except Exception as exc:
+    except DatabaseError as exc:
         logger.warning(
             "Failed to list email attachments for content view (%s): %s",
+            type(exc).__name__, exc,
+        )
+        return []
+    except Exception as exc:
+        logger.warning(
+            "Unexpected error listing email attachments for content view (%s): %s",
             type(exc).__name__, exc,
         )
         return []

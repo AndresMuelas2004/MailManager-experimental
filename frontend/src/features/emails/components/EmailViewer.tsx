@@ -2,16 +2,23 @@ import { useEffect, useRef } from 'react';
 
 import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
-import useEmailContent from '../hooks/useEmailContent';
 import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
+import type { UiError } from '../../../api/client/errors';
 import AttachmentCard from './AttachmentCard';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
-import type { AttachmentMetadata, EmailMetadataOut, AccountOut } from '../../../api/types/dto';
+import type {
+  AttachmentMetadata,
+  EmailMetadataOut,
+  AccountOut,
+  EmailContentOut,
+} from '../../../api/types/dto';
 
 type Props = {
-  mailboxId: string;
   email: EmailMetadataOut;
   accounts: AccountOut[];
+  content: EmailContentOut | null;
+  loading: boolean;
+  error: UiError | null;
   onClose: () => void;
   onRead: (email: EmailMetadataOut) => Promise<void>;
   downloader: UseAttachmentDownloaderReturn;
@@ -34,9 +41,11 @@ function wrapHtmlEmail(html: string): string {
 }
 
 export default function EmailViewer({
-  mailboxId,
   email,
   accounts,
+  content,
+  loading,
+  error,
   onClose,
   onRead,
   downloader,
@@ -44,11 +53,6 @@ export default function EmailViewer({
   onReplyAll,
   onForward,
 }: Props) {
-  const { content, loading, error } = useEmailContent(mailboxId, {
-    account_id: email.account_id,
-    provider_message_id: email.provider_message_id,
-  });
-
   const readTriggered = useRef(false);
   useEffect(() => {
     if (readTriggered.current) return;
@@ -198,7 +202,7 @@ function AttachmentsList({ attachments, downloader }: AttachmentsListProps) {
               <AttachmentCard
                 attachment={attachment}
                 status={status}
-                onDownload={() => downloader.start(attachment.attachment_id)}
+                onDownload={() => downloader.start(attachment.attachment_id, attachment.filename)}
                 onCancel={() => downloader.cancel(attachment.attachment_id)}
               />
             </li>

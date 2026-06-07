@@ -57,11 +57,13 @@ from .helpers import (
     GmailSendStrategy,
     build_mime_with_attachments,
     decode_mime_body,
+    extract_filename_from_headers,
     find_referenced_cids,
     http_error_detail,
     inline_cid_images,
     parse_expiry,
     pick_gmail_send_strategy,
+    resolve_attachment_mime_type,
     retry_with_backoff,
     unwrap_app_credentials,
     unwrap_user_tokens,
@@ -2128,6 +2130,14 @@ class GmailClient(EmailClient):
             cid = self._content_id(part)
             disposition = self._content_disposition(part)
             filename = (part.get("filename") or "").strip()
+            if not filename:
+                # B-NAME-GMAIL: some senders leave ``MessagePart.filename``
+                # empty and put the name only in ``Content-Disposition:
+                # filename=`` or ``Content-Type: name=``. Recover it before
+                # falling back to the synthetic name below.
+                recovered = extract_filename_from_headers(part.get("headers"))
+                if recovered:
+                    filename = recovered.strip()
             body = part.get("body") or {}
             size = int(body.get("size") or 0)
             part_id = part.get("partId")
@@ -2151,13 +2161,17 @@ class GmailClient(EmailClient):
             if not filename and disposition is None and not cid:
                 return
 
+            resolved_filename = filename or (cid or "attachment")
             attachments.append(
                 AttachmentMetadata(
                     provider_message_id=provider_message_id,
                     part_id=str(part_id) if part_id else None,
                     provider_attachment_id=None,
-                    filename=filename or (cid or "attachment"),
-                    mime_type=mime_type or "application/octet-stream",
+                    filename=resolved_filename,
+                    # B-MIME: a generic declared type (``application/octet-stream``)
+                    # is overridden by the type inferred from the filename
+                    # extension; a specific declared type is kept verbatim.
+                    mime_type=resolve_attachment_mime_type(resolved_filename, mime_type),
                     size=size,
                     content_id=cid,
                     is_inline=is_inline_marked,
@@ -2450,11 +2464,11 @@ class GmailClient(EmailClient):
             except Exception as exc:
                 raise EmailAttachmentSendFailed(
                     f"Gmail unexpected drafts.send error ({type(exc).__name__}): {exc}",
-                    _failed_attachments_detail(attachments, "unexpected"),
+                    _failed_attachments_detail(attachments, "provider_error"),
                 ) from exc
         raise EmailAttachmentSendFailed(
             "Gmail drafts.send simple exhausted retries without a response.",
-            _failed_attachments_detail(attachments, "exhausted"),
+            _failed_attachments_detail(attachments, "unavailable"),
         )
 
     def _send_draft_resumable(
@@ -2499,7 +2513,7 @@ class GmailClient(EmailClient):
         except Exception as exc:
             raise EmailAttachmentSendFailed(
                 f"Gmail resumable session init failed ({type(exc).__name__}): {exc}",
-                _failed_attachments_detail(attachments, "session_init"),
+                _failed_attachments_detail(attachments, "provider_error"),
             ) from exc
 
         upload_uri = (init_response.get("headers", {}) or {}).get("location") or (
@@ -2508,7 +2522,7 @@ class GmailClient(EmailClient):
         if not upload_uri:
             raise EmailAttachmentSendFailed(
                 "Gmail resumable session init returned no Location header.",
-                _failed_attachments_detail(attachments, "session_init"),
+                _failed_attachments_detail(attachments, "provider_error"),
             )
 
         # Step 2: PUT chunks. Single PUT when payload fits in one chunk.
@@ -2529,7 +2543,7 @@ class GmailClient(EmailClient):
             except Exception as exc:
                 raise EmailAttachmentSendFailed(
                     f"Gmail resumable PUT chunk failed ({type(exc).__name__}): {exc}",
-                    _failed_attachments_detail(attachments, "chunk_put"),
+                    _failed_attachments_detail(attachments, "provider_error"),
                 ) from exc
             status = response.get("status", 0)
             if status in (200, 201):
@@ -2545,12 +2559,12 @@ class GmailClient(EmailClient):
                 continue
             raise EmailAttachmentSendFailed(
                 f"Gmail resumable PUT returned unexpected status {status}.",
-                _failed_attachments_detail(attachments, "chunk_status"),
+                _failed_attachments_detail(attachments, "provider_error"),
             )
 
         raise EmailAttachmentSendFailed(
             "Gmail resumable upload completed without a 201 final response.",
-            _failed_attachments_detail(attachments, "no_final"),
+            _failed_attachments_detail(attachments, "unavailable"),
         )
 
     def _http_request(

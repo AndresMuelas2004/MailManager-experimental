@@ -7,6 +7,8 @@ Unit tests for the attachment-related helpers added in `core.email.helpers`:
 - ``build_mime_with_attachments`` (D-31 + Gmail send path)
 - ``find_referenced_cids`` (D-13 strict inline-vs-attachment classification)
 - ``retry_with_backoff`` (D-16)
+- ``resolve_attachment_mime_type`` (B-MIME)
+- ``extract_filename_from_headers`` (B-NAME-GMAIL)
 """
 
 from __future__ import annotations
@@ -16,14 +18,19 @@ from email import message_from_bytes, policy
 
 import pytest
 
-from core.email.helpers import (
+# Every helper under test is re-exported from the package facade, so they are
+# imported from ``core.email`` (the public surface the clients consume) rather
+# than the internal ``core.email.helpers`` submodule (core/CLAUDE.md §4).
+from core.email import (
     GmailSendStrategy,
     OutlookAttachmentStrategy,
     build_mime_with_attachments,
+    extract_filename_from_headers,
     find_referenced_cids,
     format_content_disposition,
     pick_gmail_send_strategy,
     pick_outlook_attachment_strategy,
+    resolve_attachment_mime_type,
     retry_with_backoff,
     sanitize_filename,
 )
@@ -120,6 +127,16 @@ class TestFormatContentDisposition:
         header = format_content_disposition("")
         assert 'filename="attachment"' in header
         assert "filename*=UTF-8''attachment" in header
+
+    def test_filename_with_double_quote_is_neutralised(self):
+        # A ``"`` inside the name must not break the quoted-string form —
+        # only the two delimiting quotes may survive in the ASCII fallback.
+        header = format_content_disposition('a"b.pdf')
+        ascii_part = header.split(";")[1].strip()  # `filename="…"`
+        assert ascii_part.count('"') == 2
+        assert 'filename="a_b.pdf"' in header
+        # The real name still rides on the RFC 5987 form.
+        assert "filename*=UTF-8''" + urllib.parse.quote('a"b.pdf', safe="") in header
 
 
 # ── pick_gmail_send_strategy ───────────────────────────────────────
@@ -294,6 +311,12 @@ class TestFindReferencedCids:
         html = '<img src="https://example.com/logo.png">'
         assert find_referenced_cids(html) == set()
 
+    def test_same_cid_referenced_twice_collapses(self):
+        # The same CID referenced via both ``src`` and a CSS ``url(...)``
+        # collapses to a single set entry (D-13 classification dedup).
+        html = '<img src="cid:x@y"><div style="background:url(cid:x@y)">z</div>'
+        assert find_referenced_cids(html) == {"x@y"}
+
 
 # ── retry_with_backoff ─────────────────────────────────────────────
 
@@ -371,3 +394,167 @@ class TestRetryWithBackoff:
                 is_retryable=lambda exc: isinstance(exc, RuntimeError),
                 sleep=lambda _s: None,
             )
+
+
+# ── resolve_attachment_mime_type (B-MIME) ──────────────────────────
+
+
+class TestResolveAttachmentMimeType:
+
+    def test_specific_declared_type_kept_verbatim(self):
+        # A specific declared type wins over any extension guess.
+        assert (
+            resolve_attachment_mime_type("photo.jpg", "application/pdf")
+            == "application/pdf"
+        )
+
+    def test_specific_declared_type_case_is_preserved(self):
+        # B-MIME / B-OUTLOOK-LOWER: the historical forced ``.lower()`` is
+        # gone — a specific declared type round-trips with its case.
+        assert (
+            resolve_attachment_mime_type("logo.png", "image/PNG") == "image/PNG"
+        )
+
+    def test_generic_octet_stream_overridden_by_xlsx_extension(self):
+        # The star case of the fix: a generic declared type but a
+        # recognisable Office extension resolves to the real Office type.
+        assert (
+            resolve_attachment_mime_type("factura.xlsx", "application/octet-stream")
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    def test_generic_octet_stream_overridden_by_docx_extension(self):
+        assert (
+            resolve_attachment_mime_type("notas.docx", "application/octet-stream")
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    def test_generic_octet_stream_overridden_by_pptx_extension(self):
+        assert (
+            resolve_attachment_mime_type("slides.pptx", "application/octet-stream")
+            == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+
+    def test_empty_declared_type_falls_back_to_extension(self):
+        assert resolve_attachment_mime_type("doc.pdf", "") == "application/pdf"
+
+    def test_none_declared_type_falls_back_to_extension(self):
+        assert resolve_attachment_mime_type("doc.pdf", None) == "application/pdf"
+
+    def test_generic_type_with_unknown_extension_stays_octet_stream(self):
+        assert (
+            resolve_attachment_mime_type("blob.unknownext", "application/octet-stream")
+            == "application/octet-stream"
+        )
+
+    def test_no_extension_and_generic_type_stays_octet_stream(self):
+        assert (
+            resolve_attachment_mime_type("noextension", "application/octet-stream")
+            == "application/octet-stream"
+        )
+
+    def test_no_filename_and_generic_type_stays_octet_stream(self):
+        assert (
+            resolve_attachment_mime_type(None, "application/octet-stream")
+            == "application/octet-stream"
+        )
+
+    @pytest.mark.parametrize("declared", [
+        "application/octet-stream",
+        "application/binary",
+        "binary/octet-stream",
+        "APPLICATION/OCTET-STREAM",  # case-insensitive generic match
+    ])
+    def test_all_generic_synonyms_yield_to_the_extension(self, declared):
+        assert (
+            resolve_attachment_mime_type("sheet.xlsx", declared)
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    @pytest.mark.parametrize("filename,expected", [
+        ("a.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("a.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("a.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        ("a.rar", "application/vnd.rar"),
+        ("a.7z", "application/x-7z-compressed"),
+        ("a.webp", "image/webp"),
+    ])
+    def test_add_type_registration_anti_regression(self, filename, expected):
+        # Anti-regression for ``mimetypes.add_type``: the runtime Linux
+        # container's mimetypes table does NOT know these extensions
+        # natively. If a base-image change ever dropped the registration,
+        # the generic-declared case would silently resolve to
+        # octet-stream — this test pins the registered types explicitly.
+        assert resolve_attachment_mime_type(filename, "application/octet-stream") == expected
+
+
+# ── extract_filename_from_headers (B-NAME-GMAIL) ───────────────────
+
+
+class TestExtractFilenameFromHeaders:
+
+    def test_recovers_from_content_disposition_filename(self):
+        headers = [
+            {"name": "Content-Disposition", "value": 'attachment; filename="doc.pdf"'},
+        ]
+        assert extract_filename_from_headers(headers) == "doc.pdf"
+
+    def test_recovers_from_content_type_name_when_no_disposition(self):
+        headers = [
+            {"name": "Content-Type", "value": 'application/pdf; name="report.pdf"'},
+        ]
+        assert extract_filename_from_headers(headers) == "report.pdf"
+
+    def test_content_disposition_takes_precedence_over_content_type(self):
+        headers = [
+            {"name": "Content-Type", "value": 'application/pdf; name="from-ct.pdf"'},
+            {"name": "Content-Disposition", "value": 'attachment; filename="from-cd.pdf"'},
+        ]
+        assert extract_filename_from_headers(headers) == "from-cd.pdf"
+
+    def test_decodes_rfc2231_extended_value(self):
+        # filename*=utf-8''… is decoded by the legacy email.message parser.
+        headers = [
+            {
+                "name": "Content-Disposition",
+                "value": "attachment; filename*=utf-8''Informaci%C3%B3n.pdf",
+            },
+        ]
+        assert extract_filename_from_headers(headers) == "Información.pdf"
+
+    def test_decodes_rfc2047_encoded_word(self):
+        # =?utf-8?B?…?= is decoded on top of the parser's output.
+        headers = [
+            {
+                "name": "Content-Disposition",
+                "value": 'attachment; filename="=?utf-8?B?SW5mb3JtYWNpw7NuLnBkZg==?="',
+            },
+        ]
+        assert extract_filename_from_headers(headers) == "Información.pdf"
+
+    def test_plain_legible_name_is_returned_unchanged(self):
+        # The RFC 2047 decode is a no-op on plain text (idempotent).
+        headers = [
+            {"name": "Content-Disposition", "value": 'attachment; filename="plain name.txt"'},
+        ]
+        assert extract_filename_from_headers(headers) == "plain name.txt"
+
+    def test_returns_none_when_no_name_present(self):
+        headers = [
+            {"name": "Content-Disposition", "value": "attachment"},
+            {"name": "Content-Type", "value": "application/pdf"},
+        ]
+        assert extract_filename_from_headers(headers) is None
+
+    def test_returns_none_for_none_headers(self):
+        assert extract_filename_from_headers(None) is None
+
+    def test_returns_none_for_empty_headers(self):
+        assert extract_filename_from_headers([]) is None
+
+    def test_ignores_header_case(self):
+        # Header name matching is case-insensitive (providers vary).
+        headers = [
+            {"name": "content-disposition", "value": 'attachment; filename="x.zip"'},
+        ]
+        assert extract_filename_from_headers(headers) == "x.zip"
