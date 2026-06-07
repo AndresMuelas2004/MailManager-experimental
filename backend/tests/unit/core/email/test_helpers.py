@@ -308,7 +308,7 @@ from core.email.helpers import (
     build_quoted_body,
     build_reply_subject,
     compute_reply_recipients,
-    html_to_text,
+    _html_to_text,
     validate_reply_threading_coherence,
 )
 
@@ -577,33 +577,33 @@ class TestBuildInReplyToAndReferences:
         assert refs == ""
 
 
-# ── html_to_text ───────────────────────────────────────────────────
+# ── _html_to_text ───────────────────────────────────────────────────
 
 
 class TestHtmlToText:
     """Covers the HTML→plain-text degrader used for the reply quote."""
 
     def test_empty_html_returns_empty(self):
-        assert html_to_text("") == ""
-        assert html_to_text(None) == ""
+        assert _html_to_text("") == ""
+        assert _html_to_text(None) == ""
 
     def test_basic_text_extraction(self):
-        assert "hello world" in html_to_text("<p>hello world</p>")
+        assert "hello world" in _html_to_text("<p>hello world</p>")
 
     def test_script_content_discarded(self):
-        out = html_to_text("<p>visible</p><script>alert('x');</script>")
+        out = _html_to_text("<p>visible</p><script>alert('x');</script>")
         assert "alert" not in out
         assert "visible" in out
 
     def test_style_content_discarded(self):
         # ``<style>`` content must never leak as visible characters.
-        out = html_to_text("<p>visible</p><style>p{color:red}</style>")
+        out = _html_to_text("<p>visible</p><style>p{color:red}</style>")
         assert "color:red" not in out
         assert "visible" in out
 
     def test_html_entities_decoded(self):
         # ``&amp;`` is decoded to ``&`` by the degrader.
-        out = html_to_text("a&amp;b")
+        out = _html_to_text("a&amp;b")
         assert "&" in out
         # The literal letters around the entity survive.
         assert "a" in out
@@ -611,11 +611,11 @@ class TestHtmlToText:
 
     def test_malformed_html_does_not_crash(self):
         # Stdlib HTMLParser tolerates unbalanced tags — soft fallback.
-        out = html_to_text("<p>line<broken")
+        out = _html_to_text("<p>line<broken")
         assert "line" in out
 
     def test_block_tags_produce_newlines(self):
-        out = html_to_text("<p>line1</p><p>line2</p>")
+        out = _html_to_text("<p>line1</p><p>line2</p>")
         assert "line1" in out
         assert "line2" in out
         # Some line break between paragraphs.
@@ -624,7 +624,7 @@ class TestHtmlToText:
     def test_truncated_to_max_chars(self):
         # A long body is clipped with a marker so the composer cannot OOM.
         long_html = "<p>" + ("a" * 100_000) + "</p>"
-        out = html_to_text(long_html, max_chars=50_000)
+        out = _html_to_text(long_html, max_chars=50_000)
         assert len(out) <= 50_000 + len("\n[...truncado...]") + 1
         assert "[...truncado...]" in out
 
@@ -690,7 +690,7 @@ class TestBuildQuotedBody:
         assert "html version" not in out
 
     def test_degrades_html_when_no_text(self):
-        # Fall back to html_to_text when text_body is None.
+        # Fall back to _html_to_text when text_body is None.
         out = build_quoted_body(
             "<p>only html</p>", None,
             from_name="A", from_email="a@x",

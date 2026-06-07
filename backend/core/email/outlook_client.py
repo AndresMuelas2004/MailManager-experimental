@@ -45,6 +45,7 @@ from .helpers import (
     inline_cid_images,
     parse_expiry,
     pick_outlook_attachment_strategy,
+    resolve_attachment_mime_type,
     unwrap_app_credentials,
     unwrap_user_tokens,
     wrap_account_tokens,
@@ -1531,12 +1532,14 @@ class OutlookClient(EmailClient):
                 detail={"reason": "provider_fetch_failed"},
             ) from exc
 
-        # Best-effort folder resolution. A failure here just collapses
-        # to ``ALL_MAIL`` — the self-reply override is a UX nicety,
-        # not a correctness invariant.
+        # Best-effort folder resolution. A provider failure here just
+        # collapses to ``ALL_MAIL`` — the self-reply override is a UX
+        # nicety, not a correctness invariant. Narrowed to the provider
+        # error (core/CLAUDE.md §5): an unexpected exception must not be
+        # silently swallowed into the wrong box.
         try:
             folder_id_to_box = self._resolve_special_folder_ids()
-        except Exception as exc:  # pragma: no cover — defensive
+        except EmailExternalAPIError as exc:  # pragma: no cover — defensive
             logger.warning(
                 "Outlook reply context: folder resolution failed (%s): %s",
                 type(exc).__name__, exc,
@@ -1787,19 +1790,24 @@ class OutlookClient(EmailClient):
                 # the provider's declared mime/size.
                 pass
             cid_raw = (attachment.get("contentId") or "").strip().strip("<>").strip() or None
-            content_type = (attachment.get("contentType") or "").lower() or "application/octet-stream"
+            name = attachment.get("name") or "attachment"
+            # B-MIME + B-OUTLOOK-LOWER: resolve the type through the shared
+            # helper. A generic declared type (``application/octet-stream``)
+            # is overridden by the type inferred from the filename extension;
+            # a specific declared type is kept verbatim, dropping the previous
+            # forced ``.lower()`` that made Outlook diverge from Gmail.
+            content_type = resolve_attachment_mime_type(name, attachment.get("contentType"))
             content_bytes_b64 = attachment.get("contentBytes")
             is_inline = bool(attachment.get("isInline"))
             attachment_id = str(attachment.get("id") or "")
             size = int(attachment.get("size") or 0)
-            name = attachment.get("name") or "attachment"
 
             if (
                 is_inline
                 and cid_raw
                 and cid_raw in referenced_cids
                 and content_bytes_b64
-                and content_type.startswith("image/")
+                and content_type.lower().startswith("image/")
             ):
                 cid_map[cid_raw] = f"data:{content_type};base64,{content_bytes_b64}"
                 continue

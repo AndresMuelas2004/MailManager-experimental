@@ -2572,13 +2572,18 @@ class TestClassifyAttachments:
     @staticmethod
     def _part(
         *, mime_type, filename="", cid=None, disposition=None,
-        data="WA", size=1, part_id="1",
+        content_type_header=None, data="WA", size=1, part_id="1",
     ):
         headers = []
         if cid is not None:
             headers.append({"name": "Content-ID", "value": f"<{cid}>"})
         if disposition is not None:
             headers.append({"name": "Content-Disposition", "value": disposition})
+        if content_type_header is not None:
+            # B-NAME-GMAIL: a raw ``Content-Type: …; name="x"`` header lets
+            # the classifier recover a filename when ``MessagePart.filename``
+            # is empty. The ``mimeType`` field stays the structural type.
+            headers.append({"name": "Content-Type", "value": content_type_header})
         body: dict = {"size": size}
         if data is not None:
             body["data"] = data
@@ -2642,3 +2647,51 @@ class TestClassifyAttachments:
         )
         assert cid_map == {}
         assert attachments == []
+
+    def test_empty_filename_recovered_from_content_type_name(self, client: GmailClient):
+        # B-NAME-GMAIL: ``MessagePart.filename`` empty but the name lives in
+        # ``Content-Type: …; name="doc.pdf"`` — recover it instead of
+        # falling back to the synthetic ``attachment`` name.
+        payload = {"parts": [self._part(
+            mime_type="application/pdf", filename="",
+            content_type_header='application/pdf; name="doc.pdf"',
+            disposition="attachment",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", "<p>body</p>",
+        )
+        assert cid_map == {}
+        assert len(attachments) == 1
+        assert attachments[0].filename == "doc.pdf"
+        assert attachments[0].mime_type == "application/pdf"
+
+    def test_empty_filename_recovered_from_content_disposition_filename(self, client: GmailClient):
+        # B-NAME-GMAIL: recovery from ``Content-Disposition: …; filename=``.
+        payload = {"parts": [self._part(
+            mime_type="application/pdf", filename="",
+            disposition='attachment; filename="invoice.pdf"',
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", "<p>body</p>",
+        )
+        assert cid_map == {}
+        assert len(attachments) == 1
+        assert attachments[0].filename == "invoice.pdf"
+
+    def test_generic_declared_type_overridden_by_extension(self, client: GmailClient):
+        # B-MIME: an ``application/octet-stream`` part named ``factura.xlsx``
+        # gets its type inferred from the extension. ``.xlsx`` is registered
+        # explicitly by the helper (``mimetypes.add_type``), so unlike
+        # ``.zip`` it resolves identically across host/container platforms.
+        payload = {"parts": [self._part(
+            mime_type="application/octet-stream", filename="factura.xlsx",
+            disposition="attachment",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", "<p>body</p>",
+        )
+        assert len(attachments) == 1
+        assert attachments[0].filename == "factura.xlsx"
+        assert attachments[0].mime_type == (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )

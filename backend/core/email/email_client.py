@@ -93,7 +93,7 @@ class ReplyContext:
     - ``subject`` — the original ``Subject`` (without re-prefixing).
     - ``body_html`` / ``body_text`` — original body parts; either may be
       ``None``. The service degrades HTML → text via
-      :py:func:`core.email.helpers.html_to_text`.
+      :py:func:`core.email.helpers._html_to_text`.
     - ``received_at`` — original ``Date`` header (or provider-side
       timestamp on fallback).
     - ``message_id`` — RFC 5322 ``Message-ID`` (without angle brackets

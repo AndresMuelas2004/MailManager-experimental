@@ -2874,3 +2874,51 @@ class TestClassifyAttachments:
             )
         assert cid_map == {}
         assert len(downloadable) == 1
+
+    def test_generic_declared_type_overridden_by_extension(self, client: OutlookClient):
+        # B-MIME: a generic ``application/octet-stream`` declared type with a
+        # recognisable Office extension resolves to the real Office type.
+        value = [self._att(
+            name="hoja.xlsx", content_type="application/octet-stream",
+        )]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", "<p>body</p>", provider_message_id="msg-1",
+            )
+        assert cid_map == {}
+        assert len(downloadable) == 1
+        assert downloadable[0].filename == "hoja.xlsx"
+        assert (
+            downloadable[0].mime_type
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    def test_specific_declared_type_case_is_preserved(self, client: OutlookClient):
+        # B-OUTLOOK-LOWER: a specific declared type is stored with its case
+        # intact — the historical forced ``.lower()`` is gone.
+        value = [self._att(
+            name="logo.png", content_type="image/PNG", is_inline=False,
+        )]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", "<p>body</p>", provider_message_id="msg-1",
+            )
+        assert cid_map == {}
+        assert len(downloadable) == 1
+        assert downloadable[0].mime_type == "image/PNG"
+
+    def test_inline_image_with_uppercase_type_still_goes_to_cid_map(self, client: OutlookClient):
+        # Edge case: the inline-image guard uses ``content_type.lower()
+        # .startswith("image/")``, so an ``IMAGE/PNG`` referenced inline
+        # image is still resolved into the cid_map even though the stored
+        # type keeps its original case.
+        value = [self._att(
+            name="logo.png", content_type="IMAGE/PNG", cid="logo123", is_inline=True,
+        )]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", '<img src="cid:logo123">', provider_message_id="msg-1",
+            )
+        assert "logo123" in cid_map
+        assert cid_map["logo123"].startswith("data:IMAGE/PNG;base64,")
+        assert downloadable == []
