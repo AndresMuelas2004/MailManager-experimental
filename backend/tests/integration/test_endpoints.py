@@ -1321,7 +1321,11 @@ def test_list_emails_unified_view(seeded_test_client):
         f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails?box=ALL_MAIL"
     )
     assert resp.status_code == 200
-    data = resp.json()
+    body = resp.json()
+    # Paginated envelope: exact keys + total of the WHOLE filtered set.
+    assert set(body.keys()) == {"items", "total", "limit", "offset"}
+    assert body["total"] == 30
+    data = body["items"]
     assert len(data) == 30
     item = data[0]
     assert "provider_message_id" in item
@@ -1340,7 +1344,7 @@ def test_list_emails_single_account_view(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_OUTLOOK_ACCOUNT},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) == 30
     assert all(e["account_id"] == _SEEDED_OUTLOOK_ACCOUNT for e in data)
     assert all(e["box"] == "ALL_MAIL" for e in data)
@@ -1393,7 +1397,9 @@ def test_seeded_list_emails_by_account(seeded_test_client, box, expected_count):
         params={"box": box, "account_id": _SEEDED_GMAIL_ACCOUNT},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    body = resp.json()
+    assert body["total"] == expected_count
+    data = body["items"]
     assert len(data) == expected_count
     assert all(e["account_id"] == _SEEDED_GMAIL_ACCOUNT for e in data)
     assert all(e["box"] == box for e in data)
@@ -1411,7 +1417,9 @@ def test_seeded_list_emails_by_mailbox(seeded_test_client, box, expected_count):
         params={"box": box},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    body = resp.json()
+    assert body["total"] == expected_count
+    data = body["items"]
     assert len(data) == expected_count
     assert all(e["box"] == box for e in data)
 
@@ -1493,7 +1501,7 @@ def test_list_emails_search_case_insensitive(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "SPRINT"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) >= 1
     # Every returned row must contain "sprint" somewhere in the searchable
     # columns (subject / from_email / from_name) — case-insensitive.
@@ -1513,7 +1521,7 @@ def test_list_emails_search_accent_insensitive_via_unaccent(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "lopez"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) >= 1
     matched = [
         e for e in data
@@ -1530,7 +1538,7 @@ def test_list_emails_search_typo_does_not_match(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "facutra"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Whatever matches "facutra" as a substring is fine; what must NOT happen
     # is matching "Factura" through fuzzy/typo tolerance.
     for e in data:
@@ -1553,7 +1561,9 @@ def test_list_emails_search_percent_is_literal(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "%a"},
     )
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
 def test_list_emails_search_underscore_is_literal(seeded_test_client):
@@ -1565,7 +1575,9 @@ def test_list_emails_search_underscore_is_literal(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "_a"},
     )
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
 def test_list_emails_search_matches_in_from_email_only(seeded_test_client):
@@ -1579,7 +1591,7 @@ def test_list_emails_search_matches_in_from_email_only(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "hr.com"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) >= 1
     assert all("hr.com" in (row.get("from_email") or "").lower() for row in data)
     # Load-bearing assertion: at least one returned row matches ONLY in from_email.
@@ -1604,7 +1616,7 @@ def test_list_emails_search_multi_word_is_AND(seeded_test_client):
         },
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) >= 1
     # Every returned row must contain BOTH tokens in the union of searchable columns.
     for e in data:
@@ -1625,7 +1637,7 @@ def test_list_emails_search_with_unified_view_matches_only_in_mailbox(seeded_tes
         params={"box": "ALL_MAIL", "q": "factura"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Whatever rows are returned, none of them belong to the Outlook account.
     assert all(e["account_id"] != _SEEDED_OUTLOOK_ACCOUNT for e in data)
     # And every row must actually contain the search token.
@@ -1656,7 +1668,7 @@ def test_list_emails_search_respects_box(seeded_test_client, box, q):
         params={"box": box, "account_id": _SEEDED_GMAIL_ACCOUNT, "q": q},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     assert len(data) >= 1
     assert all(e["box"] == box for e in data)
     needle = q.lower()
@@ -1681,7 +1693,7 @@ def test_list_emails_search_matches_in_subject_only(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "presupuesto"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 2 seeded rows in Gmail ALL_MAIL contain "presupuesto":
     # gmail-allmail-004 and gmail-allmail-005 (the reply on the same thread).
     # gmail-sent-002 also contains it but lives in box=SENT, so it is excluded.
@@ -1710,7 +1722,7 @@ def test_list_emails_search_matches_in_from_name_only(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "salazar"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 1 seeded row contains "salazar" anywhere — gmail-allmail-009.
     assert [row["provider_message_id"] for row in data] == ["gmail-allmail-009"]
     row = data[0]
@@ -1732,7 +1744,7 @@ def test_list_emails_search_accent_at_word_start(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_OUTLOOK_ACCOUNT, "q": "analisis"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 2 seeded Outlook ALL_MAIL rows contain "Análisis":
     # outlook-allmail-023 and outlook-allmail-024 (the reply on the same thread).
     assert {row["provider_message_id"] for row in data} == {
@@ -1756,7 +1768,7 @@ def test_list_emails_search_accent_in_subject_middle(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "evaluacion"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 1 seeded row contains "evaluación" — gmail-allmail-012.
     assert [row["provider_message_id"] for row in data] == ["gmail-allmail-012"]
     assert "evaluación" in (data[0].get("subject") or "").lower()
@@ -1772,7 +1784,7 @@ def test_list_emails_search_mixed_case_with_accent(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "LÓPEZ"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 1 seeded row contains "López" — gmail-allmail-012 ("Karen López").
     assert [row["provider_message_id"] for row in data] == ["gmail-allmail-012"]
     assert "lópez" in (data[0].get("from_name") or "").lower()
@@ -1790,7 +1802,7 @@ def test_list_emails_search_unaccent_handles_n_with_tilde(seeded_test_client):
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "campana"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     # Exactly 2 seeded rows contain "Campaña":
     # gmail-allmail-014 and gmail-allmail-015 (the reply on the same thread).
     assert {row["provider_message_id"] for row in data} == {
@@ -1803,28 +1815,66 @@ def test_list_emails_search_unaccent_handles_n_with_tilde(seeded_test_client):
 
 
 def test_list_emails_limit_caps_returned_rows(seeded_test_client):
-    # ALL_MAIL has 30 seeded rows for Gmail. limit=5 must trim the response.
+    # ALL_MAIL has 30 seeded rows for Gmail. limit=5 must trim the PAGE, but
+    # total must still report the WHOLE filtered set (30), not the page size.
     resp = seeded_test_client.get(
         f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails",
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "limit": 5},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 5
+    body = resp.json()
+    assert len(body["items"]) == 5
+    assert body["total"] == 30
+    assert body["limit"] == 5
+    assert body["offset"] == 0
 
 
 def test_list_emails_offset_skips_initial_rows(seeded_test_client):
-    # With limit 5 and offset 5, the second page must differ from the first.
-    first = seeded_test_client.get(
+    # With limit 5 and offset 5, the second page must differ from the first,
+    # and total must stay constant (30) across pages — proving the count is
+    # over the whole filtered set, not the page.
+    first_json = seeded_test_client.get(
         f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails",
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "limit": 5, "offset": 0},
     ).json()
-    second = seeded_test_client.get(
+    second_json = seeded_test_client.get(
         f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails",
         params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "limit": 5, "offset": 5},
     ).json()
+    first = first_json["items"]
+    second = second_json["items"]
     assert len(first) == 5
     assert len(second) == 5
+    assert first_json["total"] == second_json["total"] == 30
     first_ids = {e["provider_message_id"] for e in first}
     second_ids = {e["provider_message_id"] for e in second}
     assert first_ids.isdisjoint(second_ids)
+
+
+def test_list_emails_offset_beyond_total_returns_empty_page_with_total(seeded_test_client):
+    # offset past the end of the filtered set: empty page, correct total, 200.
+    # (The frontend reubicates the user to the last valid page on this.)
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails",
+        params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "limit": 5, "offset": 1000},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 30
+    assert body["offset"] == 1000
+
+
+def test_list_emails_search_affects_total(seeded_test_client):
+    # A q that matches a known number of rows must drive total to that number,
+    # not to the box's full size — total counts the FILTERED set.
+    # "presupuesto" matches exactly 2 Gmail ALL_MAIL rows
+    # (gmail-allmail-004 / -005), same as test_list_emails_search_matches_in_subject_only.
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails",
+        params={"box": "ALL_MAIL", "account_id": _SEEDED_GMAIL_ACCOUNT, "q": "presupuesto"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert len(body["items"]) == 2

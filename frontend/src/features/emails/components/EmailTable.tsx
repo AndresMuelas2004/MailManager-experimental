@@ -6,6 +6,7 @@ import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/format
 import Spinner from '../../../components/common/Spinner';
 import Checkbox from '../../../components/common/Checkbox';
 import FavoriteButton from './FavoriteButton';
+import EmailPagination from './EmailPagination';
 import type { HeaderCheckboxState } from '../../../lib/hooks/useSelection';
 import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
 
@@ -26,6 +27,15 @@ type Props = {
   headerCheckboxState?: HeaderCheckboxState;
   bulkBar?: ReactNode;
   emptyMessage?: string;
+  // Pagination is optional: when the four props below are provided the
+  // header bar shows the "from–to de total" range on the left and the
+  // page controls on the right. Omitting them keeps the legacy
+  // "{n} correos" counter and renders no controls.
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  onPageChange?: (page: number) => void;
+  paginationDisabled?: boolean;
 };
 
 // Column-visibility matrix tied to (view, isSent). Captures the bug-fix
@@ -50,6 +60,15 @@ function resolveColumnLayout(
   return { showTo: true, showFrom: true };
 }
 
+// Group thousands with a dot ("1234" → "1.234") using a regex rather than
+// ``Intl.NumberFormat`` because the grouping separator ``Intl`` emits
+// depends on the runtime's ICU data (small-ICU Node / some CI images drop
+// grouping for ``es-ES`` entirely), which would make the text
+// non-deterministic.
+function formatThousands(value: number): string {
+  return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
 export default function EmailTable({
   emails,
   accounts,
@@ -65,6 +84,11 @@ export default function EmailTable({
   headerCheckboxState = 'unchecked',
   bulkBar,
   emptyMessage,
+  page,
+  pageSize,
+  total,
+  onPageChange,
+  paginationDisabled,
 }: Props) {
   const accountsById = useMemo(() => buildAccountMap(accounts), [accounts]);
   const { showTo, showFrom } = resolveColumnLayout(view, isSent);
@@ -79,36 +103,71 @@ export default function EmailTable({
 
   const selectionEnabled = Boolean(isSelected && onToggle && onToggleAll);
 
+  const hasPagination =
+    page !== undefined &&
+    pageSize !== undefined &&
+    total !== undefined &&
+    onPageChange !== undefined;
+
+  // The left-hand label replaces the old "{n} correos" counter with the
+  // pagination range when pagination is wired; an empty result collapses
+  // to a plain "0 correos" instead of a nonsensical "1–0 de 0".
+  let countLabel = `${emails.length} correos`;
+  if (hasPagination) {
+    if (total! === 0) {
+      countLabel = '0 correos';
+    } else {
+      const offset = (page! - 1) * pageSize!;
+      const from = offset + 1;
+      const to = Math.min(offset + pageSize!, total!);
+      countLabel = `${formatThousands(from)}–${formatThousands(to)} de ${formatThousands(total!)}`;
+    }
+  }
+
   return (
     <div className="flex flex-col">
-      <div className="flex h-11 items-center gap-4 border-b border-zinc-200 px-8">
-        {hasSelection && bulkBar ? (
-          bulkBar
-        ) : (
-          <>
-            {selectionEnabled ? (
-              <Checkbox
-                state={headerCheckboxState}
-                onClick={onToggleAll!}
-                ariaLabel="Seleccionar los 50 correos más recientes"
-              />
-            ) : (
-              <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
-            )}
-            <RefreshCw className="h-[18px] w-[18px] text-zinc-500" />
-            <span className="text-[13px] font-medium text-zinc-500">{emails.length} correos</span>
-          </>
-        )}
-      </div>
+      <div className="sticky top-0 z-10 bg-[#F9FAFB]">
+        <div className="flex h-11 items-center justify-between gap-4 border-b border-zinc-200 px-8">
+          {hasSelection && bulkBar ? (
+            bulkBar
+          ) : (
+            <div className="flex items-center gap-4">
+              {selectionEnabled ? (
+                <Checkbox
+                  state={headerCheckboxState}
+                  onClick={onToggleAll!}
+                  ariaLabel="Seleccionar los 50 correos más recientes"
+                />
+              ) : (
+                <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
+              )}
+              <RefreshCw className="h-[18px] w-[18px] text-zinc-500" />
+              <span className="text-[13px] font-medium text-zinc-500">{countLabel}</span>
+            </div>
+          )}
+          {/* Pager stays on the right in BOTH modes (count group OR bulk bar
+              on the left) so a selection can be carried across pages — the
+              selection Map in useBulkBar survives the page change. */}
+          {hasPagination && total! > 0 && (
+            <EmailPagination
+              page={page!}
+              pageSize={pageSize!}
+              total={total!}
+              onPageChange={onPageChange!}
+              disabled={paginationDisabled}
+            />
+          )}
+        </div>
 
-      <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-        <div className="w-[18px]" />
-        <div className="w-5" aria-hidden />
-        <div className="w-[120px]">Remitente</div>
-        {showTo && <div className="w-[170px]">Para</div>}
-        {showFrom && <div className="w-[170px]">De</div>}
-        <div className="flex-1">Asunto</div>
-        <div className="w-16 text-right">Fecha</div>
+        <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+          <div className="w-[18px]" />
+          <div className="w-5" aria-hidden />
+          <div className="w-[120px]">Remitente</div>
+          {showTo && <div className="w-[170px]">Para</div>}
+          {showFrom && <div className="w-[170px]">De</div>}
+          <div className="flex-1">Asunto</div>
+          <div className="w-16 text-right">Fecha</div>
+        </div>
       </div>
 
       {emails.length === 0 ? (

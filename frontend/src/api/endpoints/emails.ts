@@ -1,7 +1,8 @@
 import { request } from '../client/http';
+import { EMAILS_PAGE_SIZE } from '../../lib/constants';
 import {
   emailContentOutSchema,
-  emailMetadataListSchema,
+  emailPageSchema,
   favoriteSyncResponseSchema,
   favoriteUpdateResponseSchema,
   moveToTrashResultSchema,
@@ -13,7 +14,7 @@ import {
   trashActionResultSchema,
   type EmailContentOut,
   type EmailItemRef,
-  type EmailMetadataOut,
+  type EmailPage,
   type EmailSendRequest,
   type FavoriteSyncResponse,
   type FavoriteUpdateResponse,
@@ -30,6 +31,7 @@ import {
 export type ListEmailsOptions = {
   q?: string;
   favorite?: boolean;
+  page?: number;
   signal?: AbortSignal;
 };
 
@@ -38,13 +40,17 @@ export function listEmails(
   box: string,
   accountId?: string,
   options: ListEmailsOptions = {},
-): Promise<EmailMetadataOut[]> {
+): Promise<EmailPage> {
   const params = new URLSearchParams({ box });
   if (accountId) params.set('account_id', accountId);
   if (options.q !== undefined && options.q.length > 0) params.set('q', options.q);
   if (options.favorite !== undefined) params.set('favorite', String(options.favorite));
+  const limit = EMAILS_PAGE_SIZE;
+  const offset = ((options.page ?? 1) - 1) * limit;
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
   return request(`/mailboxes/${mailboxId}/emails?${params}`, {
-    schema: emailMetadataListSchema,
+    schema: emailPageSchema,
     signal: options.signal,
   });
 }

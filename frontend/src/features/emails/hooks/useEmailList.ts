@@ -1,9 +1,10 @@
 import { useCallback, useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { listEmails, syncEmailMetadata } from '../../../api/endpoints/emails';
 import { listAccounts } from '../../../api/endpoints/accounts';
 import { toUiError } from '../../../api/client/errors';
+import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailBox } from '../../../lib/types';
@@ -11,8 +12,13 @@ import type { EmailBox } from '../../../lib/types';
 type UseEmailListReturn = {
   emails: EmailMetadataOut[];
   accounts: AccountOut[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
   loading: boolean;
   syncing: boolean;
+  isPlaceholder: boolean;
   error: UiError | null;
   refresh: () => Promise<void>;
 };
@@ -25,6 +31,7 @@ export default function useEmailList(
   accountId?: string,
   searchQuery?: string,
   favorite?: boolean,
+  page = 1,
 ): UseEmailListReturn {
   const queryClient = useQueryClient();
   const trimmedQuery = (searchQuery ?? '').trim();
@@ -36,14 +43,16 @@ export default function useEmailList(
     accountId ?? null,
     effectiveQ ?? null,
     favorite ?? null,
+    page,
   ] as const;
   const accountsKey = ['accounts', mailboxId] as const;
 
   const emailsQuery = useQuery({
     queryKey: emailsKey,
     queryFn: ({ signal }) =>
-      listEmails(mailboxId, box, accountId, { q: effectiveQ, favorite, signal }),
+      listEmails(mailboxId, box, accountId, { q: effectiveQ, favorite, page, signal }),
     enabled: mailboxId.length > 0,
+    placeholderData: keepPreviousData,
   });
 
   const accountsQuery = useQuery({
@@ -54,7 +63,15 @@ export default function useEmailList(
 
   const syncMutation = useMutation({
     mutationFn: () => syncEmailMetadata(mailboxId, accountId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emails', mailboxId] }),
+    // A metadata sync can pull in new emails for accounts a virtual mailbox
+    // aggregates from other real mailboxes, so invalidate the bare ['emails']
+    // prefix plus ['virtual-mailbox-emails'] — same blast radius as
+    // useEmailBulkActions / useFavorite / useEmailViewer (frontend_guide §2).
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['emails'] }),
+        queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] }),
+      ]),
   });
 
   useEffect(() => {
@@ -67,7 +84,7 @@ export default function useEmailList(
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: emailsKey });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite]);
+  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite, page]);
 
   const error = emailsQuery.error
     ? toUiError(emailsQuery.error)
@@ -75,11 +92,18 @@ export default function useEmailList(
       ? toUiError(accountsQuery.error)
       : null;
 
+  const total = emailsQuery.data?.total ?? 0;
+
   return {
-    emails: emailsQuery.data ?? [],
+    emails: emailsQuery.data?.items ?? [],
     accounts: accountsQuery.data ?? [],
+    total,
+    page,
+    pageSize: EMAILS_PAGE_SIZE,
+    totalPages: Math.max(1, Math.ceil(total / EMAILS_PAGE_SIZE)),
     loading: emailsQuery.isLoading || accountsQuery.isLoading,
     syncing: syncMutation.isPending || (emailsQuery.isFetching && !emailsQuery.isLoading),
+    isPlaceholder: emailsQuery.isPlaceholderData,
     error,
     refresh,
   };

@@ -1,5 +1,7 @@
 import { useParams, useSearchParams } from 'react-router-dom';
 
+import { useEffect } from 'react';
+
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
@@ -9,6 +11,7 @@ import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import useDebounce from '../hooks/useDebounce';
 import { EMAIL_BOX_CONFIG } from '../boxes';
+import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
 import type { EmailMetadataOut } from '../../../api/types/dto';
@@ -25,20 +28,33 @@ export default function UnifiedInboxPage({ box }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
+  const page = parsePageParam(searchParams);
 
-  const { emails, accounts, loading, error, refresh } = useEmailList(
-    mailboxId!,
-    box,
-    undefined,
-    debouncedQ,
-  );
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
+    useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page);
   const config = EMAIL_BOX_CONFIG[box];
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
-    emails,
     refresh,
+    searchKey: debouncedQ,
   });
+
+  const handlePageChange = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete('page');
+    else params.set('page', String(next));
+    setSearchParams(params);
+  };
+
+  // Re-clamp to the last valid page when the total shrinks below the
+  // current page (e.g. after a background sync or a bulk delete). Guarded
+  // by ``!loading && !isPlaceholder`` so it never fights an in-flight
+  // fetch; ``totalPages`` floors at 1 so an emptied box lands on page 1.
+  useEffect(() => {
+    if (!loading && !isPlaceholder && page > totalPages) handlePageChange(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
   const favorites = useFavorite();
@@ -74,6 +90,9 @@ export default function UnifiedInboxPage({ box }: Props) {
     const params = new URLSearchParams(searchParams);
     if (next.length === 0) params.delete('q');
     else params.set('q', next);
+    // Changing the filter must reset to page 1 in the same update so the
+    // URL never lands on a page that does not exist for the new filter.
+    params.delete('page');
     setSearchParams(params, { replace: true });
   };
 
@@ -94,22 +113,29 @@ export default function UnifiedInboxPage({ box }: Props) {
       {combinedError ? (
         <div className="px-8 text-sm text-red-600">{combinedError.message}</div>
       ) : (
-        <EmailTable
-          emails={emails}
-          accounts={accounts}
-          loading={loading}
-          view="unified"
-          isSent={box === 'SENT'}
-          hasSelection={selection.size > 0}
-          isSelected={selection.isSelected}
-          onToggle={selection.toggle}
-          onToggleAll={() => selection.toggleTopN(emails)}
-          onOpen={viewer.open}
-          onToggleFavorite={handleToggleFavorite}
-          headerCheckboxState={selection.headerState(emails)}
-          bulkBar={bulkBar}
-          emptyMessage={emptyMessage}
-        />
+        <>
+          <EmailTable
+            emails={emails}
+            accounts={accounts}
+            loading={loading}
+            view="unified"
+            isSent={box === 'SENT'}
+            hasSelection={selection.size > 0}
+            isSelected={selection.isSelected}
+            onToggle={selection.toggle}
+            onToggleAll={() => selection.toggleTopN(emails)}
+            onOpen={viewer.open}
+            onToggleFavorite={handleToggleFavorite}
+            headerCheckboxState={selection.headerState(emails)}
+            bulkBar={bulkBar}
+            emptyMessage={emptyMessage}
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={handlePageChange}
+            paginationDisabled={loading || isPlaceholder}
+          />
+        </>
       )}
       <ViewerMount
         openedEmail={viewer.openedEmail}

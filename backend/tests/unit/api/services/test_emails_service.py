@@ -1199,9 +1199,19 @@ def _patch_list_emails(
     account_get_return="default",
     accounts_for_mailbox=None,
     list_filtered_calls=None,
+    count_filtered_calls=None,
+    total=None,
 ):
     """Apply monkeypatches for list_emails tests against the unified
-    list_filtered contract."""
+    list_filtered + count_filtered contract.
+
+    ``list_emails`` now returns an ``EmailPageOut`` envelope, so it makes
+    a second store call (``count_filtered``) for the total. Both stubs
+    are installed here; ``count_filtered`` returns ``total`` (defaults to
+    ``len(rows)``) and optionally records its kwargs into
+    ``count_filtered_calls`` so a test can assert it received the SAME
+    predicates as ``list_filtered`` (the shared-predicate guarantee).
+    """
     monkeypatch.setattr(
         emails_service, "ensure_mailbox_access",
         lambda _mb, _uid: {"mailbox_id": _MAILBOX_ID, "owner_user_id": _USER_ID},
@@ -1221,10 +1231,12 @@ def _patch_list_emails(
         lambda _mb: accounts_for_mailbox if accounts_for_mailbox is not None else [_fake_account()],
     )
     result_rows = rows if rows is not None else [_SAMPLE_ROW]
+    total_value = total if total is not None else len(result_rows)
 
     def _record(
         account_ids, box, tokens, limit, offset,
         *, extra_filters=None, box_in=None, box_not_in=None,
+        distinct_provider_message_id=False,
     ):
         if list_filtered_calls is not None:
             list_filtered_calls.append({
@@ -1236,11 +1248,32 @@ def _patch_list_emails(
                 "extra_filters": extra_filters,
                 "box_in": box_in,
                 "box_not_in": box_not_in,
+                "distinct_provider_message_id": distinct_provider_message_id,
             })
         return result_rows
 
+    def _count(
+        account_ids, box, tokens,
+        *, extra_filters=None, box_in=None, box_not_in=None,
+        distinct_provider_message_id=False,
+    ):
+        if count_filtered_calls is not None:
+            count_filtered_calls.append({
+                "account_ids": account_ids,
+                "box": box,
+                "tokens": tokens,
+                "extra_filters": extra_filters,
+                "box_in": box_in,
+                "box_not_in": box_not_in,
+                "distinct_provider_message_id": distinct_provider_message_id,
+            })
+        return total_value
+
     monkeypatch.setattr(
         emails_service.email_metadata_store, "list_filtered", _record,
+    )
+    monkeypatch.setattr(
+        emails_service.email_metadata_store, "count_filtered", _count,
     )
 
 
@@ -1250,15 +1283,15 @@ class TestListEmails:
         calls: list = []
         _patch_list_emails(monkeypatch, list_filtered_calls=calls)
         result = emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
-        assert len(result) == 1
-        assert result[0].provider_message_id == "m1"
-        assert result[0].account_id == _ACCOUNT_ID
+        assert len(result.items) == 1
+        assert result.items[0].provider_message_id == "m1"
+        assert result.items[0].account_id == _ACCOUNT_ID
         # ``mailbox_id`` is projected from the JOIN on ``accounts``. The
         # frontend reads it to know which mailbox owns each row inside a
         # virtual mailbox whose scope spans several real mailboxes —
         # dropping it would re-introduce the ``account_not_found`` 404 on
         # open/favorite/reply/forward/attachment paths.
-        assert result[0].mailbox_id == _MAILBOX_ID
+        assert result.items[0].mailbox_id == _MAILBOX_ID
         # Single-account branch passes a one-element account_ids list.
         assert len(calls) == 1
         assert calls[0]["account_ids"] == [_ACCOUNT_ID]
@@ -1268,8 +1301,8 @@ class TestListEmails:
         calls: list = []
         _patch_list_emails(monkeypatch, list_filtered_calls=calls)
         result = emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID)
-        assert len(result) == 1
-        assert result[0].provider_message_id == "m1"
+        assert len(result.items) == 1
+        assert result.items[0].provider_message_id == "m1"
         # Unified branch resolves accounts via account_store.list_by_mailbox.
         assert calls[0]["account_ids"] == [_ACCOUNT_ID]
 
@@ -1290,15 +1323,20 @@ class TestListEmails:
 
     def test_unified_view_no_accounts_returns_empty_without_db_call(self, monkeypatch):
         calls: list = []
+        count_calls: list = []
         _patch_list_emails(
             monkeypatch,
             accounts_for_mailbox=[],
             list_filtered_calls=calls,
+            count_filtered_calls=count_calls,
         )
         result = emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID)
-        assert result == []
+        assert result.items == []
+        assert result.total == 0
         # Empty mailbox must short-circuit BEFORE calling list_filtered.
         assert calls == []
+        # ...and BEFORE count_filtered too — no DB round trips at all.
+        assert count_calls == []
 
     def test_account_not_found_raises(self, monkeypatch):
         _patch_list_emails(monkeypatch)
@@ -1371,7 +1409,8 @@ class TestListEmails:
     def test_empty_result_returns_empty_list(self, monkeypatch):
         _patch_list_emails(monkeypatch, rows=[])
         result = emails_service.list_emails(_MAILBOX_ID, "SPAM", _USER_ID)
-        assert result == []
+        assert result.items == []
+        assert result.total == 0
 
     def test_q_is_parsed_into_tokens_passed_to_store(self, monkeypatch):
         calls: list = []
@@ -1409,8 +1448,114 @@ class TestListEmails:
         calls: list = []
         _patch_list_emails(monkeypatch, list_filtered_calls=calls)
         emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+        # The service signature default stays 200 — the 200->50 change is
+        # ONLY in the router's Query(default=...). This test calls the
+        # service directly without ``limit``, so it must still see 200.
         assert calls[0]["limit"] == 200
         assert calls[0]["offset"] == 0
+
+
+class TestListEmailsPagination:
+    """``list_emails`` returns an ``EmailPageOut`` envelope: the total
+    comes from ``count_filtered`` and ``count_filtered`` must receive the
+    exact same predicates as ``list_filtered``."""
+
+    def test_total_is_value_returned_by_count_filtered(self, monkeypatch):
+        _patch_list_emails(monkeypatch, rows=[_SAMPLE_ROW], total=137)
+        result = emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+        # total is the WHOLE filtered set, independent of the page length.
+        assert result.total == 137
+        assert len(result.items) == 1
+
+    def test_limit_and_offset_echoed_in_envelope(self, monkeypatch):
+        _patch_list_emails(monkeypatch)
+        result = emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            limit=25, offset=50,
+        )
+        assert result.limit == 25
+        assert result.offset == 50
+
+    def test_count_filtered_receives_same_predicates_as_list_filtered(self, monkeypatch):
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, q="foo bar",
+        )
+        assert len(count_calls) == 1
+        # The shared-predicate guarantee: account_ids / box / tokens /
+        # extra_filters / box_not_in must match between the two calls so
+        # the total counts exactly what the page lists.
+        for key in ("account_ids", "box", "tokens", "extra_filters", "box_not_in"):
+            assert count_calls[0][key] == list_calls[0][key]
+
+    def test_favorite_predicates_shared_between_list_and_count(self, monkeypatch):
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, favorite=True,
+        )
+        # favourite + ALL_MAIL collapses box -> None and box_not_in ->
+        # [TRASH, SPAM]; both the page and the total must agree on it.
+        assert list_calls[0]["box"] is None
+        assert list_calls[0]["box_not_in"] == ["TRASH", "SPAM"]
+        assert list_calls[0]["extra_filters"] == {"is_favorite": True}
+        assert count_calls[0]["box"] == list_calls[0]["box"]
+        assert count_calls[0]["box_not_in"] == list_calls[0]["box_not_in"]
+        assert count_calls[0]["extra_filters"] == list_calls[0]["extra_filters"]
+
+    def test_regular_listing_does_not_request_distinct(self, monkeypatch):
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+        # The regular box listing is scoped to a single mailbox where the
+        # cross-account duplicate cannot occur — it must NOT dedup.
+        assert list_calls[0]["distinct_provider_message_id"] is False
+        assert count_calls[0]["distinct_provider_message_id"] is False
+
+    def test_db_error_on_count_filtered_translated(self, monkeypatch):
+        from api.errors.exceptions import DatabaseQueryError
+        from database.errors.exceptions import QueryError as DbQueryError
+        _patch_list_emails(monkeypatch)
+
+        def _raise(_aids, _box, _tokens, **_kwargs):
+            raise DbQueryError("count fail")
+
+        monkeypatch.setattr(
+            emails_service.email_metadata_store, "count_filtered", _raise,
+        )
+        with pytest.raises(DatabaseQueryError):
+            emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+
+    def test_unexpected_error_on_count_filtered_raises_email_list_error(self, monkeypatch):
+        _patch_list_emails(monkeypatch)
+
+        def _raise(_aids, _box, _tokens, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            emails_service.email_metadata_store, "count_filtered", _raise,
+        )
+        with pytest.raises(
+            EmailListError,
+            match="Failed to count emails while paginating the mailbox listing",
+        ):
+            emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
 
 
 # ==================================================================
@@ -1843,6 +1988,23 @@ class TestGetReplyContext:
         from api.errors.exceptions import EmailReplyContextError
         _patch_reply_context_common(monkeypatch)
         with pytest.raises(EmailReplyContextError):
+            emails_service.get_reply_context(
+                _MAILBOX_ID, _ACCOUNT_ID, "m1", "weird-action", _USER_ID,
+            )
+
+    def test_ownership_checked_before_action_validation(self, monkeypatch):
+        # api_guide "ownership check first": ensure_mailbox_access must run
+        # before the action guard, so a foreign mailbox is rejected even
+        # when the action is invalid (otherwise the guard would leak action
+        # validity to a non-owner). Locks the ordering fix.
+        from api.errors.exceptions import Forbidden
+        _patch_reply_context_common(monkeypatch)
+
+        def _deny(_mb, _uid):
+            raise Forbidden("Foreign mailbox in reply-context ownership test.")
+
+        monkeypatch.setattr(emails_service, "ensure_mailbox_access", _deny)
+        with pytest.raises(Forbidden):
             emails_service.get_reply_context(
                 _MAILBOX_ID, _ACCOUNT_ID, "m1", "weird-action", _USER_ID,
             )

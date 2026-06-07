@@ -18,7 +18,7 @@ Catálogo de topes, cuotas y comportamientos cuantitativos de la feature de favo
 | Paginación al listar favoritos del proveedor (Outlook) | **100 ids por página** | Pagina por `nextLink` hasta agotar. |
 | Filas reconciliadas por la sincronización | **Toda la cuenta** (1 sentencia SQL) | Marca verdadero/falso cada fila de la cuenta en una sola transacción. |
 | Cabecera de estabilidad de IDs (Outlook) | `Prefer: IdType="ImmutableId"` en **todas** las llamadas | Sin ella, los ids dejan de casar con los de la base de datos local tras mover el mensaje. |
-| Resultados de la pestaña de Favoritos por carga | **200 por defecto** (máximo 500) | Hereda la paginación del listado general; sin scroll infinito en el MVP. |
+| Correos de la pestaña de Favoritos por **página** | **50** (máximo técnico 500) | Hereda la paginación numerada del listado general (páginas con "X–Y de Z"); sin scroll infinito. Ver [`listado-de-correos.md`](listado-de-correos.md). |
 | Tokens de búsqueda dentro de Favoritos | **10 máximo** | La lupa silenciosamente recorta a 10 tokens (ver [`lupa.md`](../features/lupa.md)). |
 | Mínimo de caracteres de búsqueda | **2** | Por debajo de 2, no filtra. |
 

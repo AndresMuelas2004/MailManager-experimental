@@ -589,21 +589,6 @@ def update_email_spam_status_batch(
         raise fallback("Failed to update email spam status in database.") from exc
 
 
-def load_stored_message_ids(
-    account_id: str,
-    *,
-    fallback: type[ApiError] = ApiError,
-) -> list[str]:
-    """Load all provider_message_ids stored for an account."""
-    try:
-        return email_metadata_store.list_provider_message_ids(account_id)
-    except DatabaseError as exc:
-        raise translate_database_error(exc) from exc
-    except Exception as exc:
-        logger.warning("Unexpected stored message IDs load error (%s): %s", type(exc).__name__, exc)
-        raise fallback("Failed to load stored message IDs.") from exc
-
-
 def load_suspect_message_ids(
     account_id: str,
     bootstrap_ids: list[str],

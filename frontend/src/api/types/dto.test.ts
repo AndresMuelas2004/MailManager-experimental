@@ -7,6 +7,7 @@ import {
   draftOutSchema,
   emailContentOutSchema,
   emailMetadataOutSchema,
+  emailPageSchema,
   failedAttachmentSchema,
 } from './dto';
 
@@ -261,6 +262,64 @@ describe('failedAttachmentSchema', () => {
       filename: 'broken.pdf',
       reason: 123,
     });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('emailPageSchema', () => {
+  const validEmail = {
+    provider_message_id: 'm1',
+    account_id: 'acc',
+    mailbox_id: 'mb',
+    thread_id: null,
+    from_email: 'a@b.c',
+    from_name: null,
+    subject: null,
+    received_at: '2024-01-01T00:00:00Z',
+    is_read: false,
+    box: 'ALL_MAIL',
+  };
+
+  it('parses the wrapped page envelope', () => {
+    const parsed = emailPageSchema.parse({
+      items: [validEmail],
+      total: 1234,
+      limit: 50,
+      offset: 0,
+    });
+    expect(parsed.items).toHaveLength(1);
+    expect(parsed.total).toBe(1234);
+    expect(parsed.limit).toBe(50);
+    expect(parsed.offset).toBe(0);
+    // The inner item still benefits from the EmailMetadataOut defaults.
+    expect(parsed.items[0].has_attachments).toBe(false);
+    expect(parsed.items[0].is_favorite).toBe(false);
+  });
+
+  it('rejects a negative total', () => {
+    const result = emailPageSchema.safeParse({ items: [], total: -1, limit: 50, offset: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-positive limit', () => {
+    const result = emailPageSchema.safeParse({ items: [], total: 0, limit: 0, offset: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a negative offset', () => {
+    const result = emailPageSchema.safeParse({ items: [], total: 0, limit: 50, offset: -50 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-array items field', () => {
+    const result = emailPageSchema.safeParse({ items: validEmail, total: 1, limit: 50, offset: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects the legacy bare-array shape (regression guard)', () => {
+    // The old contract returned ``EmailMetadataOut[]`` directly. A drift
+    // back to it must fail loudly instead of being silently accepted.
+    const result = emailPageSchema.safeParse([validEmail]);
     expect(result.success).toBe(false);
   });
 });

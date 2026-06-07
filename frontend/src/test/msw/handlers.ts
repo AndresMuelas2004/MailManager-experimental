@@ -50,7 +50,9 @@ export const handlers = [
   http.get(`${API_BASE}/mailboxes/:mailboxId/accounts`, () => HttpResponse.json([])),
 
   // Emails
-  http.get(`${API_BASE}/mailboxes/:mailboxId/emails`, () => HttpResponse.json([])),
+  http.get(`${API_BASE}/mailboxes/:mailboxId/emails`, () =>
+    HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
+  ),
   http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
     HttpResponse.json({ total_synced: 0, accounts: [] }),
   ),
@@ -229,5 +231,7 @@ export const handlers = [
   http.delete(`${API_BASE}/virtual-mailboxes/:virtualMailboxId`, () =>
     HttpResponse.json({ status: 'deleted' }),
   ),
-  http.get(`${API_BASE}/virtual-mailboxes/:virtualMailboxId/emails`, () => HttpResponse.json([])),
+  http.get(`${API_BASE}/virtual-mailboxes/:virtualMailboxId/emails`, () =>
+    HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
+  ),
 ];

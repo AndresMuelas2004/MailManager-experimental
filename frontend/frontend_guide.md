@@ -25,17 +25,23 @@ The exception is intentional. The host's whole job is to bridge the drafts featu
 
 The host preserves both invariants by absorbing the rule break in a single file under `features/drafts/components/`, registering its hook surface via `__register()` on mount and tearing it down on unmount. Any future redesign that makes the composer state-machine live under `app/providers/` would lift this exception; until then the host is the only place in the codebase where `features/<x>/components/` calls a fetching hook.
 
+### 1.2 `useConnectedAccounts` fetches with `useEffect` + `useState` (features §4.1 exception)
+
+`frontend/src/features/accounts/hooks/useConnectedAccounts.ts` drives the account list, the per-account email previews, and the create→connect→sync→preview sequence with a hand-rolled `useEffect` + `useState` machine instead of `useQuery` / `useMutation`, which `features/CLAUDE.md` §4.1 otherwise requires.
+
+The exception is deliberate: the page runs a multi-step per-account flow with a `syncing` / `ready` / `error` tri-state per row that does not map onto a single query/mutation. The accepted trade-off is that this hook holds its data OUTSIDE the TanStack Query cache — it does NOT share the `['accounts', mailboxId]` cache `useEmailList` populates, so adding or removing an account here does not auto-invalidate the email listings (and vice versa). The trigger to migrate it to `useQuery` / `useQueries` is the first time that cross-hook cache coherence actually matters.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The five namespaces in active use:
 
-- `['emails', mailboxId, box, accountId?, q?, favorite?]` — regular mailbox listings (`useEmailList`).
-- `['virtual-mailbox-emails', virtualMailboxId, q?]` — listings produced by a virtual mailbox (`useVirtualMailboxEmails`).
+- `['emails', mailboxId, box, accountId?, q?, favorite?, page]` — regular mailbox listings (`useEmailList`).
+- `['virtual-mailbox-emails', virtualMailboxId, q?, page]` — listings produced by a virtual mailbox (`useVirtualMailboxEmails`).
 - `['virtual-mailbox', virtualMailboxId]` — a single virtual mailbox record (`useVirtualMailbox`).
 - `['virtual-mailboxes']` — the list of every virtual mailbox owned by the user (`useVirtualMailboxes`).
 - `['drafts', mailboxId]`, `['accounts', mailboxId]`, `['mailboxes']` — straightforward resource listings.
 
-When a mutation can affect emails across several mailboxes (favourites toggle, bulk move-to-trash, bulk mark-as-spam, favourites sync) the invalidation uses the bare prefix `['emails']` (no `mailboxId` scope) plus `['virtual-mailbox-emails']`. The wider blast radius is the price of correctness: a vmbox can aggregate emails from several real mailboxes, so a scoped invalidation would silently leave stale rows in sibling caches.
+When a mutation can affect emails across several mailboxes (favourites toggle, bulk move-to-trash, bulk mark-as-spam, favourites sync, metadata sync) the invalidation uses the bare prefix `['emails']` (no `mailboxId` scope) plus `['virtual-mailbox-emails']`. The wider blast radius is the price of correctness: a vmbox can aggregate emails from several real mailboxes, so a scoped invalidation would silently leave stale rows in sibling caches.
 
 ## 3. Cache-policy overrides
 
@@ -96,3 +102,15 @@ Routes are declared in a single source — `frontend/src/app/routes/router.tsx`.
 ```
 
 Every non-boot-path page uses `React.lazy()`. The router never knows anything about the `features/` internals beyond the page module's existence — a page move (e.g. the virtual-mailbox collapse documented in §4) is a one-line router edit and zero changes elsewhere.
+
+## 8. Server-side pagination across the email listings
+
+Every email listing (unified, account, favourites, virtual, and search results) is server-paginated with a single fixed page size, `EMAILS_PAGE_SIZE` (`frontend/src/lib/constants.ts`). It lives in `lib/` — not in `api/` or a feature — precisely because both the `api/endpoints/` layer (which converts `page → limit`/`offset` on the wire) and the `features/` layer (`useEmailList`, `useVirtualMailboxEmails`, `EmailPagination`, `useBulkBar`) consume it, and `api/` may not import from `features/`. The page is a 1-based URL search param (`?page=`); `page=1` is encoded by **omitting** the param so the canonical first-page URL stays clean. Changing the active search term (`q`) must reset to page 1 in the **same** `setSearchParams` update that writes `q` (every listing page does `params.delete('page')` next to the `q` edit) — otherwise the URL would briefly point at a page that does not exist for the new filter.
+
+Each listing hook returns the page rows plus `total` / `totalPages` / `isPlaceholder` and threads `placeholderData: keepPreviousData` into its query, so paging keeps the previous page visible (no spinner flash) while the next loads; `isPlaceholder` is what disables the pager buttons mid-flight. Each page also runs a clamp effect — `if (!loading && !isPlaceholder && page > totalPages) handlePageChange(totalPages)` — to re-home the user onto the last valid page after the total shrinks under them (background sync, bulk delete). The clamp is gated by `!loading && !isPlaceholder` so it never fights an in-flight fetch, and `totalPages` floors at 1 so an emptied box lands on page 1.
+
+The pager and the `1–N de Z` range render **inside `EmailTable`'s sticky top bar** (range left, `EmailPagination` right) — `EmailTable` owns the range label, `EmailPagination` only the buttons — so paging never requires scrolling to the end of the 50-row page. That bar pins on scroll **only because `MailboxLayoutPage` makes the `Outlet` wrapper the scroll container** (`h-screen` shell + `overflow-auto` on the content div; the `Sidebar` stays put via its own `sticky h-screen`). Reverting that wrapper to `min-h-screen` / `overflow-x-auto` (its pre-pagination shape) hands the vertical scroll back to the document and **silently unsticks the pager on every listing** — nothing errors, the bar just stops pinning.
+
+### `useBulkBar` keeps a selection `Map` that survives page changes
+
+`useSelection` stores only keys in a `Set`, so it forgets the `EmailMetadataOut` objects of rows that scroll off the visible page. With server pagination a selection can span pages the table is no longer rendering, and the bulk actions need the full object of EVERY selected row — `mailbox_id` drives the per-mailbox HTTP fan-out (a vmbox can span real mailboxes) and the read/unread counts decide the toggle target. `useBulkBar` therefore wraps `toggle` / `toggleTopN` / `clear` to mirror every mutation into a parallel `Map<key, EmailMetadataOut>` (React state, not a ref, so the bar re-renders), and reads the selected set from the Map rather than from `selection.getSelected(visiblePage)`. The `Set` stays the source of truth for "is this selected" (the table consumes `isSelected` / `headerState` / `size`); the `Map` is the data store. A regression that reverts `useBulkBar` to deriving the selection from the visible `emails` array would silently drop every off-page selected row from a bulk action. Consumers MUST call `toggle` / `toggleTopN` / `clear` off the returned (wrapped) `selection`, never off the raw `useSelection` result, or the two fall out of sync. The bar clears the selection whenever the debounced search term changes (a same-page `q` change does not unmount the hook, so the Set/Map would otherwise survive into a filtered result that no longer shows those rows). For that cross-page selection to be reachable from the UI at all, the in-header pager stays visible **while the bulk bar is shown** (bulk bar on the left, pager on the right; `BulkActionsBar` is deliberately not `w-full` so it does not push the pager out) — hide the pager in selection mode and the `Map` can never accumulate rows from a second page.

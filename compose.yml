@@ -60,3 +60,13 @@ services:
 
 volumes:
   mailmanager_pgdata:
+
+networks:
+  # Pin the subnet so the gateway IP (10.89.42.1) is deterministic across
+  # `compose down`/`up`. The backend's DEV_LOGIN_TRUSTED_HOSTS relies on it:
+  # browser requests arrive at uvicorn from this gateway, not from 127.0.0.1.
+  default:
+    ipam:
+      config:
+        - subnet: 10.89.42.0/24
+          gateway: 10.89.42.1

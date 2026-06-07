@@ -62,12 +62,12 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         await Promise.all(
           accounts.map(async (account) => {
             try {
-              const emails = await listEmails(mailboxId, 'ALL_MAIL', account.account_id);
+              const { items } = await listEmails(mailboxId, 'ALL_MAIL', account.account_id);
               if (cancelled) return;
               setEntries((prev) =>
                 prev.map((e) =>
                   e.account.account_id === account.account_id
-                    ? { ...e, emails: emails.slice(0, 3), status: 'ready' as const }
+                    ? { ...e, emails: items.slice(0, 3), status: 'ready' as const }
                     : e,
                 ),
               );
@@ -83,8 +83,11 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
             }
           }),
         );
-      } catch {
-        if (!cancelled) setLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          setError(toUiError(err));
+          setLoading(false);
+        }
       }
     }
 
@@ -129,11 +132,11 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
       ]);
 
       if (syncResult.total_synced > 0) {
-        const emails = await listEmails(mailboxId, 'ALL_MAIL', account.account_id);
+        const { items } = await listEmails(mailboxId, 'ALL_MAIL', account.account_id);
         setEntries((prev) =>
           prev.map((e) =>
             e.account.account_id === account.account_id
-              ? { ...e, emails: emails.slice(0, 3), status: 'ready' }
+              ? { ...e, emails: items.slice(0, 3), status: 'ready' }
               : e,
           ),
         );

@@ -130,23 +130,6 @@ class PgEmailMetadataStore(EmailMetadataStore):
             "Failed to update email read status batch.",
         )
 
-    def list_provider_message_ids(self, account_id: str) -> list[str]:
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(queries.LIST_PROVIDER_MESSAGE_IDS_BY_ACCOUNT, {"account_id": account_id})
-                    return [row[0] for row in cur.fetchall()]
-        except psycopg2.errors.InvalidTextRepresentation:
-            return []
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to list provider message IDs.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected list provider message IDs error ({type(exc).__name__}): {exc}"
-            ) from exc
-
     def list_provider_message_ids_not_in(
         self, account_id: str, exclude_ids: list[str],
     ) -> list[str]:
@@ -261,6 +244,78 @@ class PgEmailMetadataStore(EmailMetadataStore):
         )
 
 
+    def _build_filter_predicates(
+        self,
+        account_ids: list[str],
+        box: str | None,
+        tokens: list[str],
+        *,
+        extra_filters: dict[str, Any] | None,
+        box_in: list[str] | None,
+        box_not_in: list[str] | None,
+    ) -> tuple[str, str, str, dict[str, Any]]:
+        """Build the ``{box_predicate}``/``{search_predicate}``/``{extra_predicate}``
+        slots and the named params shared by every filtered query.
+
+        Single source of truth so ``list_filtered`` (SELECT) and
+        ``count_filtered`` (COUNT) stay in lockstep — a new filter
+        criterion lands here once and both the listing and its total
+        pick it up. ``account_ids`` always goes into the returned params
+        (the WHERE clause references it in every query). ``limit`` /
+        ``offset`` are NOT added here — only the listing queries carry
+        them.
+
+        Callers MUST pass at most one of ``box`` / ``box_in`` /
+        ``box_not_in`` — exclusivity is enforced upstream (services).
+        Passing more than one here would emit duplicated ``AND box ...``
+        clauses that AND together and silently return zero rows.
+        """
+        params: dict[str, Any] = {"account_ids": account_ids}
+
+        if box is not None:
+            params["box"] = box
+            box_predicate = "AND box = %(box)s"
+        elif box_in:
+            params["box_in_list"] = list(box_in)
+            box_predicate = "AND box = ANY(%(box_in_list)s)"
+        elif box_not_in:
+            # Empty list means "do not exclude anything" — callers use
+            # it to opt back into seeing TRASH/SPAM. Leave the slot
+            # empty so we do not emit a tautological ``NOT (box = ANY('{}'))``.
+            params["box_not_in_list"] = list(box_not_in)
+            box_predicate = "AND NOT (box = ANY(%(box_not_in_list)s))"
+        else:
+            box_predicate = ""
+
+        if tokens:
+            clauses: list[str] = []
+            for i, token in enumerate(tokens):
+                key = f"tok{i}"
+                params[key] = f"%{_escape_like(token)}%"
+                clauses.append(
+                    f"(unaccent(lower(coalesce(subject, ''))) ILIKE unaccent(lower(%({key})s))"
+                    f" OR unaccent(lower(coalesce(from_email, ''))) ILIKE unaccent(lower(%({key})s))"
+                    f" OR unaccent(lower(coalesce(from_name, ''))) ILIKE unaccent(lower(%({key})s)))"
+                )
+            search_predicate = "AND " + " AND ".join(clauses)
+        else:
+            search_predicate = ""
+
+        extra_clauses: list[str] = []
+        if extra_filters:
+            for key, value in extra_filters.items():
+                builder = _EXTRA_FILTER_BUILDERS.get(key)
+                if builder is None:
+                    continue
+                clause, extra_params = builder(value)
+                extra_clauses.append(clause)
+                params.update(extra_params)
+        extra_predicate = (
+            "AND " + " AND ".join(extra_clauses) if extra_clauses else ""
+        )
+
+        return box_predicate, search_predicate, extra_predicate, params
+
     def list_filtered(
         self,
         account_ids: list[str],
@@ -272,63 +327,28 @@ class PgEmailMetadataStore(EmailMetadataStore):
         extra_filters: dict[str, Any] | None = None,
         box_in: list[str] | None = None,
         box_not_in: list[str] | None = None,
+        distinct_provider_message_id: bool = False,
     ) -> list[dict[str, Any]]:
-        # Callers MUST pass at most one of ``box`` / ``box_in`` /
-        # ``box_not_in`` — exclusivity is enforced upstream (services).
-        # Passing more than one here would emit duplicated ``AND box ...``
-        # clauses that AND together and silently return zero rows.
         if not account_ids:
             return []
         try:
-            params: dict[str, Any] = {
-                "account_ids": account_ids,
-                "limit": limit,
-                "offset": offset,
-            }
-
-            if box is not None:
-                params["box"] = box
-                box_predicate = "AND box = %(box)s"
-            elif box_in:
-                params["box_in_list"] = list(box_in)
-                box_predicate = "AND box = ANY(%(box_in_list)s)"
-            elif box_not_in:
-                # Empty list means "do not exclude anything" — callers use
-                # it to opt back into seeing TRASH/SPAM. Leave the slot
-                # empty so we do not emit a tautological ``NOT (box = ANY('{}'))``.
-                params["box_not_in_list"] = list(box_not_in)
-                box_predicate = "AND NOT (box = ANY(%(box_not_in_list)s))"
-            else:
-                box_predicate = ""
-
-            if tokens:
-                clauses: list[str] = []
-                for i, token in enumerate(tokens):
-                    key = f"tok{i}"
-                    params[key] = f"%{_escape_like(token)}%"
-                    clauses.append(
-                        f"(unaccent(lower(coalesce(subject, ''))) ILIKE unaccent(lower(%({key})s))"
-                        f" OR unaccent(lower(coalesce(from_email, ''))) ILIKE unaccent(lower(%({key})s))"
-                        f" OR unaccent(lower(coalesce(from_name, ''))) ILIKE unaccent(lower(%({key})s)))"
-                    )
-                search_predicate = "AND " + " AND ".join(clauses)
-            else:
-                search_predicate = ""
-
-            extra_clauses: list[str] = []
-            if extra_filters:
-                for key, value in extra_filters.items():
-                    builder = _EXTRA_FILTER_BUILDERS.get(key)
-                    if builder is None:
-                        continue
-                    clause, extra_params = builder(value)
-                    extra_clauses.append(clause)
-                    params.update(extra_params)
-            extra_predicate = (
-                "AND " + " AND ".join(extra_clauses) if extra_clauses else ""
+            box_predicate, search_predicate, extra_predicate, params = (
+                self._build_filter_predicates(
+                    account_ids, box, tokens,
+                    extra_filters=extra_filters,
+                    box_in=box_in,
+                    box_not_in=box_not_in,
+                )
             )
+            params["limit"] = limit
+            params["offset"] = offset
 
-            sql = queries.LIST_FILTERED.format(
+            template = (
+                queries.LIST_FILTERED_DISTINCT
+                if distinct_provider_message_id
+                else queries.LIST_FILTERED
+            )
+            sql = template.format(
                 box_predicate=box_predicate,
                 search_predicate=search_predicate,
                 extra_predicate=extra_predicate,
@@ -348,6 +368,56 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected list filtered email metadata error ({type(exc).__name__}): {exc}"
             ) from exc
         return [dict(row) for row in rows]
+
+    def count_filtered(
+        self,
+        account_ids: list[str],
+        box: str | None,
+        tokens: list[str],
+        *,
+        extra_filters: dict[str, Any] | None = None,
+        box_in: list[str] | None = None,
+        box_not_in: list[str] | None = None,
+        distinct_provider_message_id: bool = False,
+    ) -> int:
+        # Mirror ``list_filtered``'s empty-accounts short-circuit: never
+        # touch the DB when there is nothing to count.
+        if not account_ids:
+            return 0
+        try:
+            box_predicate, search_predicate, extra_predicate, params = (
+                self._build_filter_predicates(
+                    account_ids, box, tokens,
+                    extra_filters=extra_filters,
+                    box_in=box_in,
+                    box_not_in=box_not_in,
+                )
+            )
+            template = (
+                queries.COUNT_FILTERED_DISTINCT
+                if distinct_provider_message_id
+                else queries.COUNT_FILTERED
+            )
+            sql = template.format(
+                box_predicate=box_predicate,
+                search_predicate=search_predicate,
+                extra_predicate=extra_predicate,
+            )
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    row = cur.fetchone()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return 0
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to count filtered email metadata.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected count filtered email metadata error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return int(row[0]) if row else 0
 
     def update_has_attachments(self, account_id: str, provider_message_id: str) -> None:
         try:

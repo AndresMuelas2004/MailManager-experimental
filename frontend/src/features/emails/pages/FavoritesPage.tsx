@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
 
@@ -9,6 +10,7 @@ import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import useDebounce from '../hooks/useDebounce';
+import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -20,25 +22,33 @@ export default function FavoritesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
+  const page = parsePageParam(searchParams);
 
   // Box ALL_MAIL acts as the "everywhere except trash and spam" anchor
   // — the favourites filter overrides this server-side (TRASH/SPAM are
   // excluded automatically unless the user passes one of them) but the
   // useEmailList hook still needs SOME box param for query-key
   // stability across components.
-  const { emails, accounts, loading, error, refresh } = useEmailList(
-    mailboxId!,
-    'ALL_MAIL',
-    undefined,
-    debouncedQ,
-    true,
-  );
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
+    useEmailList(mailboxId!, 'ALL_MAIL', undefined, debouncedQ, true, page);
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box: 'ALL_MAIL',
-    emails,
     refresh,
+    searchKey: debouncedQ,
   });
+
+  const handlePageChange = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete('page');
+    else params.set('page', String(next));
+    setSearchParams(params);
+  };
+
+  useEffect(() => {
+    if (!loading && !isPlaceholder && page > totalPages) handlePageChange(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
   const favorites = useFavorite();
@@ -78,6 +88,7 @@ export default function FavoritesPage() {
     const params = new URLSearchParams(searchParams);
     if (next.length === 0) params.delete('q');
     else params.set('q', next);
+    params.delete('page');
     setSearchParams(params, { replace: true });
   };
 
@@ -113,22 +124,29 @@ export default function FavoritesPage() {
       {combinedError ? (
         <div className="px-8 text-sm text-red-600">{combinedError.message}</div>
       ) : (
-        <EmailTable
-          emails={emails}
-          accounts={accounts}
-          loading={loading}
-          view="mixed"
-          isSent={false}
-          hasSelection={selection.size > 0}
-          isSelected={selection.isSelected}
-          onToggle={selection.toggle}
-          onToggleAll={() => selection.toggleTopN(emails)}
-          onOpen={viewer.open}
-          onToggleFavorite={handleToggleFavorite}
-          headerCheckboxState={selection.headerState(emails)}
-          bulkBar={bulkBar}
-          emptyMessage={emptyMessage}
-        />
+        <>
+          <EmailTable
+            emails={emails}
+            accounts={accounts}
+            loading={loading}
+            view="mixed"
+            isSent={false}
+            hasSelection={selection.size > 0}
+            isSelected={selection.isSelected}
+            onToggle={selection.toggle}
+            onToggleAll={() => selection.toggleTopN(emails)}
+            onOpen={viewer.open}
+            onToggleFavorite={handleToggleFavorite}
+            headerCheckboxState={selection.headerState(emails)}
+            bulkBar={bulkBar}
+            emptyMessage={emptyMessage}
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={handlePageChange}
+            paginationDisabled={loading || isPlaceholder}
+          />
+        </>
       )}
       <ViewerMount
         openedEmail={viewer.openedEmail}

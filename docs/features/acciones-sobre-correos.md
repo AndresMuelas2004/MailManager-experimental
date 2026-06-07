@@ -156,9 +156,15 @@ El borrado definitivo es la excepción: al no llamar al proveedor, el cambio es 
 
 ### 8.1 Seleccionar correos
 
-La tabla permite marcar correos uno a uno con sus casillas, o usar la casilla de la cabecera para **seleccionar de golpe los más recientes** de la lista (hasta un tope; ver [../limits/acciones-sobre-correos.md](../limits/acciones-sobre-correos.md)). En cuanto hay al menos un correo seleccionado, la cabecera de la tabla se reemplaza por la barra de acciones masivas, que muestra cuántos correos hay seleccionados y los botones aplicables al buzón actual (§ 1.2).
+La tabla permite marcar correos uno a uno con sus casillas, o usar la casilla de la cabecera para **seleccionar de golpe toda la página actual** (la casilla de cabecera marca los correos de la página visible — la cifra está en [../limits/acciones-sobre-correos.md](../limits/acciones-sobre-correos.md), y coincide con el tamaño de página). No es "seleccionar todos los de todas las páginas": es el comportamiento más predecible y seguro para acciones masivas. En cuanto hay al menos un correo seleccionado, la cabecera de la tabla se reemplaza por la barra de acciones masivas, que muestra cuántos correos hay seleccionados y los botones aplicables al buzón actual (§ 1.2).
 
-La casilla de cabecera es de tres estados: vacía (nada seleccionado), marcada (todos los visibles seleccionados) o intermedia (selección parcial). Tras ejecutar cualquier acción, la selección se limpia automáticamente y la lista se refresca.
+La casilla de cabecera es de tres estados: vacía (nada seleccionado), marcada (todos los de la página visible seleccionados) o intermedia (selección parcial).
+
+### 8.1.1 La selección se conserva al cambiar de página
+
+Con la lista paginada (ver [listado-de-correos.md](listado-de-correos.md) § 7), la selección **sobrevive a la navegación entre páginas**: si el usuario marca tres correos en la página 1 y pasa a la página 2, esos tres siguen seleccionados, y una acción en bloque los afecta a **todos** aunque estén en páginas distintas. El contador de la barra refleja el total seleccionado, no solo lo visible. Por eso un usuario puede acumular una selección **mayor que una página** marcando correos en varias páginas, aunque ninguna pulsación de "seleccionar todo" abarque más de la página actual.
+
+La selección **se limpia** en dos situaciones: tras ejecutar cualquier acción (y entonces la lista se refresca), y al **cambiar de búsqueda** (cambia el contexto, así que una selección hecha antes de filtrar no debe arrastrarse a un resultado que ya no muestra esas filas). Cambiar de bandeja o de cuenta también reinicia la selección porque la pantalla se vuelve a montar.
 
 ### 8.2 El reparto por buzón real: una llamada por grupo
 
@@ -180,7 +186,7 @@ Si una futura refactorización colapsara las acciones masivas en una sola llamad
 
 ## 9. Interacción con la búsqueda, los favoritos y las bandejas ficticias
 
-- **Búsqueda (lupa)**: las acciones operan sobre los correos que estén visibles, filtrados o no. Si el usuario filtró con la lupa y selecciona resultados, las acciones se aplican exactamente a esa selección. La lupa se documenta en [lupa.md](lupa.md).
+- **Búsqueda (lupa)**: las acciones operan sobre los correos seleccionados, filtrados o no (incluso si la selección abarca varias páginas — § 8.1.1). Si el usuario filtró con la lupa y selecciona resultados, las acciones se aplican exactamente a esa selección; cambiar el texto buscado limpia la selección. La lupa se documenta en [lupa.md](lupa.md).
 - **Favoritos**: marcar/desmarcar favorito es ortogonal a estas acciones. Un correo favorito que se mueve a la papelera **sigue siendo favorito**; el favorito viaja con el correo entre bandejas. El toggle de favorito tiene su propio documento ([favoritos.md](favoritos.md)) y su propia regla (Provider-First estricto, sin la excepción del borrado).
 - **Bandejas ficticias**: las acciones funcionan igual sobre los correos listados en una bandeja ficticia, con el reparto por mailbox real de § 8.2 haciendo el trabajo pesado. Las bandejas ficticias se documentan en [bandejas-ficticias.md](bandejas-ficticias.md).
 

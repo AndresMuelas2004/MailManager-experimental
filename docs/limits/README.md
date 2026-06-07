@@ -12,7 +12,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 
 ### Traer y leer correo
 - [sincronizacion.md](sincronizacion.md) — Cap de bootstrap, umbral de eventos, tamaño de lote, workers, reintentos y paginación por proveedor.
-- [listado-de-correos.md](listado-de-correos.md) — Tope de correos por carga, ausencia de paginación y tope de selección.
+- [listado-de-correos.md](listado-de-correos.md) — Tamaño de página, paginación numerada (límite/offset, total exacto) y tope de selección.
 - [visualizacion-de-correos.md](visualizacion-de-correos.md) — Etiquetas, atributos, protocolos y reglas CSS permitidos, y umbrales del saneamiento.
 - [lupa.md](lupa.md) — Mínimo de caracteres, debounce, tope de tokens y tope de resultados.
 - [favoritos.md](favoritos.md) — Topes y asimetrías de conteo de la sincronización de favoritos.

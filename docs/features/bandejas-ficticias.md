@@ -167,6 +167,10 @@ Abrir un correo desde una bandeja ficticia permite las mismas acciones que desde
 
 La bandeja ficticia **no** ofrece un botón para sincronizar correo nuevo. La sincronización se hace desde las bandejas reales; la ficticia solo **muestra** lo que esas ya bajaron. Un "sincronizar" en este contexto tendría que abanicar peticiones a todas las cuentas implicadas, lo que es una decisión de producto aparte. Lo que sí hace la vista es **refrescarse de forma agresiva**: cada vez que el usuario vuelve a abrir la bandeja, vuelve a pedir la lista al instante, sin servir una versión cacheada antigua. La razón es que estas vistas son curadas y sensibles al tiempo ("lo de hoy", "lo no leído"): el usuario espera ver lo recién llegado en cuanto entra, no una foto de hace medio minuto.
 
+### 6.5 También se pagina, igual que cualquier bandeja
+
+La bandeja ficticia se recorre **por páginas numeradas**, con la misma barra "Anterior/Siguiente", los mismos números de página y el mismo indicador "X–Y de Z" que el resto de buzones. El tamaño de página y el comportamiento completo (la página en la URL, el reinicio a la página 1 al cambiar de búsqueda, el reencuadre a la última página válida si el total encoge) son los del listado general — ver [listado-de-correos.md](listado-de-correos.md). Aquí el "Z" es el número de mensajes **distintos** que cumplen los criterios de la bandeja, ya descontados los duplicados (§ 7.1).
+
 ---
 
 ## 7. Casos borde y comportamiento ante conflictos
@@ -176,6 +180,8 @@ La bandeja ficticia **no** ofrece un botón para sincronizar correo nuevo. La si
 Un mismo correo físico puede aparecer **dos veces** en los datos cuando el usuario ha conectado **la misma cuenta de proveedor bajo dos bandejas reales distintas** (dos "cuentas" en la app que apuntan al mismo buzón de Gmail/Outlook). Si una bandeja ficticia agrega ambas, ese correo saldría duplicado.
 
 La app **colapsa esos duplicados** y muestra **una sola fila** por mensaje. Para decidir cuál de las dos copias gana, prefiere la que tenga datos más completos (una dirección de destinatario real por delante de una vacía; en empate, la más reciente). Es una decisión de presentación: el usuario ve un buzón limpio sin filas repetidas.
+
+Esta deduplicación ocurre **antes de paginar**, no después: con la bandeja ya paginada por páginas (ver § 6.5), si se quitaran los duplicados *después* de cortar la página, los correos repetidos podrían "robar" sitios en los bordes de cada página y el total "X–Y de Z" contaría de más. Por eso el colapso de duplicados y el conteo del total se hacen sobre el conjunto entero, y solo entonces se recorta la página. El resultado es que cada página viene siempre llena (no le faltan filas por un duplicado) y el total es el número real de mensajes distintos.
 
 > El detalle de la preferencia de desempate está en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md). Nótese que esta deduplicación es **exclusiva** de las bandejas ficticias: en un buzón normal, acotado a una sola cuenta, la duplicación no puede ocurrir.
 
@@ -206,10 +212,10 @@ Para fijar expectativas (la lista completa con el porqué de cada límite está 
 - **No es una carpeta real**: no existe en Gmail/Outlook, no se puede mover un correo "a" una bandeja ficticia.
 - **No autoexpande** la lista de cuentas al conectar cuentas nuevas (§ 3.1).
 - **No ofrece acciones en bloque propias** distintas de las que ya da la tabla de correos: la bandeja es de **solo lectura** respecto a su definición; las acciones operan sobre los correos reales subyacentes.
-- **No ordena por relevancia** ni soporta scroll infinito: hereda el comportamiento de la lista de correos (orden por fecha descendente, con un tope de resultados por carga).
+- **No ordena por relevancia** ni soporta scroll infinito: hereda el comportamiento de la lista de correos (orden por fecha descendente, navegación por páginas numeradas).
 
 ---
 
 ## Resumen en una frase
 
-> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que junta en una sola pantalla los correos **ya sincronizados** de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera y spam excluidos por defecto—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).
+> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que junta en una sola pantalla los correos **ya sincronizados** de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera y spam excluidos por defecto—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas (antes de paginar, para no descuadrar páginas ni el total), se navega por páginas numeradas igual que cualquier bandeja, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).

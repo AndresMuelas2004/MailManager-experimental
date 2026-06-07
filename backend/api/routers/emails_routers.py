@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from api.routers.routers_helpers import require_session
 from api.schemas.email import (
     EmailContentOut,
-    EmailMetadataOut,
+    EmailPageOut,
     EmailSendRequest,
     FavoriteSyncResponse,
     FavoriteUpdateRequest,
@@ -33,7 +33,7 @@ from api.services import emails_service
 router = APIRouter(prefix="/mailboxes/{mailbox_id}/emails", tags=["emails"])
 
 
-@router.get("", response_model=list[EmailMetadataOut])
+@router.get("", response_model=EmailPageOut)
 def list_emails(
     mailbox_id: str,
     box: Literal["ALL_MAIL", "SENT", "SPAM", "TRASH"] = Query(...),
@@ -54,13 +54,17 @@ def list_emails(
             "TRASH/SPAM by default (unless box explicitly selects one of them)."
         ),
     ),
-    limit: int = Query(default=200, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     user_id: str = Depends(require_session),
-) -> list[EmailMetadataOut]:
+) -> EmailPageOut:
     """
-    List email metadata for a mailbox, filtered by box.
-    Optionally filter to a single account, by free text, or by favourite status.
+    List a page of email metadata for a mailbox, filtered by box.
+
+    Returns an ``EmailPageOut`` envelope (``items`` + exact ``total`` of
+    the filtered set + applied ``limit`` / ``offset``) so the client can
+    render numbered pagination. Optionally filter to a single account,
+    by free text, or by favourite status.
     """
     return emails_service.list_emails(
         mailbox_id, box, user_id, account_id, q, limit, offset, favorite,

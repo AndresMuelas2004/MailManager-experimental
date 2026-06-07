@@ -46,6 +46,15 @@ VITE_API_BASE_URL=http://localhost:8000
 VITE_GOOGLE_CLIENT_ID=<must match backend's GOOGLE_CLIENT_ID>
 ```
 
+### Dev auto-login
+
+`VITE_DEV_AUTO_LOGIN=true` (set in the versioned `.env.development`) makes `AuthProvider`
+mint a session through the backend dev-login backdoor on boot, so the dev server skips the
+login screen. It only takes effect under `import.meta.env.DEV` and only when the backend has
+`DEV_LOGIN_ENABLED=true` + a valid `DEV_LOGIN_EMAIL`. It deliberately does **not** live in the
+compose `environment:` block — that would leak into Vitest's `process.env` and break
+`LoginPage.test.tsx`. See `repository_guide.md` (Containerisation section).
+
 ## Project Structure
 
 ```text

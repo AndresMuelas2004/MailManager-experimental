@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
 import useEmailList from '../hooks/useEmailList';
@@ -11,6 +11,7 @@ import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import useDebounce from '../hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';
+import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
 import type { EmailMetadataOut } from '../../../api/types/dto';
@@ -30,19 +31,28 @@ export default function AccountInboxPage({ box }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
+  const page = parsePageParam(searchParams);
 
-  const { emails, accounts, loading, error, refresh } = useEmailList(
-    mailboxId!,
-    box,
-    accountId!,
-    debouncedQ,
-  );
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
+    useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page);
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
-    emails,
     refresh,
+    searchKey: debouncedQ,
   });
+
+  const handlePageChange = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete('page');
+    else params.set('page', String(next));
+    setSearchParams(params);
+  };
+
+  useEffect(() => {
+    if (!loading && !isPlaceholder && page > totalPages) handlePageChange(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
   const favorites = useFavorite();
@@ -91,6 +101,7 @@ export default function AccountInboxPage({ box }: Props) {
     const params = new URLSearchParams(searchParams);
     if (next.length === 0) params.delete('q');
     else params.set('q', next);
+    params.delete('page');
     setSearchParams(params, { replace: true });
   };
 
@@ -131,6 +142,11 @@ export default function AccountInboxPage({ box }: Props) {
         headerCheckboxState={selection.headerState(emails)}
         bulkBar={bulkBar}
         emptyMessage={emptyMessage}
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={handlePageChange}
+        paginationDisabled={loading || isPlaceholder}
       />
 
       <ViewerMount

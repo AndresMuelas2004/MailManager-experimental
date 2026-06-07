@@ -56,7 +56,7 @@ def test_emails_listing_exposes_is_favorite_default_false(seeded_test_client):
         params={"box": "ALL_MAIL"},
     )
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert rows, "seeded data must include ALL_MAIL emails"
     assert all(row["is_favorite"] is False for row in rows)
 
@@ -128,10 +128,14 @@ def test_listing_with_favorite_filter_excludes_trash_and_spam_by_default(
         params={"box": "ALL_MAIL", "favorite": "true"},
     )
     assert resp.status_code == 200
-    rows = resp.json()
+    body = resp.json()
+    rows = body["items"]
     ids = [row["provider_message_id"] for row in rows]
     assert "gmail-allmail-001" in ids
     assert "gmail-trash-001" not in ids
+    # total counts the favourite/box-filtered set: only the ALL_MAIL
+    # favourite matches (the TRASH favourite is excluded by default).
+    assert body["total"] == 1
 
 
 def test_listing_with_favorite_and_explicit_trash_box_returns_trash_favorites(
@@ -148,7 +152,7 @@ def test_listing_with_favorite_and_explicit_trash_box_returns_trash_favorites(
         params={"box": "TRASH", "favorite": "true"},
     )
     assert resp.status_code == 200
-    ids = [row["provider_message_id"] for row in resp.json()]
+    ids = [row["provider_message_id"] for row in resp.json()["items"]]
     assert "gmail-trash-001" in ids
 
 
@@ -173,7 +177,7 @@ def test_listing_with_favorite_and_explicit_sent_box_returns_only_sent_favorites
         params={"box": "SENT", "favorite": "true"},
     )
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     ids = [row["provider_message_id"] for row in rows]
     assert "gmail-sent-001" in ids
     assert "gmail-allmail-001" not in ids
