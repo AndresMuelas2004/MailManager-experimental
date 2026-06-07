@@ -51,7 +51,7 @@ Si la salida está **vacía**, emite exactamente la siguiente línea y detente:
 
 No leas ningún archivo más. No realices ninguna otra llamada a herramientas. Termina inmediatamente.
 
-Si al menos una de ellas no está vacía, continúa al Paso 1.
+Si no está vacía, continúa al Paso 1.
 
 ## Paso 1 — Recoge las dos fuentes
 
