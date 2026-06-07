@@ -28,12 +28,20 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
 }
 
 import { server } from './msw/server';
+import { installFetchXHR } from './xhr-fetch-shim';
 
 // Start the mock service worker before any test runs. `onUnhandledRequest:
 // 'error'` turns unexpected network traffic into a loud failure instead of
 // letting the request escape into the real network — a broken boundary is
 // always a test bug, never a silent success.
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+
+// MSW v2's XHR interceptor intercepts the request but never delivers the
+// response in this jsdom runtime (no terminal event fires, so upload promises
+// hang). Replace the global XMLHttpRequest with a fetch-delegating shim AFTER
+// `server.listen()` has applied its own XHR patch, so XHR-based upload code
+// routes through MSW's reliable fetch interception. See `xhr-fetch-shim.ts`.
+beforeAll(() => installFetchXHR());
 
 // Reset any per-test `server.use(...)` overrides so one test's failure
 // simulation never leaks into the next one. Also unmount any component

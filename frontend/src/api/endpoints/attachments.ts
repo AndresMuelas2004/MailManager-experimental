@@ -12,12 +12,19 @@ import {
  * caller (`useDownloadQueue` consumer) creates an object URL and fires
  * the browser download — keeping the UI in control of the download
  * lifecycle (spinner, retry, cancel).
+ *
+ * `filename` is the real attachment name (with extension) taken from the
+ * email's attachment metadata. It is forwarded as `fallbackFilename` so
+ * the download keeps its correct name+extension even when the browser
+ * cannot read `Content-Disposition` (cross-origin without CORS exposing
+ * the header) — defence in depth against the download-name bug.
  */
 export function downloadEmailAttachment(
   mailboxId: string,
   accountId: string,
   providerMessageId: string,
   attachmentId: string,
+  filename: string,
   signal?: AbortSignal,
 ): Promise<{ blob: Blob; filename: string }> {
   return requestBlob(
@@ -25,7 +32,7 @@ export function downloadEmailAttachment(
     {
       method: 'GET',
       signal,
-      fallbackFilename: `attachment-${attachmentId}`,
+      fallbackFilename: filename || `attachment-${attachmentId}`,
     },
   );
 }

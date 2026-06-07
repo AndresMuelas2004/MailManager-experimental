@@ -11,7 +11,7 @@ type UseAttachmentDownloaderArgs = {
 
 export type UseAttachmentDownloaderReturn = {
   status: (attachmentId: string) => DownloadStatus;
-  start: (attachmentId: string) => void;
+  start: (attachmentId: string, filename: string) => void;
   cancel: (attachmentId: string) => void;
 };
 
@@ -39,7 +39,7 @@ export default function useAttachmentDownloader(
   const queue = useDownloadQueue();
 
   const start = useCallback(
-    (attachmentId: string) => {
+    (attachmentId: string, filename: string) => {
       queue
         .enqueue(attachmentId, () =>
           downloadEmailAttachment(
@@ -47,9 +47,13 @@ export default function useAttachmentDownloader(
             args.accountId,
             args.providerMessageId,
             attachmentId,
+            filename,
           ),
         )
-        .then(({ blob, filename }) => triggerBrowserDownload(blob, filename))
+        // ``resolved`` is the name ``requestBlob`` settled on (header first,
+        // propagated ``filename`` as fallback). Renamed to avoid shadowing the
+        // ``filename`` argument of ``start``.
+        .then(({ blob, filename: resolved }) => triggerBrowserDownload(blob, resolved))
         .catch(() => {
           /* errors surface via queue.status — visible state lives there */
         });

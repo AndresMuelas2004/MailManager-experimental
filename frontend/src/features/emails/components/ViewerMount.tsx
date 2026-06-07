@@ -1,5 +1,6 @@
 import EmailViewer from './EmailViewer';
 import useAttachmentDownloader from '../hooks/useAttachmentDownloader';
+import useEmailContent from '../hooks/useEmailContent';
 import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
 
 type Props = {
@@ -35,10 +36,11 @@ export default function ViewerMount({
   );
 }
 
-// Inner wrapper exists so the downloader hook is only instantiated when an
-// email is actually open. Lifting the hook out of `EmailViewer` (and its
-// inner `AttachmentsList`) satisfies features/CLAUDE.md §5.1 — components
-// no longer call data-fetching hooks; the page passes them in.
+// Inner wrapper exists so the data-fetching hooks are only instantiated
+// when an email is actually open. Lifting BOTH the downloader and the
+// email-content hook out of `EmailViewer` (and its inner `AttachmentsList`)
+// satisfies features/CLAUDE.md §5.1 — the viewer no longer calls any
+// data-fetching hook; this wrapper passes the results in as props.
 //
 // ``mailboxId`` is derived from ``openedEmail.mailbox_id`` (the email
 // carries its real mailbox in the listing payload). A virtual mailbox
@@ -60,11 +62,17 @@ function ViewerWithDownloader({
     accountId: openedEmail.account_id,
     providerMessageId: openedEmail.provider_message_id,
   });
+  const { content, loading, error } = useEmailContent(openedEmail.mailbox_id, {
+    account_id: openedEmail.account_id,
+    provider_message_id: openedEmail.provider_message_id,
+  });
   return (
     <EmailViewer
-      mailboxId={openedEmail.mailbox_id}
       email={openedEmail}
       accounts={accounts}
+      content={content}
+      loading={loading}
+      error={error}
       onClose={onClose}
       onRead={onRead}
       downloader={downloader}

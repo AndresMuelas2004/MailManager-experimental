@@ -72,6 +72,26 @@ export const handlers = [
     HttpResponse.json({ updated_count: 0, accounts: [] }),
   ),
 
+  // Email content + attachment metadata
+  http.get(`${API_BASE}/mailboxes/:mailboxId/emails/:pmid/content`, () =>
+    HttpResponse.json({ html_body: null, text_body: null, attachments: [] }),
+  ),
+  // Received attachment binary download. Returns a binary stream with the
+  // real name+extension on ``Content-Disposition`` (mirrors the backend
+  // contract). Specs that exercise the "header missing" path override this
+  // with ``server.use(...)`` to drop the header.
+  http.get(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/emails/:pmid/attachments/:attachmentId`,
+    () =>
+      new HttpResponse(new Blob(['binary'], { type: 'application/octet-stream' }), {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition':
+            'attachment; filename="attachment.bin"; filename*=UTF-8\'\'attachment.bin',
+        },
+      }),
+  ),
+
   // Drafts
   http.get(`${API_BASE}/mailboxes/:mailboxId/drafts`, () => HttpResponse.json([])),
   http.post(`${API_BASE}/mailboxes/:mailboxId/drafts/sync`, () =>
@@ -167,6 +187,25 @@ export const handlers = [
         skipped: [],
         attachments: [],
       }),
+  ),
+  // Draft attachments (D-07 lazy push). Local-only writes on the backend;
+  // happy-path shapes here so any spec that mounts the composer's attach /
+  // remove flow does not hit an unhandled-request warning.
+  http.post(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts/:draftId/attachments`,
+    () =>
+      HttpResponse.json({
+        draft_attachment_id: '00000000-0000-0000-0000-000000000001',
+        filename: 'attachment.bin',
+        mime_type: 'application/octet-stream',
+        size: 6,
+        position: 0,
+        provider_attachment_id: null,
+      }),
+  ),
+  http.delete(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/drafts/:draftId/attachments/:draftAttachmentId`,
+    () => HttpResponse.json({ status: 'deleted' }),
   ),
 
   // Favourites
