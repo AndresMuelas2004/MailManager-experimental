@@ -9,7 +9,6 @@
       "Grep(*)",
       "WebFetch(*)",
       "WebSearch(*)",
-      "mcp__*",
       "Agent(*)",
       "Skill(code-review:code-review)",
       "Skill(claude-api)",
