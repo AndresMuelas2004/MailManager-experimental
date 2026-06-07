@@ -108,6 +108,41 @@ Nota de memoria: el binario se carga completo en RAM del proceso al servirlo (el
 - **No hay blocklist al recibir**: todos los adjuntos que lleguen se muestran y se pueden descargar, incluidos tipos "peligrosos" (`.exe`, etc.). La postura es la de Gmail web; la protección se delega al sistema operativo / navegador del usuario al abrir el fichero.
 - **No hay tope de tamaño de descarga** distinto del que ya impuso el proveedor de origen al recibir el correo.
 
+### 6.1 Resolución del nombre y el tipo del adjunto recibido
+
+El comportamiento está en [../features/adjuntos.md](../features/adjuntos.md) § 2.6 y § 7.1. Aquí van los valores y conjuntos exactos.
+
+**Tipos declarados tratados como "genéricos"** (cuando el proveedor declara uno de estos, el tipo se deduce de la extensión del nombre en lugar de respetarse):
+
+| Valor exacto |
+|---|
+| `""` (vacío / ausente) |
+| `application/octet-stream` |
+| `application/binary` |
+| `binary/octet-stream` |
+
+La comparación es **insensible a mayúsculas**. Cualquier otro valor cuenta como tipo **específico** y se conserva **tal cual** (preservando mayúsculas/minúsculas: ya no se fuerza minúsculas en Outlook). Si ni el tipo declarado es específico ni la extensión resuelve nada, el fallback final es `application/octet-stream`.
+
+**Extensiones registradas explícitamente** porque la tabla `mimetypes` de la imagen base (Linux, Python 3.12) las devuelve como desconocidas; sin este registro, un `factura.xlsx` declarado genérico seguiría resolviendo a octet-stream:
+
+| Extensión | Tipo asignado |
+|---|---|
+| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
+| `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
+| `.rar` | `application/vnd.rar` |
+| `.7z` | `application/x-7z-compressed` |
+| `.webp` | `image/webp` |
+
+El registro es idempotente: las extensiones que la tabla ya conoce de fábrica (`.pdf`, `.png`, …) no se tocan.
+
+**Recuperación del nombre desde cabeceras (solo Gmail).** Cuando Gmail deja el nombre del adjunto vacío, se rescata en este **orden de precedencia fijo**:
+
+1. `Content-Disposition: …; filename=…`
+2. `Content-Type: …; name=…`
+
+Se decodifican nombres RFC 2231 (`filename*=utf-8''…`) y RFC 2047 (`=?utf-8?B?…?=`). Si ninguna cabecera lleva un nombre usable, se mantiene el nombre sintético (`cid` o `attachment`). **Outlook no tiene este rescate**: Graph no expone las cabeceras MIME crudas en el listado de adjuntos, así que su única fuente de nombre es el campo `name` del adjunto.
+
 ---
 
 ## 7. Lo que NO soporta (limitaciones aceptadas del MVP)
