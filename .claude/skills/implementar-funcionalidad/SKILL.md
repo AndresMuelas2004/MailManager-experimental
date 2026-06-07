@@ -79,7 +79,7 @@ Con una ruta md **…-backend.md**, trabaja desde el diff y desde solo la secci�
 ## Paso 6 — Documentación de cierre · `docs-updater-from-diff`
 
 @docs-updater-from-diff
-Paso final. Su task prompt **debe incluir la ruta absoluta del `…-general-description.md`**: la necesita como fuente del **porqué** de las decisiones; el resto —comportamiento y cifras— lo verifica contra el diff. Analiza los diffs existentes de la nueva implementación para conocer todos los detalles y actualiza **solo** la capa `docs/`.
+Paso final. Su task prompt **debe incluir la ruta absoluta del `…-general-description.md`**: la necesita como fuente del **porqué** de las decisiones; el resto —comportamiento y cifras— lo verifica contra el diff. Analiza los diffs existentes de la nueva implementación para conocer todos los detalles y actualiza **solo** la capa `docs/`. Existe la posibilidad de que la funcionalidad no sea nueva sino que sea una modificación grande de una anterior, menciónale también en el task prompt que existe esa posibilidad y que el archivo md en cuestión `…-general-description.md` se la aclarará.
 
 ## Cierre
 
