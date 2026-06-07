@@ -84,6 +84,13 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # ``Content-Disposition`` is NOT on the CORS response safelist, so a
+        # cross-origin ``fetch`` (frontend at :5173, backend at :8000, no Vite
+        # proxy) cannot read it without this. The attachment download endpoint
+        # carries the real filename/extension in that header; exposing it lets
+        # the browser save the file with its correct name. ``Content-Length``
+        # is already safelisted (listed only to keep the intent explicit).
+        expose_headers=["Content-Disposition", "Content-Length"],
     )
     register_error_handlers(app)
     app.include_router(health_router)

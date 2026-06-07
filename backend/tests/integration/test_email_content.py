@@ -166,6 +166,29 @@ def test_get_email_content_core_error_returns_502(
     assert resp.json()["error"]["code"] == "external_api_error"
 
 
+@pytest.mark.parametrize(
+    "failing_test_client",
+    [{"list_message_attachments_exc": EmailExternalAPIError("Attachment listing timeout.")}],
+    indirect=True,
+)
+def test_get_email_content_list_attachments_core_error_returns_502(
+    failing_test_client, setup_mailbox_and_account,
+):
+    """CoreError during cache-miss attachment discovery is the SECOND
+    502 translation path in ``get_email_full_content`` — distinct from the
+    ``fetch_email_content`` one. ``fetch_content`` succeeds (default content)
+    so the flow reaches ``list_message_attachments``, which raises; a
+    regression that drops or mis-translates this branch is not caught by
+    ``test_get_email_content_core_error_returns_502``.
+    """
+    mid, aid = setup_mailbox_and_account(failing_test_client)
+    failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+
+    resp = failing_test_client.get(_content_url(mid, "m1", aid))
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "external_api_error"
+
+
 # ------------------------------------------------------------------
 # Missing metadata row → 404 email_not_found
 # ------------------------------------------------------------------
@@ -333,10 +356,144 @@ def test_get_email_content_cache_hit_reads_attachments_from_db(
     resp = test_client.get(_content_url(mid, "m1", aid))
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # Both rows surface — inline filtering happens at the SQL layer in
-    # ``LIST_EMAIL_ATTACHMENTS_BY_MESSAGE`` selectively; the API maps both
-    # to the response and the frontend can hide inline ones if needed.
-    # The contract under test here is that the cache-hit branch reads
-    # the table at all and that the downloadable attachment is present.
+    # Neither ``LIST_EMAIL_ATTACHMENTS_BY_MESSAGE`` nor
+    # ``_load_email_attachments_out`` filters inline rows: BOTH the inline
+    # and the downloadable attachment surface in the response (hiding inline
+    # parts is a frontend concern). This pins the actual contract so an
+    # inline-filter regression introduced at this layer is caught — and
+    # proves the cache-hit branch reads the dedicated table.
     filenames = {a["filename"] for a in data["attachments"]}
     assert "attached.pdf" in filenames
+    assert "logo.png" in filenames
+
+
+def test_get_email_content_cache_hit_surfaces_derived_attachment_flags(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """The derived ``is_downloaded`` (a blob row EXISTS) and
+    ``is_unavailable`` (``unavailable_at`` set, D-17) flags must reflect DB
+    state. Every other attachment test only ever sees the false/false case;
+    this pins the true cases the frontend relies on to decide whether a
+    download is available or already cached.
+    """
+    from uuid import uuid4 as _uuid
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+
+    downloaded_id = str(_uuid())
+    unavailable_id = str(_uuid())
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_content (provider_message_id, account_id, html_body, text_body)
+            VALUES (%(pmid)s, %(aid)s::uuid, %(html)s, %(txt)s)
+            ON CONFLICT (provider_message_id, account_id) DO UPDATE SET
+                html_body = EXCLUDED.html_body, text_body = EXCLUDED.text_body
+            """,
+            {"pmid": "m1", "aid": aid, "html": "<p>cached</p>", "txt": "cached"},
+        )
+        cur.execute(
+            """
+            INSERT INTO email_attachments (
+                attachment_id, account_id, provider_message_id, part_id,
+                provider_attachment_id, filename, mime_type, size,
+                content_id, is_inline, position
+            )
+            VALUES
+                (%(did)s, %(acc)s, 'm1', '1', NULL, 'downloaded.pdf',
+                 'application/pdf', 100, NULL, FALSE, 0),
+                (%(uid)s, %(acc)s, 'm1', '2', NULL, 'gone.pdf',
+                 'application/pdf', 100, NULL, FALSE, 1)
+            """,
+            {"did": downloaded_id, "uid": unavailable_id, "acc": aid},
+        )
+        # downloaded.pdf has a cached blob → is_downloaded must be true.
+        cur.execute(
+            """
+            INSERT INTO email_attachment_blobs
+                (attachment_id, blob, blob_storage_kind, blob_ref, fetched_at)
+            VALUES (%(aid)s, %(blob)s, 'db', NULL, now())
+            """,
+            {"aid": downloaded_id, "blob": psycopg2.Binary(b"PDFDATA")},
+        )
+        # gone.pdf was stamped unavailable (D-17) → is_unavailable must be true.
+        cur.execute(
+            "UPDATE email_attachments SET unavailable_at = now() "
+            "WHERE attachment_id = %(aid)s",
+            {"aid": unavailable_id},
+        )
+
+    resp = test_client.get(_content_url(mid, "m1", aid))
+    assert resp.status_code == 200, resp.text
+    by_name = {a["filename"]: a for a in resp.json()["attachments"]}
+    assert by_name["downloaded.pdf"]["is_downloaded"] is True
+    assert by_name["downloaded.pdf"]["is_unavailable"] is False
+    assert by_name["gone.pdf"]["is_downloaded"] is False
+    assert by_name["gone.pdf"]["is_unavailable"] is True
+
+
+def test_get_email_content_cache_miss_sanitizes_persisted_filename(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """B-SANITIZE: a provider attachment whose filename carries path
+    traversal / reserved characters is persisted with a sanitised name
+    (same D-20 treatment drafts already get). The resolved ``mime_type``
+    is persisted verbatim (resolution happens in the provider client).
+    """
+    from core.email import AttachmentMetadata
+    from tests.shared.email_fakes import FakeEmailClient
+    from api.services import emails_service
+    from core.email import EmailManager
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+
+    dangerous = AttachmentMetadata(
+        provider_message_id="m1",
+        part_id="0.1",
+        provider_attachment_id=None,
+        filename="../../etc/passwd.xlsx",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        size=2048,
+        content_id=None,
+        is_inline=False,
+        position=0,
+    )
+
+    def _build(accounts):
+        manager = EmailManager()
+        for account in accounts:
+            mailbox_id = str(account.get("mailbox_id") or "")
+            account_id = str(account.get("account_id") or "")
+            label = f"{mailbox_id}__{account_id}"
+            manager.add_client(
+                FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    list_message_attachments_return=([dangerous], {}),
+                )
+            )
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+
+    resp = test_client.get(_content_url(mid, "m1", aid))
+    assert resp.status_code == 200, resp.text
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT filename, mime_type FROM email_attachments "
+            "WHERE account_id = %s AND provider_message_id = %s",
+            (aid, "m1"),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    persisted = rows[0]["filename"]
+    assert ".." not in persisted
+    assert "/" not in persisted
+    assert persisted.endswith(".xlsx")
+    # mime_type is persisted exactly as the provider client resolved it.
+    assert rows[0]["mime_type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
