@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import psycopg2
 import pytest
 
+from ._forward_helpers import bootstrap_attachment_message
 from .e2e_config import (
     GMAIL_ACCOUNT_ID,
     GMAIL_MAILBOX_ID,
@@ -2147,6 +2148,72 @@ def test_46l_admin_purge_runs_when_token_matches(e2e_client, monkeypatch):
     assert isinstance(data["freed_bytes"], int)
     assert data["purged_count"] >= 0
     assert data["freed_bytes"] >= 0
+
+
+def _fetch_downloadable_attachment(account_id: str, provider_message_id: str):
+    """Return ``(attachment_id, filename, mime_type)`` of the first
+    non-inline attachment row for the message, or ``None``.
+    """
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT attachment_id, filename, mime_type "
+                "FROM email_attachments "
+                "WHERE account_id = %s AND provider_message_id = %s "
+                "AND is_inline = FALSE "
+                "ORDER BY position LIMIT 1",
+                (account_id, provider_message_id),
+            )
+            row = cur.fetchone()
+            return (row[0], row[1], row[2]) if row else None
+    finally:
+        conn.close()
+
+
+def test_46m_download_received_attachment_gmail(e2e_client):
+    """Download the binary of a RECEIVED Gmail attachment end-to-end (D-06).
+
+    Flow: ensure a message with a downloadable attachment exists (bootstrap
+    a self-addressed PDF if needed) → prime ``GET /content`` so the
+    attachment row is discovered/persisted → ``GET`` the download endpoint
+    and assert the response carries the real name+extension on
+    ``Content-Disposition`` and the resolved mime on ``Content-Type``.
+
+    The header verification lives in the SAME test as the download call
+    (common_mistakes.md §1 — it is the side effect of the endpoint under
+    test, not a separate behaviour).
+    """
+    candidate_pmid = bootstrap_attachment_message(
+        e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID,
+    )
+    if candidate_pmid is None:
+        pytest.skip("No Gmail message with a downloadable attachment available")
+
+    # Prime the cache-aside content endpoint so attachments are classified
+    # and persisted into email_attachments.
+    content_resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{candidate_pmid}/content"
+        f"?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(content_resp)
+
+    row = _fetch_downloadable_attachment(GMAIL_ACCOUNT_ID, candidate_pmid)
+    if row is None:
+        pytest.skip("Content fetch produced no downloadable attachment row")
+    attachment_id, filename, mime_type = row
+
+    download = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}"
+        f"/emails/{candidate_pmid}/attachments/{attachment_id}",
+    )
+    _assert_ok(download)
+    # The binary is non-empty and the headers carry the real name + mime.
+    assert len(download.content) > 0
+    disposition = download.headers["content-disposition"]
+    assert f'filename="{filename}"' in disposition
+    assert download.headers["content-type"].startswith(mime_type)
+    assert download.headers["x-content-type-options"] == "nosniff"
 
 
 # ===================================================================
