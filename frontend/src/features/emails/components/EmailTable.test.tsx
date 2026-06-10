@@ -131,6 +131,38 @@ describe('EmailTable', () => {
     expect(screen.queryByRole('button', { name: 'Página siguiente' })).not.toBeInTheDocument();
   });
 
+  it('shows only the "Para" column with the recipient in an individual SENT view', () => {
+    // This is the property the in: column-override solution relies on: the
+    // single individual column flips to "Para" when isSent is true.
+    render(
+      <EmailTable
+        emails={[makeEmail({ to_email: 'recipient@example.com', box: 'SENT' })]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="individual"
+        isSent={true}
+      />,
+    );
+    expect(screen.getByText('Para')).toBeInTheDocument();
+    expect(screen.queryByText('De')).not.toBeInTheDocument();
+    expect(screen.getByText('recipient@example.com')).toBeInTheDocument();
+  });
+
+  it('shows only the "De" column with the sender in an individual received view', () => {
+    render(
+      <EmailTable
+        emails={[makeEmail({ from_email: 'sender@example.com', box: 'ALL_MAIL' })]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="individual"
+        isSent={false}
+      />,
+    );
+    expect(screen.getByText('De')).toBeInTheDocument();
+    expect(screen.queryByText('Para')).not.toBeInTheDocument();
+    expect(screen.getByText('sender@example.com')).toBeInTheDocument();
+  });
+
   it('keeps the pager visible but hides the range while a bulk selection is active', () => {
     // The bulk bar takes over the left side (so the range is hidden), but the
     // pager stays on the right so a selection can be carried across pages.

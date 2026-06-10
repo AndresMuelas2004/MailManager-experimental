@@ -1,5 +1,10 @@
 /**
- * Integration tests for the conversation path of AccountInboxPage.
+ * Integration tests for AccountInboxPage. Two concerns are covered:
+ *
+ *  - the conversation path (thread-grouped listing + the conversation viewer
+ *    opened from a row), and
+ *  - the lupa ``in:`` operator column sync (the De/Para column follows the
+ *    effective box derived from ``q``).
  *
  * MSW intercepts HTTP at the network boundary; the real hooks, endpoint
  * functions, schema validation and React Query cache run. We never mock
@@ -27,6 +32,44 @@ import {
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
 const API_BASE = 'http://localhost:8000';
+
+// A sent email: the recipient (to_email) is the "other side" the SENT
+// column must surface; from_email is the user's own account.
+const sentEmail = {
+  provider_message_id: 'm_sent',
+  account_id: 'a_1',
+  mailbox_id: 'mb_1',
+  thread_id: null,
+  from_email: 'alice@example.com',
+  from_name: 'Alice',
+  to_email: 'recipient@example.com',
+  to_name: 'Recipient',
+  subject: 'A message I sent',
+  received_at: new Date('2024-01-12T09:00:00Z').toISOString(),
+  is_read: true,
+  box: 'SENT',
+  has_attachments: false,
+  is_favorite: false,
+};
+
+// An inbound email for the no-operator inbox case: the sender (from_email)
+// is the "other side" the received column must surface.
+const inboxEmail = {
+  provider_message_id: 'm_inbox',
+  account_id: 'a_1',
+  mailbox_id: 'mb_1',
+  thread_id: null,
+  from_email: 'sender@example.com',
+  from_name: 'Sender',
+  to_email: 'alice@example.com',
+  to_name: 'Alice',
+  subject: 'A message I received',
+  received_at: new Date('2024-01-12T09:00:00Z').toISOString(),
+  is_read: true,
+  box: 'ALL_MAIL',
+  has_attachments: false,
+  is_favorite: false,
+};
 
 const accountFixture = {
   account_id: 'a_1',
@@ -334,5 +377,74 @@ describe('AccountInboxPage — cross-mailbox per-message content (virtual-style 
 
     await waitFor(() => expect(contentMailboxes).toContain('mb_2'));
     expect(contentMailboxes).not.toContain('mb_1');
+  });
+});
+
+// Lupa ``in:`` operator column sync: the De/Para column of the individual
+// view follows the EFFECTIVE box derived from ``q`` (the row may be a thread
+// row in conversation mode, but the column-sense logic is independent of
+// grouping). The backend applies the real box override from ``q``; the
+// frontend only mirrors it cosmetically.
+describe('AccountInboxPage — in: column sync', () => {
+  it('shows the recipient under "Para" (not "De") when q carries in:sent', async () => {
+    const seenQueries: (string | null)[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenQueries.push(new URL(request.url).searchParams.get('q'));
+        return HttpResponse.json({ items: [sentEmail], total: 1, limit: 50, offset: 0 });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/m/:mailboxId/account/:accountId/sent"
+          element={<AccountInboxPage box="SENT" />}
+        />
+      </Routes>,
+      { initialEntries: ['/m/mb_1/account/a_1/sent?q=in:sent'] },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('A message I sent')).toBeInTheDocument();
+    });
+
+    // Individual view shows a single side column: with the effective box
+    // being SENT it must be "Para" with the recipient, not "De".
+    expect(screen.getByText('Para')).toBeInTheDocument();
+    expect(screen.queryByText('De')).not.toBeInTheDocument();
+    expect(screen.getByText('recipient@example.com')).toBeInTheDocument();
+
+    // q must travel literally — the frontend never rewrites operators.
+    expect(seenQueries[seenQueries.length - 1]).toBe('in:sent');
+  });
+
+  it('shows the sender under "De" in the inbox with no in: operator', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [inboxEmail], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/m/:mailboxId/account/:accountId/inbox"
+          element={<AccountInboxPage box="ALL_MAIL" />}
+        />
+      </Routes>,
+      { initialEntries: ['/m/mb_1/account/a_1/inbox'] },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('A message I received')).toBeInTheDocument();
+    });
+
+    // Received individual view shows the "De" column with the real sender.
+    expect(screen.getByText('De')).toBeInTheDocument();
+    expect(screen.queryByText('Para')).not.toBeInTheDocument();
+    expect(screen.getByText('sender@example.com')).toBeInTheDocument();
   });
 });
