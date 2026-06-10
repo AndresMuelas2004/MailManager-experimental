@@ -86,6 +86,88 @@ def _select_count_template(group_by_thread: bool, distinct: bool) -> str:
     return queries.COUNT_FILTERED_DISTINCT if distinct else queries.COUNT_FILTERED
 
 
+# Operator-clause builders for the lupa's Gmail-style operators (from:/to:/
+# subject:/has:attachment/before:/after:/is:read|unread|favorite/in: — ``in:``
+# is resolved as a box override in the service, not here). This registry is
+# INTENTIONALLY separate from ``_EXTRA_FILTER_BUILDERS``:
+#   - These operators are ad-hoc search, NOT saveable virtual-mailbox filters,
+#     so they have NO counterpart in ``VirtualMailboxFilterPayload`` /
+#     ``ALLOWED_FILTER_KEYS`` (the "two whitelists in lockstep" rule does not
+#     apply to them — see repository_guide.md / the feature plan §7).
+#   - The ``kind`` keys carry an ``_op`` suffix (or a distinct name) and the
+#     parameter names are ``op{idx}`` per occurrence, so an operator clause and
+#     a saved filter touching the SAME column (e.g. ``subject_contains`` saved
+#     + ``subject:`` from the lupa, or ``is_read`` saved + ``is:read``) emit two
+#     independent ANDed clauses with disjoint params instead of colliding. A
+#     contradiction (``is:read``+``is:unread``, inverted date range) thus yields
+#     zero rows naturally via two incompatible AND clauses.
+# Each builder takes ``(value, idx)`` and returns ``(clause_sql, params)`` with
+# a unique ``op{idx}`` parameter name so repeated operators do not collide.
+def _op_from_contains(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (
+        f"(unaccent(lower(coalesce(from_email, ''))) ILIKE unaccent(lower(%({p})s)) "
+        f"OR unaccent(lower(coalesce(from_name, ''))) ILIKE unaccent(lower(%({p})s)))",
+        {p: f"%{_escape_like(str(value))}%"},
+    )
+
+
+def _op_to_contains(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (
+        f"(unaccent(lower(coalesce(to_email, ''))) ILIKE unaccent(lower(%({p})s)) "
+        f"OR unaccent(lower(coalesce(to_name, ''))) ILIKE unaccent(lower(%({p})s)))",
+        {p: f"%{_escape_like(str(value))}%"},
+    )
+
+
+def _op_subject_contains(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (
+        f"unaccent(lower(coalesce(subject, ''))) ILIKE unaccent(lower(%({p})s))",
+        {p: f"%{_escape_like(str(value))}%"},
+    )
+
+
+def _op_has_attachments(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (f"has_attachments = %({p})s", {p: bool(value)})
+
+
+def _op_received_after(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    # ``value`` is a tz-aware datetime; psycopg2 adapts it for the
+    # comparison against ``received_at`` (TIMESTAMPTZ).
+    return (f"received_at >= %({p})s", {p: value})
+
+
+def _op_received_before(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (f"received_at < %({p})s", {p: value})
+
+
+def _op_is_read(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (f"is_read = %({p})s", {p: bool(value)})
+
+
+def _op_is_favorite(value: Any, idx: int) -> tuple[str, dict[str, Any]]:
+    p = f"op{idx}"
+    return (f"is_favorite = %({p})s", {p: bool(value)})
+
+
+_OPERATOR_CLAUSE_BUILDERS: dict[str, Callable[[Any, int], tuple[str, dict[str, Any]]]] = {
+    "from_contains": _op_from_contains,
+    "to_contains": _op_to_contains,
+    "subject_contains_op": _op_subject_contains,
+    "has_attachments": _op_has_attachments,
+    "received_after": _op_received_after,
+    "received_before": _op_received_before,
+    "is_read_op": _op_is_read,
+    "is_favorite_op": _op_is_favorite,
+}
+
+
 class PgEmailMetadataStore(EmailMetadataStore):
     """
     PostgreSQL-backed email metadata persistence.
@@ -305,6 +387,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         extra_filters: dict[str, Any] | None,
         box_in: list[str] | None,
         box_not_in: list[str] | None,
+        operator_clauses: list[tuple[str, Any]] | None = None,
     ) -> tuple[str, str, str, dict[str, Any]]:
         """Build the ``{box_predicate}``/``{search_predicate}``/``{extra_predicate}``
         slots and the named params shared by every filtered query.
@@ -321,6 +404,15 @@ class PgEmailMetadataStore(EmailMetadataStore):
         ``box_not_in`` — exclusivity is enforced upstream (services).
         Passing more than one here would emit duplicated ``AND box ...``
         clauses that AND together and silently return zero rows.
+
+        ``operator_clauses`` (the lupa's Gmail-style operators) are
+        appended to the SAME ``{extra_predicate}`` slot AFTER the
+        ``extra_filters`` dict clauses — no new SQL slot. Their parameter
+        names (``op{idx}``) are disjoint from ``extra_*`` (saved filters)
+        and ``tok{i}`` (free text), so the three never collide and an
+        operator that touches the same column as a saved filter just
+        AND-s a second clause. When ``operator_clauses`` is empty the
+        emitted SQL is byte-for-byte identical to the pre-operator query.
         """
         params: dict[str, Any] = {"account_ids": account_ids}
 
@@ -362,6 +454,14 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 clause, extra_params = builder(value)
                 extra_clauses.append(clause)
                 params.update(extra_params)
+        if operator_clauses:
+            for i, (kind, value) in enumerate(operator_clauses):
+                op_builder = _OPERATOR_CLAUSE_BUILDERS.get(kind)
+                if op_builder is None:
+                    continue
+                clause, op_params = op_builder(value, i)
+                extra_clauses.append(clause)
+                params.update(op_params)
         extra_predicate = (
             "AND " + " AND ".join(extra_clauses) if extra_clauses else ""
         )
@@ -381,6 +481,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
+        operator_clauses: list[tuple[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         if not account_ids:
             return []
@@ -391,6 +492,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                     extra_filters=extra_filters,
                     box_in=box_in,
                     box_not_in=box_not_in,
+                    operator_clauses=operator_clauses,
                 )
             )
             params["limit"] = limit
@@ -431,6 +533,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
+        operator_clauses: list[tuple[str, Any]] | None = None,
     ) -> int:
         # Mirror ``list_filtered``'s empty-accounts short-circuit: never
         # touch the DB when there is nothing to count.
@@ -443,6 +546,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                     extra_filters=extra_filters,
                     box_in=box_in,
                     box_not_in=box_not_in,
+                    operator_clauses=operator_clauses,
                 )
             )
             template = _select_count_template(
