@@ -10,7 +10,7 @@ import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
-import useDebounce from '../hooks/useDebounce';
+import useDebounce from '../../../lib/hooks/useDebounce';
 import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';

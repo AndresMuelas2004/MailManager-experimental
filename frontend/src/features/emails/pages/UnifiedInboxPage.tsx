@@ -8,7 +8,7 @@ import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
-import useDebounce from '../hooks/useDebounce';
+import useDebounce from '../../../lib/hooks/useDebounce';
 import { EMAIL_BOX_CONFIG } from '../boxes';
 import { parsePageParam } from '../../../lib/pagination';
 import { parseInOperator } from '../../../lib/searchOperators';

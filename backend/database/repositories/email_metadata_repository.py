@@ -168,6 +168,40 @@ _OPERATOR_CLAUSE_BUILDERS: dict[str, Callable[[Any, int], tuple[str, dict[str, A
 }
 
 
+def _build_recipient_token_predicate(
+    tokens: list[str],
+    email_col: str,
+    name_col: str,
+    params: dict[str, Any],
+) -> str:
+    """Build the AND-chained token predicate for one ``(email, name)``
+    column pair, mutating *params* with the shared ``rtok{i}`` keys.
+
+    Each token is OR'd across the two columns with accent-/case-
+    insensitive substring match — same shape as the search predicate in
+    ``_build_filter_predicates``. Returns ``""`` when there are no
+    tokens (so the SQL slot stays empty). ``email_col`` / ``name_col``
+    are hardcoded by the caller (never user input), so concatenating
+    them into the clause carries no injection risk.
+
+    Both UNION ALL branches of ``LIST_RECIPIENT_SUGGESTIONS`` reference
+    the SAME ``%(rtok{i})s`` params, so this helper is called once per
+    branch and writes the same values into *params* on each call
+    (idempotent — the second call overwrites with identical values).
+    """
+    if not tokens:
+        return ""
+    clauses: list[str] = []
+    for i, token in enumerate(tokens):
+        key = f"rtok{i}"
+        params[key] = f"%{_escape_like(token)}%"
+        clauses.append(
+            f"(unaccent(lower(coalesce({email_col}, ''))) ILIKE unaccent(lower(%({key})s))"
+            f" OR unaccent(lower(coalesce({name_col}, ''))) ILIKE unaccent(lower(%({key})s)))"
+        )
+    return "AND " + " AND ".join(clauses)
+
+
 class PgEmailMetadataStore(EmailMetadataStore):
     """
     PostgreSQL-backed email metadata persistence.
@@ -695,6 +729,44 @@ class PgEmailMetadataStore(EmailMetadataStore):
             raise QueryError(
                 f"Unexpected email favorites batch update error ({type(exc).__name__}): {exc}"
             ) from exc
+
+    def list_recipient_suggestions(
+        self,
+        account_ids: list[str],
+        tokens: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        # Mirror the empty-accounts short-circuit of the filtered queries:
+        # never touch the DB when there is nothing to aggregate.
+        if not account_ids:
+            return []
+        try:
+            params: dict[str, Any] = {"account_ids": account_ids, "limit": limit}
+            from_pred = _build_recipient_token_predicate(
+                tokens, "from_email", "from_name", params
+            )
+            to_pred = _build_recipient_token_predicate(
+                tokens, "to_email", "to_name", params
+            )
+            sql = queries.LIST_RECIPIENT_SUGGESTIONS.format(
+                from_token_predicate=from_pred,
+                to_token_predicate=to_pred,
+            )
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(sql, params)
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list recipient suggestions.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected recipient suggestions error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return [dict(row) for row in rows]
 
 
 email_metadata_store = PgEmailMetadataStore()

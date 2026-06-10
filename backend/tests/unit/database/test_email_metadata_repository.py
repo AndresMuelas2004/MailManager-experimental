@@ -14,7 +14,10 @@ import psycopg2.errors
 import pytest
 
 from database.repositories import email_metadata_repository as em_module
-from database.repositories.email_metadata_repository import _escape_like
+from database.repositories.email_metadata_repository import (
+    _build_recipient_token_predicate,
+    _escape_like,
+)
 from database.errors.exceptions import ConnectionPoolError, QueryError
 from tests.shared.database_fakes import FakeCursor, patch_connection, patch_connection_error
 
@@ -1455,3 +1458,196 @@ def test_count_filtered_propagates_connection_pool_error(monkeypatch):
 
     with pytest.raises(ConnectionPoolError, match="pool down"):
         em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])
+
+
+# ===== _build_recipient_token_predicate (pure helper) =====
+# Same shape as the search predicate but for one (email, name) column pair.
+# Both UNION ALL branches of LIST_RECIPIENT_SUGGESTIONS reference the SAME
+# rtok{i} params, so the helper is called once per branch and writes the
+# same values each time (idempotent overwrite).
+
+
+def test_build_recipient_token_predicate_empty_returns_empty_string_no_params():
+    params: dict = {}
+    assert _build_recipient_token_predicate([], "from_email", "from_name", params) == ""
+    # No keys leak into params for an empty token list.
+    assert params == {}
+
+
+def test_build_recipient_token_predicate_starts_with_and_and_ors_the_pair():
+    params: dict = {}
+    clause = _build_recipient_token_predicate(["foo"], "from_email", "from_name", params)
+    assert clause.startswith("AND ")
+    # One OR block over the two columns of the pair, ILIKE on each side.
+    assert clause.count("ILIKE") == 2
+    assert "coalesce(from_email, '')" in clause
+    assert "coalesce(from_name, '')" in clause
+    assert " OR " in clause
+
+
+def test_build_recipient_token_predicate_uses_the_columns_passed():
+    # The to-side branch must reference to_email / to_name, not from_*.
+    params: dict = {}
+    clause = _build_recipient_token_predicate(["foo"], "to_email", "to_name", params)
+    assert "coalesce(to_email, '')" in clause
+    assert "coalesce(to_name, '')" in clause
+    assert "from_email" not in clause
+    assert "from_name" not in clause
+
+
+def test_build_recipient_token_predicate_and_chains_multiple_tokens():
+    params: dict = {}
+    clause = _build_recipient_token_predicate(
+        ["foo", "bar"], "from_email", "from_name", params,
+    )
+    # Two tokens → two parenthesised OR blocks joined by AND (4 ILIKEs total).
+    assert clause.count("ILIKE") == 4
+    assert params["rtok0"] == "%foo%"
+    assert params["rtok1"] == "%bar%"
+    # Tokens are AND-combined inside the clause.
+    assert " AND " in clause[len("AND "):]
+
+
+def test_build_recipient_token_predicate_escapes_metacharacters_per_token():
+    params: dict = {}
+    _build_recipient_token_predicate(
+        ["50%_off\\bar"], "from_email", "from_name", params,
+    )
+    # Wrapped with % on both sides AFTER _escape_like, so the original
+    # %, _ and \ arrive pre-escaped and do not act as ILIKE metacharacters.
+    assert params["rtok0"] == "%50\\%\\_off\\\\bar%"
+
+
+def test_build_recipient_token_predicate_is_idempotent_across_both_branches():
+    # Called once for the from-pair and once for the to-pair against the
+    # SAME params dict: the second call overwrites rtok{i} with identical
+    # values (the shared named params are the whole point).
+    params: dict = {}
+    _build_recipient_token_predicate(["foo", "bar"], "from_email", "from_name", params)
+    snapshot = dict(params)
+    _build_recipient_token_predicate(["foo", "bar"], "to_email", "to_name", params)
+    assert params == snapshot
+    assert set(params) == {"rtok0", "rtok1"}
+
+
+# ===== list_recipient_suggestions =====
+# Aggregates recipient-autocomplete candidates from from_* (received) and
+# to_* (sent) across the user's accounts, dedups by lower(email), excludes
+# the user's own account addresses, orders by frequency then recency.
+
+
+def _suggestion_row(**overrides):
+    base = {
+        "email": "alice@example.com",
+        "name": "Alice",
+        "frequency": 2,
+        "last_seen": datetime.now(timezone.utc),
+    }
+    base.update(overrides)
+    return base
+
+
+def test_list_recipient_suggestions_empty_account_ids_returns_empty_without_db_call(monkeypatch):
+    # Mirror list_filtered: empty scope short-circuits BEFORE the connection
+    # is touched (no leaking suggestions from an unauthorised account set).
+    def _explode():
+        raise AssertionError("get_connection must not be called for empty account_ids")
+
+    monkeypatch.setattr(em_module.connection, "get_connection", _explode)
+    assert em_module.email_metadata_store.list_recipient_suggestions([], ["am"], 8) == []
+
+
+def test_list_recipient_suggestions_happy_path_sql_surface_and_params(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_suggestion_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.list_recipient_suggestions(
+        ["acc1"], ["am"], 8,
+    )
+    assert len(result) == 1
+    assert result[0]["email"] == "alice@example.com"
+    sql, params = cursor.executed[0]
+    # The aggregation CTE with both candidate branches.
+    assert "WITH candidates" in sql
+    assert sql.count("UNION ALL") == 1
+    # Both UNION branches must restrict to non-SPAM/TRASH/DELETED boxes — a
+    # regression dropping this would leak SPAM/TRASH addresses into the
+    # recipient suggestions (load-bearing per repository_guide.md).
+    assert sql.count("box NOT IN ('SPAM', 'TRASH', 'DELETED')") == 2
+    # The own-address exclusion subquery against accounts.email_address.
+    assert "lower(a.email_address)" in sql
+    # Both branches share the rtok0 named param built from the single token.
+    assert params["rtok0"] == "%am%"
+    assert params["account_ids"] == ["acc1"]
+    assert params["limit"] == 8
+
+
+def test_list_recipient_suggestions_no_tokens_omits_token_predicate(monkeypatch):
+    # An empty token list leaves both SQL slots empty: no ILIKE / rtok params.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_recipient_suggestions(["acc1"], [], 8)
+    sql, params = cursor.executed[0]
+    assert "ILIKE" not in sql
+    assert not any(k.startswith("rtok") for k in params)
+
+
+def test_list_recipient_suggestions_escapes_token_metacharacters(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_recipient_suggestions(
+        ["acc1"], ["50%_off\\bar"], 8,
+    )
+    _, params = cursor.executed[0]
+    assert params["rtok0"] == "%50\\%\\_off\\\\bar%"
+
+
+def test_list_recipient_suggestions_returns_dicts_with_name_none_passed_through(monkeypatch):
+    # The store does NOT normalise name=None/'' — that is the service's job.
+    rows = [
+        _suggestion_row(email="a@b.com", name=None),
+        _suggestion_row(email="c@d.com", name=""),
+    ]
+    cursor = FakeCursor(fetchall_results=[rows])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.list_recipient_suggestions(
+        ["acc1"], ["am"], 8,
+    )
+    assert all(isinstance(r, dict) for r in result)
+    assert result[0]["name"] is None
+    assert result[1]["name"] == ""
+
+
+def test_list_recipient_suggestions_invalid_text_returns_empty(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.list_recipient_suggestions(
+        ["not-a-uuid"], ["am"], 8,
+    ) == []
+
+
+def test_list_recipient_suggestions_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to list recipient suggestions"):
+        em_module.email_metadata_store.list_recipient_suggestions(["acc1"], ["am"], 8)
+
+
+def test_list_recipient_suggestions_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.list_recipient_suggestions(["acc1"], ["am"], 8)
+
+
+def test_list_recipient_suggestions_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.list_recipient_suggestions(["acc1"], ["am"], 8)

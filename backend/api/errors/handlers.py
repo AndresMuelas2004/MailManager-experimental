@@ -70,6 +70,7 @@ from api.errors.exceptions import (
     MoveToTrashError,
     PurgeDisabled,
     RecipientsMissing,
+    RecipientSuggestionsError,
     ReadStatusUpdateError,
     EmailListError,
     RequestTooLarge,
@@ -165,6 +166,8 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     VirtualMailboxNotFound: status.HTTP_404_NOT_FOUND,
     VirtualMailboxOperationError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # Contacts (recipient autocomplete)
+    RecipientSuggestionsError: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
 

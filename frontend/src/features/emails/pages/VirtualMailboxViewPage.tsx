@@ -6,7 +6,7 @@ import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import useEmailViewer from '../hooks/useEmailViewer';
-import useDebounce from '../hooks/useDebounce';
+import useDebounce from '../../../lib/hooks/useDebounce';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
 import { parsePageParam } from '../../../lib/pagination';

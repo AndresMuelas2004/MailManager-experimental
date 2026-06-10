@@ -81,6 +81,9 @@ function renderOverlay(overrides: RenderOpts = {}) {
     attachmentTotalSize: 0,
     onAddFiles,
     onRemoveAttachment,
+    recipientSuggestions: [],
+    recipientSuggestionsLoading: false,
+    onRecipientQueryChange: noop,
   };
 
   const utils = render(<ComposeOverlay {...defaults} {...overrides} />);

@@ -406,3 +406,13 @@ class VirtualMailboxOperationError(ApiError):
 class VirtualMailboxListError(ApiError):
     """Unexpected failure while resolving the filtered email listing of a virtual mailbox."""
     code = "virtual_mailbox_list_error"
+
+
+# ---------------------------------------------------------------------------
+# Contacts (recipient autocomplete — aggregated from synced email_metadata).
+# ---------------------------------------------------------------------------
+
+
+class RecipientSuggestionsError(ApiError):
+    """Unexpected failure while building recipient autocomplete suggestions."""
+    code = "recipient_suggestions_error"

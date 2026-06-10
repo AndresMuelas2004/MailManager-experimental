@@ -4,11 +4,12 @@ import { Paperclip, Save, Send, X, ChevronDown } from 'lucide-react';
 import Spinner from '../common/Spinner';
 import AttachmentChip, { type ComposerAttachmentChipDisplay } from './AttachmentChip';
 import RichTextEditor from './RichTextEditor';
+import RecipientAutocompleteInput from './RecipientAutocompleteInput';
 import { getProviderMeta } from '../../lib/providers';
 import { MAX_MESSAGE_SIZE, formatBytes } from '../../lib/attachments';
 import type { ComposerMode } from '../../lib/types';
 import type { UiError } from '../../api/client/errors';
-import type { AccountOut } from '../../api/types/dto';
+import type { AccountOut, ContactSuggestion } from '../../api/types/dto';
 
 type ComposeAccount = Pick<
   AccountOut,
@@ -56,6 +57,14 @@ type Props = {
   attachmentTotalSize: number;
   onAddFiles: (files: File[]) => void;
   onRemoveAttachment: (chipId: string) => void;
+  // Recipient autocomplete. The same suggestions / loading feed all three
+  // recipient fields; only the focused field shows its dropdown, and each
+  // instance filters out addresses already present in its own ``value``.
+  // ``onRecipientQueryChange`` reports the active fragment of whichever field
+  // the user is editing so the host can debounce + fetch.
+  recipientSuggestions: ContactSuggestion[];
+  recipientSuggestionsLoading: boolean;
+  onRecipientQueryChange: (fragment: string) => void;
 };
 
 const TITLE_BY_MODE: Record<ComposerMode, string> = {
@@ -100,6 +109,9 @@ export default function ComposeOverlay({
   attachmentTotalSize,
   onAddFiles,
   onRemoveAttachment,
+  recipientSuggestions,
+  recipientSuggestionsLoading,
+  onRecipientQueryChange,
 }: Props) {
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [ccBccOpen, setCcBccOpen] = useState(() => cc.trim().length > 0 || bcc.trim().length > 0);
@@ -170,50 +182,47 @@ export default function ComposeOverlay({
       </div>
 
       <div className="flex flex-col gap-4 px-5 pb-5">
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-zinc-900">Para</label>
-            {!ccBccOpen && (
-              <button
-                type="button"
-                onClick={() => setCcBccOpen(true)}
-                className="text-xs font-medium text-blue-600 hover:text-blue-700"
-              >
-                Añadir CC/BCC
-              </button>
-            )}
-          </div>
-          <input
-            type="text"
+        <div className="relative">
+          {!ccBccOpen && (
+            <button
+              type="button"
+              onClick={() => setCcBccOpen(true)}
+              className="absolute top-0 right-0 z-10 text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
+              Añadir CC/BCC
+            </button>
+          )}
+          <RecipientAutocompleteInput
+            label="Para"
             value={to}
-            onChange={(e) => onToChange(e.target.value)}
+            onChange={onToChange}
             placeholder="correo@ejemplo.com"
-            className="h-10 rounded-[10px] border-[1.5px] border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
+            suggestions={recipientSuggestions}
+            loading={recipientSuggestionsLoading}
+            onQueryChange={onRecipientQueryChange}
           />
         </div>
 
         {ccBccOpen && (
           <>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium text-zinc-900">CC</label>
-              <input
-                type="text"
-                value={cc}
-                onChange={(e) => onCcChange(e.target.value)}
-                placeholder="cc@ejemplo.com"
-                className="h-10 rounded-[10px] border-[1.5px] border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium text-zinc-900">BCC</label>
-              <input
-                type="text"
-                value={bcc}
-                onChange={(e) => onBccChange(e.target.value)}
-                placeholder="bcc@ejemplo.com"
-                className="h-10 rounded-[10px] border-[1.5px] border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
-              />
-            </div>
+            <RecipientAutocompleteInput
+              label="CC"
+              value={cc}
+              onChange={onCcChange}
+              placeholder="cc@ejemplo.com"
+              suggestions={recipientSuggestions}
+              loading={recipientSuggestionsLoading}
+              onQueryChange={onRecipientQueryChange}
+            />
+            <RecipientAutocompleteInput
+              label="BCC"
+              value={bcc}
+              onChange={onBccChange}
+              placeholder="bcc@ejemplo.com"
+              suggestions={recipientSuggestions}
+              loading={recipientSuggestionsLoading}
+              onQueryChange={onRecipientQueryChange}
+            />
           </>
         )}
 

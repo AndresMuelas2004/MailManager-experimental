@@ -47,6 +47,7 @@ from api.routers.attachments_routers import (
     email_attachments_router,
 )
 from api.routers.auth_routers import router as auth_router
+from api.routers.contacts_routers import router as contacts_router
 from api.routers.drafts_routers import router as drafts_router
 from api.routers.emails_routers import (
     favorites_router,
@@ -100,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(emails_router)
     app.include_router(favorites_router)
     app.include_router(virtual_mailboxes_router)
+    app.include_router(contacts_router)
     app.include_router(drafts_router)
     app.include_router(email_attachments_router)
     app.include_router(attachments_admin_router)

@@ -342,6 +342,37 @@ class EmailMetadataStore(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def list_recipient_suggestions(
+        self,
+        account_ids: list[str],
+        tokens: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Aggregate distinct recipient-autocomplete suggestions.
+
+        Collects candidate addresses from BOTH the senders of received
+        mail (``from_email`` / ``from_name``) and the recipients of sent
+        mail (``to_email`` / ``to_name``) across every account in
+        ``account_ids``, restricted to boxes other than SPAM / TRASH /
+        DELETED, and excluding the user's own account addresses
+        (``accounts.email_address``).
+
+        ``tokens`` are AND-combined; for each token the predicate is OR'd
+        across the ``(email, name)`` pair with accent-/case-insensitive
+        substring match. The tokens MUST already be parsed by the
+        service (``parse_search_tokens``) — LIKE metacharacters are
+        escaped inside the repository.
+
+        Returns one row per distinct ``lower(email)``, each
+        ``{"email": str, "name": str | None, "frequency": int,
+        "last_seen": datetime}``, ordered by frequency then recency
+        (most-recent non-empty name wins for ``name``), capped at
+        ``limit``. Returns ``[]`` without touching the database when
+        ``account_ids`` is empty.
+        """
+        raise NotImplementedError
+
 
 class EmailContentStore(ABC):
     """

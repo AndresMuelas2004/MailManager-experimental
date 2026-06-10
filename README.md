@@ -24,6 +24,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Email search with Gmail-style operators (`from:`, `to:`, `subject:`, `has:attachment`, `before:`/`after:`, `is:`, `in:`) on top of free-text substring matching, all over the locally synced metadata.
 - Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
+- Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow plus silent re-authentication.
@@ -261,6 +262,10 @@ Drafts:
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments/copy-from-email` — Copy downloadable attachments from a received email into a Forward draft (R-06 / R-12). Always returns 200 even on partial failure: per-row failures (provider 404/410, size / count cap hit, already-copied) surface via the `skipped[]` array. Idempotent — a retry skips rows already landed via `source_attachment_id`. Gmail downloads + re-uploads; Outlook is a no-op (drafts created via `createForward` already inherited attachments server-side).
 - `POST /admin/attachments/purge` — Admin maintenance endpoint that drops `email_attachment_blobs` rows whose `email_attachments.last_accessed_at` is older than 30 days (TTL purge, D-15). Requires the `X-Admin-Token` header to match the `ATTACHMENTS_PURGE_TOKEN` env var; 503 `purge_disabled` when the env var is unset, 401 `invalid_admin_token` when set but the header is missing/wrong.
 
+Contacts (recipient autocomplete):
+
+- `GET /contacts/suggestions` — User-level (not mailbox-scoped). Required query param `q` (2-200 chars; whitespace-only collapses to `[]`). Optional `limit` (default 8, max 20). Returns a bare `[{ email, name }]` array of distinct addresses known from the synced mail of every account the user owns — senders of received mail plus recipients of sent mail — matched as accent-/case-insensitive substring, ordered by frequency then recency, excluding the user's own connected-account addresses and anything seen only in SPAM/TRASH. Local-only (no provider call).
+
 Auth:
 
 - `POST /auth/google`
@@ -321,6 +326,7 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `user_operation_error` — 500
 - `virtual_mailbox_operation_error` — 500
 - `virtual_mailbox_list_error` — 500
+- `recipient_suggestions_error` — 500
 - `email_fetch_error` — 502
 - `email_send_error` — 502
 - `external_api_error` — 502
