@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 
+import { htmlIsEmpty, normalizeEmpty } from '../../../lib/richText';
 import type { DraftOut, ReplyKindDto } from '../../../api/types/dto';
 
 export type ComposerSnapshot = {
@@ -106,7 +107,12 @@ function snapshotsDiffer(a: ComposerSnapshot, b: ComposerSnapshot): boolean {
     a.cc !== b.cc ||
     a.bcc !== b.bcc ||
     a.subject !== b.subject ||
-    a.body !== b.body
+    // ``body`` is HTML. Normalise both sides so a ``<p></p>`` residual in the
+    // backend-seeded snapshot does not read as "dirty" against the editor's
+    // serialised empty document (and vice-versa). A false positive here would
+    // make a freshly-opened composer look unsaved; a false negative would let
+    // "Enviar borrador" send stale HTML (it skips the PATCH when not dirty).
+    normalizeEmpty(a.body) !== normalizeEmpty(b.body)
   );
 }
 
@@ -160,7 +166,10 @@ export default function useComposerForm(): UseComposerFormReturn {
       cc: initialCc,
       bcc: initialBcc,
       subject: draft.subject,
-      body: draft.body,
+      // Store the normalised HTML so the snapshot matches what the editor
+      // will report after seeding (the backend may send a ``<p></p>``
+      // residual the editor would serialise differently).
+      body: normalizeEmpty(draft.body),
     };
   }, []);
 
@@ -188,7 +197,9 @@ export default function useComposerForm(): UseComposerFormReturn {
         cc: initialCc,
         bcc: '',
         subject: args.subject,
-        body: args.body,
+        // Normalised to match the editor's post-seed serialisation (see
+        // ``seedFromDraft``).
+        body: normalizeEmpty(args.body),
       };
     },
     [],
@@ -213,7 +224,9 @@ export default function useComposerForm(): UseComposerFormReturn {
       cc.trim().length > 0 ||
       bcc.trim().length > 0 ||
       subject.trim().length > 0 ||
-      body.trim().length > 0,
+      // ``body`` is HTML: a lone ``<p></p>`` / ``<br>`` must NOT count as
+      // content (otherwise the close dialog fires on an untouched composer).
+      !htmlIsEmpty(body),
     [to, cc, bcc, subject, body],
   );
 

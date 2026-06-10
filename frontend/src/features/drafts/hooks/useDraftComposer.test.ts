@@ -595,6 +595,119 @@ describe('useDraftComposer — bootstrap failure path', () => {
   });
 });
 
+describe('useDraftComposer — HTML emptiness drives content/dirty checks', () => {
+  it('treats a lone empty paragraph as no content (closeWithX closes immediately)', async () => {
+    installBootstrapHandlers();
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // A residual ``<p></p>`` is "visually empty": hasAnyContent (via
+    // htmlIsEmpty) must NOT count it, so closeWithX closes without a dialog.
+    act(() => {
+      result.current.setBody('<p></p>');
+    });
+    act(() => {
+      result.current.closeWithX();
+    });
+    expect(result.current.open).toBe(false);
+    expect(result.current.closeDialogOpen).toBe(false);
+  });
+
+  it('treats real HTML content as dirty (closeWithX opens the discard dialog)', async () => {
+    installBootstrapHandlers();
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // A paragraph with text counts as content, so the close confirmation
+    // dialog must appear instead of silently discarding the draft.
+    act(() => {
+      result.current.setBody('<p>texto</p>');
+    });
+    act(() => {
+      result.current.closeWithX();
+    });
+    expect(result.current.closeDialogOpen).toBe(true);
+    expect(result.current.open).toBe(true);
+  });
+});
+
+describe('useDraftComposer — body size gating', () => {
+  it('flags bodyError and blocks the send-email action when the body exceeds the cap', async () => {
+    installBootstrapHandlers();
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // A valid recipient + small body: the send action is allowed and there
+    // is no body error.
+    act(() => {
+      result.current.setTo('to@example.com');
+      result.current.setBody('<p>hi</p>');
+    });
+    expect(result.current.bodyError).toBeNull();
+    expect(result.current.canSendEmail).toBe(true);
+
+    // Push the body past the 1,000,000-char cap: bodyError appears and the
+    // send action is blocked (the client-side guard mirrors the backend's
+    // Pydantic max_length).
+    act(() => {
+      result.current.setBody('x'.repeat(1_000_001));
+    });
+    expect(result.current.bodyError).not.toBeNull();
+    expect(result.current.bodyError?.code).toBe('body_too_large');
+    expect(result.current.canSendEmail).toBe(false);
+  });
+
+  it('blocks save-draft and send-draft on an existing draft when the body is too big', async () => {
+    installBootstrapHandlers();
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    // edit_draft sets accountId + providerDraftId, enabling both draft
+    // actions; the gating must also hold on these paths because
+    // handleSendEmail reroutes through sendDraftNow once a draft exists.
+    act(() => {
+      result.current.openForEditDraft({
+        provider_draft_id: 'drf_existing',
+        account_id: 'acc_1',
+        to_recipients: ['someone@example.com'],
+        cc_recipients: [],
+        bcc_recipients: [],
+        subject: 'Existing',
+        body: '<p>body</p>',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        attachments: [],
+      });
+    });
+    await waitFor(() => expect(result.current.mode).toBe('edit_draft'));
+
+    expect(result.current.canSaveDraft).toBe(true);
+    expect(result.current.canSendDraft).toBe(true);
+
+    act(() => {
+      result.current.setBody('x'.repeat(1_000_001));
+    });
+    expect(result.current.bodyError).not.toBeNull();
+    expect(result.current.canSaveDraft).toBe(false);
+    expect(result.current.canSendDraft).toBe(false);
+  });
+});
+
 /**
  * Reply / Reply All / Forward — composer opens with prefilled state.
  *
@@ -651,7 +764,11 @@ function replyContextFixture(replyKind: 'reply' | 'reply_all' | 'forward') {
       to_recipients: [] as string[],
       cc_recipients: [] as string[],
       subject: 'Fwd: Hello',
-      body: '\n\n---------- Mensaje reenviado ----------\nDe: Ana <ana@example.com>\nAsunto: Hello\n',
+      // ``body`` is HTML now (rich-text composer): the forward block + the
+      // original quoted inside a <blockquote>.
+      body:
+        '<p>---------- Mensaje reenviado ----------<br>De: Ana &lt;ana@example.com&gt;<br>Asunto: Hello</p>' +
+        '<blockquote style="border-left:2px solid #ccc"><p>Hello</p></blockquote>',
     };
   }
   return {
@@ -659,7 +776,10 @@ function replyContextFixture(replyKind: 'reply' | 'reply_all' | 'forward') {
     to_recipients: ['ana@example.com'],
     cc_recipients: replyKind === 'reply_all' ? ['carol@x.com'] : ([] as string[]),
     subject: 'Re: Hello',
-    body: '\n\nEl 23 de mayo de 2026, Ana Lopez <ana@example.com> escribió:\n\n> Hello',
+    // ``body`` is HTML: attribution line + the original inside a <blockquote>.
+    body:
+      '<p>El 23 de mayo de 2026, Ana Lopez &lt;ana@example.com&gt; escribió:</p>' +
+      '<blockquote style="border-left:2px solid #ccc"><p>Hello</p></blockquote>',
   };
 }
 
@@ -763,6 +883,13 @@ describe('useDraftComposer — openForReply', () => {
       // To-recipients prefilled from the reply context.
       expect(result.current.to).toBe('ana@example.com');
     });
+
+    // The seeded body is the HTML quote from reply-context. This hook is a
+    // ``renderHook`` test that does NOT mount RichTextEditor (the editor lives
+    // inside ComposeOverlay), so ``result.current.body`` is exactly the
+    // ``context.body`` ``seedForReply`` stored via ``setBody`` — verbatim,
+    // without passing through ProseMirror.
+    expect(result.current.body).toContain('<blockquote');
 
     // One call to each of: reply-context + create-draft.
     expect(counters.replyContext).toBe(1);

@@ -3,6 +3,7 @@ import { Paperclip, Save, Send, X, ChevronDown } from 'lucide-react';
 
 import Spinner from '../common/Spinner';
 import AttachmentChip, { type ComposerAttachmentChipDisplay } from './AttachmentChip';
+import RichTextEditor from './RichTextEditor';
 import { getProviderMeta } from '../../lib/providers';
 import { MAX_MESSAGE_SIZE, formatBytes } from '../../lib/attachments';
 import type { ComposerMode } from '../../lib/types';
@@ -33,6 +34,7 @@ type Props = {
   saving: boolean;
   error: UiError | null;
   recipientError: UiError | null;
+  bodyError: UiError | null;
   canSendEmail: boolean;
   canSaveDraft: boolean;
   canSendDraft: boolean;
@@ -84,6 +86,7 @@ export default function ComposeOverlay({
   saving,
   error,
   recipientError,
+  bodyError,
   canSendEmail,
   canSaveDraft,
   canSendDraft,
@@ -275,18 +278,22 @@ export default function ComposeOverlay({
 
         <div className="flex flex-1 flex-col gap-1.5">
           <label className="text-sm font-medium text-zinc-900">Mensaje</label>
-          <textarea
+          {/* Body is HTML now: RichTextEditor.onChange already hands back the
+              HTML string (no event adapter). Safe-rendering rationale lives in
+              RichTextEditor (no dangerouslySetInnerHTML; backend re-sanitises). */}
+          <RichTextEditor
             value={body}
-            onChange={(e) => onBodyChange(e.target.value)}
+            onChange={onBodyChange}
             placeholder="Escribe tu mensaje..."
-            rows={6}
-            className="resize-none rounded-[10px] border-[1.5px] border-zinc-200 p-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
+            disabled={sending || saving}
+            ariaLabel="Cuerpo del mensaje"
           />
         </div>
 
         {recipientError && (
           <p className="text-center text-sm text-red-600">{recipientError.message}</p>
         )}
+        {bodyError && <p className="text-center text-sm text-red-600">{bodyError.message}</p>}
         {error && <p className="text-center text-sm text-red-600">{error.message}</p>}
 
         {attachmentsEnabled ? (
