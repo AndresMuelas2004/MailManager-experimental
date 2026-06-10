@@ -11,8 +11,11 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 - Las **acciones por correo y en bloque** (marcar leído, mover a papelera, spam, restaurar) se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
 - **Abrir un correo** y ver su cuerpo se documenta en [visualizacion-de-correos.md](visualizacion-de-correos.md).
 - Las **bandejas ficticias** (vistas curadas por criterios) se documentan en [bandejas-ficticias.md](bandejas-ficticias.md).
+- La **agrupación por conversación** (que es como se presentan hoy las filas en las cuatro bandejas reales y en la unificada) se documenta en [conversaciones.md](conversaciones.md).
 
 Este documento se centra en el esqueleto: **la tabla de correos de una bandeja real**.
+
+> **Importante — cómo leer este documento hoy.** En las cuatro bandejas reales y en la unificada, las filas se presentan **agrupadas por conversación**: cada fila es un **hilo** (no un mensaje suelto), es de **solo lectura** y su única acción es **abrir** la conversación. Eso cambia tres cosas que este documento describe en su forma "clásica" (un mensaje por fila): la fila **ya no** tiene casilla de selección, **ni** estrella clicable, **ni** barra de acciones masivas, y el total "X–Y de Z" cuenta **hilos**, no mensajes. Todo eso —y el visor que enseña la cadena completa— vive en [conversaciones.md](conversaciones.md). El esqueleto que sí sigue vigente tal cual (de dónde salen los correos, las cuatro bandejas, el orden, la paginación numerada, el enrutado de cada acción al buzón real) se describe aquí. La **única** superficie que conserva la fila clásica con selección, acciones masivas y estrella clicable es la pestaña de **Favoritos** ([favoritos.md](favoritos.md)), que no agrupa.
 
 ---
 
@@ -66,6 +69,8 @@ Si un mailbox no tiene ninguna cuenta conectada, la vista unificada devuelve una
 
 ## 4. Cómo se ve cada fila
 
+> Esta sección describe la fila **clásica** (un mensaje por fila), que hoy aplica tal cual a la pestaña de **Favoritos**. En las cuatro bandejas reales y en la unificada, las filas se agrupan por conversación y son de solo lectura (sin casilla ni estrella clicable) — ver [conversaciones.md](conversaciones.md). El resto de lo que aquí se cuenta (proveedor, columnas "Para"/"De", clip de adjunto, fecha, los tres indicadores de estado) **sí** sigue aplicando a la fila-conversación, solo que con los indicadores **agregados** sobre el hilo en lugar de un único mensaje.
+
 Cada correo es una fila. De izquierda a derecha el usuario ve: una casilla de selección, una estrella de favorito, el **proveedor** del que viene (un nombre amigable tipo "Gmail" / "Outlook"), una o dos columnas de personas ("Para" / "De"), el **asunto** (con un clip delante si trae adjuntos) y la **fecha**.
 
 ### 4.1 Los tres indicadores de estado por fila
@@ -74,7 +79,7 @@ Tres señales visuales resumen el estado de cada correo sin tener que abrirlo:
 
 - **No leído.** Un correo sin leer se pinta en **negrita** y con un **fondo gris** que lo separa del resto; los leídos van en peso normal sobre fondo blanco. Es la señal más inmediata de "esto es nuevo / pendiente".
 - **Clip de adjuntos.** Si el correo tiene al menos un adjunto **descargable**, aparece un icono de clip junto al asunto. Los correos que solo traen imágenes incrustadas en el cuerpo (logos, firmas con foto) **no** muestran clip — igual que Gmail y Outlook web. Hay un matiz deliberado: ese indicador arranca apagado y solo se enciende **la primera vez que alguien abre el correo** y la app descubre que tenía partes descargables. Es decir, justo después de sincronizar, un correo con adjuntos que nadie ha abierto puede no mostrar clip todavía. Es una simplificación consciente del MVP; el porqué completo está en [adjuntos.md](adjuntos.md).
-- **Favorito.** Una estrella marcada indica que el correo es favorito. La estrella es **clicable directamente desde la lista** para marcar/desmarcar sin abrir el correo. El favorito es **independiente** de la bandeja y del estado de lectura: un correo favorito sigue siéndolo aunque se mueva entre bandejas o se marque como leído. El detalle de ese toggle vive en [favoritos.md](favoritos.md).
+- **Favorito.** Una estrella marcada indica que el correo es favorito. En la fila **clásica** (Favoritos) la estrella es **clicable directamente desde la lista** para marcar/desmarcar sin abrir el correo; en la **fila-conversación** la estrella es un indicador **agregado de solo lectura** (favorito si lo es algún mensaje del hilo) y el marcado se hace por mensaje dentro del visor ([conversaciones.md](conversaciones.md)). El favorito es **independiente** de la bandeja y del estado de lectura: un correo favorito sigue siéndolo aunque se mueva entre bandejas o se marque como leído. El detalle de ese toggle vive en [favoritos.md](favoritos.md).
 
 #### Ejemplo
 
@@ -131,7 +136,7 @@ Dentro de una misma sesión, si el usuario sale y vuelve a la bandeja en un inte
 El listado se recorre **por páginas numeradas**, no con scroll infinito ni con un botón de "cargar más". Cada página muestra un bloque fijo de correos (los más recientes primero); el tamaño de página exacto está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md). Debajo de la tabla aparece una **barra de paginación** con tres elementos:
 
 - **"Anterior" / "Siguiente"**, para moverse una página atrás o adelante. Quedan **deshabilitados** en los extremos (en la primera página no se puede ir atrás; en la última, adelante).
-- Un indicador **"X–Y de Z"** (por ejemplo, `1–50 de 1.234`) que dice qué rango de correos se está viendo y, sobre todo, **cuántos correos hay en total** en esa bandeja/vista. Los miles se agrupan con punto.
+- Un indicador **"X–Y de Z"** (por ejemplo, `1–50 de 1.234`) que dice qué rango se está viendo y, sobre todo, **cuántos elementos hay en total** en esa bandeja/vista. Los miles se agrupan con punto. En las bandejas que **agrupan por conversación**, "Z" cuenta **hilos** (no mensajes sueltos) y una conversación nunca se parte entre dos páginas — ver [conversaciones.md](conversaciones.md); en Favoritos, "Z" cuenta mensajes.
 - **Números de página** clicables que saltan directamente a una página concreta. Cuando hay muchas páginas, los tramos intermedios se resumen con puntos suspensivos (`1 … 4 5 6 … 25`), mostrando siempre la primera, la última y una ventana alrededor de la actual.
 
 Esto cambia un comportamiento anterior del MVP: antes la lista solo dejaba ver un primer bloque de los correos más recientes y **los siguientes no eran alcanzables** desde la interfaz. Ahora el usuario puede **recorrer página a página todo lo que la app tiene sincronizado** de esa bandeja. En la práctica se ven **más correos que antes**, no menos.
@@ -150,7 +155,7 @@ Como la paginación es por posición, el número total de páginas puede encoger
 
 Al pulsar "Siguiente" o un número, la página que ya se veía **se mantiene en pantalla** hasta que llega la nueva, en lugar de vaciarse y mostrar un spinner. Los controles de paginación se deshabilitan momentáneamente durante esa transición. Es una navegación fluida, sin saltos de "tabla en blanco" entre páginas.
 
-> Aclaración para evitar confusión: la casilla de "seleccionar todo" de la cabecera selecciona los correos de **la página actual** (no "todos los de todas las páginas"); la cifra exacta de cuántos caben en una página está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md). Es un límite de **selección por página**, no de cuántos correos existen. Eso sí, la selección **se conserva al cambiar de página**, de modo que una acción en bloque puede afectar a correos marcados en páginas distintas. La selección y las acciones en bloque se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
+> Aclaración para evitar confusión: la selección múltiple y la casilla de "seleccionar todo" de la cabecera **solo existen hoy en la pestaña de Favoritos** (la única que no agrupa por conversación); las bandejas en modo conversación no tienen selección por fila (ver [conversaciones.md](conversaciones.md)). Donde existe, la casilla de "seleccionar todo" marca los correos de **la página actual** (no "todos los de todas las páginas"); la cifra exacta de cuántos caben en una página está en [../limits/listado-de-correos.md](../limits/listado-de-correos.md). Es un límite de **selección por página**, no de cuántos correos existen. Eso sí, la selección **se conserva al cambiar de página**, de modo que una acción en bloque puede afectar a correos marcados en páginas distintas. La selección y las acciones en bloque se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
 
 ---
 

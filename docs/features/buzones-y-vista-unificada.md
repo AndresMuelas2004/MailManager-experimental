@@ -74,6 +74,8 @@ El modelo de buzón del MVP es deliberadamente minimalista. **No** existe renomb
 
 Aquí está el corazón de la funcionalidad. Un buzón puede contener varias cuentas, así que la app ofrece **dos formas de mirar sus correos**, y el usuario alterna entre ellas con un clic:
 
+> Tanto la vista unificada como la de cuenta concreta presentan hoy sus filas **agrupadas por conversación** (una fila por hilo, de solo lectura — ver [conversaciones.md](conversaciones.md)). Esa agrupación **no** altera la lógica de columnas "Para"/"De" de la sección 4 ni los modos de tabla: la fila-conversación toma como cara visible su mensaje más reciente y resuelve "Para"/"De" con el mismo criterio. Lo único que cambia respecto a la fila clásica es que la fila ya no lleva casilla de selección ni estrella clicable (esas acciones se mueven al visor del hilo).
+
 ### 3.1 Vista unificada (todas las cuentas del buzón)
 
 Es la vista por defecto y la razón de ser de la app. Combina en **una sola lista** los correos de **todas las cuentas conectadas al buzón**, ordenados juntos. El usuario ve su Gmail de trabajo y su Outlook de trabajo entremezclados como si fueran un único buzón.

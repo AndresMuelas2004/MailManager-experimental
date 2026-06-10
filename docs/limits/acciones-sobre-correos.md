@@ -4,6 +4,8 @@ Catálogo de los topes, asimetrías y limitaciones deliberadas de las acciones s
 
 El toggle de favorito tiene su propio catálogo: ver [favoritos.md](favoritos.md).
 
+> **Nota — modo conversación.** Las cifras de **selección** y la **barra de acciones masivas** de este documento aplican hoy **solo a la pestaña de Favoritos** (la única que no agrupa por conversación). En las cuatro bandejas reales, la unificada y las ficticias, las acciones se disparan **por mensaje** desde el visor de la conversación, sin selección múltiple ni barra masiva (ver [conversaciones.md](conversaciones.md)). El resto de cifras (troceo, reintentos, asimetrías de proveedor, alcance del borrado, códigos de error) **no cambian**: la acción subyacente es la misma venga de la barra masiva o del botón por mensaje.
+
 ---
 
 ## 1. Topes cuantitativos
@@ -107,7 +109,7 @@ Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (
 - **Restaurar de spam no devuelve a la carpeta original concreta**, siempre a la bandeja principal. Solo la papelera recuerda el origen exacto.
 - **No hay papelera "real" propia de MailManager ni purga manual de correos.** La papelera de la app es un reflejo de la del proveedor; la limpieza definitiva la hace el proveedor por retención. (La purga manual existe solo para los **binarios de adjuntos** cacheados — ver [../limits/adjuntos.md](../limits/adjuntos.md) — no para correos.)
 - **No hay un "seleccionar toda la bandeja" de un clic.** La casilla de cabecera abarca como mucho la **página actual** (50 correos); no existe un "seleccionar los 5.000 correos del buzón" en una sola acción. Sí se puede acumular una selección mayor marcando correos a mano en varias páginas (la selección persiste entre páginas), pero no con una única pulsación de "seleccionar todo".
-- **No hay acción por fila independiente** para papelera / spam / borrado: todo pasa por la barra de selección (una selección de un solo correo usa la misma barra). La única acción "por fila" automática es marcar como leído al abrir, y el toggle de favorito (documentado aparte).
+- **No hay acción por fila independiente en el listado** para papelera / spam / borrado. En Favoritos todo pasa por la barra de selección (una selección de un solo correo usa la misma barra). En las bandejas que agrupan por conversación, la fila es de solo lectura (solo abre) y esas acciones se ofrecen **por mensaje dentro del visor de la conversación** (Spam / Papelera / No leído / Favorito por mensaje — ver [conversaciones.md](conversaciones.md)); el **borrado definitivo** no se ofrece en ese visor (sigue siendo exclusivo de la barra de la papelera). La única acción automática al abrir es marcar como leído (toda la conversación de golpe).
 - **No hay archivado, ni etiquetas/categorías personalizadas, ni mover a carpetas arbitrarias.** El conjunto de destinos se limita a las bandejas modeladas (principal, enviados, spam, papelera). Fuera del MVP.
 - **No hay reversión atómica de operaciones parciales.** Si una acción masiva falla a medias, los correos que sí se procesaron quedan procesados; no se revierten. La respuesta reporta el recuento real de afectados.
 

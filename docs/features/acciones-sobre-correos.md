@@ -6,6 +6,8 @@ El toggle de **favorito** es una acción por correo aparte, con su propia semán
 
 Los topes numéricos exactos (cuántos correos abarca una selección "todos", cómo se trocean las llamadas, qué reintenta cada proveedor, qué NO se soporta) viven en un documento aparte para no repetir cifras aquí: **[../limits/acciones-sobre-correos.md](../limits/acciones-sobre-correos.md)**. Este fichero solo los menciona de pasada y enlaza a ese catálogo cuando hace falta.
 
+> **Importante — dónde se disparan estas acciones hoy.** El **qué** hace cada acción (mover a papelera, spam, leído/no leído, restaurar, borrar) y su lógica Provider-First **no cambian** y son el grueso de este documento. Lo que cambió con la vista de conversación es el **dónde**: en las cuatro bandejas reales, la unificada y las ficticias, las filas se agrupan por conversación y son de **solo lectura**, así que **no hay selección múltiple ni barra de acciones masivas** ahí; estas acciones se disparan **por mensaje desde el visor de la conversación** (cada mensaje expandido trae sus botones Favorito / No leído / Spam / Papelera). La **selección múltiple y la barra de acciones masivas** que este documento describe **siguen existiendo solo en la pestaña de Favoritos** (la única que no agrupa). La descripción de la cadena del visor y de sus acciones por mensaje está en [conversaciones.md](conversaciones.md).
+
 ---
 
 ## 1. Qué acciones existen y dónde aparecen
@@ -18,10 +20,11 @@ La app ofrece cinco acciones de estado sobre correos, más sus inversas:
 - **Restaurar** (desde la papelera) — devuelve el correo a la bandeja de la que vino.
 - **Eliminar definitivamente** — borra el correo de MailManager. Es la única acción con una semántica especial que merece su propia sección (§ 6): **no borra el correo del buzón real del proveedor**.
 
-### 1.1 Dos formas de invocarlas
+### 1.1 Dónde se invocan (según la bandeja)
 
-1. **Abrir un correo** dispara automáticamente "marcar como leído" (§ 2.1). El visor del correo no ofrece botones de papelera / spam / borrado; esas acciones se hacen desde la lista.
-2. **Selección múltiple en la lista**: al marcar una o más casillas de la tabla, la cabecera se transforma en una **barra de acciones masivas** con los botones aplicables. Es el camino principal para mover a papelera, marcar spam, restaurar y borrar. Una selección de un solo correo usa exactamente la misma barra — no hay un menú "por fila" separado para estas acciones.
+1. **Abrir un correo / conversación** dispara automáticamente "marcar como leído" (§ 2.1): en una conversación se marcan de golpe **todos** los mensajes no leídos del hilo.
+2. **Por mensaje, dentro del visor de la conversación** (bandejas reales, unificada y ficticias): cada mensaje expandido de la cadena ofrece **Favorito**, **No leído**, **Spam** y **Papelera**, aplicados a ese mensaje concreto y enrutados a su buzón real. Es el camino principal para estas acciones en las bandejas que agrupan. No hay "marcar leído" (abrir ya lo hizo) ni borrado definitivo en este visor. Ver [conversaciones.md](conversaciones.md).
+3. **Selección múltiple y barra de acciones masivas** (hoy **solo en la pestaña de Favoritos**, que no agrupa): al marcar una o más casillas de la tabla, la cabecera se transforma en una **barra de acciones masivas** con los botones aplicables. Es el camino para mover a papelera, marcar spam, restaurar y borrar en bloque. Una selección de un solo correo usa exactamente la misma barra — no hay un menú "por fila" separado para estas acciones.
 
 ### 1.2 Qué acciones se ofrecen según el buzón
 

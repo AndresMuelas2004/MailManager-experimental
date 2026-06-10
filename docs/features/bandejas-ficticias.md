@@ -147,7 +147,7 @@ La diferencia clave es el **alcance**: aquí la lupa busca dentro del **resultad
 
 ## 6. La vista de correos: igual que un buzón, con un matiz multi-cuenta
 
-La tabla de correos de una bandeja ficticia es la misma que la de cualquier buzón: filas con remitente, asunto, fecha, indicadores de no leído, favorito y adjunto, y casillas de selección para acciones en bloque.
+La tabla de correos de una bandeja ficticia es la misma que la de cualquier buzón **en modo conversación**: las filas se agrupan por hilo y son de **solo lectura** (asunto base del hilo, remitente y fecha del más reciente, contador del hilo, e indicadores agregados de no leído, favorito y adjunto). La bandeja ficticia agrupa por conversación **siempre**. La fila **no** tiene casilla de selección ni estrella clicable: su única acción es **abrir** la conversación, y las acciones por mensaje (favorito, papelera, spam, no leído) viven dentro del visor de la cadena. El detalle de la agrupación está en [conversaciones.md](conversaciones.md).
 
 ### 6.1 Por qué la columna muestra la cuenta de cada correo
 
@@ -157,7 +157,7 @@ Como una bandeja ficticia mezcla correos de **varias cuentas**, la tabla se mues
 
 Aquí hay una asimetría sutil pero crítica. Cada correo de la lista **lleva consigo cuál es su bandeja real y su cuenta real**. Cuando el usuario abre un correo, lo marca como favorito, lo mueve a la papelera o descarga un adjunto, la acción se dirige a la **cuenta real de ese correo**, no a la bandeja desde la que se está mirando.
 
-El motivo: una bandeja ficticia puede agregar cuentas que viven en **bandejas reales diferentes**. Si una acción usara "la bandeja actual" en lugar de la del correo concreto, fallaría con "cuenta no encontrada" para todos los correos cuya cuenta vive en otra bandeja. Esto aplica también a las **acciones en bloque**: seleccionar correos de varias cuentas y, por ejemplo, marcarlos como leídos, funciona porque la app agrupa la selección por su cuenta real y lanza la operación a cada una por separado.
+El motivo: una bandeja ficticia puede agregar cuentas que viven en **bandejas reales diferentes**. Si una acción usara "la bandeja actual" en lugar de la del correo concreto, fallaría con "cuenta no encontrada" para todos los correos cuya cuenta vive en otra bandeja. La misma garantía aplica a las acciones **por mensaje** dentro del visor de la conversación: una conversación abierta desde una ficticia multi-buzón puede contener mensajes de mailboxes distintos, y cada acción se enruta al buzón real de su mensaje (agrupando por buzón cuando hace falta, como el marcado de "leído" al abrir el hilo). Ver [conversaciones.md](conversaciones.md).
 
 ### 6.3 Responder, reenviar y demás
 
@@ -169,7 +169,7 @@ La bandeja ficticia **no** ofrece un botón para sincronizar correo nuevo. La si
 
 ### 6.5 También se pagina, igual que cualquier bandeja
 
-La bandeja ficticia se recorre **por páginas numeradas**, con la misma barra "Anterior/Siguiente", los mismos números de página y el mismo indicador "X–Y de Z" que el resto de buzones. El tamaño de página y el comportamiento completo (la página en la URL, el reinicio a la página 1 al cambiar de búsqueda, el reencuadre a la última página válida si el total encoge) son los del listado general — ver [listado-de-correos.md](listado-de-correos.md). Aquí el "Z" es el número de mensajes **distintos** que cumplen los criterios de la bandeja, ya descontados los duplicados (§ 7.1).
+La bandeja ficticia se recorre **por páginas numeradas**, con la misma barra "Anterior/Siguiente", los mismos números de página y el mismo indicador "X–Y de Z" que el resto de buzones. El tamaño de página y el comportamiento completo (la página en la URL, el reinicio a la página 1 al cambiar de búsqueda, el reencuadre a la última página válida si el total encoge) son los del listado general — ver [listado-de-correos.md](listado-de-correos.md). Como la vista agrupa por conversación, aquí el "Z" es el número de **hilos distintos** que cumplen los criterios de la bandeja, ya descontados los duplicados de mensaje (§ 7.1); una conversación nunca se parte entre dos páginas.
 
 ---
 
@@ -181,7 +181,7 @@ Un mismo correo físico puede aparecer **dos veces** en los datos cuando el usua
 
 La app **colapsa esos duplicados** y muestra **una sola fila** por mensaje. Para decidir cuál de las dos copias gana, prefiere la que tenga datos más completos (una dirección de destinatario real por delante de una vacía; en empate, la más reciente). Es una decisión de presentación: el usuario ve un buzón limpio sin filas repetidas.
 
-Esta deduplicación ocurre **antes de paginar**, no después: con la bandeja ya paginada por páginas (ver § 6.5), si se quitaran los duplicados *después* de cortar la página, los correos repetidos podrían "robar" sitios en los bordes de cada página y el total "X–Y de Z" contaría de más. Por eso el colapso de duplicados y el conteo del total se hacen sobre el conjunto entero, y solo entonces se recorta la página. El resultado es que cada página viene siempre llena (no le faltan filas por un duplicado) y el total es el número real de mensajes distintos.
+Esta deduplicación ocurre **antes de paginar**, no después: con la bandeja ya paginada por páginas (ver § 6.5), si se quitaran los duplicados *después* de cortar la página, los correos repetidos podrían "robar" sitios en los bordes de cada página y el total "X–Y de Z" contaría de más. Por eso el colapso de duplicados y el conteo del total se hacen sobre el conjunto entero, y solo entonces se recorta la página. El resultado es que cada página viene siempre llena (no le faltan filas por un duplicado) y el total es el número real de elementos distintos. Como la vista agrupa por conversación, el orden de operaciones es **deduplicar el mismo mensaje → colapsar por hilo → contar hilos → paginar**: así dos cuentas distintas que comparten un intercambio siguen siendo hilos separados, pero la misma cuenta conectada dos veces colapsa a un único hilo (ver [conversaciones.md](conversaciones.md)).
 
 > El detalle de la preferencia de desempate está en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md). Nótese que esta deduplicación es **exclusiva** de las bandejas ficticias: en un buzón normal, acotado a una sola cuenta, la duplicación no puede ocurrir.
 
@@ -211,7 +211,7 @@ Para fijar expectativas (la lista completa con el porqué de cada límite está 
 - **No descarga correo nuevo** del proveedor ni importa mensajes que no estén ya sincronizados. Si una cuenta favorita en el proveedor todavía no se ha sincronizado en la app, no aparece.
 - **No es una carpeta real**: no existe en Gmail/Outlook, no se puede mover un correo "a" una bandeja ficticia.
 - **No autoexpande** la lista de cuentas al conectar cuentas nuevas (§ 3.1).
-- **No ofrece acciones en bloque propias** distintas de las que ya da la tabla de correos: la bandeja es de **solo lectura** respecto a su definición; las acciones operan sobre los correos reales subyacentes.
+- **No ofrece selección múltiple ni acciones en bloque** (la vista agrupa por conversación, donde la fila es de solo lectura): la bandeja es de **solo lectura** respecto a su definición, y las acciones operan **por mensaje** sobre los correos reales subyacentes, desde el visor de la conversación.
 - **No ordena por relevancia** ni soporta scroll infinito: hereda el comportamiento de la lista de correos (orden por fecha descendente, navegación por páginas numeradas).
 
 ---

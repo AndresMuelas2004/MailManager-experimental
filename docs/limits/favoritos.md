@@ -9,7 +9,7 @@ Catálogo de topes, cuotas y comportamientos cuantitativos de la feature de favo
 | Parámetro | Valor exacto | Notas |
 |---|---|---|
 | Marca por correo (granularidad de la API) | **1 correo por llamada** | El endpoint de toggle actúa sobre un único correo. No existe endpoint de marca en bloque. |
-| Marca multi-selección | **No existe** | No hay acción de favorito en la barra de selección múltiple ni endpoint por lotes; la estrella se alterna fila a fila. Ver § 4. |
+| Marca multi-selección | **No existe** | No hay acción de favorito en la barra de selección múltiple ni endpoint por lotes; la marca se alterna correo a correo (estrella clicable de la fila en Favoritos, o botón por mensaje en el visor de la conversación en el resto de bandejas). Ver § 4. |
 | Reintentos de la marca (lado Gmail) | **5 intentos** (1 inicial + 4 reintentos) | La marca Gmail pasa por la maquinaria de modificación de etiquetas por lotes, con 4 reintentos sobre errores transitorios. |
 | Espera entre reintentos (Gmail) | **1 s** fija entre intentos | No es backoff exponencial en esta ruta. |
 | Códigos transitorios que reintenta (Gmail) | `429`, `500`, `502`, `503`, `504` | Errores permanentes (`400`/`401`/`403`/`404`) no se reintentan. |
@@ -53,11 +53,11 @@ Nota: el toggle es Provider-First, así que un fallo del proveedor (502 `favorit
 
 ## 4. Lo que NO soporta (limitaciones aceptadas para el MVP)
 
-- **No hay marca de favoritos en bloque ni acción multi-selección.** La estrella solo se alterna correo a correo desde su fila (el único punto de entrada es `setFavorite` / el endpoint `PATCH .../favorite`). La barra de acciones en bloque (`useEmailBulkActions`) cubre papelera, leído/no leído y spam, **pero no incluye favoritos**, y no existe ningún endpoint de marca por lotes. Las APIs de ambos proveedores ofrecen modificación por lotes, pero añadirla obligaría a diseñar un contrato de "éxito parcial" (qué correos se marcaron y cuáles fallaron) que no aporta valor al volumen del MVP. Mantiene la superficie de la API y el modelo de errores simples.
+- **No hay marca de favoritos en bloque ni acción multi-selección.** La marca se alterna correo a correo (un único punto de entrada: `setFavorite` / el endpoint `PATCH .../favorite`), ya sea desde la estrella clicable de la fila en Favoritos o desde el botón por mensaje del visor de la conversación. La barra de acciones en bloque (`useEmailBulkActions`, presente solo en Favoritos) cubre papelera, leído/no leído y spam, **pero no incluye favoritos**, y no existe ningún endpoint de marca por lotes. Las APIs de ambos proveedores ofrecen modificación por lotes, pero añadirla obligaría a diseñar un contrato de "éxito parcial" (qué correos se marcaron y cuáles fallaron) que no aporta valor al volumen del MVP. Mantiene la superficie de la API y el modelo de errores simples.
 
 - **La sincronización no importa correos nuevos (Opción A).** Un correo marcado como favorito en el proveedor que MailManager todavía no tiene en su base de datos local se ignora en silencio durante la sincronización; no se crea fila nueva. La razón: la llamada de listado solo devuelve identificadores, e importar forzaría una segunda ronda de llamadas por id (una sincronización de metadata encubierta) que ya es responsabilidad de la sincronización general de la bandeja. El favorito aparece tras la siguiente sincronización de metadata.
 
-- **No hay botón de favorito en el visor del correo abierto.** La estrella solo está disponible en las filas de los listados. Marcar/desmarcar desde el correo abierto requeriría exponer el botón también ahí; fuera de scope del MVP.
+- **El botón de favorito está en el visor de la conversación (por mensaje), no en el visor de un solo correo.** En las bandejas que agrupan por conversación, cada mensaje expandido del visor trae su botón "Favorito"; en Favoritos (que no agrupa) la marca sigue siendo la estrella clicable de la fila, y su visor de un solo correo no expone botón de favorito. No hay, por tanto, un toggle de favorito en la cabecera del visor mono-mensaje. (Ver [`../features/conversaciones.md`](../features/conversaciones.md).)
 
 - **No hay sincronización global multi-mailbox de un tirón.** La sincronización opera sobre el mailbox actual. Reconciliar favoritos de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios) exige disparar una sincronización por cada mailbox implicado.
 

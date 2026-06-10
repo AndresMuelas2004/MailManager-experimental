@@ -13,6 +13,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 ### Traer y leer correo
 - [sincronizacion.md](sincronizacion.md) — Copia local primero: bootstrap + incremental de correos, y reemplazo de borradores y favoritos.
 - [listado-de-correos.md](listado-de-correos.md) — Las cuatro bandejas reales, el orden, la navegación por páginas numeradas, y por qué cada acción va al buzón real del correo.
+- [conversaciones.md](conversaciones.md) — Vista de conversación: los mensajes de un hilo colapsados en una fila de solo lectura y el visor que reconstruye la cadena completa del proveedor.
 - [visualizacion-de-correos.md](visualizacion-de-correos.md) — Abrir un correo: render del HTML saneado, imágenes embebidas (`cid:`→`data:`) y caché tras la primera apertura.
 - [lupa.md](lupa.md) — Búsqueda local, literal e insensible a tildes sobre asunto y remitente.
 - [favoritos.md](favoritos.md) — La estrella (Gmail) / bandera (Outlook), la pestaña de Favoritos y la reconciliación con el proveedor.

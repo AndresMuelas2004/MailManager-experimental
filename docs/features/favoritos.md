@@ -39,16 +39,12 @@ Esto se hizo así porque **los dos proveedores lo modelan exactamente igual**:
 
 ## 2. Dónde puede el usuario marcar y desmarcar favoritos
 
-La estrella aparece al principio de cada fila en **todos** los listados de correos donde tiene sentido:
+La forma de marcar/desmarcar **depende de si la bandeja agrupa por conversación**:
 
-- La **bandeja de una cuenta** concreta.
-- La **bandeja unificada** del mailbox (varias cuentas a la vez).
-- Las **bandejas ficticias** (virtual mailboxes).
-- La propia **pestaña de Favoritos**.
+- En la **pestaña de Favoritos** (la única que **no** agrupa), la estrella aparece al principio de cada fila y es **clicable directamente desde la lista**: un clic alterna el estado, aislado del resto de la fila (pulsar la estrella nunca abre el correo, y abrir el correo no toca la estrella).
+- En la **bandeja de una cuenta**, la **unificada** y las **bandejas ficticias** —que se presentan agrupadas por conversación (ver [conversaciones.md](conversaciones.md))— la estrella de la fila es un **indicador agregado de solo lectura** (rellena si **algún** mensaje del hilo es favorito) y **no** se puede pulsar. Para marcar/desmarcar, el usuario **abre la conversación** y usa el botón **"Favorito"** que cada mensaje expandido trae en el visor: el favorito se alterna **por mensaje**, no por hilo.
 
-Un clic en la estrella alterna el estado. El clic está **aislado del resto de la fila**: pulsar la estrella nunca abre el correo, solo cambia el favorito (y al revés, abrir el correo no toca la estrella).
-
-El visor de correo abierto **no** muestra botón de favorito hoy — la marca se gestiona desde el listado. Es una limitación aceptada, recogida en [`../limits/favoritos.md`](../limits/favoritos.md).
+Es decir, el toggle de favorito ahora vive en **dos** sitios según el contexto: la estrella clicable de la fila en Favoritos, y el botón por mensaje dentro del visor de la conversación en el resto de bandejas. (En la versión anterior la estrella era clicable en todas las filas y el visor no tenía botón de favorito; eso cambió con la vista de conversación.)
 
 ---
 
@@ -149,7 +145,7 @@ El botón muestra "Sincronizando…" con un icono girando mientras dura, y al te
 
 El estado de favorito se gestiona **por cuenta y por correo**, no por mailbox. Esto tiene una consecuencia práctica importante en vistas que mezclan cuentas de varios mailboxes reales (las bandejas ficticias):
 
-- Cada fila del listado lleva la información de **a qué mailbox real pertenece** el correo. Cuando el usuario marca una estrella, la app dirige la llamada al mailbox real que posee la cuenta de ese correo, **no** al mailbox de la URL.
+- Cada correo lleva la información de **a qué mailbox real pertenece**. Cuando el usuario marca un favorito —sea con la estrella clicable de la fila en Favoritos, sea con el botón por mensaje dentro del visor de la conversación—, la app dirige la llamada al mailbox real que posee la cuenta de ese correo, **no** al mailbox de la URL. Esto es crítico para un hilo abierto desde una bandeja ficticia, cuyos mensajes pueden vivir en mailboxes distintos (ver [conversaciones.md](conversaciones.md)).
 - Si no lo hiciera así, marcar como favorito un correo cuya cuenta vive en otro mailbox fallaría con "cuenta no encontrada", porque el backend valida que la cuenta pertenezca al mailbox indicado.
 
 La sincronización funciona por mailbox: la pestaña de Favoritos sincroniza el mailbox actual. Reconciliar cuentas repartidas entre varios mailboxes reales requeriría disparar una sincronización por cada mailbox implicado.
@@ -158,7 +154,7 @@ La sincronización funciona por mailbox: la pestaña de Favoritos sincroniza el 
 
 ## 7. No hay marca de favoritos en bloque
 
-El MVP **no** tiene ninguna operación de favorito multi-selección. El favorito **solo** se alterna correo a correo, pulsando la estrella de su fila: no existe un botón de "marcar como favorito" en la barra de acciones en bloque (esa barra cubre papelera, leído/no leído y spam, pero no favoritos) ni hay un endpoint de marca por lotes en el backend.
+El MVP **no** tiene ninguna operación de favorito multi-selección. El favorito **solo** se alterna correo a correo —con la estrella clicable de su fila en Favoritos, o con el botón "Favorito" de cada mensaje dentro del visor de la conversación en el resto de bandejas (ver [conversaciones.md](conversaciones.md))—: no existe un botón de "marcar como favorito" en la barra de acciones en bloque (esa barra, presente solo en Favoritos, cubre papelera, leído/no leído y spam, pero no favoritos) ni hay un endpoint de marca por lotes en el backend.
 
 **Por qué se dejó así**: las dos APIs (Gmail y Outlook) ofrecen operaciones de modificación por lotes que serían una mejora trivial de añadir más adelante y que no bloquean ninguna otra funcionalidad. No tenerlas mantiene la superficie de la API pequeña y el modelo de errores simple: no hay que diseñar un contrato de "éxito parcial" (qué pasa si 3 de 5 se marcan y 2 fallan). Para el volumen del MVP, alternar la estrella de una en una es suficiente.
 
