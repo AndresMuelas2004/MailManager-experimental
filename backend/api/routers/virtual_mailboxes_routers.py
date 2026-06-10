@@ -72,7 +72,21 @@ def delete_virtual_mailbox(
 @router.get("/{virtual_mailbox_id}/emails", response_model=EmailPageOut)
 def list_emails_for_virtual_mailbox(
     virtual_mailbox_id: str,
-    q: str | None = Query(default=None, min_length=2, max_length=200),
+    q: str | None = Query(
+        default=None,
+        min_length=2,
+        max_length=200,
+        description=(
+            "Search query. Same free text and Gmail-style operators as the "
+            "regular listing (from:, to:, subject:, has:attachment, "
+            "before:/after:, is:read|unread|favorite, in:...), combined with "
+            "AND. Quote phrases with double quotes; unknown operators are "
+            "literal text and unsupported operator values are ignored. Unlike "
+            "the regular listing, in: INTERSECTS the fake mailbox's own box "
+            "scope: asking for a box the fake mailbox excludes yields an empty "
+            "page."
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     user_id: str = Depends(require_session),

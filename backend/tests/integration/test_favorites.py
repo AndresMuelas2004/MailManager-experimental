@@ -184,6 +184,40 @@ def test_listing_with_favorite_and_explicit_sent_box_returns_only_sent_favorites
     assert all(row["box"] == "SENT" for row in rows)
 
 
+def test_listing_favorite_with_in_sent_operator_returns_only_sent_favorites(
+    seeded_test_client, isolated_db,
+):
+    """Favourites view (box=ALL_MAIL anchor) + ``in:sent`` in q: the in:
+    override flips the effective box to SENT while the is_favorite filter
+    stays, so only SENT favourites surface — never the ALL_MAIL one.
+
+    This is the operator-driven sibling of
+    ``test_listing_with_favorite_and_explicit_sent_box_returns_only_sent_favorites``:
+    the SENT box is reached through the q operator, not the box param.
+    """
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE email_metadata SET is_favorite = TRUE "
+            "WHERE account_id = %s "
+            "AND provider_message_id IN ('gmail-allmail-001', 'gmail-sent-001')",
+            (_SEEDED_ACCOUNT,),
+        )
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_MAILBOX}/emails",
+        # Favourites page always passes ALL_MAIL as the anchor box; the in:
+        # override in q is what targets SENT.
+        params={"box": "ALL_MAIL", "favorite": "true", "q": "in:sent"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [row["provider_message_id"] for row in body["items"]]
+    assert "gmail-sent-001" in ids
+    assert "gmail-allmail-001" not in ids
+    assert all(row["box"] == "SENT" for row in body["items"])
+    # total counts the favourite + SENT set only.
+    assert body["total"] == 1
+
+
 def test_sync_favorites_full_replace_for_account(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):

@@ -38,7 +38,7 @@ from api.schemas.virtual_mailbox import (
     VirtualMailboxUpdate,
 )
 from api.services.services_helpers import (
-    parse_search_tokens,
+    parse_search_query,
     row_to_email_metadata_out,
     translate_database_error,
 )
@@ -336,16 +336,52 @@ def list_emails_for_virtual_mailbox(
 
     box, box_not_in, extra_filters = _build_filter_args(record.get("filter_payload") or {})
 
-    # ``tokens`` is a pure string split (no DB) computed once and shared
-    # by BOTH calls below so the deduplicated count matches the
-    # deduplicated page. Two separate try blocks keep the failure
-    # messages unique per raise site (API CLAUDE.md §7).
-    tokens = parse_search_tokens(q)
+    # ``parse_search_query`` is a pure string operation (no DB) computed
+    # once and shared by BOTH calls below so the deduplicated count
+    # matches the deduplicated page. Two separate try blocks keep the
+    # failure messages unique per raise site (API CLAUDE.md §7).
+    parsed = parse_search_query(q)
+    tokens = parsed.tokens
+    operator_clauses = parsed.operator_clauses
+
+    # ``in:`` INTERSECTS (AND) with the box the fake mailbox already
+    # defines, instead of overriding it like the regular listing does.
+    # Asking for a box the fake mailbox excludes yields an empty page
+    # naturally — surfaced via the same short-circuit used for the
+    # "no owned accounts" case, so we never pass both ``box`` and
+    # ``box_not_in`` to the repository (mixing them is a programming
+    # error there).
+    if parsed.box_override is not None:
+        ov = parsed.box_override
+        if box is not None:
+            # Fake mailbox pinned to a single box: only the same box is
+            # compatible; any other ``in:`` collapses to empty.
+            if ov != box:
+                return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
+        elif box_not_in:
+            # Fake mailbox carries exclusions (the default
+            # ``["TRASH","SPAM"]`` or an explicit non-empty list):
+            # ``in:`` of an excluded box is empty; otherwise it narrows
+            # to that single box.
+            if ov in box_not_in:
+                return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
+            box = ov
+            box_not_in = None
+        else:
+            # ``box`` is None AND ``box_not_in`` is falsy — reachable when
+            # the fake mailbox was created with ``box_not_in: []`` (an
+            # explicit opt-in to see TRASH/SPAM), which ``_build_filter_args``
+            # returns as an empty list. No exclusion to violate, so any
+            # ``in:`` is compatible and narrows to that box.
+            box = ov
+            box_not_in = None
+
     try:
         rows = email_metadata_store.list_filtered(
             account_ids, box, tokens, limit, offset,
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
+            operator_clauses=operator_clauses or None,
             distinct_provider_message_id=True,
             group_by_thread=True,
         )
@@ -365,6 +401,7 @@ def list_emails_for_virtual_mailbox(
             account_ids, box, tokens,
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
+            operator_clauses=operator_clauses or None,
             distinct_provider_message_id=True,
             group_by_thread=True,
         )

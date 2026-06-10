@@ -313,6 +313,7 @@ class TestListEmailsForVirtualMailbox:
             account_ids, box, tokens, limit, offset, *,
             extra_filters=None, box_in=None, box_not_in=None,
             distinct_provider_message_id=False, group_by_thread=False,
+            operator_clauses=None,
         ):
             captured["account_ids"] = account_ids
             captured["box"] = box
@@ -324,6 +325,7 @@ class TestListEmailsForVirtualMailbox:
             captured["box_not_in"] = box_not_in
             captured["distinct_provider_message_id"] = distinct_provider_message_id
             captured["group_by_thread"] = group_by_thread
+            captured["operator_clauses"] = operator_clauses
             if list_exc:
                 raise list_exc
             return rows or []
@@ -332,6 +334,7 @@ class TestListEmailsForVirtualMailbox:
             account_ids, box, tokens, *,
             extra_filters=None, box_in=None, box_not_in=None,
             distinct_provider_message_id=False, group_by_thread=False,
+            operator_clauses=None,
         ):
             if count_captured is not None:
                 count_captured["account_ids"] = account_ids
@@ -342,6 +345,7 @@ class TestListEmailsForVirtualMailbox:
                 count_captured["box_not_in"] = box_not_in
                 count_captured["distinct_provider_message_id"] = distinct_provider_message_id
                 count_captured["group_by_thread"] = group_by_thread
+                count_captured["operator_clauses"] = operator_clauses
             return total if total is not None else len(rows or [])
 
         monkeypatch.setattr(
@@ -513,6 +517,86 @@ class TestListEmailsForVirtualMailbox:
         )
         assert result.limit == 15
         assert result.offset == 30
+
+    # -- in: INTERSECTS the fake mailbox's own box scope (≠ override) -------
+    # Unlike the regular listing (where in: overrides the route box), a fake
+    # mailbox's in: must AND with the box scope the vmbox already defines.
+    # Asking for a box the vmbox excludes yields an empty page WITHOUT
+    # touching the DB.
+
+    def test_in_compatible_with_default_exclusion_narrows_to_that_box(self, monkeypatch):
+        # Config (a): default box_not_in=[TRASH, SPAM]. in:sent is not
+        # excluded → it narrows the listing to SENT and clears box_not_in.
+        record = _fake_record()
+        captured = self._patch_listing(monkeypatch, record=record)
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:sent",
+        )
+        assert captured["box"] == "SENT"
+        assert captured["box_not_in"] is None
+
+    def test_in_excluded_by_default_exclusion_returns_empty_without_query(self, monkeypatch):
+        # Config (a): in:trash against the default [TRASH, SPAM] exclusion is
+        # incompatible → empty page, short-circuited before any DB call.
+        record = _fake_record()
+        captured = self._patch_listing(monkeypatch, record=record)
+        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:trash",
+        )
+        assert result.items == []
+        assert result.total == 0
+        # Neither store was called — captured stays empty.
+        assert captured == {}
+
+    def test_in_different_from_pinned_box_returns_empty_without_query(self, monkeypatch):
+        # Config (b): vmbox pinned to a single box. in: of a different box is
+        # incompatible → empty page, no DB call.
+        record = _fake_record(filter_payload={"box": "TRASH"})
+        captured = self._patch_listing(monkeypatch, record=record)
+        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:spam",
+        )
+        assert result.items == []
+        assert result.total == 0
+        assert captured == {}
+
+    def test_in_equal_to_pinned_box_keeps_box(self, monkeypatch):
+        # Config (b): in: matching the pinned box is compatible → box stays.
+        record = _fake_record(filter_payload={"box": "TRASH"})
+        captured = self._patch_listing(monkeypatch, record=record)
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:trash",
+        )
+        assert captured["box"] == "TRASH"
+        assert captured["box_not_in"] is None
+
+    def test_in_applies_when_vmbox_opts_into_trash_and_spam(self, monkeypatch):
+        # Config (c): vmbox created with box_not_in=[] (opt-in to TRASH/SPAM).
+        # No exclusion to violate, so in:trash narrows to TRASH (else branch).
+        record = _fake_record(filter_payload={"box_not_in": []})
+        captured = self._patch_listing(monkeypatch, record=record)
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:trash",
+        )
+        assert captured["box"] == "TRASH"
+        assert captured["box_not_in"] is None
+
+    def test_operator_clauses_passed_to_both_calls_with_distinct(self, monkeypatch):
+        # On a compatible in: the operator_clauses must reach BOTH calls
+        # alongside distinct_provider_message_id=True (the vmbox dedup).
+        record = _fake_record()
+        count_captured: dict = {}
+        captured = self._patch_listing(
+            monkeypatch, record=record, count_captured=count_captured,
+        )
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="from:linkedin in:sent",
+        )
+        expected = [("from_contains", "linkedin")]
+        assert captured["operator_clauses"] == expected
+        assert count_captured["operator_clauses"] == expected
+        assert captured["distinct_provider_message_id"] is True
+        assert count_captured["distinct_provider_message_id"] is True
 
     def test_unexpected_count_error_translated(self, monkeypatch):
         record = _fake_record()

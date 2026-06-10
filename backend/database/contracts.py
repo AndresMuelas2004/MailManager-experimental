@@ -165,6 +165,7 @@ class EmailMetadataStore(ABC):
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
+        operator_clauses: list[tuple[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """List email metadata for the given accounts, optionally filtered.
 
@@ -205,6 +206,18 @@ class EmailMetadataStore(ABC):
         templates (the 2x2 matrix). The companion ``count_filtered`` MUST
         receive the SAME ``group_by_thread`` / ``distinct_provider_message_id``
         axes or the paginated ``total`` will not match the listed rows.
+
+        ``operator_clauses``: optional list of ``(kind, typed_value)``
+        pairs for the lupa's Gmail-style operators (``from:`` / ``to:`` /
+        ``subject:`` / ``has:attachment`` / ``before:`` / ``after:`` /
+        ``is:read|unread|favorite``). Each ``kind`` resolves against a
+        closed builder registry in the repository and emits an extra
+        ANDed clause with per-occurrence parameter names — disjoint from
+        ``extra_filters`` and ``tokens`` so repeated operators and
+        overlaps with saved filters never collide. ``in:`` is NOT here;
+        it is applied by the service as a box override. Unknown kinds are
+        ignored. ``None`` / empty means "no operator clauses" and the
+        emitted SQL is identical to the pre-operator query.
         """
         raise NotImplementedError
 
@@ -220,6 +233,7 @@ class EmailMetadataStore(ABC):
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
+        operator_clauses: list[tuple[str, Any]] | None = None,
     ) -> int:
         """Count the email metadata rows that match ``list_filtered``.
 
@@ -237,6 +251,10 @@ class EmailMetadataStore(ABC):
         ``group_by_thread``: when ``True``, count threads instead of
         messages. It MUST mirror the same axis ``list_filtered`` uses or
         the paginated ``total`` will disagree with the rows returned.
+
+        ``operator_clauses``: same as ``list_filtered`` — the count is
+        driven through the same predicate builder so it counts exactly
+        the set the listing would return.
 
         Returns ``0`` without touching the database when ``account_ids``
         is empty (mirrors ``list_filtered`` returning ``[]``).

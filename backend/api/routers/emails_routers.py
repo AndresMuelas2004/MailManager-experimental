@@ -44,8 +44,15 @@ def list_emails(
         min_length=2,
         max_length=200,
         description=(
-            "Free-text search query. Whitespace-only values are treated as no "
-            "search; tokens are space-separated and silently capped at 10."
+            "Search query. Free text matches subject/sender as a substring "
+            "(accent/case-insensitive). Also supports Gmail-style operators "
+            "combined with AND: from:, to:, subject:, has:attachment, "
+            "before:/after: (AAAA/MM/DD or AAAA-MM-DD, Europe/Madrid), "
+            "is:read|unread|favorite (alias is:starred), in:inbox|sent|spam|trash. "
+            "Quote phrases with double quotes. Unknown operators are treated as "
+            "literal text; unsupported operator values are ignored. Whitespace-only "
+            "is treated as no search; free-text tokens and operator clauses are each "
+            "silently capped at 10. in: overrides the box shown for this listing."
         ),
     ),
     favorite: bool | None = Query(

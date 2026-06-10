@@ -9,6 +9,7 @@ import useFavorite from '../hooks/useFavorite';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
+import SearchHelpPopover from '../components/SearchHelpPopover';
 import useDebounce from '../hooks/useDebounce';
 import { parsePageParam } from '../../../lib/pagination';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
@@ -117,8 +118,9 @@ export default function FavoritesPage() {
             {favorites.syncing ? 'Sincronizando…' : 'Sincronizar favoritos'}
           </button>
         </div>
-        <div className="pt-2">
+        <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />
+          <SearchHelpPopover />
         </div>
       </div>
       {combinedError ? (

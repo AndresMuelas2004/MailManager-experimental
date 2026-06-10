@@ -4,11 +4,13 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
+import SearchHelpPopover from '../components/SearchHelpPopover';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useDebounce from '../hooks/useDebounce';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
 import { parsePageParam } from '../../../lib/pagination';
+import { parseInOperator } from '../../../lib/searchOperators';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -76,6 +78,16 @@ export default function VirtualMailboxViewPage() {
     ? 'No se encontraron correos para tu búsqueda en esta bandeja ficticia.'
     : 'Ningún correo coincide con los filtros de esta bandeja ficticia.';
 
+  // Columns follow the EFFECTIVE box. A valid in: in q intersects the
+  // vmbox filter server-side and makes every returned row share that box,
+  // so columns must render with that sense; otherwise fall back to the
+  // vmbox's saved box. ``filter_payload.box`` is typed ``unknown`` (the OUT
+  // schema is ``z.record(z.string(), z.unknown())``), and ``unknown ===
+  // 'SENT'`` is legal — keep the comparison direct rather than narrowing to
+  // an intermediate ``EmailBox``, which would not type-check.
+  const inBox = parseInOperator(debouncedQ);
+  const isSent = inBox !== null ? inBox === 'SENT' : record?.filter_payload?.box === 'SENT';
+
   // 404 on the vmbox lookup means the URL points to a deleted /
   // foreign / never-existed virtual mailbox. The listing hook will
   // independently also 404, which used to render the same red banner
@@ -135,8 +147,9 @@ export default function VirtualMailboxViewPage() {
             </p>
           </div>
         </div>
-        <div className="pt-2">
+        <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />
+          <SearchHelpPopover />
         </div>
       </div>
       {loadError && <div className="px-8 text-sm text-red-600">{loadError.message}</div>}
@@ -149,7 +162,7 @@ export default function VirtualMailboxViewPage() {
             accounts={accounts}
             loading={loading}
             view="unified"
-            isSent={record?.filter_payload?.box === 'SENT'}
+            isSent={isSent}
             conversationMode
             onOpen={viewer.open}
             emptyMessage={emptyMessage}

@@ -991,6 +991,207 @@ def test_list_filtered_empty_account_ids_short_circuits(monkeypatch):
     assert cursor.executed == []
 
 
+# ===== list_filtered — operator_clauses SQL surface (lupa operators) =====
+# The lupa's Gmail-style operators (from:/to:/subject:/has:/before:/after:/
+# is:) reach the repository as a list of (kind, value) pairs resolved against
+# _OPERATOR_CLAUSE_BUILDERS. Their parameter names are ``op{idx}`` per
+# occurrence — disjoint from the ``extra_*`` (saved filters) and ``tok{i}``
+# (free text) namespaces, so repeated operators and overlaps with saved
+# filters never collide. These lock the exact clause + param emitted, mirroring
+# the extra_filters surface tests above.
+
+
+def test_list_filtered_no_operator_clauses_emits_no_extra_predicate(monkeypatch):
+    # Zero-regression promise: with neither extra_filters NOR operator_clauses
+    # the emitted SQL carries no extra ``AND`` clause — byte-for-byte identical
+    # to the pre-operator query.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=None,
+    )
+    sql, params = cursor.executed[0]
+    # No operator parameter leaks and no operator clause is emitted. (Bare
+    # ``has_attachments`` appears as a projected column in the SELECT, so the
+    # sentinel must be the operator clause shape, not the column name.)
+    assert not any(k.startswith("op") for k in params)
+    assert "has_attachments = %(op0)s" not in sql
+    assert "ILIKE unaccent(lower(%(op0)s))" not in sql
+
+
+def test_list_filtered_operator_clauses_use_unique_op_indexed_params(monkeypatch):
+    # ``from:a from:b`` → two clauses with distinct op0/op1 params so repeated
+    # operators do not overwrite each other.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("from_contains", "a"), ("from_contains", "b")],
+    )
+    _, params = cursor.executed[0]
+    assert params["op0"] == "%a%"
+    assert params["op1"] == "%b%"
+
+
+def test_list_filtered_from_contains_emits_email_and_name_or(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("from_contains", "linkedin")],
+    )
+    sql, params = cursor.executed[0]
+    assert "unaccent(lower(coalesce(from_email, ''))) ILIKE" in sql
+    assert "unaccent(lower(coalesce(from_name, ''))) ILIKE" in sql
+    assert params["op0"] == "%linkedin%"
+
+
+def test_list_filtered_to_contains_emits_to_email_and_name_or(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("to_contains", "ana")],
+    )
+    sql, params = cursor.executed[0]
+    assert "unaccent(lower(coalesce(to_email, ''))) ILIKE" in sql
+    assert "unaccent(lower(coalesce(to_name, ''))) ILIKE" in sql
+    assert params["op0"] == "%ana%"
+
+
+def test_list_filtered_subject_op_emits_only_subject(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("subject_contains_op", "factura")],
+    )
+    sql, params = cursor.executed[0]
+    assert "unaccent(lower(coalesce(subject, ''))) ILIKE unaccent(lower(%(op0)s))" in sql
+    # The subject operator is a single-column clause — op0 appears exactly
+    # once (unlike from:/to: which reference their param twice in an OR).
+    assert sql.count("%(op0)s") == 1
+    assert params["op0"] == "%factura%"
+
+
+def test_list_filtered_has_attachments_emits_boolean_param(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("has_attachments", True)],
+    )
+    sql, params = cursor.executed[0]
+    assert "has_attachments = %(op0)s" in sql
+    assert params["op0"] is True
+
+
+def test_list_filtered_is_read_op_emits_boolean_param(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("is_read_op", False)],
+    )
+    sql, params = cursor.executed[0]
+    assert "is_read = %(op0)s" in sql
+    assert params["op0"] is False
+
+
+def test_list_filtered_is_favorite_op_emits_boolean_param(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("is_favorite_op", True)],
+    )
+    sql, params = cursor.executed[0]
+    assert "is_favorite = %(op0)s" in sql
+    assert params["op0"] is True
+
+
+def test_list_filtered_received_after_and_before_emit_range(monkeypatch):
+    # The tz-aware datetime is passed through verbatim (psycopg2 adapts it for
+    # the TIMESTAMPTZ comparison); after → >=, before → <.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    after_dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    before_dt = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[
+            ("received_after", after_dt),
+            ("received_before", before_dt),
+        ],
+    )
+    sql, params = cursor.executed[0]
+    assert "received_at >= %(op0)s" in sql
+    assert "received_at < %(op1)s" in sql
+    assert params["op0"] is after_dt
+    assert params["op1"] is before_dt
+
+
+def test_list_filtered_operator_value_metacharacters_are_escaped(monkeypatch):
+    # ILIKE metacharacters in an operator value are escaped via _escape_like,
+    # same format as the free-text token escaping.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("from_contains", "50%_x")],
+    )
+    _, params = cursor.executed[0]
+    assert params["op0"] == "%50\\%\\_x%"
+
+
+def test_list_filtered_unknown_operator_kind_is_ignored(monkeypatch):
+    # A kind with no builder is silently skipped (defensive) — no clause, no
+    # param leaks.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[("not_a_real_kind", "x")],
+    )
+    sql, params = cursor.executed[0]
+    assert not any(k.startswith("op") for k in params)
+    assert "not_a_real_kind" not in sql
+
+
+def test_list_filtered_operator_and_saved_filter_same_column_coexist(monkeypatch):
+    # A saved filter and an operator touching the SAME column emit TWO
+    # independent ANDed ILIKE clauses with disjoint params (extra_* vs op0) —
+    # no collision, no overwrite.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], None, [], 50, 0,
+        extra_filters={"subject_contains": "a"},
+        operator_clauses=[("subject_contains_op", "b")],
+    )
+    sql, params = cursor.executed[0]
+    assert params["extra_subject_contains"] == "%a%"
+    assert params["op0"] == "%b%"
+    # Two distinct subject ILIKE comparisons survive in the SQL.
+    assert sql.count("unaccent(lower(coalesce(subject, ''))) ILIKE") == 2
+
+
+def test_count_filtered_operator_clauses_emit_same_predicate(monkeypatch):
+    # The count is driven through the same builder so it counts exactly the set
+    # the listing returns.
+    cursor = FakeCursor(fetchone_results=[(3,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.count_filtered(
+        ["acc-1"], "ALL_MAIL", [],
+        operator_clauses=[("has_attachments", True)],
+    )
+    sql, params = cursor.executed[0]
+    assert "has_attachments = %(op0)s" in sql
+    assert params["op0"] is True
+    assert "COUNT(*)" in sql
+
+
 # ===== list_filtered — distinct_provider_message_id (vmbox dedup) =====
 # The Python dedup was removed; dedup now happens in SQL. These lock the
 # SQL surface of the DISTINCT variant and its tie-break parity with the

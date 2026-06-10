@@ -57,6 +57,26 @@ const accountFixture = {
   email_address: 'alice@example.com',
 };
 
+// A sent email returned by an in:sent search. account_id matches
+// accountFixture so the "De" column resolves to the user's own account
+// email and the "Para" column shows the real recipient.
+const sentEmailFixture = {
+  provider_message_id: 'm_sent',
+  account_id: 'a_1',
+  mailbox_id: 'mb_1',
+  thread_id: null,
+  from_email: 'alice@example.com',
+  from_name: 'Alice',
+  to_email: 'recipient@example.com',
+  to_name: 'Recipient',
+  subject: 'A sent message',
+  received_at: new Date('2024-01-12T09:00:00Z').toISOString(),
+  is_read: true,
+  box: 'SENT',
+  has_attachments: false,
+  is_favorite: false,
+};
+
 function renderInboxAtMailbox(initialEntry = '/m/mb_1/inbox') {
   return renderWithProviders(
     <>
@@ -400,5 +420,62 @@ describe('UnifiedInboxPage', () => {
       expect(screen.getByText('No se encontraron correos para tu búsqueda.')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Página siguiente' })).not.toBeInTheDocument();
+  });
+
+  it('flips the columns to the sent sense when q carries in:sent on an inbox view', async () => {
+    const seenQueries: (string | null)[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenQueries.push(new URL(request.url).searchParams.get('q'));
+        return HttpResponse.json({ items: [sentEmailFixture], total: 1, limit: 50, offset: 0 });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    // The route box is ALL_MAIL (inbox); in:sent in q shifts the effective
+    // box to SENT for the column layout only.
+    renderInboxAtMailbox('/m/mb_1/inbox?q=in:sent');
+
+    await waitFor(() => {
+      expect(screen.getByText('A sent message')).toBeInTheDocument();
+    });
+
+    // Unified view shows both columns; with isSent derived as SENT the
+    // recipient surfaces under "Para" and the user's own account under "De".
+    expect(screen.getByText('recipient@example.com')).toBeInTheDocument();
+    expect(screen.getByText('alice@example.com')).toBeInTheDocument();
+
+    // Only q carries the override, and it travels literally — the box param
+    // sent to the backend is unchanged (the real override is server-side).
+    expect(seenQueries[seenQueries.length - 1]).toBe('in:sent');
+  });
+
+  it('forwards an operator query (from:linkedin) literally without rewriting it', async () => {
+    const seenQueries: (string | null)[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenQueries.push(new URL(request.url).searchParams.get('q'));
+        return HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderInboxAtMailbox();
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome to the platform')).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('searchbox'), 'from:linkedin');
+
+    await waitFor(() => {
+      expect(seenQueries[seenQueries.length - 1]).toBe('from:linkedin');
+    });
   });
 });

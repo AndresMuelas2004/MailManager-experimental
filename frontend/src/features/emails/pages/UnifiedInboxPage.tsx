@@ -7,9 +7,11 @@ import useEmailViewer from '../hooks/useEmailViewer';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
+import SearchHelpPopover from '../components/SearchHelpPopover';
 import useDebounce from '../hooks/useDebounce';
 import { EMAIL_BOX_CONFIG } from '../boxes';
 import { parsePageParam } from '../../../lib/pagination';
+import { parseInOperator } from '../../../lib/searchOperators';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
 import type { EmailMetadataOut } from '../../../api/types/dto';
@@ -84,13 +86,20 @@ export default function UnifiedInboxPage({ box }: Props) {
     ? 'No se encontraron correos para tu búsqueda.'
     : 'No hay correos en esta bandeja';
 
+  // Columns follow the EFFECTIVE box: a valid in: in q shifts the box of
+  // every returned row, so unified columns must render with that sense. The
+  // box sent to the backend is unchanged (the override is applied
+  // server-side from q). Cosmetic only.
+  const isSent = (parseInOperator(debouncedQ) ?? box) === 'SENT';
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
         <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{config.title}</h1>
         <p className="text-[15px] leading-[1.5] text-zinc-500">{config.subtitle}</p>
-        <div className="pt-2">
+        <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />
+          <SearchHelpPopover />
         </div>
       </div>
       {combinedError ? (
@@ -102,7 +111,7 @@ export default function UnifiedInboxPage({ box }: Props) {
             accounts={accounts}
             loading={loading}
             view="unified"
-            isSent={box === 'SENT'}
+            isSent={isSent}
             conversationMode
             onOpen={viewer.open}
             emptyMessage={emptyMessage}

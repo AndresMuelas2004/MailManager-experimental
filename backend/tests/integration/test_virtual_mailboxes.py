@@ -485,6 +485,83 @@ def test_emails_for_virtual_mailbox_search_query_combines_with_filter(
     assert all("sprint" in (row["subject"] or "").lower() for row in rows)
 
 
+def test_emails_for_vmbox_operator_ands_with_saved_filter(test_client, isolated_db):
+    # A lupa operator from q ANDs with a SAVED virtual-mailbox filter. Saved
+    # subject_contains="sprint" matches the two seeded sprint rows (019 Rachel,
+    # 020 Sam); from:rachel in q narrows to gmail-allmail-019 only.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Sprint by sender",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"subject_contains": "sprint"},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "from:rachel"})
+    assert resp.status_code == 200
+    rows = resp.json()["items"]
+    assert {r["provider_message_id"] for r in rows} == {"gmail-allmail-019"}
+
+
+def test_emails_for_vmbox_in_intersects_compatible_box(test_client, isolated_db):
+    # Default-exclusion vmbox (no box) → in:sent is compatible and narrows the
+    # listing to SENT rows only.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "All Gmail",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "in:sent"})
+    assert resp.status_code == 200
+    rows = resp.json()["items"]
+    assert rows, "in:sent must surface the seeded SENT rows"
+    assert all(r["box"] == "SENT" for r in rows)
+
+
+def test_emails_for_vmbox_in_excluded_box_returns_empty(test_client, isolated_db):
+    # Default-exclusion vmbox excludes TRASH/SPAM; in:trash asks for an excluded
+    # box → empty page (the intersection is naturally empty).
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "All Gmail 2",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "in:trash"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+def test_emails_for_vmbox_saved_is_read_contradicts_lupa_is_unread(test_client, isolated_db):
+    # Saved is_read=True contradicts q is:unread → two incompatible AND clauses
+    # → empty page. (Seed sprint rows: 019 read, 020 unread; the saved filter
+    # keeps only read rows, the lupa keeps only unread → intersection empty.)
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Read sprint",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"subject_contains": "sprint", "is_read": True},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "is:unread"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
 def test_filter_by_box_not_in_excludes_only_listed_box(test_client, isolated_db):
     """``box_not_in=['SPAM']`` excludes SPAM but keeps TRASH (and
     ALL_MAIL, SENT). The previous default-exclusion branch ate both —

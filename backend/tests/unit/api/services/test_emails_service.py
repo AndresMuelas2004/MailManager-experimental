@@ -1274,6 +1274,7 @@ def _patch_list_emails(
         account_ids, box, tokens, limit, offset,
         *, extra_filters=None, box_in=None, box_not_in=None,
         distinct_provider_message_id=False, group_by_thread=False,
+        operator_clauses=None,
     ):
         if list_filtered_calls is not None:
             list_filtered_calls.append({
@@ -1287,6 +1288,7 @@ def _patch_list_emails(
                 "box_not_in": box_not_in,
                 "distinct_provider_message_id": distinct_provider_message_id,
                 "group_by_thread": group_by_thread,
+                "operator_clauses": operator_clauses,
             })
         return result_rows
 
@@ -1294,6 +1296,7 @@ def _patch_list_emails(
         account_ids, box, tokens,
         *, extra_filters=None, box_in=None, box_not_in=None,
         distinct_provider_message_id=False, group_by_thread=False,
+        operator_clauses=None,
     ):
         if count_filtered_calls is not None:
             count_filtered_calls.append({
@@ -1305,6 +1308,7 @@ def _patch_list_emails(
                 "box_not_in": box_not_in,
                 "distinct_provider_message_id": distinct_provider_message_id,
                 "group_by_thread": group_by_thread,
+                "operator_clauses": operator_clauses,
             })
         return total_value
 
@@ -1406,16 +1410,21 @@ class TestListEmails:
             emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
 
     def test_db_error_on_list_filtered_translated(self, monkeypatch):
+        from api.errors.exceptions import DatabaseQueryError
         from database.errors.exceptions import QueryError as DbQueryError
         _patch_list_emails(monkeypatch)
 
-        def _raise(_aids, _box, _tokens, _limit, _offset):
+        # ``list_filtered`` is called with keyword args (extra_filters,
+        # box_not_in, operator_clauses); the stub must accept **_kwargs or it
+        # raises TypeError before our injected error and the test passes for
+        # the wrong reason. Mirrors test_db_error_on_count_filtered_translated.
+        def _raise(_aids, _box, _tokens, _limit, _offset, **_kwargs):
             raise DbQueryError("db fail")
 
         monkeypatch.setattr(
             emails_service.email_metadata_store, "list_filtered", _raise,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(DatabaseQueryError):
             emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
 
     def test_db_error_on_unified_account_listing_translated(self, monkeypatch):
@@ -1432,7 +1441,10 @@ class TestListEmails:
     def test_unexpected_error_raises_email_list_error_with_filtered_message(self, monkeypatch):
         _patch_list_emails(monkeypatch)
 
-        def _raise(_aids, _box, _tokens, _limit, _offset):
+        # **_kwargs so the keyword args (extra_filters/box_not_in/
+        # operator_clauses) reach the stub and the injected RuntimeError is
+        # what propagates — not a signature TypeError.
+        def _raise(_aids, _box, _tokens, _limit, _offset, **_kwargs):
             raise RuntimeError("unexpected")
 
         monkeypatch.setattr(
@@ -1608,6 +1620,63 @@ class TestListEmailsPagination:
         # cross-account duplicate cannot occur — it must NOT dedup.
         assert list_calls[0]["distinct_provider_message_id"] is False
         assert count_calls[0]["distinct_provider_message_id"] is False
+
+    def test_in_operator_overrides_route_box(self, monkeypatch):
+        # ``in:sent`` in q wins over the route's ALL_MAIL: box_arg becomes
+        # SENT and box_not_in is cleared (the override keeps the
+        # mutually-exclusive box / box_not_in contract).
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, q="in:sent",
+        )
+        assert list_calls[0]["box"] == "SENT"
+        assert list_calls[0]["box_not_in"] is None
+
+    def test_in_operator_overrides_favorites_anchor_box(self, monkeypatch):
+        # Favourites passes ALL_MAIL (box → None, box_not_in → [TRASH, SPAM]);
+        # ``in:sent`` then overrides to SENT and clears box_not_in while the
+        # is_favorite extra filter stays — i.e. "favourites in Sent".
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            favorite=True, q="in:sent",
+        )
+        assert list_calls[0]["box"] == "SENT"
+        assert list_calls[0]["box_not_in"] is None
+        assert list_calls[0]["extra_filters"] == {"is_favorite": True}
+
+    def test_operator_clauses_passed_identically_to_list_and_count(self, monkeypatch):
+        # The parsed operator_clauses must reach BOTH calls unchanged so the
+        # total counts exactly what the page lists (same guarantee as tokens).
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            q="from:linkedin is:unread",
+        )
+        expected = [("from_contains", "linkedin"), ("is_read_op", False)]
+        assert list_calls[0]["operator_clauses"] == expected
+        assert count_calls[0]["operator_clauses"] == list_calls[0]["operator_clauses"]
+
+    def test_no_operators_passes_none_operator_clauses(self, monkeypatch):
+        # Pure free-text q → operator_clauses falls to None (service passes
+        # ``operator_clauses or None``), so the emitted SQL is the pre-operator
+        # query.
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, q="foo bar",
+        )
+        assert list_calls[0]["operator_clauses"] is None
+        # Free-text semantics are untouched by the richer parser.
+        assert list_calls[0]["tokens"] == ["foo", "bar"]
 
     def test_db_error_on_count_filtered_translated(self, monkeypatch):
         from api.errors.exceptions import DatabaseQueryError

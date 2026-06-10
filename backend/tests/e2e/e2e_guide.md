@@ -129,10 +129,13 @@ When adding a new provider:
 
 The E2E suite should always represent the full set of supported providers.
 
-## Search endpoint coverage — `test_38a` / `test_38b`
+## Search endpoint coverage — `test_38a`–`test_38g`
 
-`GET /mailboxes/{mailbox_id}/emails?q=…` is exercised by `test_38a_search_emails_single_account` and `test_38b_search_emails_unified_mailbox`. Why the dedicated mention here:
+`GET /mailboxes/{mailbox_id}/emails?q=…` (free text + Gmail-style operators) and its pagination envelope are exercised by the `test_38*` block. Why the dedicated mention here — each test is the executable spec for a contract not visible from the router signature alone:
 
-- The contract on `q` (OR semantics across `subject`, `from_email`, `from_name`, AND between tokens, literal substring, no stemming) is not visible from the router signature alone — the test is the executable spec for it. A change in the predicate that breaks one column's contribution must surface here.
-- 38a scopes the search to a single `account_id` and verifies every returned row matches the needle in at least one of the three searchable columns.
-- 38b drops the `account_id` filter (unified mailbox view) and verifies every returned row belongs to **some** account inside the requested mailbox AND matches the needle. This pins down that the unified path does not leak rows from foreign mailboxes when no `account_id` is supplied — a contract the router signature alone does not express.
+- The contract on `q` free text (OR semantics across `subject`, `from_email`, `from_name`, AND between tokens, literal substring, no stemming) is pinned by `test_38a` (single `account_id`, every row matches the needle in ≥1 searchable column) and `test_38b` (unified view, no `account_id`: every row belongs to **some** account inside the requested mailbox — the unified path must not leak rows from foreign mailboxes).
+- `test_38c` pins the `EmailPageOut` envelope against the real account: `total` is the whole filtered set (not the page length), and two adjacent pages share no `provider_message_id` — proving OFFSET paging is stable thanks to the total-ordering tie-break. Skips when the account has < 3 emails.
+- `test_38d` is the spec for the `is:read` / `is:unread` operators (every returned row must satisfy the read-state predicate). Both halves stay in one test — they are the same logical contract.
+- `test_38e` pins the **asymmetry** of `in:`: with `box=ALL_MAIL&q=in:sent` every row is in `SENT`, and `total` equals a direct `box=SENT` query — so the override reaches the COUNT predicate, not only the listing. A regression that applied `in:` to the page but not the count would pass a bare status check.
+- `test_38f` pins that contradictory operators (`is:read is:unread`) resolve to **zero rows in SQL** (`items == []`, `total == 0`), never a 422 — the executable counterpart to the `repository_guide.md` "contradictions resolve in SQL, not via code" note.
+- `test_38g` is the only place that proves the deployed runtime carries the IANA tz database (`tzdata`): `before:`/`after:` parse the date as midnight in `Europe/Madrid`, so a missing `tzdata` would 500 these requests — a failure neither unit nor integration can catch (they share the interpreter; only E2E exercises the real runtime). Fixed far-past/far-future boundaries keep it deterministic against a live inbox.
