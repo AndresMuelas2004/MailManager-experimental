@@ -78,8 +78,8 @@
 
   Every plan produced in plan mode for a non-trivial feature implementation must include these two final steps, in this order:
 
-  **Penultimate step — Tests update and execution:**
-  Before running tests, review the code changes introduced by the plan and add new tests or update existing ones to cover the new or modified functionality. Then run all test suites that were added or modified during plan execution — unit, integration, and e2e. Do not run only one layer; run every test file that was created or edited as part of the implementation.
+  **Penultimate step — Tests update:**
+  Review the code changes introduced by the plan and add new tests or update existing ones to cover the new or modified functionality.
 
   **Final step — Documentation update (critical):**
   This step is the foundation of the entire quality assurance system. The Documentation Priority rule (§ 9) establishes that `.md` files are always the source of truth: when code contradicts documentation, the documentation is correct and the code must change. Review subagent md-reviewer rely on this principle to catch and fix code mistakes.
@@ -112,3 +112,7 @@
 
   **Proactive flagging:** When Claude notices it is repeating an error — or the user corrects the same kind of mistake more than once across conversations — Claude must explicitly ask the user whether the
   correction should be added to `common_mistakes.md`. Do not add entries autonomously; always ask first.
+
+  ### 11 Integration and E2E Test Execution
+
+  Never run the integration or E2E test suites on your own initiative. Run them only when the user explicitly requests it; in that case you may decide to run them.
