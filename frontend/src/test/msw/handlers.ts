@@ -48,6 +48,40 @@ export const handlers = [
 
   // Accounts
   http.get(`${API_BASE}/mailboxes/:mailboxId/accounts`, () => HttpResponse.json([])),
+  http.post(`${API_BASE}/mailboxes/:mailboxId/accounts`, ({ params }) =>
+    HttpResponse.json({
+      account_id: 'acc_test',
+      mailbox_id: params.mailboxId,
+      provider: 'gmail',
+      display_label: 'Gmail',
+      config: {},
+      email_address: null,
+    }),
+  ),
+  http.get(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, ({ params }) =>
+    HttpResponse.json({
+      account_id: params.accountId,
+      mailbox_id: params.mailboxId,
+      provider: 'gmail',
+      display_label: 'Gmail',
+      config: {},
+      email_address: 'connected@example.com',
+    }),
+  ),
+  http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () =>
+    HttpResponse.json({ status: 'deleted' }),
+  ),
+  // Interactive connect flow: returns the provider authorization URL the
+  // browser must open; the OAuth callback completes the connection.
+  http.post(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/connect`, ({ params }) =>
+    HttpResponse.json({
+      provider: 'gmail',
+      account_id: params.accountId,
+      account_label: `${params.mailboxId}__${params.accountId}`,
+      authorization_url: 'https://accounts.google.com/o/oauth2/auth?mock=1',
+      state: 'state-test',
+    }),
+  ),
 
   // Recipient autocomplete (contacts) — user-level, no path params. Static
   // happy-path list; specs needing the empty / error case override inline.

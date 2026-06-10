@@ -37,6 +37,14 @@ function buildUrl(path: string): string {
   return `${base}${normalized}`;
 }
 
+/**
+ * Browser origin of the API backend. The OAuth connect flow validates
+ * `postMessage` events from the callback popup against this origin.
+ */
+export function getApiOrigin(): string {
+  return new URL(getBaseUrl()).origin;
+}
+
 async function parseBody(response: Response): Promise<unknown> {
   if (response.status === 204) {
     return undefined;

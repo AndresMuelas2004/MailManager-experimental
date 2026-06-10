@@ -1,15 +1,17 @@
 import { request } from '../client/http';
 import {
-  accountConnectResponseSchema,
+  accountConnectStartResponseSchema,
   accountListSchema,
   accountOutSchema,
   statusResponseSchema,
-  type AccountConnectResponse,
+  type AccountConnectStartResponse,
   type AccountCreate,
   type AccountOut,
   type AccountUpdate,
   type StatusResponse,
 } from '../types/dto';
+
+export { getApiOrigin } from '../client/http';
 
 export function listAccounts(mailboxId: string): Promise<AccountOut[]> {
   return request(`/mailboxes/${mailboxId}/accounts`, { schema: accountListSchema });
@@ -49,9 +51,9 @@ export function deleteAccount(mailboxId: string, accountId: string): Promise<Sta
 export function connectAccount(
   mailboxId: string,
   accountId: string,
-): Promise<AccountConnectResponse> {
+): Promise<AccountConnectStartResponse> {
   return request(`/mailboxes/${mailboxId}/accounts/${accountId}/connect`, {
     method: 'POST',
-    schema: accountConnectResponseSchema,
+    schema: accountConnectStartResponseSchema,
   });
 }

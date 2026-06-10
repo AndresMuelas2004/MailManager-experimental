@@ -68,15 +68,14 @@ export type AccountOut = z.infer<typeof accountOutSchema>;
 
 export const accountListSchema = z.array(accountOutSchema);
 
-export const accountConnectResponseSchema = z.object({
-  connected: z.boolean(),
-  provider: z.string().nullable(),
+export const accountConnectStartResponseSchema = z.object({
+  provider: z.string(),
   account_id: z.string(),
-  account_label: z.string().nullable(),
-  email_address: z.string().nullable(),
-  message: z.string().nullable(),
+  account_label: z.string(),
+  authorization_url: z.string(),
+  state: z.string(),
 });
-export type AccountConnectResponse = z.infer<typeof accountConnectResponseSchema>;
+export type AccountConnectStartResponse = z.infer<typeof accountConnectStartResponseSchema>;
 
 // Attachments — see decisionesTomadasAdjuntosFrontend.md §4.
 export const attachmentMetadataSchema = z.object({
