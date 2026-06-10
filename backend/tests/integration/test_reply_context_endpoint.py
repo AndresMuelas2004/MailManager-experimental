@@ -162,7 +162,10 @@ def test_reply_returns_pre_filled_data(
     assert body["reply_kind"] == "reply"
     assert body["reply_to_message_id"] == "m1"
     assert body["original_from_email"] == "ana@x.com"
+    # The reply body is HTML now: attribution line + the original quoted
+    # inside a <blockquote> (built by build_quoted_body_html).
     assert "escribió:" in body["body"]
+    assert "<blockquote" in body["body"]
 
 
 def test_reply_all_excludes_current_account_from_cc(
@@ -258,8 +261,9 @@ def test_forward_subject_prefixed_and_empty_recipients(
     # Forward pre-fills no recipients — the user adds them.
     assert body["to_recipients"] == []
     assert body["cc_recipients"] == []
-    # Body uses block header form, not ``> `` quoting.
+    # Body uses the HTML "Mensaje reenviado" block + a <blockquote> quote.
     assert "Mensaje reenviado" in body["body"]
+    assert "<blockquote" in body["body"]
     assert body["reply_kind"] == "forward"
 
 

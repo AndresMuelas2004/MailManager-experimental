@@ -2,6 +2,54 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 
+// ProseMirror (TipTap) coordinate/geometry APIs jsdom does not implement.
+// The editor's view setup — and the Placeholder extension's viewport tracking
+// in particular — calls ``document.elementFromPoint`` and reads client rects
+// off ``Range``/``Element``. jsdom returns nothing for these, so the mount
+// throws ``elementFromPoint is not a function`` / ``getClientRects is not a
+// function``. We stub them with inert zero-rects so RichTextEditor and any
+// component that mounts it (ComposeOverlay) can render in tests. This is a
+// polyfill of a missing browser API, NOT a mock of the component under test
+// (test/CLAUDE.md §4 forbids mocking the editor; polyfilling jsdom gaps in the
+// shared setup is the sanctioned route).
+{
+  const zeroRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      bottom: 0,
+      right: 0,
+      width: 0,
+      height: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+
+  if (typeof document.elementFromPoint !== 'function') {
+    document.elementFromPoint = () => null;
+  }
+  if (typeof Range.prototype.getClientRects !== 'function') {
+    Range.prototype.getClientRects = () =>
+      ({
+        length: 0,
+        item: () => null,
+        [Symbol.iterator]: function* () {},
+      }) as unknown as DOMRectList;
+  }
+  if (typeof Range.prototype.getBoundingClientRect !== 'function') {
+    Range.prototype.getBoundingClientRect = zeroRect;
+  }
+  if (typeof Element.prototype.getClientRects !== 'function') {
+    Element.prototype.getClientRects = () =>
+      ({
+        length: 0,
+        item: () => null,
+        [Symbol.iterator]: function* () {},
+      }) as unknown as DOMRectList;
+  }
+}
+
 // Strip RequestInit.signal at the Request constructor level. jsdom 25 + MSW
 // v2 validate `init.signal instanceof AbortSignal` against the AbortSignal
 // class jsdom captured at module load time. TanStack Query (and any code

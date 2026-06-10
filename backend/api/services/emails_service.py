@@ -36,7 +36,7 @@ from core.email import (
     EmailMetadata,
     SyncResult,
     build_in_reply_to_and_references,
-    build_quoted_body,
+    build_quoted_body_html,
     build_reply_subject,
     compute_reply_recipients,
     sanitize_filename,
@@ -87,6 +87,7 @@ from api.services.services_helpers import (
     restore_from_trash_discovered_batch,
     row_to_email_metadata_out,
     sanitize_email_html,
+    sanitize_outbound_html,
     translate_core_error,
     translate_database_error,
     unwrap_secret,
@@ -156,8 +157,12 @@ def _persist_refreshed_tokens(
     updated_tokens: dict[str, dict[str, Any]],
     label_lookup: dict[str, tuple[str, str, str]],
     *,
-    fallback: type[ApiError] = ApiError,
+    fallback: type[ApiError],
 ) -> None:
+    # ``fallback`` is a required keyword: every caller passes the ApiError
+    # subclass matching its operation. A base ``ApiError`` default would emit
+    # a code-less 500 if a future caller forgot it — a required arg fails
+    # loudly at call time instead (every current call site is explicit).
     for account_label, token_payload in updated_tokens.items():
         ids = label_lookup.get(account_label)
         if not ids:
@@ -322,6 +327,12 @@ def sync_email_metadata(
 
 def send_email(mailbox_id: str, payload: EmailSendRequest, user_id: str) -> dict[str, str]:
     ensure_mailbox_access(mailbox_id, user_id)
+    # Sanitise the rich-text HTML body at the trust boundary before it
+    # reaches the provider (Gmail multipart/alternative, Outlook HTML).
+    # Fail-soft (never raises). NOTE: ``sanitize_outbound_html`` (outbound,
+    # strict allowlist) is distinct from ``sanitize_email_html`` (the
+    # inbound viewer pipeline) — they are NOT interchangeable.
+    sanitized_body = sanitize_outbound_html(payload.body)
     try:
         account = account_store.get(mailbox_id, payload.account_id)
     except DatabaseError as exc:
@@ -346,7 +357,7 @@ def send_email(mailbox_id: str, payload: EmailSendRequest, user_id: str) -> dict
             sent_metadata = manager.send_email_from_account(
                 account_label=account_label,
                 subject=payload.subject,
-                body=payload.body,
+                body=sanitized_body,
                 recipients=payload.recipients,
             )
         except CoreError as exc:
@@ -1422,7 +1433,7 @@ def get_reply_context(
     in_reply_to, references = build_in_reply_to_and_references(
         reply_context.message_id, reply_context.references,
     )
-    quoted_body = build_quoted_body(
+    quoted_body = build_quoted_body_html(
         reply_context.body_html,
         reply_context.body_text,
         from_name=reply_context.from_name,

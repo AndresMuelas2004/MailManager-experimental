@@ -156,7 +156,7 @@ Se decodifican nombres RFC 2231 (`filename*=utf-8''…`) y RFC 2047 (`=?utf-8?B?
 | **Vista previa inline de no-imágenes** | PDFs y similares se descargan, no se renderizan dentro de la app. |
 | **Adjuntos enormes vía enlace a Drive / OneDrive** | La app no genera enlaces para archivos > 25 MB; simplemente los rechaza. |
 | **Métricas custom (Prometheus / OpenTelemetry)** | Solo logs estructurados en operaciones críticas (descarga del proveedor, errores). |
-| **Cuerpo rich-text / pegar imágenes inline al componer** | El composer es un `<textarea>` plano y el correo se envía siempre como `text/plain`; "pegar imagen → inline" requiere un editor rich, fuera del MVP. |
+| **Pegar imágenes inline en el cuerpo al componer** | El cuerpo es HTML con formato (negrita, cursiva, subrayado, listas, enlaces), pero el editor y el saneador de salida no admiten imágenes incrustadas en el texto (`<img>` ni protocolos `cid` / `data`). Una imagen pegada/arrastrada en el cuerpo se descarta; los ficheros se mandan como **adjuntos**. Fuera del MVP. |
 | **Validación de `Origin` / `Referer` en la descarga** | El endpoint usa cookie de sesión y verifica pertenencia, pero no añade defensa extra contra exfiltración cross-site desde una pestaña que ya tenga sesión válida. Mejora futura. |
 | **Purga por TTL automática (cron)** | La purga de 30 días se ejecuta manualmente vía endpoint admin con token; se sustituirá por un cron más adelante. |
 

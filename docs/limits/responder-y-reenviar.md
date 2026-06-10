@@ -59,12 +59,13 @@ Cuando la validación local de Gmail falla, el usuario recibe un error determini
 
 | Parámetro | Valor exacto |
 |---|---|
-| Formato | **Texto plano** siempre (el correo se compone y envía como `text/plain`, R-05; el composer es un `<textarea>`). |
-| Idioma de la cabecera de cita | **Español fijo** (p. ej. *"El 23 de mayo de 2026 a las 14:32, … escribió:"*). i18n fuera del MVP. |
+| Formato de la cita | **HTML** (`build_quoted_body_html`): línea(s) de atribución en `<p>` + el original dentro de un `<blockquote>`. El original **se degrada primero a texto** (mismo degradador `_html_to_text`) y luego se re-envuelve; la cita **no** ingiere el HTML del remitente. |
+| Estilo del recuadro de cita (`<blockquote style>`) | `margin:0 0 0 .8ex; border-left:2px solid #ccc; padding-left:1ex; color:#555;` — barra lateral gris + sangría. Sus propiedades CSS deben estar en la allowlist del saneador de salida (ver [composicion-y-envio.md](./composicion-y-envio.md)) para sobrevivir al saneado en persistir/enviar. |
+| Idioma de la atribución de cita | **Español fijo** (p. ej. *"El 23 de mayo de 2026 a las 14:32, … escribió:"*). i18n fuera del MVP. |
 | Zona horaria de la fecha | **UTC** (sin conversión a hora local). Fuera del MVP. |
-| Estilo Responder / Resp. a todos | Cabecera con fecha + remitente, cuerpo original prefijado con `> ` por línea. |
-| Estilo Reenviar | Bloque `---------- Mensaje reenviado ----------` con `De / Fecha / Asunto / Para / Cc` y cuerpo **sin** prefijo `>`. |
-| Posición del cursor | Sobre **dos líneas en blanco** encima de la cita (el usuario escribe arriba sin pisarla). |
+| Estilo Responder / Resp. a todos | `<p>` de atribución (fecha + remitente) seguido del `<blockquote>` con el original. **Ya no** se prefija cada línea con `> ` (el recuadro de cita sustituye al prefijo del antiguo camino en texto plano). |
+| Estilo Reenviar | `<p>` con `---------- Mensaje reenviado ----------` + `De / Fecha / Asunto / Para / Cc` (separadas por `<br>`), seguido del `<blockquote>` con el original. |
+| Posición del cursor | El usuario escribe **encima** del bloque de cita (el composer siembra el HTML con la atribución + cita y el cursor queda arriba). |
 | Recorte del original citado (solo en degradación HTML→texto) | **50 000 caracteres** máximo; el exceso se corta con un marcador `[...truncado...]`. |
 | Saltos en blanco consecutivos (solo en degradación HTML→texto) | Se colapsan a un máximo de **2** (mantiene párrafos sin inflar la cita). |
 | Original que ya trae parte en texto plano | Se cita **tal cual** (solo se recorta el espacio sobrante de los extremos): **no** se le aplica el recorte de 50 000 caracteres ni el colapso de saltos. Esas dos reglas son exclusivas del camino HTML→texto. |
@@ -139,7 +140,7 @@ Motivos de "saltado" (`reason`) posibles:
 | **Reenvío entre cuentas distintas (cross-account)** | Bloqueado a la cuenta del original en el MVP; el esquema ya está preparado (columnas account-scoped) para añadirlo. |
 | **Variantes de prefijo numeradas (`Re[2]:`)** | No se reconocen como prefijo; se tratan como parte del asunto. Fallo benigno (el hilo se forma por `threadId`/`conversationId`). |
 | **i18n y zona horaria local en la cita** | La cabecera de cita es español fijo y la fecha va en UTC. Fuera del MVP (R-05). |
-| **Cuerpo rich-text / cita con formato HTML** | El composer es `<textarea>` y el correo va como `text/plain`; el original HTML se degrada a texto. |
+| **Preservar el formato HTML del original en la cita** | El cuerpo es HTML (editor enriquecido) y la cita va dentro de un `<blockquote>`, pero el **contenido citado** se degrada a texto antes de envolverlo: no se conserva el formato original del remitente (negritas, tablas, imágenes del original). Es deliberado para no arrastrar HTML arbitrario al editor restringido. |
 | **Deduplicar bytes en herencia Outlook con nombres repetidos** | Dos adjuntos del original con el mismo nombre pueden provocar una re-subida redundante en el envío (caso vanishingly raro, sin pérdida de datos). |
 | **Edición del threading desde el cliente al enviar** | Los seis campos de respuesta se leen de la fila local, no del cuerpo del envío; un cliente no puede sobrescribir el enhebrado (es una protección, no una carencia funcional). |
 

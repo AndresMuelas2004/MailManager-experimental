@@ -2,9 +2,24 @@ import { useCallback, useRef, useState } from 'react';
 
 import { createDraft, updateDraft, sendDraft } from '../../../api/endpoints/drafts';
 import { sendEmail } from '../../../api/endpoints/emails';
-import { toUiError } from '../../../api/client/errors';
+import { isApiError, toUiError } from '../../../api/client/errors';
 import type { UiError } from '../../../api/client/errors';
 import type { DraftPayload } from './useComposerForm';
+
+// Body-size 422 is a FastAPI validation error: its body is the object
+// ``{ detail: [...] }`` (not the ``{ error: { code, message } }`` envelope),
+// so ``toApiError`` falls back to ``ApiError('Request failed', 'http_error',
+// 422)`` and ``toUiError`` would surface that opaque English string. This is
+// only reachable by bypassing the client-side ``bodyError`` gating (the real
+// defence). When it does happen, replace the message with a readable Spanish
+// one. ``status`` must be read off the raw ``ApiError`` because ``toUiError``
+// drops it.
+function toComposerError(err: unknown): UiError {
+  if (isApiError(err) && err.code === 'http_error' && err.status === 422) {
+    return { message: 'El mensaje es demasiado grande. Reduce su tamaño.', code: 'body_too_large' };
+  }
+  return toUiError(err);
+}
 
 export type UseDraftPersistenceReturn = {
   sending: boolean;
@@ -94,7 +109,7 @@ export default function useDraftPersistence(): UseDraftPersistenceReturn {
         });
         return true;
       } catch (err) {
-        const uiErr = toUiError(err);
+        const uiErr = toComposerError(err);
         const isRecipientError =
           uiErr.code === 'recipients_missing' || uiErr.code === 'email_send_error';
         setError({
@@ -126,7 +141,7 @@ export default function useDraftPersistence(): UseDraftPersistenceReturn {
         await sendDraft(mailboxId, accountId, providerDraftId);
         return true;
       } catch (err) {
-        setError(toUiError(err));
+        setError(toComposerError(err));
         return false;
       } finally {
         setSending(false);
@@ -144,7 +159,7 @@ export default function useDraftPersistence(): UseDraftPersistenceReturn {
         await persistDraft(mailboxId, accountId, payload);
         return true;
       } catch (err) {
-        setError(toUiError(err));
+        setError(toComposerError(err));
         return false;
       } finally {
         setSaving(false);

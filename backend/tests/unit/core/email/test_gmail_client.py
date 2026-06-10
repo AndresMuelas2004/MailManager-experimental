@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
+from email import message_from_bytes, policy
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -1091,23 +1092,27 @@ class TestSendEmail:
         return mock_service
 
     def test_constructs_mime_and_calls_api(self, client: GmailClient):
-        """Verify MIME message structure and API call."""
+        """Verify the HTML multipart/alternative MIME structure and API call."""
         mock_service = self._setup_send_mock(client)
         with patch.object(client, "fetch_messages_metadata", return_value=[]):
-            client.send_email("Test Subject", "Test Body", ["a@b.com"])
+            client.send_email("Test Subject", "<p>Test Body</p>", ["a@b.com"])
 
         send_fn = mock_service.users.return_value.messages.return_value.send
         send_fn.assert_called_once()
         call_kwargs = send_fn.call_args
         body = call_kwargs[1]["body"]
         raw_bytes = base64.urlsafe_b64decode(body["raw"])
-        raw_text = raw_bytes.decode("utf-8")
-        assert "Test Subject" in raw_text
-        # The shared MIME builder (build_mime_with_attachments helper)
-        # encodes the body via base64 transfer-encoding to keep non-ASCII
-        # safe end-to-end, so the literal text is no longer visible inline.
-        assert "VGVzdCBCb2R5" in raw_text  # base64("Test Body")
-        assert "a@b.com" in raw_text
+        msg = message_from_bytes(raw_bytes, policy=policy.default)
+        assert msg["subject"] == "Test Subject"
+        assert "a@b.com" in (msg["to"] or "")
+        # HTML send is a multipart/alternative: derived text/plain leg + the
+        # text/html leg carrying the composed HTML.
+        assert msg.get_content_type() == "multipart/alternative"
+        subtypes = [p.get_content_type() for p in msg.iter_parts()]
+        assert "text/plain" in subtypes
+        assert "text/html" in subtypes
+        html_part = next(p for p in msg.iter_parts() if p.get_content_type() == "text/html")
+        assert "<p>Test Body</p>" in html_part.get_content()
 
     def test_returns_metadata_from_batch_fetch(self, client: GmailClient):
         """send_email returns EmailMetadata fetched via fetch_messages_metadata."""
@@ -1796,35 +1801,87 @@ class TestFetchDrafts:
         assert "body-d1" in draft.body
 
     @pytest.mark.parametrize(
-        "raw_body,expected",
+        "raw_html,expected",
         [
-            ("sync test\n", "sync test"),
-            ("sync test\r\n", "sync test"),
-            ("line1\nline2\n", "line1\nline2"),
-            ("no trailing", "no trailing"),
+            ("<p>hello</p>\n", "<p>hello</p>"),
+            ("<p>hello</p>\r\n", "<p>hello</p>"),
+            ("<p>a</p><p>b</p>\n", "<p>a</p><p>b</p>"),
+            ("<p>no trailing</p>", "<p>no trailing</p>"),
             ("", ""),
         ],
     )
     def test_parse_gmail_draft_strips_single_trailing_newline(
-        self, client: GmailClient, raw_body: str, expected: str,
+        self, client: GmailClient, raw_html: str, expected: str,
     ):
-        """Gmail's MIMEText serialization appends one trailing newline that
-        must be stripped on read so the body round-trips matching what the
-        user composed (and stays consistent with Outlook, which never adds
-        one)."""
+        """The MIME serialization of the text/html part appends one trailing
+        newline that Gmail echoes back verbatim. ``_parse_gmail_draft`` now
+        prefers the text/html part and strips exactly one terminator (``\\r\\n``
+        first, then ``\\n``) so the round-tripped HTML matches what was
+        composed (and stays consistent with Outlook, which never adds one)."""
         response = {
             "id": "d-nl",
             "message": {
                 "id": "msg-d-nl",
                 "payload": {
                     "headers": [{"name": "Subject", "value": "s"}],
-                    "mimeType": "text/plain",
-                    "body": {"data": _encode_body(raw_body)},
+                    "mimeType": "text/html",
+                    "body": {"data": _encode_body(raw_html)},
                 },
             },
         }
         draft = client._parse_gmail_draft(response)
         assert draft.body == expected
+
+    def test_parse_gmail_draft_round_trips_html_body(self, client: GmailClient):
+        """A draft built with ``build_mime_with_attachments`` (HTML
+        multipart/alternative) round-trips: the parsed body is the composed
+        HTML with no trailing newline, taken from the text/html leg."""
+        from core.email import build_mime_with_attachments
+
+        html = "<p>Hola <strong>mundo</strong></p>"
+        raw = build_mime_with_attachments(
+            to_recipients=["a@b.com"], cc_recipients=[], bcc_recipients=[],
+            subject="S", body=html, attachments=[],
+        )
+        full_msg = message_from_bytes(raw, policy=policy.default)
+
+        def _to_payload(part):
+            if part.is_multipart():
+                return {
+                    "mimeType": part.get_content_type(),
+                    "parts": [_to_payload(p) for p in part.iter_parts()],
+                }
+            data = part.get_payload(decode=True) or b""
+            return {
+                "mimeType": part.get_content_type(),
+                "body": {"data": base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")},
+            }
+
+        response = {
+            "id": "d-rt",
+            "message": {"id": "m-rt", "payload": _to_payload(full_msg)},
+        }
+        draft = client._parse_gmail_draft(response)
+        assert draft.body == html
+        assert not draft.body.endswith("\n")
+
+    def test_parse_gmail_draft_converts_legacy_text_plain_to_html(self, client: GmailClient):
+        """A legacy draft carrying ONLY a text/plain part (pre-rich-text, or
+        authored by another client) is converted to HTML via
+        ``plain_text_to_html`` so the persisted body is always HTML."""
+        response = {
+            "id": "d-legacy",
+            "message": {
+                "id": "m-legacy",
+                "payload": {
+                    "headers": [{"name": "Subject", "value": "s"}],
+                    "mimeType": "text/plain",
+                    "body": {"data": _encode_body("line1\nline2")},
+                },
+            },
+        }
+        draft = client._parse_gmail_draft(response)
+        assert draft.body == "<p>line1<br>line2</p>"
 
 
 # ── fetch_email_content + cid resolution ────────────────────────────

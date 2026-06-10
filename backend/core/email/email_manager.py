@@ -271,7 +271,7 @@ class EmailManager:
     ) -> DraftMetadata:
         """
         Create a draft using the client that matches the requested account label.
-        Body is plain text (D-31).
+        Body is HTML.
 
         The reply / forward kwargs (all optional) are propagated to the
         underlying client. Gmail uses ``thread_id`` + ``in_reply_to`` /
@@ -332,7 +332,7 @@ class EmailManager:
         Update an existing draft using the client that matches the
         requested account label. Full-field replacement semantics — the
         caller passes every field; the provider overwrites the draft
-        with exactly those values. Body is plain text (D-31).
+        with exactly those values. Body is HTML.
         """
         client = self._get_client_or_raise(account_label)
         try:

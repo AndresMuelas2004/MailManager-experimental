@@ -379,6 +379,37 @@ class TestSendEmail:
         assert len(meta_list) == 1
         assert meta_list[0].box == "SENT"
 
+    def test_html_body_sanitised_before_provider_send(self, monkeypatch):
+        # The outbound sanitiser runs at the trust boundary before the body
+        # reaches the provider's send_email (Gmail multipart / Outlook HTML).
+        from api.schemas.email import EmailSendRequest
+        _patch_common(monkeypatch)
+        captured_clients: list[FakeEmailClient] = []
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                label = f"{acc.get('mailbox_id', '')}__{acc.get('account_id', '')}"
+                client = FakeEmailClient(
+                    label, auth_return={"access_token": "tok", "refresh_token": "ref"},
+                )
+                captured_clients.append(client)
+                manager.add_client(client)
+            return manager
+
+        monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+        payload = EmailSendRequest(
+            account_id=_ACCOUNT_ID,
+            subject="Hello",
+            body='<script>steal()</script><p>real <strong>body</strong></p>',
+            recipients=["dest@example.com"],
+        )
+        emails_service.send_email(_MAILBOX_ID, payload, _USER_ID)
+        # The fake records (subject, body, recipients) on ``sent_emails``.
+        _subject, sent_body, _recipients = captured_clients[0].sent_emails[0]
+        assert "<script>" not in sent_body
+        assert "<p>real <strong>body</strong></p>" in sent_body
+
 
 # ==================================================================
 # _reconcile_ghost_emails
@@ -2062,6 +2093,24 @@ class TestGetReplyContext:
         assert result.reply_to_message_id == "m1"
         assert result.reply_kind == "reply"
         assert result.original_from_email == "ana@x.com"
+
+    def test_reply_body_is_html_with_blockquote(self, monkeypatch):
+        # The reply body is now built by ``build_quoted_body_html``: an HTML
+        # attribution line followed by the original quoted inside a
+        # <blockquote> (was plain text with "> " before the rich-text feature).
+        _patch_reply_context_common(
+            monkeypatch,
+            fake_client_kwargs={
+                "fetch_reply_context_return": _build_reply_context_fake(),
+            },
+        )
+        result = emails_service.get_reply_context(
+            _MAILBOX_ID, _ACCOUNT_ID, "m1", "reply", _USER_ID,
+        )
+        assert "<blockquote" in result.body
+        assert "escribió:" in result.body
+        # The degraded original rides inside the quote fragment.
+        assert "body text" in result.body
 
     def test_reply_all_excludes_current_account_email(self, monkeypatch):
         _patch_reply_context_common(

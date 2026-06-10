@@ -4,7 +4,7 @@ Unit tests for the attachment-related helpers added in `core.email.helpers`:
 - ``sanitize_filename`` (D-20)
 - ``format_content_disposition`` (D-21)
 - ``pick_gmail_send_strategy`` / ``pick_outlook_attachment_strategy`` (D-18)
-- ``build_mime_with_attachments`` (D-31 + Gmail send path)
+- ``build_mime_with_attachments`` (HTML multipart/alternative + Gmail send path)
 - ``find_referenced_cids`` (D-13 strict inline-vs-attachment classification)
 - ``retry_with_backoff`` (D-16)
 - ``resolve_attachment_mime_type`` (B-MIME)
@@ -175,23 +175,41 @@ class TestPickOutlookAttachmentStrategy:
 
 class TestBuildMimeWithAttachments:
 
-    def test_plain_text_body_no_attachments(self):
+    def test_html_body_no_attachments_is_multipart_alternative(self):
+        # The body is HTML now: with no attachments the root is a
+        # multipart/alternative carrying a derived text/plain leg FIRST and
+        # the text/html leg SECOND (the order clients require to prefer the
+        # richest representation they understand).
         raw = build_mime_with_attachments(
             to_recipients=["to@example.com"],
             cc_recipients=[],
             bcc_recipients=[],
             subject="hi",
-            body="hola",
+            body="<p>hola</p>",
             attachments=[],
         )
         msg = message_from_bytes(raw, policy=policy.default)
         assert msg["To"] == "to@example.com"
         assert msg["Subject"] == "hi"
-        # text/plain when there are no attachments — the body is the message itself.
-        body_part = msg
-        if msg.is_multipart():
-            body_part = next(p for p in msg.iter_parts() if p.get_content_type() == "text/plain")
-        assert body_part.get_content_type() == "text/plain"
+        assert msg.get_content_type() == "multipart/alternative"
+        subtypes = [p.get_content_type() for p in msg.iter_parts()]
+        assert "text/plain" in subtypes
+        assert "text/html" in subtypes
+        # text/plain comes first (richest-last ordering).
+        assert subtypes.index("text/plain") < subtypes.index("text/html")
+
+    def test_html_part_carries_the_html_body(self):
+        raw = build_mime_with_attachments(
+            to_recipients=["to@example.com"],
+            cc_recipients=[],
+            bcc_recipients=[],
+            subject="hi",
+            body="<p>hola <strong>mundo</strong></p>",
+            attachments=[],
+        )
+        msg = message_from_bytes(raw, policy=policy.default)
+        html_part = next(p for p in msg.iter_parts() if p.get_content_type() == "text/html")
+        assert "<strong>mundo</strong>" in html_part.get_content()
 
     def test_includes_attachment_with_correct_metadata(self):
         raw = build_mime_with_attachments(
@@ -212,7 +230,11 @@ class TestBuildMimeWithAttachments:
         assert msg["To"] == "to@example.com"
         assert msg["Cc"] == "cc@example.com"
         assert msg["Bcc"] == "bcc@example.com"
-        assert msg.is_multipart()
+        # With attachments the root is multipart/mixed; its FIRST child is the
+        # multipart/alternative body, followed by the attachment part(s).
+        assert msg.get_content_type() == "multipart/mixed"
+        children = list(msg.iter_parts())
+        assert children[0].get_content_type() == "multipart/alternative"
         attachment_parts = [p for p in msg.iter_parts() if p.get_filename()]
         assert len(attachment_parts) == 1
         att = attachment_parts[0]
@@ -252,19 +274,20 @@ class TestBuildMimeWithAttachments:
             )
         assert (excinfo.value.detail or {}).get("reason") == "invalid_attachment_data"
 
-    def test_text_plain_charset_is_utf8(self):
-        # D-31: body is text/plain; charset must declare UTF-8 so accents
+    def test_body_charset_is_utf8(self):
+        # Both legs of the multipart/alternative must declare UTF-8 so accents
         # round-trip end-to-end through Gmail/Outlook.
         raw = build_mime_with_attachments(
             to_recipients=["to@example.com"],
             cc_recipients=[],
             bcc_recipients=[],
             subject="s",
-            body="Atención: tildes",
+            body="<p>Atención: tildes</p>",
             attachments=[],
         )
-        decoded = raw.decode("utf-8", errors="replace")
-        assert "utf-8" in decoded.lower()
+        msg = message_from_bytes(raw, policy=policy.default)
+        charsets = {p.get_content_charset() for p in msg.iter_parts()}
+        assert charsets == {"utf-8"}
 
     def test_utf8_filename_round_trips(self):
         raw = build_mime_with_attachments(

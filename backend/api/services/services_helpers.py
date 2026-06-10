@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from pydantic import SecretStr
 
 from api.services.email_html_pipeline import prepare_email_html as sanitize_email_html
+from api.services.outbound_html_pipeline import sanitize_outbound_html
 
 from auth import (
     AuthError,

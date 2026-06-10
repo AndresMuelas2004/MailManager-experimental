@@ -13,6 +13,7 @@ import pytest
 from api.errors.exceptions import (
     AccountNotConnected,
     AccountNotFound,
+    AttachmentSendFailed,
     DatabaseQueryError,
     DraftCreationError,
     DraftDeleteError,
@@ -27,7 +28,11 @@ from api.errors.exceptions import (
 from api.schemas.draft import DraftCreate, DraftSendOut, DraftUpdate
 from api.services import drafts_service
 from core.email import DraftMetadata, EmailManager
-from core.email.errors import EmailAuthError, EmailExternalAPIError
+from core.email.errors import (
+    EmailAttachmentSendFailed,
+    EmailAuthError,
+    EmailExternalAPIError,
+)
 from database.errors import QueryError as DbQueryError
 from tests.shared.email_fakes import FakeEmailClient
 
@@ -281,6 +286,57 @@ class TestCreateDraft:
             "My subject",
             "plain body",
         )
+
+    def test_html_body_sanitised_before_provider_call(self, monkeypatch):
+        # The HTML body is sanitised ONCE at the trust boundary; the cleaned
+        # value (not the raw payload) is what reaches the provider client.
+        _patch_common(monkeypatch)
+        captured_clients: list[FakeEmailClient] = []
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                label = f"{acc.get('mailbox_id', '')}__{acc.get('account_id', '')}"
+                client = FakeEmailClient(
+                    label, auth_return={"access_token": "tok", "refresh_token": "ref"},
+                )
+                captured_clients.append(client)
+                manager.add_client(client)
+            return manager
+
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+        payload = DraftCreate(
+            to_recipients=["a@b.com"],
+            subject="s",
+            body='<script>steal()</script><p>safe</p>',
+        )
+        drafts_service.create_draft(_MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID)
+        provider_body = captured_clients[0].create_draft_calls[0][4]
+        assert "<script>" not in provider_body
+        assert "<p>safe</p>" in provider_body
+
+    def test_html_body_sanitised_before_persist(self, monkeypatch):
+        # The SAME sanitised value persists to the row — provider and DB
+        # must never diverge.
+        _patch_common(monkeypatch)
+        captured_rows: list[dict] = []
+
+        def _capture_create(row):
+            captured_rows.append(row)
+            return _persisted_row(
+                provider_draft_id=row.get("provider_draft_id", "fake_draft_1"),
+                body=row.get("body", ""),
+            )
+
+        monkeypatch.setattr(drafts_service.draft_store, "create", _capture_create)
+        payload = DraftCreate(
+            to_recipients=["a@b.com"],
+            subject="s",
+            body='<script>steal()</script><p>safe</p>',
+        )
+        drafts_service.create_draft(_MAILBOX_ID, _ACCOUNT_ID, payload, _USER_ID)
+        assert "<script>" not in captured_rows[0]["body"]
+        assert "<p>safe</p>" in captured_rows[0]["body"]
 
     def test_persist_refreshed_tokens_happy_path(self, monkeypatch):
         # When authenticate_silent returns refreshed tokens, _persist_refreshed_tokens
@@ -1170,6 +1226,37 @@ class TestUpdateDraft:
             "new",
         )
 
+    def test_html_body_sanitised_before_provider_replacement(self, monkeypatch):
+        # update_draft sanitises the HTML body at entry; the cleaned value
+        # reaches the provider replacement call (index 5 of the tuple).
+        _patch_update_common(monkeypatch)
+        captured_clients: list[FakeEmailClient] = []
+
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                label = f"{acc.get('mailbox_id', '')}__{acc.get('account_id', '')}"
+                client = FakeEmailClient(
+                    label, auth_return={"access_token": "tok", "refresh_token": "ref"},
+                )
+                captured_clients.append(client)
+                manager.add_client(client)
+            return manager
+
+        monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+        payload = DraftUpdate(
+            to_recipients=["a@b.com"],
+            subject="s",
+            body='<img src="x" onerror="hack()"><p>kept</p>',
+        )
+        drafts_service.update_draft(
+            _MAILBOX_ID, _ACCOUNT_ID, _PROVIDER_DRAFT_ID, payload, _USER_ID,
+        )
+        provider_body = captured_clients[0].update_draft_calls[0][5]
+        assert "onerror" not in provider_body
+        assert "<img" not in provider_body
+        assert "<p>kept</p>" in provider_body
+
     def test_persist_refreshed_tokens_happy_path(self, monkeypatch):
         _patch_update_common(monkeypatch, fake_client_kwargs={
             "auth_silent_return": {
@@ -1639,6 +1726,43 @@ class TestSendDraft:
             drafts_service.send_draft(
                 _MAILBOX_ID, _ACCOUNT_ID, _SEND_DRAFT_ID, _USER_ID,
             )
+
+    def test_attachment_send_failure_persists_partial_results_then_raises(self, monkeypatch):
+        # D-27 partial-success resume: Outlook's non-atomic send raises
+        # EmailAttachmentSendFailed carrying the already-uploaded parts in
+        # ``detail['succeeded']``. The service must persist their
+        # provider_attachment_ids (so a retry skips them) BEFORE re-raising
+        # the translated AttachmentSendFailed (502). This branch is distinct
+        # from the EmailExternalAPIError / RuntimeError branches, which never
+        # touch ``_persist_partial_upload_results``.
+        _patch_send_common(
+            monkeypatch,
+            fake_client_kwargs={
+                "send_draft_with_attachments_exc": EmailAttachmentSendFailed(
+                    "Outlook attachment upload failed mid-flight.",
+                    detail={
+                        "succeeded": [
+                            {"draft_attachment_id": "da-1", "provider_attachment_id": "pa-1"},
+                            {"draft_attachment_id": "da-2", "provider_attachment_id": "pa-2"},
+                        ],
+                        "failed_attachments": [
+                            {"draft_attachment_id": "da-3", "filename": "big.pdf", "reason": "upload_failed"},
+                        ],
+                    },
+                ),
+            },
+        )
+        persisted_pairs: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            drafts_service.draft_attachment_store, "batch_update_provider_attachment_ids",
+            lambda pairs: persisted_pairs.extend(pairs),
+        )
+        with pytest.raises(AttachmentSendFailed):
+            drafts_service.send_draft(
+                _MAILBOX_ID, _ACCOUNT_ID, _SEND_DRAFT_ID, _USER_ID,
+            )
+        # Only the two succeeded parts are stamped; the failed one stays NULL.
+        assert persisted_pairs == [("da-1", "pa-1"), ("da-2", "pa-2")]
 
     def test_silent_auth_error_raises_account_not_connected(self, monkeypatch):
         _patch_send_common(

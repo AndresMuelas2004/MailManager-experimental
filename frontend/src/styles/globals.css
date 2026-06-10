@@ -1,6 +1,20 @@
 @import 'tailwindcss';
+@plugin '@tailwindcss/typography';
 
 body {
   margin: 0;
   min-height: 100vh;
+}
+
+/* RichTextEditor (TipTap) empty-state placeholder. ProseMirror's Placeholder
+   extension injects ``is-editor-empty`` + ``data-placeholder`` on the empty
+   document's first node; the ghost text is a pseudo-element keyed off that
+   attribute, which Tailwind utility classes cannot target — hence this lives
+   in the single global CSS file. */
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--color-zinc-400);
+  float: left;
+  height: 0;
+  pointer-events: none;
 }

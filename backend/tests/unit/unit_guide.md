@@ -42,7 +42,7 @@ Service-layer tests use inline `FakeStore` classes combined with `monkeypatch.se
 
 `tests/shared/email_fakes.py::FakeEmailClient` records invocations of draft operations on `*_calls` lists. The lists intentionally use different tuple shapes per operation — do not assume a uniform schema:
 
-- `create_draft_calls` — 5-tuple `(to, cc, bcc, subject, body)`. Note: the trailing field is `body` (plain text after D-31), not `body_html`.
+- `create_draft_calls` — 5-tuple `(to, cc, bcc, subject, body)`. Note: the trailing field is `body` (sanitised HTML — the rich-text composer; reversed D-31), not `body_html`. Service-level tests assert the captured `body` is the **sanitised** value (e.g. a `<script>` does not reach the fake client).
 - `update_draft_calls` — 6-tuple `(provider_draft_id, to, cc, bcc, subject, body)`. Extra leading `provider_draft_id`.
 - `delete_draft_calls` — `list[str]` of bare `provider_draft_id`s (not tuples).
 - `send_draft_calls` — `list[str]` of bare `provider_draft_id`s; `send_draft_return` returns an `EmailMetadata` (the sent message), not a `DraftMetadata`.

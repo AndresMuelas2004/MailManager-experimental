@@ -66,6 +66,7 @@ export default function DraftComposerHost({ mailboxId }: Props) {
           saving={composer.saving}
           error={composer.error}
           recipientError={composer.recipientError}
+          bodyError={composer.bodyError}
           canSendEmail={composer.canSendEmail}
           canSaveDraft={composer.canSaveDraft}
           canSendDraft={composer.canSendDraft}

@@ -15,11 +15,16 @@ from api.schemas.attachment import AttachmentMetadataOut
 class EmailSendRequest(BaseModel):
     """
     Request model for sending an email from a specific account.
+
+    ``body`` is sanitised HTML from the rich-text composer. It must be
+    non-empty (``min_length=1``) and is capped at 1,000,000 chars
+    (``max_length`` — over the cap collapses to a Pydantic 422, the
+    "message too large" guard).
     """
 
     account_id: str = Field(..., min_length=1)
     subject: str = Field(..., min_length=1)
-    body: str = Field(..., min_length=1)
+    body: str = Field(..., min_length=1, max_length=1_000_000)
     recipients: list[str] = Field(..., min_length=1)
 
 
@@ -251,9 +256,11 @@ class ReplyContextOut(BaseModel):
     Carries every value the composer needs to open a Reply / Reply All
     / Forward draft: recipients (already computed against the current
     account email — Reply-To and self-reply rules applied), the
-    pre-prefixed subject, the plain-text body (header + quoted
-    original), and the RFC 5322 threading strings persisted alongside
-    the draft.
+    pre-prefixed subject, the **HTML** body (attribution line + the
+    original quoted inside a ``<blockquote>``; built by
+    ``core.email.helpers.build_quoted_body_html``), and the RFC 5322
+    threading strings persisted alongside the draft. The user composes
+    above the quote; the composer seeds with this HTML.
 
     ``reply_kind`` mirrors the request's ``action`` query param so the
     frontend can route the response to the right composer mode without

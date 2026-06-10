@@ -4,7 +4,7 @@ Este documento describe **qué hace** la app cuando el usuario redacta un correo
 
 La frontera de este documento es deliberadamente estrecha:
 
-- **Cubre**: el composer en modo "Nuevo mensaje" (campos, destinatarios, cuerpo en texto plano), las validaciones que se aplican antes de mandar, y el **envío directo** de un correo recién escrito.
+- **Cubre**: el composer en modo "Nuevo mensaje" (campos, destinatarios, cuerpo con **texto enriquecido**), las validaciones que se aplican antes de mandar, y el **envío directo** de un correo recién escrito. El campo "Mensaje" es el mismo en los cinco modos de redacción, así que la descripción del editor (sección 3) es **la fuente canónica**: [borradores.md](./borradores.md) y [responder-y-reenviar.md](./responder-y-reenviar.md) enlazan aquí para no repetirla.
 - **No cubre**: el ciclo de vida del **borrador** y su sincronización (en [borradores.md](./borradores.md)); **Responder / Responder a todos / Reenviar** (en [responder-y-reenviar.md](./responder-y-reenviar.md)); la gestión de **adjuntos** —cómo se añaden, validan, suben— (en [adjuntos.md](./adjuntos.md)).
 
 Aun así, hay un punto donde estas piezas se entrelazan y **sí** se explica aquí porque cambia el comportamiento del envío: cuando el usuario adjunta un archivo a un "Nuevo mensaje", la app crea por debajo un **borrador silencioso** y el botón "Enviar" deja de mandar el correo "en directo" para mandar ese borrador. La sección 6 lo desarrolla.
@@ -31,7 +31,7 @@ Un detalle de arquitectura visible para el usuario: el composer es **único y gl
 - El campo **"Para"** (destinatarios principales).
 - Un enlace **"Añadir CC/BCC"** que despliega los campos de copia (**"CC"**) y copia oculta (**"BCC"**). Empiezan plegados salvo que ya traigan contenido.
 - El campo **"Asunto"**.
-- El **cuerpo**, que es un área de texto **plano** (ver sección 3).
+- El **cuerpo**, que es un **editor con formato** (negrita, cursiva, subrayado, listas y enlaces) con una barra de herramientas justo encima (ver sección 3).
 - Una barra inferior con el botón **"Adjuntar"** (clip) y el botón **"Enviar"**.
 
 ---
@@ -65,13 +65,33 @@ En "Nuevo mensaje", el botón "Enviar" solo se habilita cuando se cumplen a la v
 
 ---
 
-## 3. El cuerpo es texto plano (no enriquecido)
+## 3. El cuerpo es un editor con formato (texto enriquecido)
 
-El cuerpo del correo se escribe en un **área de texto plano**. No hay negritas, ni colores, ni listas con viñetas, ni pegar imágenes dentro del texto. Lo que el usuario teclea es exactamente lo que viaja: el correo se envía siempre como `text/plain`.
+> Esta sección es la **fuente canónica** del editor de cuerpo. El mismo editor se usa al guardar/editar un borrador y al responder/reenviar; esos documentos enlazan aquí en lugar de repetir la mecánica.
 
-Consecuencia práctica a tener clara: si el usuario **pega HTML** (por ejemplo, copiando de una página web), no se interpreta como formato — se manda el marcado tal cual, en crudo. Es una decisión consciente del MVP; el porqué y el plan de un futuro editor enriquecido están en [../limits/composicion-y-envio.md](../limits/composicion-y-envio.md).
+El cuerpo del correo se escribe en un **editor con formato** (WYSIWYG: lo que se ve es lo que se envía). Justo encima del área de escritura hay una **barra de herramientas** con, en este orden:
 
-El asunto exige contenido (no se puede mandar un correo con asunto totalmente vacío) y el cuerpo también; los mínimos exactos están en el catálogo de límites.
+- **Negrita** (también con el atajo Ctrl/Cmd + B).
+- **Cursiva** (Ctrl/Cmd + I).
+- **Subrayado** (Ctrl/Cmd + U).
+- **Lista con viñetas**.
+- **Lista numerada**.
+- **Insertar enlace**: el usuario selecciona un texto, pulsa el botón, escribe la dirección en un pequeño popover y ese texto queda convertido en hipervínculo (texto visible distinto de la URL). La dirección debe llevar un esquema reconocido (`http`, `https` o `mailto`); si no, el popover avisa y no crea el enlace. Sobre un enlace ya existente, el mismo botón ofrece editarlo o quitarlo.
+- **Quitar formato**: devuelve la selección a texto normal.
+
+El correo viaja **con ese formato**. Para los destinatarios cuyo cliente no muestre HTML, la app adjunta automáticamente una **versión en texto plano equivalente** (las listas se renderizan como `- ` / `1.`, los enlaces como `texto (url)` y las citas con `> `), de modo que el mensaje sigue siendo legible. El detalle de cómo se transporta a cada proveedor está en la sección 4.
+
+### 3.1 Qué formato sobrevive y qué se limpia
+
+El editor está restringido a propósito: solo entiende negrita, cursiva, subrayado, listas y enlaces. Esto importa al **pegar** contenido con formato (desde una página web, Word, Excel…): se conserva únicamente el formato soportado y **todo lo demás se limpia** (colores, tamaños de letra, tablas, imágenes incrustadas, estilos de Office…). El usuario no ve un error; simplemente el contenido no soportado desaparece y queda el texto con el formato que sí se admite.
+
+Además, antes de enviarse y de guardarse, el contenido pasa por un **saneamiento de seguridad** en el servidor que vuelve a recortar a esa misma lista de elementos permitidos y endurece los enlaces (se abren en una pestaña nueva, sin filtrar el referente). Es invisible para el usuario salvo, otra vez, en que cualquier elemento no soportado desaparece. Lo que NO admite ese saneamiento (imágenes inline, tablas, scripts…) y el listón exacto de etiquetas están en [../limits/composicion-y-envio.md](../limits/composicion-y-envio.md).
+
+### 3.2 Tamaño máximo del cuerpo
+
+Hay un **tope holgado** para el tamaño del cuerpo con formato (del orden de ~1 MB de contenido; sin imágenes incrustadas, un correo normal nunca se acerca). Si se supera, aparece un **aviso de error en línea** con el mismo estilo de error que el resto del composer y **se bloquean** "Enviar", "Guardar borrador" y "Enviar borrador" hasta que el usuario reduzca el texto. La cifra exacta y dónde se hace cumplir están en [../limits/composicion-y-envio.md](../limits/composicion-y-envio.md).
+
+El asunto exige contenido (no se puede mandar un correo con asunto totalmente vacío) y el cuerpo también (en el envío directo); los mínimos exactos están en el catálogo de límites.
 
 ---
 
@@ -86,8 +106,8 @@ Cuando el usuario pulsa "Enviar" en un "Nuevo mensaje" **sin adjuntos**, la app 
 
 El correo sale por la cuenta seleccionada, y eso determina si se usa la API de Gmail o la de Microsoft Graph. Para el usuario el resultado es el mismo (el correo se manda), pero por debajo hay una asimetría que conviene conocer porque explica algún comportamiento de los errores:
 
-- **Gmail** manda el correo en **una sola operación**.
-- **Outlook** no tiene un "enviar directo" equivalente para un correo redactado al vuelo: por debajo crea un borrador en el servidor, lo envía y, **si el envío falla, borra ese borrador** para no dejar restos en Outlook web. El usuario no ve nada de esto; solo nota que el correo se manda (o no).
+- **Gmail** manda el correo en **una sola operación**. El cuerpo con formato viaja en un sobre con **dos versiones del mensaje**: la de texto plano (derivada del HTML) y la de HTML, en ese orden; cada cliente de correo muestra la más rica que entienda.
+- **Outlook** no tiene un "enviar directo" equivalente para un correo redactado al vuelo: por debajo crea un borrador en el servidor, lo envía y, **si el envío falla, borra ese borrador** para no dejar restos en Outlook web. El cuerpo se entrega marcado como HTML. El usuario no ve nada de esto; solo nota que el correo se manda (o no).
 
 ### 4.2 El envío directo no se reintenta automáticamente
 
@@ -167,7 +187,7 @@ Dicho de otro modo: en el MVP, **para garantizar que Cc/Cco lleguen en un correo
 Para ver el flujo de "Nuevo mensaje" de un vistazo:
 
 1. El usuario abre "Nuevo mensaje" → el composer aparece con la primera cuenta seleccionada.
-2. Rellena "Para" (y opcionalmente Cc/Cco), "Asunto" y el cuerpo (texto plano).
+2. Rellena "Para" (y opcionalmente Cc/Cco), "Asunto" y el cuerpo (con el editor de formato).
 3. La app valida la forma de cada dirección en vivo; el botón "Enviar" se habilita cuando todo es válido y hay al menos un destinatario.
 4. **Sin adjuntos** → al pulsar "Enviar", el correo sale en directo por la cuenta elegida (Gmail en una llamada; Outlook crea-envía-y-limpia por debajo). Un solo intento.
 5. **Con adjuntos** → el primer adjunto creó un borrador silencioso; "Enviar" vuelca todo al borrador (incluidos Cc/Cco), sube los adjuntos y lo manda (con reintentos; atómico en Gmail, por pasos en Outlook).
@@ -178,4 +198,4 @@ Para ver el flujo de "Nuevo mensaje" de un vistazo:
 
 ## 8. Resumen en una frase
 
-> En "Nuevo mensaje" el usuario redacta con cuerpo en **texto plano**, destinatarios separados por comas con validación de forma en el cliente, y al pulsar "Enviar" el correo sale **en directo y de un solo intento** por la cuenta elegida (Gmail en una llamada; Outlook crea-envía-y-limpia por debajo) llevando **solo "Para"**; pero en cuanto el correo tiene adjuntos —que crean un **borrador silencioso**— el envío se **reencamina a enviar borrador**, que sí transporta Cc/Cco, **reintenta** los fallos transitorios y sube los adjuntos (atómico en Gmail, por pasos reanudables en Outlook), abortando el envío entero si algún adjunto no llega; las cifras exactas y lo que deliberadamente no soporta viven en [../limits/composicion-y-envio.md](../limits/composicion-y-envio.md).
+> En "Nuevo mensaje" el usuario redacta con un **editor de texto enriquecido** (negrita, cursiva, subrayado, listas y enlaces, con tope de tamaño y saneamiento en el servidor), destinatarios separados por comas con validación de forma en el cliente, y al pulsar "Enviar" el correo sale **en directo y de un solo intento** por la cuenta elegida (Gmail en una llamada, con el cuerpo en HTML + texto plano equivalente; Outlook crea-envía-y-limpia por debajo, con el cuerpo en HTML) llevando **solo "Para"**; pero en cuanto el correo tiene adjuntos —que crean un **borrador silencioso**— el envío se **reencamina a enviar borrador**, que sí transporta Cc/Cco, **reintenta** los fallos transitorios y sube los adjuntos (atómico en Gmail, por pasos reanudables en Outlook), abortando el envío entero si algún adjunto no llega; las cifras exactas y lo que deliberadamente no soporta viven en [../limits/composicion-y-envio.md](../limits/composicion-y-envio.md).

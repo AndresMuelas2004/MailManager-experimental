@@ -173,7 +173,12 @@ export type EmailContentOut = z.infer<typeof emailContentOutSchema>;
 export const emailSendRequestSchema = z.object({
   account_id: z.string(),
   subject: z.string(),
-  body: z.string(),
+  // ``body`` is HTML (rich-text composer). The 1..1_000_000 bounds document
+  // the contract and refine the inferred type, but DO NOT run at runtime:
+  // ``request<T>()`` validates responses, never request bodies. The real
+  // client-side size guard is ``bodyError`` in ``useDraftComposer``; the
+  // backend's Pydantic ``max_length`` is the authoritative enforcement.
+  body: z.string().min(1).max(1_000_000),
   recipients: z.array(z.string()),
 });
 export type EmailSendRequest = z.infer<typeof emailSendRequestSchema>;
@@ -230,10 +235,12 @@ export const spamResponseSchema = z.object({
 });
 export type SpamResponse = z.infer<typeof spamResponseSchema>;
 
-// Drafts — body is plain text (D-31).
-// The six reply / forward fields mirror the backend ``DraftCreate`` /
-// ``DraftOut`` extensions. Zod's default extra-key policy ("allow")
-// is intentionally kept — the backend does NOT set ``extra="forbid"``
+// Drafts — body is HTML (rich-text composer; sanitised server-side).
+// The ``.max(1_000_000)`` on the request schemas documents the contract and
+// refines the type only — it does NOT run at runtime (``request<T>()`` only
+// validates responses). The six reply / forward fields mirror the backend
+// ``DraftCreate`` / ``DraftOut`` extensions. Zod's default extra-key policy
+// ("allow") is intentionally kept — the backend does NOT set ``extra="forbid"``
 // so older clients with unknown fields keep working.
 export const replyKindSchema = z.enum(['reply', 'reply_all', 'forward']);
 export type ReplyKindDto = z.infer<typeof replyKindSchema>;
@@ -243,7 +250,7 @@ export const draftCreateSchema = z.object({
   cc_recipients: z.array(z.string()).optional(),
   bcc_recipients: z.array(z.string()).optional(),
   subject: z.string().optional(),
-  body: z.string().optional(),
+  body: z.string().max(1_000_000).optional(),
   reply_kind: replyKindSchema.nullable().optional(),
   reply_to_message_id: z.string().nullable().optional(),
   reply_to_account_id: z.string().nullable().optional(),
@@ -258,7 +265,7 @@ export const draftUpdateSchema = z.object({
   cc_recipients: z.array(z.string()).optional(),
   bcc_recipients: z.array(z.string()).optional(),
   subject: z.string().optional(),
-  body: z.string().optional(),
+  body: z.string().max(1_000_000).optional(),
 });
 export type DraftUpdate = z.infer<typeof draftUpdateSchema>;
 
@@ -376,9 +383,10 @@ export const virtualMailboxListSchema = z.array(virtualMailboxOutSchema);
 // ``GET /mailboxes/{mid}/accounts/{aid}/emails/{pmid}/reply-context``.
 // Every value is already computed server-side: ``to_recipients`` /
 // ``cc_recipients`` apply Reply-To and self-reply rules, ``subject``
-// carries the ``Re:`` / ``Fwd:`` prefix, ``body`` is the plain-text
-// degraded body with the quote header. The composer prefills with
-// these values directly — no further computation on the frontend.
+// carries the ``Re:`` / ``Fwd:`` prefix, ``body`` is HTML with the original
+// quoted inside a ``<blockquote>`` preceded by the attribution line, ready to
+// seed into the editor. The composer prefills with these values directly —
+// no further computation on the frontend.
 export const replyContextOutSchema = z.object({
   to_recipients: z.array(z.string()),
   cc_recipients: z.array(z.string()),

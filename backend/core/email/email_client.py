@@ -163,11 +163,12 @@ class DraftMetadata:
     """
     Normalized draft metadata returned by provider clients after creating a draft.
 
-    The ``body`` field carries plain-text content (D-31). It used to be
-    called ``body_html`` but the composer is a plain ``<textarea>`` and
-    both providers receive ``text/plain`` MIME, so the name now matches
-    the actual semantics. A future rich-text editor will introduce
-    ``body_format`` rather than reviving the HTML naming.
+    The ``body`` field carries **HTML** content (rich-text composer:
+    negrita, cursiva, subrayado, listas, enlaces). Gmail ships it as a
+    ``multipart/alternative`` (derived ``text/plain`` + ``text/html``);
+    Outlook ships ``body.contentType = "HTML"``. There is no
+    ``body_format`` discriminator — the body is always HTML (legacy
+    plain-text drafts are converted to HTML on the read path).
     """
     provider_draft_id: str
     to_recipients: list[str]
@@ -301,7 +302,8 @@ class EmailClient(ABC):
         """
         Send a simple email message using this provider.
         :param subject: Email subject line.
-        :param body: Plain text body of the email.
+        :param body: HTML body of the email (Gmail sends a
+            ``multipart/alternative``; Outlook sends ``contentType: HTML``).
         :param recipients: List of recipient email addresses.
         :return: Metadata of the sent email.
         """
@@ -326,9 +328,10 @@ class EmailClient(ABC):
         Create a draft message at the provider. All fields may be empty
         (empty drafts are allowed). Returns normalized draft metadata.
 
-        ``body`` is plain text (D-31): both providers persist a
-        ``text/plain`` MIME at the provider so subsequent draft sends
-        can compose a clean ``multipart/mixed`` with attachments.
+        ``body`` is HTML: Gmail persists a ``multipart/alternative``
+        (derived ``text/plain`` + ``text/html``) so subsequent draft
+        sends compose a clean ``multipart/mixed`` with attachments;
+        Outlook persists ``body.contentType = "HTML"``.
 
         Reply / Forward kwargs (all optional, all defaulting to ``None``
         for back-compat with "compose from scratch" callers):
@@ -373,9 +376,9 @@ class EmailClient(ABC):
         Returns normalized draft metadata — timestamps are best-effort
         (providers may not return them on update).
 
-        ``body`` is plain text (D-31). The Outlook ``contentType`` is
-        ``"Text"`` and Gmail's MIME body is a single ``text/plain`` part
-        (no ``multipart/alternative`` wrapping a single part).
+        ``body`` is HTML. The Outlook ``contentType`` is ``"HTML"`` and
+        Gmail's MIME body is a ``multipart/alternative`` (derived
+        ``text/plain`` + ``text/html``).
         """
 
     @abstractmethod
@@ -612,8 +615,9 @@ class EmailClient(ABC):
 
         Behaviour:
 
-        - **Gmail** — atomic. Builds ``multipart/mixed`` with
-          ``text/plain`` body + every attachment, picks
+        - **Gmail** — atomic. Builds ``multipart/mixed`` with the HTML
+          body (``multipart/alternative``: derived ``text/plain`` +
+          ``text/html``) + every attachment, picks
           :py:class:`GmailSendStrategy` from the total MIME size,
           calls ``drafts.send`` (or the resumable upload variant) once.
           ``AttachmentUploadResult.provider_attachment_id`` is always

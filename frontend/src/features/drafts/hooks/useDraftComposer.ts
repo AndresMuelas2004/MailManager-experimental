@@ -30,6 +30,13 @@ const REPLY_KIND_TO_MODE: Record<ReplyKind, ComposerMode> = {
   forward: 'forward',
 };
 
+// Client-side body size guard (mirrors the backend's Pydantic ``max_length``).
+// This length-check is the REAL size defence in the client: the ``.max()`` on
+// the Zod *request* schemas never runs at runtime (``request<T>()`` only
+// validates responses), so the server-side 422 would otherwise be the first
+// signal — and it does not arrive as a readable message (see ``useDraftPersistence``).
+const BODY_MAX_CHARS = 1_000_000;
+
 type UseDraftComposerReturn = {
   open: boolean;
   mode: ComposerMode | null;
@@ -50,6 +57,7 @@ type UseDraftComposerReturn = {
   saving: boolean;
   error: UiError | null;
   recipientError: UiError | null;
+  bodyError: UiError | null;
   canSendEmail: boolean;
   canSaveDraft: boolean;
   canSendDraft: boolean;
@@ -551,14 +559,26 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     ? { message: 'Dirección de correo no válida.', code: 'invalid_recipient' }
     : null;
 
+  // Oversized HTML body. ``form.body`` is the live editor HTML (already
+  // normalised on every ``onChange``). Gating all three actions on
+  // ``!bodyError`` — not just ``canSendEmail`` — is required because
+  // ``handleSendEmail`` reroutes through ``sendDraftNow`` once a silent
+  // draft exists, so the size block must hold on the draft paths too.
+  const bodyError: UiError | null =
+    form.body.length > BODY_MAX_CHARS
+      ? { message: 'El mensaje es demasiado grande. Reduce su tamaño.', code: 'body_too_large' }
+      : null;
+
   const canSendEmail =
     mode === 'new_email' &&
     form.accountId.length > 0 &&
     form.parseRecipients(form.to).length > 0 &&
     !recipientsInvalid &&
+    !bodyError &&
     !persistence.sending;
 
-  const canSaveDraft = isDraftMode && form.accountId.length > 0 && !persistence.saving;
+  const canSaveDraft =
+    isDraftMode && form.accountId.length > 0 && !bodyError && !persistence.saving;
 
   const canSendDraft =
     isSendDraftMode &&
@@ -566,6 +586,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     providerDraftId !== null &&
     form.parseRecipients(form.to).length > 0 &&
     !recipientsInvalid &&
+    !bodyError &&
     !persistence.sending;
 
   const attachmentsEnabled = mode !== null && form.accountId !== '';
@@ -657,6 +678,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     saving: persistence.saving,
     error: persistence.error,
     recipientError,
+    bodyError,
     canSendEmail,
     canSaveDraft,
     canSendDraft,

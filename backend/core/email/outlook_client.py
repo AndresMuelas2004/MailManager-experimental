@@ -26,6 +26,7 @@ from .email_client import (
     SyncResult,
 )
 from .errors import (
+    CoreError,
     EmailAttachmentDownloadFailed,
     EmailAttachmentNotFound,
     EmailAttachmentSendFailed,
@@ -43,9 +44,11 @@ from .errors import (
 from .helpers import (
     OutlookAttachmentStrategy,
     find_referenced_cids,
+    flatten_html_document,
     inline_cid_images,
     parse_expiry,
     pick_outlook_attachment_strategy,
+    plain_text_to_html,
     resolve_attachment_mime_type,
     unwrap_app_credentials,
     unwrap_user_tokens,
@@ -768,7 +771,8 @@ class OutlookClient(EmailClient):
         recipients: list[str],
     ) -> EmailMetadata:
         """
-        Send a plain text email using Microsoft Graph API (draft-then-send).
+        Send an HTML email using Microsoft Graph API (draft-then-send).
+        The ``body`` is HTML; Graph stores it as ``contentType: "HTML"``.
         Returns metadata of the sent message.
         """
         if self._access_token is None:
@@ -780,7 +784,7 @@ class OutlookClient(EmailClient):
         try:
             draft_payload = {
                 "subject": subject,
-                "body": {"contentType": "Text", "content": body},
+                "body": {"contentType": "HTML", "content": body or ""},
                 "toRecipients": [
                     {"emailAddress": {"address": r}} for r in recipients
                 ],
@@ -847,18 +851,20 @@ class OutlookClient(EmailClient):
         body: str,
     ) -> dict[str, Any]:
         """Build the Graph Message payload used by both create_draft
-        (POST /me/messages) and update_draft (PATCH /me/messages/{id}).
-        Both endpoints accept the same shape; update semantically replaces
+        (POST /me/messages) and update_draft (PATCH /me/messages/{id}),
+        and reused (nested under ``{"message": ...}``) by
+        ``createReply`` / ``createReplyAll`` / ``createForward``. Both
+        endpoints accept the same shape; update semantically replaces
         every listed field with the new value.
 
-        Body is sent as ``text/plain`` (D-31). The composer is a plain
-        ``<textarea>`` and Gmail is now also configured for text/plain;
-        keeping both providers symmetric simplifies the MIME assembly
-        in ``send_draft_with_attachments``.
+        Body is sent as ``contentType: "HTML"``. The composer emits
+        sanitised HTML (negrita, cursiva, listas, enlaces); Graph accepts
+        arbitrary HTML on write and re-wraps / sanitises it on read (the
+        round-trip is handled by :py:meth:`_parse_outlook_draft`).
         """
         return {
             "subject": subject or "",
-            "body": {"contentType": "Text", "content": body or ""},
+            "body": {"contentType": "HTML", "content": body or ""},
             "toRecipients": [{"emailAddress": {"address": r}} for r in to_recipients],
             "ccRecipients": [{"emailAddress": {"address": r}} for r in cc_recipients],
             "bccRecipients": [{"emailAddress": {"address": r}} for r in bcc_recipients],
@@ -1239,16 +1245,29 @@ class OutlookClient(EmailClient):
 
         Extracts address fields from the ``emailAddress.address`` sub-keys
         and parses ``createdDateTime`` / ``lastModifiedDateTime`` via the
-        shared :py:meth:`_parse_graph_datetime` helper. The body is read
-        from ``body.content`` regardless of ``contentType`` — legacy
-        drafts created before D-31 might still come back as ``HTML`` and
-        we surface them as-is so the user can edit them; new drafts
-        carry ``Text`` and the content is plain (D-31).
+        shared :py:meth:`_parse_graph_datetime` helper.
+
+        Body handling depends on ``contentType``:
+
+        - ``HTML`` — Graph returns the content wrapped in a full
+          ``<html><head><meta …us-ascii></head><body>…</body></html>``
+          document (and NOT byte-for-byte the HTML we sent). It is
+          flattened to the ``<body>`` fragment via
+          :py:func:`flatten_html_document` so the composer is seeded with
+          clean HTML.
+        - anything else (legacy ``Text``) — converted to HTML via
+          :py:func:`plain_text_to_html` so the persisted body is always
+          HTML, matching the migration + the Gmail parse path.
         """
         provider_draft_id = str(msg.get("id") or "")
         subject = msg.get("subject") or ""
         body_section = msg.get("body") or {}
-        body_text = body_section.get("content") or ""
+        raw_content = body_section.get("content") or ""
+        content_type = (body_section.get("contentType") or "").lower()
+        if content_type == "html":
+            body_text = flatten_html_document(raw_content)
+        else:
+            body_text = plain_text_to_html(raw_content)
 
         def _addrs(key: str) -> list[str]:
             out: list[str] = []
@@ -1625,6 +1644,11 @@ class OutlookClient(EmailClient):
                 f"Failed to fetch reply context for Outlook message {provider_message_id}: {exc.message}",
                 detail={"reason": "provider_fetch_failed"},
             ) from exc
+        except CoreError:
+            # Any other CoreError (e.g. a reply-context error from a future
+            # helper inside the try) passes through untouched instead of being
+            # re-wrapped by the generic handler below (core/CLAUDE.md §5).
+            raise
         except Exception as exc:
             raise EmailReplyContextFetchError(
                 f"Outlook unexpected fetch_reply_context error ({type(exc).__name__}): {exc}",

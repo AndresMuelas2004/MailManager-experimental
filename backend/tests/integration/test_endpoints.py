@@ -237,6 +237,52 @@ def test_send_email_persists_metadata(test_client, setup_mailbox_and_account, is
     assert count >= 1
 
 
+def test_send_email_with_html_body_accepted(test_client, setup_mailbox_and_account):
+    """The send endpoint accepts a rich-text HTML body (sanitised server-side)."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/send",
+        json={
+            "account_id": aid,
+            "subject": "HTML Send",
+            "body": "<p>Hello <strong>world</strong></p>",
+            "recipients": ["dest@example.com"],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "sent"}
+
+
+def test_send_email_empty_body_returns_422(test_client, setup_mailbox_and_account):
+    """``EmailSendRequest.body`` carries ``min_length=1`` — an empty body 422s."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/send",
+        json={
+            "account_id": aid,
+            "subject": "Empty",
+            "body": "",
+            "recipients": ["dest@example.com"],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_send_email_body_over_cap_returns_422(test_client, setup_mailbox_and_account):
+    """A body over the 1,000,000-char ``max_length`` collapses to a 422."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/send",
+        json={
+            "account_id": aid,
+            "subject": "Big",
+            "body": "x" * 1_000_001,
+            "recipients": ["dest@example.com"],
+        },
+    )
+    assert resp.status_code == 422
+
+
 # ==================================================================
 # Multi-account scenarios
 # ==================================================================

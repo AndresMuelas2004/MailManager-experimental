@@ -68,14 +68,16 @@ El prefijo original se preserva tal cual (mayúsculas y espaciado incluidos) en 
 
 ## 4. Cómo se cita el correo original
 
-El cuerpo del composer llega precargado con el original citado **en texto plano** (el composer es un `<textarea>`; ver [adjuntos.md](adjuntos.md) sobre por qué el correo se compone y envía como texto plano). Si el original era HTML, se degrada a texto legible (se descartan scripts, estilos y metadatos, y los saltos de bloque se conservan como saltos de línea).
+El cuerpo del composer llega precargado **con formato (HTML)**: el editor enriquecido (ver [composicion-y-envio.md](composicion-y-envio.md) § 3) se abre con una **línea de atribución** y, debajo, el original metido dentro de un **bloque de cita diferenciado** (un recuadro con barra lateral a la izquierda, al estilo de una cita), de modo que se distingue de un vistazo lo que escribe el usuario de lo que es el original citado.
+
+Un matiz importante y poco obvio: aunque la cita se muestra **con formato**, el original **no se ingiere como HTML**. La app **degrada primero el original a texto legible** (descartando scripts, estilos y metadatos, conservando los saltos como líneas) y luego envuelve ese texto en el bloque de cita. Es decir, el recuadro de cita es la única "decoración" HTML; el contenido citado en sí es el texto del original, no su marcado. Esto evita arrastrar HTML arbitrario del remitente al editor restringido.
 
 El cursor queda **encima** de la cita, sobre dos líneas en blanco, para que el usuario escriba su mensaje sin pisar lo citado.
 
-- **Responder / Responder a todos**: una línea de cabecera del tipo *"El 23 de mayo de 2026 a las 14:32, Ana López &lt;ana@example.com&gt; escribió:"* seguida del cuerpo original con cada línea prefijada por `>` (estilo Gmail web).
-- **Reenviar**: un bloque *"---------- Mensaje reenviado ----------"* con las líneas *De / Fecha / Asunto / Para / Cc* y, debajo, el cuerpo original **sin** prefijo `>`.
+- **Responder / Responder a todos**: una línea de atribución del tipo *"El 23 de mayo de 2026 a las 14:32, Ana López &lt;ana@example.com&gt; escribió:"* y, debajo, el cuerpo original dentro del recuadro de cita.
+- **Reenviar**: un bloque *"---------- Mensaje reenviado ----------"* con las líneas *De / Fecha / Asunto / Para / Cc* y, debajo, el cuerpo original dentro del recuadro de cita.
 
-> **Detalle de idioma y zona horaria.** La fecha de la cita se redacta en español y se renderiza en UTC (la internacionalización y la zona horaria local quedan fuera del MVP). El formato exacto y sus límites están en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).
+> **Detalle de idioma y zona horaria.** La fecha de la cita se redacta en español y se renderiza en UTC (la internacionalización y la zona horaria local quedan fuera del MVP). El formato exacto, el recorte del original citado y sus límites están en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).
 
 ---
 
@@ -183,4 +185,4 @@ Responder/Reenviar funciona también cuando el correo se está viendo dentro de 
 
 ## 10. Resumen en una frase
 
-> Responder / Responder a todos / Reenviar abren el composer de borradores ya relleno y enganchado al correo original —calculando destinatarios (con Reply-To y "quítame del CC" en Responder a todos), prefijo de asunto (`Re:` / `Fwd:`) y cita en texto plano—, creando el borrador en el proveedor de inmediato; el enhebrado al hilo es asimétrico (Gmail exige el triple requisito `threadId` + `In-Reply-To`/`References` + asunto, validado en local antes de tocar el proveedor; Outlook lo fija server-side en una sola llamada y descarta las cabeceras en el envío); Responder no arrastra adjuntos y Reenviar sí (heredados server-side en Outlook, descargados y recopiados de forma idempotente y tolerante a fallos en Gmail, tras una llamada uniforme que es no-op en Outlook); y arrastra consigo trampas aceptadas como el reenvío de Outlook que se desengancha del hilo si editas el asunto. Las cifras exactas, los códigos de error y todo lo que deliberadamente no soporta viven en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).
+> Responder / Responder a todos / Reenviar abren el composer de borradores ya relleno y enganchado al correo original —calculando destinatarios (con Reply-To y "quítame del CC" en Responder a todos), prefijo de asunto (`Re:` / `Fwd:`) y cita **con formato** (línea de atribución + el original, degradado a texto, dentro de un recuadro de cita diferenciado)—, creando el borrador en el proveedor de inmediato; el enhebrado al hilo es asimétrico (Gmail exige el triple requisito `threadId` + `In-Reply-To`/`References` + asunto, validado en local antes de tocar el proveedor; Outlook lo fija server-side en una sola llamada y descarta las cabeceras en el envío); Responder no arrastra adjuntos y Reenviar sí (heredados server-side en Outlook, descargados y recopiados de forma idempotente y tolerante a fallos en Gmail, tras una llamada uniforme que es no-op en Outlook); y arrastra consigo trampas aceptadas como el reenvío de Outlook que se desengancha del hilo si editas el asunto. Las cifras exactas, los códigos de error y todo lo que deliberadamente no soporta viven en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).

@@ -542,6 +542,34 @@ _DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_email_metadata_account_thread "
     "ON email_metadata (account_id, thread_id, received_at DESC);",
     "UPDATE alembic_version SET version_num = '0033_index_email_metadata_thread';",
+    # Migration 0034: convert every plain-text ``drafts.body`` to HTML for
+    # the rich-text composer (no ``body_format`` discriminator — body is
+    # always HTML from here on). Mirrors the Python conversion in the
+    # Alembic file with equivalent SQL: HTML-escape ``&`` / ``<`` / ``>``
+    # FIRST (order matters — ``&`` must be escaped before ``<``/``>`` so
+    # their ``&lt;``/``&gt;`` are not re-escaped), THEN turn CR/LF into
+    # ``<br>`` and wrap in a single ``<p>…</p>``. Idempotent: only rows
+    # with a non-blank body that does NOT already look like HTML (no
+    # leading ``<p`` / no ``<br``) are touched, so a re-run never
+    # double-escapes. Empty / whitespace-only bodies stay ``''``.
+    r"""
+    UPDATE drafts
+    SET body = '<p>' || replace(
+                            replace(
+                                replace(
+                                    replace(
+                                        replace(
+                                            replace(body, '&', '&amp;'),
+                                            '<', '&lt;'),
+                                        '>', '&gt;'),
+                                    E'\r\n', E'\n'),
+                                E'\r', E'\n'),
+                            E'\n', '<br>') || '</p>'
+    WHERE btrim(body) <> ''
+      AND lower(left(btrim(body), 64)) NOT LIKE '<p%'
+      AND lower(left(btrim(body), 64)) NOT LIKE '%<br%';
+    """,
+    "UPDATE alembic_version SET version_num = '0034_convert_drafts_body_to_html';",
 ]
 
 

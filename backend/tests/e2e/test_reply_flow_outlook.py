@@ -103,6 +103,8 @@ def test_48_reply_flow_outlook(e2e_client):
     assert ctx["thread_id"] == original_thread_id
     assert ctx["subject"].lower().startswith(("re:", "aw:", "sv:")), ctx["subject"]
     assert len(ctx["to_recipients"]) >= 1
+    # The reply body is HTML with the original inside a <blockquote>.
+    assert "<blockquote" in ctx["body"]
 
     # 2. POST /drafts → routes through Graph createReply on the wire.
     # The subject is kept untouched (just the ``Re: …`` from
@@ -195,5 +197,17 @@ def test_48_reply_flow_outlook(e2e_client):
             time.sleep(4)
         assert found, "sent reply was never persisted to email_metadata"
         assert thread_id == original_thread_id
+
+        # The sent body must be HTML at Graph. Fetch the sent message's content
+        # through the cache-aside endpoint (it pulls the real Graph message,
+        # whose ``body.contentType`` is HTML) and assert the rendered HTML
+        # carries the quote markup — confirming the HTML body round-tripped.
+        content_resp = e2e_client.get(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{sent_pmid}/content",
+        )
+        _assert_ok(content_resp)
+        html_body = content_resp.json().get("html_body")
+        assert html_body is not None
+        assert "blockquote" in html_body.lower()
     finally:
         _delete_draft_row_locally(provider_draft_id, OUTLOOK_ACCOUNT_ID)
