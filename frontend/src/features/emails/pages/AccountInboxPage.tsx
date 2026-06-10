@@ -8,7 +8,7 @@ import ViewerMount from '../components/ViewerMount';
 import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
-import useDebounce from '../hooks/useDebounce';
+import useDebounce from '../../../lib/hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';
 import { parsePageParam } from '../../../lib/pagination';
 import { parseInOperator } from '../../../lib/searchOperators';
