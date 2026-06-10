@@ -83,7 +83,7 @@ Invalid `account_id` format raises `QueryError` (wrapped from `InvalidTextRepres
 ## `drafts` table invariants (migration 0012, renamed in 0022)
 
 - Recipients stored as `TEXT[] NOT NULL DEFAULT '{}'`. psycopg2 maps Python `list[str]` ↔ PostgreSQL `TEXT[]` transparently.
-- `subject` and `body` are `TEXT NOT NULL DEFAULT ''` — empty drafts are valid. The column was named `body_html`, renamed to `body` in migration 0022, and now holds **HTML** again (the rich-text composer): migration 0033 converts every pre-existing plain-text `body` to HTML, and from then on `body` is always sanitised HTML (no `body_format` discriminator). The 0022 rename ripple still applies (queries, repository, schemas, provider clients, draft API parameters); 0033 is data-only and touches no column definition.
+- `subject` and `body` are `TEXT NOT NULL DEFAULT ''` — empty drafts are valid. The column was named `body_html`, renamed to `body` in migration 0022, and now holds **HTML** again (the rich-text composer): migration 0034 converts every pre-existing plain-text `body` to HTML, and from then on `body` is always sanitised HTML (no `body_format` discriminator). The 0022 rename ripple still applies (queries, repository, schemas, provider clients, draft API parameters); 0034 is data-only and touches no column definition.
 - `created_at` / `updated_at` are `TIMESTAMPTZ NOT NULL DEFAULT now()`. The `DEFAULT now()` fires only for `INSERT_DRAFT` (which doesn't list these columns). `UPSERT_DRAFTS_BATCH` always passes them explicitly from provider-reported timestamps.
 
 ## `LIST_FILTERED` traps (email metadata search)

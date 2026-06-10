@@ -952,7 +952,7 @@ def plain_text_to_html(text: str | None) -> str:
 
     Shared by the draft round-trip parsers (``_parse_gmail_draft`` /
     ``_parse_outlook_draft``) and conceptually identical to migration
-    0033 (which re-implements the same escape + ``nl2br`` rule inline so
+    0034 (which re-implements the same escape + ``nl2br`` rule inline so
     it stays self-contained). The output is what seeds the rich-text
     composer when a draft that predates the HTML body still exists at the
     provider as ``text/plain``.
