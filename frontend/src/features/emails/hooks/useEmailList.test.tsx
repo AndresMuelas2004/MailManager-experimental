@@ -98,6 +98,34 @@ describe('useEmailList — pagination', () => {
     expect(seenOffsets).toContain('100');
   });
 
+  it('sends group_by_thread=true on the wire when grouped, and omits it otherwise', async () => {
+    const seenGroup: (string | null)[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenGroup.push(new URL(request.url).searchParams.get('group_by_thread'));
+        return HttpResponse.json({ items: [makeEmail('m_1')], total: 12, limit: 50, offset: 0 });
+      }),
+    );
+
+    // 7th positional arg = groupByThread. ``total`` now counts threads; the
+    // totalPages derivation is unchanged.
+    const grouped = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1, true),
+      { wrapper },
+    );
+    await waitFor(() => expect(grouped.result.current.emails).toHaveLength(1));
+    expect(seenGroup).toContain('true');
+
+    seenGroup.length = 0;
+    const ungrouped = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1, false),
+      { wrapper },
+    );
+    await waitFor(() => expect(ungrouped.result.current.emails).toHaveLength(1));
+    // When false the param must be absent from every request.
+    expect(seenGroup.every((v) => v === null)).toBe(true);
+  });
+
   it('keeps the previous page while the next page is loading (keepPreviousData)', async () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, async ({ request }) => {

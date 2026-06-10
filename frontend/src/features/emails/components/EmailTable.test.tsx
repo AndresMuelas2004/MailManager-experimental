@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 
 import EmailTable from './EmailTable';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
@@ -151,5 +152,109 @@ describe('EmailTable', () => {
     expect(screen.getByText('Acciones en lote')).toBeInTheDocument();
     expect(screen.queryByText('1–50 de 130')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Página siguiente' })).toBeInTheDocument();
+  });
+
+  describe('conversation mode', () => {
+    it('shows the thread message-count chip only when the count is > 1', () => {
+      const { rerender } = render(
+        <EmailTable
+          emails={[makeEmail({ subject: 'Threaded subject', thread_message_count: 3 })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      // The count renders as a discrete chip next to the subject.
+      expect(screen.getByText('3')).toBeInTheDocument();
+
+      // A single-message thread shows no chip.
+      rerender(
+        <EmailTable
+          emails={[makeEmail({ subject: 'Single subject', thread_message_count: 1 })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      expect(screen.queryByText('1', { selector: 'span' })).not.toBeInTheDocument();
+    });
+
+    it('renders no selection checkbox and no interactive favourite button (read-only row)', () => {
+      render(
+        <EmailTable
+          emails={[makeEmail({ is_favorite: true })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      // No selection control (the page does not pass isSelected/onToggle).
+      expect(
+        screen.queryByRole('checkbox', { name: 'Seleccionar correo' }),
+      ).not.toBeInTheDocument();
+      // The favourite is an indicator, not a button.
+      expect(screen.queryByRole('button', { name: 'Quitar de favoritos' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Marcar como favorito' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('opens the conversation with the representative row via onOpen', async () => {
+      const onOpen = vi.fn();
+      const rep = makeEmail({ provider_message_id: 'rep_1', subject: 'Open me' });
+      render(
+        <EmailTable
+          emails={[rep]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={onOpen}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByText('Open me'));
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(onOpen.mock.calls[0][0]).toMatchObject({ provider_message_id: 'rep_1' });
+    });
+
+    it('renders the clip from the aggregated has_attachments of the thread row', () => {
+      const { rerender } = render(
+        <EmailTable
+          emails={[makeEmail({ has_attachments: true, subject: 'With clip' })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      // The aggregated clip is shown for the row (bool_or(has_attachments)).
+      expect(screen.getByLabelText('Tiene adjuntos')).toBeInTheDocument();
+
+      rerender(
+        <EmailTable
+          emails={[makeEmail({ has_attachments: false, subject: 'No clip' })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      expect(screen.queryByLabelText('Tiene adjuntos')).not.toBeInTheDocument();
+    });
   });
 });

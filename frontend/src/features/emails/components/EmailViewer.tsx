@@ -4,14 +4,10 @@ import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
 import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
 import type { UiError } from '../../../api/client/errors';
-import AttachmentCard from './AttachmentCard';
+import AttachmentsList from './AttachmentsList';
+import { wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
-import type {
-  AttachmentMetadata,
-  EmailMetadataOut,
-  AccountOut,
-  EmailContentOut,
-} from '../../../api/types/dto';
+import type { EmailMetadataOut, AccountOut, EmailContentOut } from '../../../api/types/dto';
 
 type Props = {
   email: EmailMetadataOut;
@@ -26,19 +22,6 @@ type Props = {
   onReplyAll: (email: EmailMetadataOut) => void | Promise<void>;
   onForward: (email: EmailMetadataOut) => void | Promise<void>;
 };
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function wrapPlainText(text: string): string {
-  const escaped = escapeHtml(text);
-  return `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;color:#18181b"><pre style="white-space:pre-wrap;margin:0;font-family:inherit;font-size:inherit">${escaped}</pre></body></html>`;
-}
-
-function wrapHtmlEmail(html: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#18181b;background:#fff;overflow:auto}body{padding:16px}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
-}
 
 export default function EmailViewer({
   email,
@@ -176,39 +159,5 @@ export default function EmailViewer({
         <AttachmentsList attachments={content?.attachments ?? []} downloader={downloader} />
       </div>
     </Modal>
-  );
-}
-
-type AttachmentsListProps = {
-  attachments: AttachmentMetadata[];
-  downloader: UseAttachmentDownloaderReturn;
-};
-
-function AttachmentsList({ attachments, downloader }: AttachmentsListProps) {
-  if (attachments.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="border-t border-zinc-200 px-6 py-4">
-      <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-zinc-500">
-        Adjuntos ({attachments.length})
-      </h3>
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {attachments.map((attachment) => {
-          const status = downloader.status(attachment.attachment_id);
-          return (
-            <li key={attachment.attachment_id}>
-              <AttachmentCard
-                attachment={attachment}
-                status={status}
-                onDownload={() => downloader.start(attachment.attachment_id, attachment.filename)}
-                onCancel={() => downloader.cancel(attachment.attachment_id)}
-              />
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }

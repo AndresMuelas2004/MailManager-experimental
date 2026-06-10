@@ -4,8 +4,6 @@ import { useEffect } from 'react';
 
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
-import useBulkBar from '../hooks/useBulkBar';
-import useFavorite from '../hooks/useFavorite';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
@@ -30,15 +28,12 @@ export default function UnifiedInboxPage({ box }: Props) {
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
   const page = parsePageParam(searchParams);
 
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
-    useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page);
+  // Conversation mode: ``groupByThread=true`` (7th positional arg) collapses
+  // each thread into one read-only + open row; no selection / favourite
+  // wiring on this page.
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error } =
+    useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page, true);
   const config = EMAIL_BOX_CONFIG[box];
-
-  const { selection, bulkError, bulkBar } = useBulkBar({
-    box,
-    refresh,
-    searchKey: debouncedQ,
-  });
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -57,7 +52,6 @@ export default function UnifiedInboxPage({ box }: Props) {
   }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
-  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -73,18 +67,7 @@ export default function UnifiedInboxPage({ box }: Props) {
     void composer.openForForward(email);
   };
 
-  const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
-    favorites
-      .toggle({
-        mailboxId: email.mailbox_id,
-        accountId: email.account_id,
-        providerMessageId: email.provider_message_id,
-        favorite: next,
-      })
-      .catch(() => {});
-  };
-
-  const combinedError = error || bulkError || favorites.error || viewer.error;
+  const combinedError = error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -120,14 +103,8 @@ export default function UnifiedInboxPage({ box }: Props) {
             loading={loading}
             view="unified"
             isSent={box === 'SENT'}
-            hasSelection={selection.size > 0}
-            isSelected={selection.isSelected}
-            onToggle={selection.toggle}
-            onToggleAll={() => selection.toggleTopN(emails)}
+            conversationMode
             onOpen={viewer.open}
-            onToggleFavorite={handleToggleFavorite}
-            headerCheckboxState={selection.headerState(emails)}
-            bulkBar={bulkBar}
             emptyMessage={emptyMessage}
             page={page}
             pageSize={pageSize}
@@ -140,6 +117,7 @@ export default function UnifiedInboxPage({ box }: Props) {
       <ViewerMount
         openedEmail={viewer.openedEmail}
         accounts={accounts}
+        conversationMode
         onClose={viewer.close}
         onRead={viewer.handleRead}
         onReply={handleReply}
