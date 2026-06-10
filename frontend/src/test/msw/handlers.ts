@@ -49,6 +49,15 @@ export const handlers = [
   // Accounts
   http.get(`${API_BASE}/mailboxes/:mailboxId/accounts`, () => HttpResponse.json([])),
 
+  // Recipient autocomplete (contacts) — user-level, no path params. Static
+  // happy-path list; specs needing the empty / error case override inline.
+  http.get(`${API_BASE}/contacts/suggestions`, () =>
+    HttpResponse.json([
+      { email: 'amparo@ejemplo.com', name: 'Amparo López' },
+      { email: 'soporte@empresa.com', name: null },
+    ]),
+  ),
+
   // Emails
   http.get(`${API_BASE}/mailboxes/:mailboxId/emails`, () =>
     HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),

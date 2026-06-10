@@ -464,6 +464,57 @@ GET_METADATA_BY_MESSAGE = """
     LIMIT 1
 """
 
+# Recipient-autocomplete aggregation (user-level; no provider call).
+# Two UNION ALL branches collect candidate (email, name, received_at)
+# tuples: senders of received mail (from_*) and recipients of sent mail
+# (to_*), both restricted to boxes other than SPAM/TRASH/DELETED. The
+# outer SELECT dedupes by lower(email), picks the most-recent non-empty
+# name, counts frequency and tracks recency, excludes the user's own
+# account addresses, and orders by frequency then recency. The
+# {from_token_predicate}/{to_token_predicate} slots are filled by the
+# repository from a hardcoded column whitelist + named params — NEVER
+# inject free-form text (same SQL-injection invariant as LIST_FILTERED).
+#
+# Subscript trap (do NOT "simplify"): PostgreSQL cannot subscript the
+# result of a function call directly (``func(...)[1]`` is a syntax
+# error), so ``(array_remove(array_agg(...), NULL))[1]`` MUST keep the
+# outer parentheses before ``[1]``. Removing them breaks the query.
+LIST_RECIPIENT_SUGGESTIONS = """
+    WITH candidates AS (
+        SELECT from_email AS email, from_name AS name, received_at
+        FROM email_metadata
+        WHERE account_id = ANY(%(account_ids)s::uuid[])
+          AND box NOT IN ('SPAM', 'TRASH', 'DELETED')
+          AND btrim(coalesce(from_email, '')) <> ''
+          {from_token_predicate}
+        UNION ALL
+        SELECT to_email AS email, to_name AS name, received_at
+        FROM email_metadata
+        WHERE account_id = ANY(%(account_ids)s::uuid[])
+          AND box NOT IN ('SPAM', 'TRASH', 'DELETED')
+          AND btrim(coalesce(to_email, '')) <> ''
+          {to_token_predicate}
+    )
+    SELECT
+        lower(c.email) AS email,
+        (array_remove(
+            array_agg(nullif(btrim(c.name), '') ORDER BY c.received_at DESC),
+            NULL
+        ))[1] AS name,
+        count(*)           AS frequency,
+        max(c.received_at) AS last_seen
+    FROM candidates c
+    WHERE lower(c.email) NOT IN (
+        SELECT lower(a.email_address)
+        FROM accounts a
+        WHERE a.account_id = ANY(%(account_ids)s::uuid[])
+          AND a.email_address IS NOT NULL
+    )
+    GROUP BY lower(c.email)
+    ORDER BY frequency DESC, last_seen DESC, email ASC
+    LIMIT %(limit)s
+"""
+
 # Recompute has_attachments from email_attachments (D-09). The
 # subquery counts non-inline rows; ``COUNT(*) > 0`` is true if and
 # only if at least one downloadable attachment row exists. Idempotent

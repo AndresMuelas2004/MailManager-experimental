@@ -2364,6 +2364,51 @@ def test_46m_download_received_attachment_gmail(e2e_client):
     assert download.headers["x-content-type-options"] == "nosniff"
 
 
+def test_46n_contact_suggestions(e2e_client):
+    """Recipient autocomplete against the real synced mailboxes (DB-only,
+    no provider call). Mirrors the search tests (test_38a/test_38b): assert
+    by CONTAINMENT — every returned suggestion's email or name contains the
+    fragment — never by count or order (the real mailbox contents vary).
+
+    The ``q`` < 2 → 422 contract check rides the SAME test (common_mistakes
+    §1): it verifies a boundary of the very endpoint under test, not a
+    separate behaviour.
+    """
+    # Sync so the aggregation has the user's mail to draw from. The needle
+    # is derived from SEND_RECIPIENT (the address every send/draft test
+    # targets), so the SENT rows of the test account are very likely to
+    # carry it on ``to_email`` — but the assertion tolerates an empty list
+    # the same way the search tests tolerate a pristine inbox.
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    local_part = SEND_RECIPIENT.split("@", 1)[0]
+    needle = local_part[:5] if len(local_part) >= 5 else local_part
+    assert len(needle) >= 2, "SEND_RECIPIENT local part too short to form a fragment"
+
+    resp = e2e_client.get("/contacts/suggestions", params={"q": needle})
+    _assert_ok(resp)
+    data = resp.json()
+    assert isinstance(data, list)
+    needle_lc = needle.lower()
+    for item in data:
+        assert set(item.keys()) == {"email", "name"}
+        haystack = " ".join([
+            (item.get("email") or ""),
+            (item.get("name") or ""),
+        ]).lower()
+        assert needle_lc in haystack, (
+            f"Suggestion {item.get('email')} returned for q='{needle}' does not "
+            "contain the fragment in its email or name."
+        )
+
+    # Contract: a single-character fragment is rejected at the router.
+    too_short = e2e_client.get("/contacts/suggestions", params={"q": "a"})
+    _assert_ok(too_short, expected=422)
+
+
 # ===================================================================
 # Section 6: Auth lifecycle (MUST BE LAST — invalidates session)
 # ===================================================================

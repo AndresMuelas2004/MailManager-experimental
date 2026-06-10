@@ -1,14 +1,18 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import AttachmentSendFailedDialog from '../../../components/ui/AttachmentSendFailedDialog';
 import CloseComposerDialog from '../../../components/ui/CloseComposerDialog';
 import ComposeOverlay from '../../../components/ui/ComposeOverlay';
+import useDebounce from '../../../lib/hooks/useDebounce';
 import useDraftComposer from '../hooks/useDraftComposer';
+import useRecipientSuggestions from '../hooks/useRecipientSuggestions';
 
 type Props = {
   mailboxId: string | null;
 };
+
+const RECIPIENT_DEBOUNCE_MS = 250;
 
 // Headless container that bridges the drafts feature into the cross-cutting
 // DraftComposerContext provided by `app/providers/DraftComposerProvider`.
@@ -21,6 +25,19 @@ type Props = {
 export default function DraftComposerHost({ mailboxId }: Props) {
   const composer = useDraftComposer(mailboxId);
   const { __register } = useDraftComposerContext();
+
+  // Recipient autocomplete: the active fragment of whichever recipient field
+  // is being edited, debounced before it drives the suggestions hook.
+  // Adding this data hook here rides the SAME documented exception as
+  // useDraftComposer (frontend_guide §1.1) — the host is the only
+  // ``features/<x>/components/`` allowed to call a fetching hook.
+  // ``recipientQuery`` persists across composer open/close; that is harmless
+  // because nothing reads ``recipientSuggestions`` while the overlay is
+  // unmounted, and the first keystroke on reopen overwrites the fragment.
+  const [recipientQuery, setRecipientQuery] = useState('');
+  const debouncedRecipientQuery = useDebounce(recipientQuery, RECIPIENT_DEBOUNCE_MS);
+  const { suggestions: recipientSuggestions, loading: recipientSuggestionsLoading } =
+    useRecipientSuggestions(debouncedRecipientQuery);
 
   useEffect(() => {
     __register({
@@ -80,6 +97,9 @@ export default function DraftComposerHost({ mailboxId }: Props) {
           attachmentTotalSize={composer.attachmentTotalSize}
           onAddFiles={composer.addAttachmentFiles}
           onRemoveAttachment={composer.removeAttachmentChip}
+          recipientSuggestions={recipientSuggestions}
+          recipientSuggestionsLoading={recipientSuggestionsLoading}
+          onRecipientQueryChange={setRecipientQuery}
         />
       )}
       <CloseComposerDialog

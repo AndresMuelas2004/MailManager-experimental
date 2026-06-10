@@ -24,6 +24,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 
 ### Escribir y enviar
 - [composicion-y-envio.md](composicion-y-envio.md) — El composer en modo "Nuevo mensaje" y el envío directo.
+- [autocompletado-destinatarios.md](autocompletado-destinatarios.md) — Sugerencias de direcciones en Para/CC/CCO a partir de la gente con la que el usuario ya se ha comunicado.
 - [borradores.md](borradores.md) — Crear, editar, listar, sincronizar, enviar y borrar borradores.
 - [responder-y-reenviar.md](responder-y-reenviar.md) — Responder / Responder a todos / Reenviar: threading y herencia de adjuntos.
 

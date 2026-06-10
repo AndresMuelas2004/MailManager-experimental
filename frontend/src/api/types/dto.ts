@@ -418,3 +418,19 @@ export const copyAttachmentsFromEmailResponseSchema = z.object({
 export type CopyAttachmentsFromEmailResponse = z.infer<
   typeof copyAttachmentsFromEmailResponseSchema
 >;
+
+// Recipient autocomplete (contacts) — items returned by
+// ``GET /contacts/suggestions``. ``email`` is validated as a plain
+// ``z.string()`` (not ``.email()``) so odd-but-valid addresses the
+// backend already stored are never rejected at the boundary. ``name``
+// is ``.nullable()``: the backend (``ContactSuggestionOut``) always
+// serialises the key, emitting ``"name": null`` when unknown — it is
+// never omitted, so ``.nullable()`` (not ``.optional()``) is correct.
+export const contactSuggestionSchema = z.object({
+  email: z.string(),
+  name: z.string().nullable(),
+});
+export type ContactSuggestion = z.infer<typeof contactSuggestionSchema>;
+
+export const contactSuggestionsResponseSchema = z.array(contactSuggestionSchema);
+export type ContactSuggestionsResponse = z.infer<typeof contactSuggestionsResponseSchema>;

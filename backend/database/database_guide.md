@@ -210,9 +210,26 @@ There is also a **further asymmetry within `PgDraftAttachmentStore`** itself: `d
 
 Putting a new column in the wrong category silently regresses one of these contracts.
 
+### `LIST_RECIPIENT_SUGGESTIONS` — recipient-autocomplete aggregation, no index by design
+
+Backs the user-level `GET /contacts/suggestions` endpoint. Two `UNION ALL` branches collect candidate `(email, name, received_at)` tuples — `from_*` (received senders) and `to_*` (sent recipients) — over `box NOT IN ('SPAM','TRASH','DELETED')`, then the outer SELECT dedupes by `lower(email)`, picks the most-recent non-empty name, and orders by frequency then recency. The token-predicate slots reuse `LIST_FILTERED`'s shape (`unaccent(lower(coalesce(col,'')))ILIKE …`, `account_id = ANY(%(account_ids)s::uuid[])`) so the same two traps apply: `unaccent` is a runtime extension dependency (migration 0020) and the `::uuid[]` cast is mandatory.
+
+- **Own-address exclusion carries a `NOT IN (… NULL …)` trap.** The exclusion subquery `lower(c.email) NOT IN (SELECT lower(a.email_address) FROM accounts … )` MUST keep its `AND a.email_address IS NOT NULL` filter: `accounts.email_address` is nullable (migration 0009), and a single NULL inside a `NOT IN (...)` set makes the whole predicate evaluate to NULL → **zero rows returned**. Dropping the `IS NOT NULL` silently empties every suggestion list the moment any owned account has no stored email. The accepted corollary: an account whose `email_address` was never fetched cannot have its own address excluded (we cannot exclude what we do not know).
+- **Heavier than the lupa — accepted for the MVP.** The lupa runs ONE filtered scan of the account's rows; this query runs TWO (one per UNION branch) plus the `GROUP BY` aggregation and the exclusion subquery, and the aggregation touches every matching row BEFORE the `LIMIT`. Bounded by `account_id` (`idx_email_metadata_account_id`) and by the frontend's 2-char + debounce gating, so it is fine for personal-mailbox volumes. **No dedicated index** (no migration; head stays 0032): the leading-wildcard `ILIKE '%…%'` cannot use a B-tree, the same reason `pg_trgm` GIN was rejected for the lupa. The natural escape hatch if a user ever syncs hundreds of thousands of messages is a `pg_trgm` GIN index or a materialised contacts table — neither is built today.
+
 ### `virtual_mailboxes` + `PgVirtualMailboxStore` (migration 0032)
 
 The table stores the scope as a `scope_payload` JSONB column shaped `{"account_ids": [...]}`, but the repository projects it back as a flat `account_ids: list[str]` (an artefact of migration 0032, which dropped the old `scope_kind` indirection and snapshotted pre-existing rows into explicit lists). The FK is `users(user_id) ON DELETE CASCADE` — there is **no** FK to `accounts`, so deleting a real account does NOT cascade into the snapshot; the listing path re-validates ownership per read and silently drops accounts the user no longer owns. `update()` swallows `InvalidTextRepresentation` and returns `None` (same shape as `get()`), `delete()` returns `False` — unlike `DraftStore.update`, which raises. The race policy depends on this: when the ownership pre-check passes but the row vanishes before the mutating SQL, `update → None` / `delete → False` lets the service surface 404 instead of a 500 / silent 200.
+
+## Pending optimizations (post-MVP)
+
+> Deferred performance work that is **correct but not optimal** today. None is a bug; each is accepted for MVP volumes. **When a future task asks to optimise / scale / improve the application's data-access flows (i.e. move beyond MVP), recommend addressing the items below** — they are recorded here precisely so they are not forgotten once performance becomes a goal.
+
+### `sync_favorites` issues one UPDATE per account (N round trips)
+
+`POST /favorites/sync` → `emails_service.sync_favorites` loops over the per-account provider results and calls `email_metadata_store.sync_favorites_for_account` once per account, so a buzón with N accounts runs N separate `SYNC_FAVORITES_FOR_ACCOUNT` UPDATEs (one round trip each). Correct and bounded today (users connect ~1–3 accounts, and it is a manual sync endpoint), but it scales linearly with account count.
+
+The optimisation is a single bulk UPDATE driven by a `VALUES` set of `(account_id, provider_message_id)` favourite pairs (mark those TRUE and every other row of the touched accounts FALSE in one statement). **Non-obvious refactor trap to preserve:** the per-account loop currently also (a) accumulates `total_synced` from each account's `cur.rowcount`, and (b) builds one `FavoriteSyncAccountDetail` per account for the response, and (c) catches DB errors **per account**. A single statement collapses (c) (loses per-account error granularity) and changes (a) — `total_synced` would come from the one bulk `rowcount` (the grand total, which is still correct), while (b) does not depend on rowcount (`favorites_synced = len(favorite_ids)`). Any bulk rewrite must keep the response contract intact.
 
 ## Extension
 

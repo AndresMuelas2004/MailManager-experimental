@@ -24,6 +24,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 
 ### Escribir y enviar
 - [composicion-y-envio.md](composicion-y-envio.md) — Validaciones mínimas del envío directo, tope de tamaño del cuerpo, allowlist del saneador de texto enriquecido, reintentos y códigos de error.
+- [autocompletado-destinatarios.md](autocompletado-destinatarios.md) — Mínimo de caracteres, debounce, número de sugerencias, exclusiones y qué NO soporta.
 - [borradores.md](borradores.md) — Cap de borradores por cuenta, reintentos de envío y asimetrías Gmail/Outlook.
 - [responder-y-reenviar.md](responder-y-reenviar.md) — Recorte de la cita, permisos exactos, requisitos de threading y herencia de adjuntos.
 
