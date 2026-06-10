@@ -172,6 +172,70 @@ def test_create_draft_persists_to_db(
     assert row["body"] == "ok"
 
 
+def test_create_draft_with_valid_html_returns_sanitized_body(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """A POST with valid rich-text HTML stores and returns the sanitised HTML
+    both in the response and in the drafts row."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    html = "<p>Hello <strong>bold</strong> and <em>italic</em></p>"
+    resp = test_client.post(
+        _create_draft_url(mid, aid),
+        json={"to_recipients": ["to@example.com"], "subject": "HTML", "body": html},
+    )
+    assert resp.status_code == 200, resp.text
+    # The allowlisted tags survive sanitisation untouched.
+    assert resp.json()["body"] == html
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT body FROM drafts WHERE account_id = %s::uuid", (aid,),
+        )
+        row = cur.fetchone()
+    assert row["body"] == html
+
+
+def test_create_draft_strips_script_from_body(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """A POST whose body smuggles a <script> stores the sanitised HTML — the
+    executable element never reaches the row nor the provider."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        _create_draft_url(mid, aid),
+        json={
+            "to_recipients": ["to@example.com"],
+            "subject": "Danger",
+            "body": '<script>steal()</script><p>safe text</p>',
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert "<script>" not in resp.json()["body"]
+    assert "<p>safe text</p>" in resp.json()["body"]
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT body FROM drafts WHERE account_id = %s::uuid", (aid,),
+        )
+        row = cur.fetchone()
+    assert "<script>" not in row["body"]
+
+
+def test_create_draft_body_over_cap_returns_422(
+    test_client, setup_mailbox_and_account,
+):
+    """A body over the 1,000,000-char cap collapses to Pydantic 422. The error
+    body uses FastAPI's DEFAULT envelope ``{"detail": [...]}`` — NOT the
+    ``{"error": {...}}`` envelope, so we do not assert ``error.code``."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        _create_draft_url(mid, aid),
+        json={"subject": "Big", "body": "x" * 1_000_001},
+    )
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
 def test_create_empty_draft_allowed(
     test_client, setup_mailbox_and_account, isolated_db,
 ):
@@ -732,6 +796,53 @@ def test_update_draft_persists_to_db(
     assert row["bcc_recipients"] == ["bcc@f.com"]
     assert row["subject"] == "DB Check"
     assert row["body"] == "ok"
+
+
+def test_update_draft_strips_script_from_body(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """A PATCH whose body carries a dangerous attribute persists sanitised."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft(
+        isolated_db, account_id=aid, provider_draft_id="draft-update-html",
+        subject="original",
+    )
+    resp = test_client.patch(
+        _update_draft_url(mid, aid, "draft-update-html"),
+        json=_update_payload(
+            subject="Sanitised",
+            body='<img src="x" onerror="hack()"><p>kept</p>',
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    assert "onerror" not in resp.json()["body"]
+    assert "<p>kept</p>" in resp.json()["body"]
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT body FROM drafts WHERE provider_draft_id = %s AND account_id = %s::uuid",
+            ("draft-update-html", aid),
+        )
+        row = cur.fetchone()
+    assert "onerror" not in row["body"]
+    assert "<img" not in row["body"]
+
+
+def test_update_draft_body_over_cap_returns_422(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """A PATCH body over the cap collapses to Pydantic 422 (default envelope)."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft(
+        isolated_db, account_id=aid, provider_draft_id="draft-update-big",
+        subject="original",
+    )
+    resp = test_client.patch(
+        _update_draft_url(mid, aid, "draft-update-big"),
+        json=_update_payload(body="x" * 1_000_001),
+    )
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
 
 
 def test_update_draft_preserves_created_at_refreshes_updated_at(

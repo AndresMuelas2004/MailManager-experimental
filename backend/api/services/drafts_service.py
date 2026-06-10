@@ -52,6 +52,7 @@ from api.services.services_helpers import (
     load_wrapped_app_credentials,
     persist_email_metadata_batch,
     raise_on_silent_auth_errors,
+    sanitize_outbound_html,
     translate_core_error,
     translate_database_error,
     unwrap_secret,
@@ -216,6 +217,11 @@ def create_draft(
     """
     ensure_mailbox_access(mailbox_id, user_id)
 
+    # Sanitise the rich-text HTML body ONCE at entry (trust boundary) and
+    # reuse the cleaned value for BOTH the provider call and the persisted
+    # row — the two must never diverge. Fail-soft (never raises).
+    sanitized_body = sanitize_outbound_html(payload.body)
+
     try:
         account = account_store.get(mailbox_id, account_id)
     except DatabaseError as exc:
@@ -262,7 +268,7 @@ def create_draft(
                 payload.cc_recipients,
                 payload.bcc_recipients,
                 payload.subject,
-                payload.body,
+                sanitized_body,
                 thread_id=payload.thread_id,
                 in_reply_to=payload.in_reply_to,
                 references=payload.references_header,
@@ -291,7 +297,7 @@ def create_draft(
             "cc_recipients": list(payload.cc_recipients),
             "bcc_recipients": list(payload.bcc_recipients),
             "subject": payload.subject,
-            "body": payload.body,
+            "body": sanitized_body,
             "reply_kind": payload.reply_kind,
             "reply_to_message_id": payload.reply_to_message_id,
             "reply_to_account_id": (
@@ -456,6 +462,10 @@ def update_draft(
     """
     ensure_mailbox_access(mailbox_id, user_id)
 
+    # Sanitise the rich-text HTML body ONCE at entry and reuse for both
+    # the provider replacement and the persisted row (see create_draft).
+    sanitized_body = sanitize_outbound_html(payload.body)
+
     try:
         account = account_store.get(mailbox_id, account_id)
     except DatabaseError as exc:
@@ -523,7 +533,7 @@ def update_draft(
                 payload.cc_recipients,
                 payload.bcc_recipients,
                 payload.subject,
-                payload.body,
+                sanitized_body,
             )
         except CoreError as exc:
             raise translate_core_error(
@@ -551,7 +561,7 @@ def update_draft(
             "cc_recipients": list(payload.cc_recipients),
             "bcc_recipients": list(payload.bcc_recipients),
             "subject": payload.subject,
-            "body": payload.body,
+            "body": sanitized_body,
         }
         try:
             persisted = draft_store.update(row)
