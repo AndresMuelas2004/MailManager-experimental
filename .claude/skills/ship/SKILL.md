@@ -5,14 +5,14 @@ model: opus
 effort: max
 allowed-tools: Bash, Read, Edit, Grep, Glob, Agent, AskUserQuestion
 user-invocable: true
-argument-hint: "[worktree-dir] (e.g., feature-name)"
+argument-hint: "[worktree-dir] [worktrees-to-exclude-from-rebase ...] (e.g., feature-name wt-a wt-b)"
 ---
 
 # Ship — Full Worktree Shipping Workflow
 
 This skill finalizes a feature developed in a git worktree: commits, pushes, creates a PR, merges it, cleans up, and rebases every other active worktree so they stay in sync with master.
 
-**Invocation**: Must be run from the main MailManager directory (master branch), with the worktree directory name as an argument. The worktree name is: $ARGUMENTS. Example: `/ship feature-name`
+**Invocation**: Must be run from the main MailManager directory (master branch). The full argument string is: $ARGUMENTS. The **first** whitespace-separated token is the worktree directory to ship (referred to as `<worktree-to-ship>` throughout this skill); **every token after it** names a worktree to **exclude** from the Phase 3/4 rebase (the **exclusion list**). Examples: `/ship feature-name` (ship and rebase ALL remaining worktrees) · `/ship feature-name wt-a wt-b` (ship, then rebase all remaining worktrees except `wt-a` and `wt-b`).
 
 The main repo directory is always named **MailManager**. Worktrees are sibling directories named directly after the feature (e.g., `feature-name`, `fix-bug-123`) — there is no `MailManager-` prefix. The default branch is **master**. GitHub CLI (`gh`) is available.
 
@@ -20,10 +20,15 @@ The main repo directory is always named **MailManager**. Worktrees are sibling d
 
 ## Phase 0 — Argument Parsing & Validation
 
-### 0.1 Extract argument
+### 0.1 Extract arguments
 
-Read the worktree directory name from `$ARGUMENTS`. If empty or blank, **STOP** and tell the user:
-> "Please provide the worktree directory name as an argument. Example: `/ship feature-name`"
+Split the argument string on whitespace:
+
+- **First token** → `<worktree-to-ship>`: the worktree directory to ship.
+- **Remaining tokens** (if any) → the **exclusion list**: worktrees to skip during the Phase 4 rebase. It is applied silently in Phase 3 — exclusions are NEVER asked interactively; this list is the only mechanism.
+
+If the argument string is empty or blank, **STOP** and tell the user:
+> "Please provide the worktree directory name as an argument. Example: `/ship feature-name` — optionally followed by worktrees to exclude from the rebase: `/ship feature-name wt-a wt-b`"
 
 ### 0.2 Validate execution context
 
@@ -41,7 +46,7 @@ If the two values differ, we are inside a worktree. **STOP** with message:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-WORKTREE_PATH="$(dirname "$REPO_ROOT")/$ARGUMENTS"
+WORKTREE_PATH="$(dirname "$REPO_ROOT")/<worktree-to-ship>"
 ```
 
 Validate:
@@ -49,7 +54,7 @@ Validate:
 2. It is a registered git worktree: it appears in the output of `git worktree list`
 
 If either check fails, **STOP** with message:
-> "Worktree directory '$ARGUMENTS' not found or is not a valid git worktree."
+> "Worktree directory '<worktree-to-ship>' not found or is not a valid git worktree."
 
 ### 0.4 Get the branch name
 
@@ -287,7 +292,7 @@ The `/creacion-worktree` skill adds a navigation function to the PowerShell prof
   ```
   Capture the output as `<profile-path>`.
 - Read `<profile-path>` with the Read tool.
-- The worktree directory name is `$ARGUMENTS` (the same argument passed to `/ship`).
+- The worktree directory name is `<worktree-to-ship>` (the first argument passed to `/ship`).
 - Find the 3-line function block matching the worktree directory name:
   ```powershell
   function <worktree-directory-name> {
@@ -302,7 +307,7 @@ The `/creacion-worktree` skill adds a navigation function to the PowerShell prof
 
 ---
 
-## Phase 3 — Interactive Worktree Selection
+## Phase 3 — Worktree Selection (argument-driven, never interactive)
 
 ### 3.1 List remaining worktrees
 
@@ -312,17 +317,17 @@ git worktree list
 
 Filter out the main MailManager directory — only show actual worktrees (sibling directories with branches other than master).
 
-### 3.2 Ask the user which to exclude
+### 3.2 Apply the exclusion list from the arguments
 
-Use `AskUserQuestion` with this structure:
+**Do NOT ask the user anything in this phase.** The default behavior is always to rebase **ALL** remaining worktrees. The only way to exclude a worktree from the rebase is the exclusion list the user passed as extra arguments when invoking the skill (Phase 0.1) — if the user wanted to exclude one, they already said so at invocation time. Never re-confirm, never offer an exclusion prompt.
 
-- **Question**: "The following worktrees exist:\n\n{formatted list with path and branch for each}\n\nDo you want to exclude any from the rebase + conflict resolution?"
-- **Options**: First option is "No, include all worktrees". Do NOT add individual worktree options — the user types the names to exclude as free text in a second option labeled "Type worktree names to exclude (space-separated)".
+- **Exclusion list empty** (the common case): proceed with every remaining worktree.
+- **Exclusion list non-empty**: remove from the rebase set every worktree whose directory name matches a token in the exclusion list. For each excluded worktree, output to chat:
+  > Excluido del rebase (por argumento): `<excluded-worktree>` (branch: `<branch-name>`)
+- **Token with no matching worktree** (typo, already-removed worktree, or the shipped worktree itself): **WARN** in chat and continue — never stop for this:
+  > Argumento de exclusión '<token>' no coincide con ningún worktree activo — ignorado.
 
-If the user selects "No, include all worktrees", proceed with all of them.
-If the user types names, parse them and exclude those worktrees.
-
-If there are NO remaining worktrees, skip to the final summary and inform the user that everything is clean.
+If there are NO remaining worktrees (none exist, or all were excluded), skip to the final summary and inform the user that everything is clean.
 
 ---
 
@@ -442,7 +447,8 @@ After all phases complete, output a structured final summary to chat. This is **
 
 ### Phase 3 — Worktree Selection
 - Remaining worktrees: <N> | None (nothing to rebase)
-- Excluded: none | <list of excluded names>
+- Excluded (via invocation arguments): none | <list of excluded names>
+- Ignored exclusion tokens (no matching worktree): <list> (omit this line if none)
 
 ### Phase 4 — Rebase (only if worktrees exist)
 #### <worktree-name> (`<branch>`)
@@ -487,8 +493,9 @@ After all phases complete, output a structured final summary to chat. This is **
 - Never skip hooks (`--no-verify`).
 - Never stage `.env`, credentials, or secret files.
 - Must be invoked from the main MailManager directory (master branch), never from inside a worktree.
-- The worktree to ship is specified via `$ARGUMENTS` (the directory name, e.g., `feature-name`).
-- The worktree path is derived as: `<parent-of-repo-root>/<argument>`.
+- The worktree to ship is the **first** argument (the directory name, e.g., `feature-name`); any **additional** arguments name worktrees to exclude from the Phase 4 rebase.
+- Worktree exclusion is decided exclusively by the invocation arguments — Phase 3 must never prompt the user about exclusions.
+- The worktree path is derived as: `<parent-of-repo-root>/<worktree-to-ship>`.
 - All git operations targeting the main repo can omit `git -C` since we are already in the main directory.
 - All git operations targeting the worktree must use `git -C <worktree-path>`.
 - This skill never starts or stops Podman containers other than via `compose down -v` (an idempotent cleanup, not a process start). All stack lifecycle for master and worktrees is the user's responsibility.
