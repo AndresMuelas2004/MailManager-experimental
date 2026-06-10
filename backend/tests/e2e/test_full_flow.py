@@ -360,12 +360,15 @@ def test_18_sync_metadata_outlook_path_2(e2e_client, flow_state):
 
 
 def test_19_send_email_gmail(e2e_client):
+    # The body is rich-text HTML: this exercises the real HTML send path
+    # (Gmail assembles a multipart/alternative — derived text/plain + the
+    # text/html leg — and the provider must accept it without rejection).
     response = e2e_client.post(
         f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/send",
         json={
             "account_id": GMAIL_ACCOUNT_ID,
             "subject": "E2E automated test — Gmail send",
-            "body": "Automated E2E test email sent via Gmail.",
+            "body": "<p>Automated E2E test email sent via <strong>Gmail</strong>.</p>",
             "recipients": [SEND_RECIPIENT],
         },
     )
@@ -374,12 +377,14 @@ def test_19_send_email_gmail(e2e_client):
 
 
 def test_20_send_email_outlook(e2e_client):
+    # The body is rich-text HTML: Graph stores it as contentType=HTML. The
+    # send path must accept the HTML body without rejection.
     response = e2e_client.post(
         f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/send",
         json={
             "account_id": OUTLOOK_ACCOUNT_ID,
             "subject": "E2E automated test — Outlook send",
-            "body": "Automated E2E test email sent via Outlook.",
+            "body": "<p>Automated E2E test email sent via <strong>Outlook</strong>.</p>",
             "recipients": [SEND_RECIPIENT],
         },
     )
@@ -2220,14 +2225,14 @@ def test_46m_download_received_attachment_gmail(e2e_client):
 # Section 6: Auth lifecycle (MUST BE LAST — invalidates session)
 # ===================================================================
 
-def test_47_post_auth_logout(e2e_client, flow_state):
+def test_51_post_auth_logout(e2e_client, flow_state):
     response = e2e_client.post("/auth/logout")
     _assert_ok(response)
     assert response.json() == {"status": "logged_out"}
     flow_state["logged_out"] = "true"
 
 
-def test_48_get_auth_me_after_logout_401(e2e_client, flow_state):
+def test_52_get_auth_me_after_logout_401(e2e_client, flow_state):
     _require(flow_state, "logged_out")
     response = e2e_client.get("/auth/me")
     _assert_ok(response, expected=401)

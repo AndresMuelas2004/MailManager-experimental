@@ -13,6 +13,7 @@ after send) lives in the same test function.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 
 import psycopg2
@@ -100,8 +101,9 @@ def test_49_forward_flow_gmail(e2e_client):
     assert ctx["subject"].lower().startswith(("fwd:", "fw:", "rv:", "reenv:"))
     # Forward pre-fills no recipients (the user adds them).
     assert ctx["to_recipients"] == []
-    # The quoted body uses the forward block header.
+    # The forward body is HTML: the "Mensaje reenviado" block + a <blockquote>.
     assert "Mensaje reenviado" in ctx["body"]
+    assert "<blockquote" in ctx["body"]
 
     # 2. POST /drafts to create the Forward draft.
     ts = datetime.now(timezone.utc).isoformat()
@@ -169,5 +171,39 @@ def test_49_forward_flow_gmail(e2e_client):
                 assert cur.fetchone()[0] == 0
         finally:
             conn.close()
+
+        # 6. The sent forward body must arrive as HTML at the provider. The
+        # post-send metadata persist is best-effort, so poll a bounded number
+        # of sync-metadata cycles until the sent message lands in
+        # email_metadata, then fetch its rendered content and assert the quote
+        # markup survived the multipart/alternative text/html leg (same
+        # round-trip the reply flow verifies).
+        sent_pmid = send_data["provider_message_id"]
+        deadline = time.time() + 60
+        synced = False
+        while time.time() < deadline:
+            conn = _db_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM email_metadata "
+                        "WHERE account_id = %s AND provider_message_id = %s",
+                        (GMAIL_ACCOUNT_ID, sent_pmid),
+                    )
+                    synced = cur.fetchone() is not None
+            finally:
+                conn.close()
+            if synced:
+                break
+            e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata")
+            time.sleep(4)
+        assert synced, "sent forward was never persisted to email_metadata"
+        content_resp = e2e_client.get(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content",
+        )
+        _assert_ok(content_resp)
+        html_body = content_resp.json().get("html_body")
+        assert html_body is not None
+        assert "blockquote" in html_body.lower()
     finally:
         _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)

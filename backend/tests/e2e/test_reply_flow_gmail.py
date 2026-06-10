@@ -107,8 +107,10 @@ def test_47_reply_flow_gmail(e2e_client):
     assert ctx["subject"].lower().startswith(("re:", "aw:", "sv:")), ctx["subject"]
     # At least one recipient is populated for a Reply (the From/Reply-To).
     assert len(ctx["to_recipients"]) >= 1
-    # The body contains the quoted-header line.
+    # The body is HTML now: the attribution line + the original quoted inside
+    # a <blockquote> (was plain text with "> " before the rich-text feature).
     assert "escribió:" in ctx["body"]
+    assert "<blockquote" in ctx["body"]
 
     # 2. POST /drafts with the reply metadata in the body.
     ts = datetime.now(timezone.utc).isoformat()
@@ -200,6 +202,18 @@ def test_47_reply_flow_gmail(e2e_client):
             time.sleep(4)
         assert found, "sent reply was never persisted to email_metadata"
         assert thread_id == original_thread_id
+
+        # The sent body must be HTML at the provider. Fetch the sent message's
+        # content through the cache-aside endpoint (it pulls the real message
+        # from Gmail) and assert the rendered HTML carries the quote markup —
+        # confirming the multipart/alternative text/html leg round-tripped.
+        content_resp = e2e_client.get(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content",
+        )
+        _assert_ok(content_resp)
+        html_body = content_resp.json().get("html_body")
+        assert html_body is not None
+        assert "blockquote" in html_body.lower()
     finally:
         # Safety-net cleanup if a step above failed mid-flow.
         _delete_draft_row_locally(provider_draft_id, GMAIL_ACCOUNT_ID)
