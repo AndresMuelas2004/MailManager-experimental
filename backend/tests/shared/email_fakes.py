@@ -8,6 +8,7 @@ from core.email import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
     EmailClient,
@@ -51,6 +52,43 @@ def build_metadata(
     )
 
 
+def build_conversation_message(
+    provider_message_id: str = "m1",
+    thread_id: str = "t1",
+    from_email: str = "sender@example.com",
+    from_name: str = "Sender",
+    subject: str = "subject",
+    received_at: datetime | None = None,
+    is_read: bool = True,
+    is_favorite: bool = False,
+    box: str = "ALL_MAIL",
+    to_email: str = "",
+    to_name: str = "",
+    account_id: str = "",
+) -> ConversationMessage:
+    """Build a ``ConversationMessage`` with sensible defaults.
+
+    ``account_id`` defaults to ``""`` mirroring the provider contract: the
+    service stamps it before persistence (same as ``EmailMetadata``).
+    """
+    if received_at is None:
+        received_at = DEFAULT_RECEIVED_AT
+    return ConversationMessage(
+        provider_message_id=provider_message_id,
+        thread_id=thread_id,
+        from_email=from_email,
+        from_name=from_name,
+        subject=subject,
+        received_at=received_at,
+        is_read=is_read,
+        is_favorite=is_favorite,
+        box=box,
+        to_email=to_email,
+        to_name=to_name,
+        account_id=account_id,
+    )
+
+
 class FakeEmailClient(EmailClient):
     """In-memory fake that can simulate provider successes and failures."""
 
@@ -84,6 +122,8 @@ class FakeEmailClient(EmailClient):
         list_favorite_ids_return: list[str] | None = None,
         fetch_reply_context_exc: Exception | None = None,
         fetch_reply_context_return: ReplyContext | None = None,
+        fetch_conversation_exc: Exception | None = None,
+        fetch_conversation_return: list[ConversationMessage] | None = None,
         list_message_attachments_return: tuple[list[AttachmentMetadata], dict[str, str]] | None = None,
         fetch_attachment_binary_return: AttachmentBinary | None = None,
         send_draft_with_attachments_return: tuple[EmailMetadata, list[AttachmentUploadResult]] | None = None,
@@ -137,6 +177,8 @@ class FakeEmailClient(EmailClient):
         self._list_favorite_ids_return = list(list_favorite_ids_return or [])
         self._fetch_reply_context_exc = fetch_reply_context_exc
         self._fetch_reply_context_return = fetch_reply_context_return
+        self._fetch_conversation_exc = fetch_conversation_exc
+        self._fetch_conversation_return = fetch_conversation_return
         self._list_message_attachments_return = list_message_attachments_return
         self._fetch_attachment_binary_return = fetch_attachment_binary_return
         self._send_draft_with_attachments_return = send_draft_with_attachments_return
@@ -186,6 +228,10 @@ class FakeEmailClient(EmailClient):
         # ``reply_to_message_id`` / ``reply_kind`` / ``original_subject``
         # for create_draft, and the subset that send accepts).
         self.fetch_reply_context_calls: list[str] = []
+        # Conversation viewer. Records each ``thread_id`` passed to
+        # ``fetch_conversation`` so a test can assert the service derived the
+        # right thread from the base message row.
+        self.fetch_conversation_calls: list[str] = []
         self.create_draft_reply_kwargs: list[dict] = []
         self.send_draft_with_attachments_reply_kwargs: list[dict] = []
         self.deleted_message_ids: list[str] = []
@@ -512,6 +558,22 @@ class FakeEmailClient(EmailClient):
             references="",
             box="ALL_MAIL",
         )
+
+    def fetch_conversation(self, thread_id: str) -> list[ConversationMessage]:
+        """Return the injected conversation members (or an empty list).
+
+        Records the ``thread_id`` so a test can assert the service derived
+        the right thread from the base message row. Tests that exercise the
+        conversation viewer inject ``fetch_conversation_return`` (deliberately
+        unsorted, to verify the service sorts ascending) or
+        ``fetch_conversation_exc``.
+        """
+        self.fetch_conversation_calls.append(thread_id)
+        if self._fetch_conversation_exc:
+            raise self._fetch_conversation_exc
+        if self._fetch_conversation_return is not None:
+            return list(self._fetch_conversation_return)
+        return []
 
     def get_account_label(self) -> str:
         return self._account_label

@@ -5,9 +5,7 @@ import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import useEmailViewer from '../hooks/useEmailViewer';
-import useBulkBar from '../hooks/useBulkBar';
 import useDebounce from '../hooks/useDebounce';
-import useFavorite from '../hooks/useFavorite';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
 import { parsePageParam } from '../../../lib/pagination';
@@ -29,21 +27,11 @@ export default function VirtualMailboxViewPage() {
   const page = parsePageParam(searchParams);
   const { record, error: loadError } = useVirtualMailbox(virtualMailboxId ?? '');
 
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
+  // The virtual listing is always grouped by thread server-side, so the rows
+  // arrive as conversations. Conversation mode makes each row read-only +
+  // open; no selection / favourite wiring on this page.
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error } =
     useVirtualMailboxEmails(virtualMailboxId!, mailboxId!, debouncedQ, page);
-
-  // Bulk actions on a virtual mailbox view still operate on real emails
-  // — the underlying email is a real provider message in a real
-  // account. The same useBulkBar hook works because it keys by
-  // (account_id, provider_message_id), which both views surface
-  // identically. The visible "box" passed in is informational only
-  // (controls which bulk actions are exposed); ALL_MAIL is the safest
-  // baseline.
-  const { selection, bulkError, bulkBar } = useBulkBar({
-    box: 'ALL_MAIL',
-    refresh,
-    searchKey: debouncedQ,
-  });
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -58,14 +46,6 @@ export default function VirtualMailboxViewPage() {
   }, [page, totalPages, loading, isPlaceholder]);
 
   const viewer = useEmailViewer();
-  // ``useFavorite`` is no longer parameterised by mailboxId: the toggle
-  // path passes ``email.mailbox_id`` per call (see ``handleToggleFavorite``
-  // below), which is the only correct mailbox in a virtual-mailbox view
-  // that may aggregate accounts across several real mailboxes. A sync
-  // button is intentionally NOT exposed here — a vmbox-scoped sync would
-  // need a fan-out over every (mailbox_id, account_id) pair the vmbox
-  // covers, which is a separate user surface decision.
-  const favorites = useFavorite();
   const composer = useDraftComposerContext();
 
   const handleReply = (email: EmailMetadataOut) => {
@@ -81,18 +61,7 @@ export default function VirtualMailboxViewPage() {
     void composer.openForForward(email);
   };
 
-  const handleToggleFavorite = (email: EmailMetadataOut, next: boolean) => {
-    favorites
-      .toggle({
-        mailboxId: email.mailbox_id,
-        accountId: email.account_id,
-        providerMessageId: email.provider_message_id,
-        favorite: next,
-      })
-      .catch(() => {});
-  };
-
-  const combinedError = error || bulkError || favorites.error || viewer.error;
+  const combinedError = error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -181,14 +150,8 @@ export default function VirtualMailboxViewPage() {
             loading={loading}
             view="unified"
             isSent={record?.filter_payload?.box === 'SENT'}
-            hasSelection={selection.size > 0}
-            isSelected={selection.isSelected}
-            onToggle={selection.toggle}
-            onToggleAll={() => selection.toggleTopN(emails)}
+            conversationMode
             onOpen={viewer.open}
-            onToggleFavorite={handleToggleFavorite}
-            headerCheckboxState={selection.headerState(emails)}
-            bulkBar={bulkBar}
             emptyMessage={emptyMessage}
             page={page}
             pageSize={pageSize}
@@ -201,6 +164,7 @@ export default function VirtualMailboxViewPage() {
       <ViewerMount
         openedEmail={viewer.openedEmail}
         accounts={accounts}
+        conversationMode
         onClose={viewer.close}
         onRead={viewer.handleRead}
         onReply={handleReply}

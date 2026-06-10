@@ -147,6 +147,14 @@ class EmailMetadataOut(BaseModel):
     ``STARRED`` label and Outlook's message flag. It is orthogonal to
     ``box`` / ``is_read``: a favourite email can sit in any box, read
     or unread.
+
+    ``thread_message_count`` is the number of messages of this row's
+    thread present **in this box** (conversation view). It defaults to
+    ``1`` and stays ``1`` for non-grouped listings (Favourites) and for
+    each message inside a ``ConversationOut``. In grouped mode the row
+    represents a whole thread, so ``is_read`` / ``has_attachments`` /
+    ``is_favorite`` are the aggregated thread state, not a single
+    message's.
     """
 
     provider_message_id: str
@@ -163,6 +171,7 @@ class EmailMetadataOut(BaseModel):
     box: str
     has_attachments: bool = False
     is_favorite: bool = False
+    thread_message_count: int = 1
 
 
 class EmailPageOut(BaseModel):
@@ -184,6 +193,27 @@ class EmailPageOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ConversationOut(BaseModel):
+    """Full message chain of a conversation (conversation viewer).
+
+    ``messages`` is ordered **chronologically ascending** (oldest
+    first), mapped from the provider's fresh thread state on this open —
+    so a message that moved box or was read outside the app is reflected
+    immediately. Each item is an :py:class:`EmailMetadataOut`; bodies are
+    NOT included here — the viewer fetches each body lazily via
+    ``GET .../emails/{provider_message_id}/content``. ``has_attachments``
+    of each message is always ``False`` here (B.lazy): the per-message
+    clip appears once its body is opened and attachments are discovered.
+
+    ``thread_id`` is ``''`` when the base message has no thread (a
+    single-message conversation), in which case ``messages`` holds
+    exactly that one message and no provider call was made.
+    """
+
+    thread_id: str
+    messages: list[EmailMetadataOut]
 
 
 class FavoriteUpdateRequest(BaseModel):

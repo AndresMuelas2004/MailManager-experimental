@@ -1,6 +1,7 @@
 import { request } from '../client/http';
 import { EMAILS_PAGE_SIZE } from '../../lib/constants';
 import {
+  conversationOutSchema,
   emailContentOutSchema,
   emailPageSchema,
   favoriteSyncResponseSchema,
@@ -12,6 +13,7 @@ import {
   statusResponseSchema,
   syncResultOutSchema,
   trashActionResultSchema,
+  type ConversationOut,
   type EmailContentOut,
   type EmailItemRef,
   type EmailPage,
@@ -32,6 +34,7 @@ export type ListEmailsOptions = {
   q?: string;
   favorite?: boolean;
   page?: number;
+  groupByThread?: boolean;
   signal?: AbortSignal;
 };
 
@@ -45,6 +48,9 @@ export function listEmails(
   if (accountId) params.set('account_id', accountId);
   if (options.q !== undefined && options.q.length > 0) params.set('q', options.q);
   if (options.favorite !== undefined) params.set('favorite', String(options.favorite));
+  // Only send group_by_thread when truthy — the backend treats its absence as
+  // default=False, mirroring how ``favorite`` is omitted when undefined.
+  if (options.groupByThread) params.set('group_by_thread', 'true');
   const limit = EMAILS_PAGE_SIZE;
   const offset = ((options.page ?? 1) - 1) * limit;
   params.set('limit', String(limit));
@@ -92,6 +98,27 @@ export function getReplyContext(
   return request(
     `/mailboxes/${mailboxId}/accounts/${accountId}/emails/${providerMessageId}/reply-context?${params}`,
     { schema: replyContextOutSchema },
+  );
+}
+
+// Full conversation chain for the message the user opened. The thread is
+// identified by ``providerMessageId`` (NOT thread_id) because Outlook's
+// conversationId is base64 with ``/`` / ``+`` / ``=`` and would break a
+// path segment — the backend derives the thread from the message row.
+// Unlike the sibling endpoints (``getEmailContent`` / ``getReplyContext`` /
+// ``setFavorite``) this one URL-encodes the id, since Outlook's ImmutableId
+// can contain ``/``.
+export function getConversation(
+  mailboxId: string,
+  accountId: string,
+  providerMessageId: string,
+  signal?: AbortSignal,
+): Promise<ConversationOut> {
+  return request(
+    `/mailboxes/${mailboxId}/accounts/${accountId}/emails/${encodeURIComponent(
+      providerMessageId,
+    )}/conversation`,
+    { schema: conversationOutSchema, signal },
   );
 }
 

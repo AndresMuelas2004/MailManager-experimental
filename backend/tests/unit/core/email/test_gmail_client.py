@@ -2695,3 +2695,132 @@ class TestClassifyAttachments:
         assert attachments[0].mime_type == (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+
+# ── fetch_conversation ──────────────────────────────────────────────
+
+
+class TestFetchConversation:
+    """Gmail conversation viewer — threads.get(format=metadata) → members."""
+
+    @staticmethod
+    def _thread_message(
+        msg_id: str,
+        *,
+        internal_date: str,
+        labels: list[str],
+        thread_id: str = "thread-1",
+        from_value: str = "Alice <alice@example.com>",
+        subject: str = "Hello",
+    ) -> dict:
+        return {
+            "id": msg_id,
+            "threadId": thread_id,
+            "internalDate": internal_date,
+            "labelIds": labels,
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": from_value},
+                    {"name": "Subject", "value": subject},
+                ],
+            },
+        }
+
+    def test_not_authenticated_raises(self, client: GmailClient):
+        client.service = None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.fetch_conversation("thread-1")
+
+    def test_parses_members_with_state_and_favorite(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().threads().get().execute.return_value = {
+            "messages": [
+                self._thread_message(
+                    "m1", internal_date="1700000000000",
+                    labels=["INBOX", "STARRED"],
+                ),
+                self._thread_message(
+                    "m2", internal_date="1700000100000",
+                    labels=["SENT", "UNREAD"],
+                ),
+            ],
+        }
+        client.service = mock_service
+        members = client.fetch_conversation("thread-1")
+
+        assert len(members) == 2
+        by_id = {m.provider_message_id: m for m in members}
+        # box / is_read / to_* come from the SAME parser as sync; favourite is
+        # derived from the STARRED label (not carried by EmailMetadata).
+        assert by_id["m1"].box == "ALL_MAIL"
+        assert by_id["m1"].is_read is True
+        assert by_id["m1"].is_favorite is True
+        assert by_id["m2"].box == "SENT"
+        assert by_id["m2"].is_read is False
+        assert by_id["m2"].is_favorite is False
+        assert by_id["m1"].thread_id == "thread-1"
+        # account_id is left unstamped for the service layer.
+        assert by_id["m1"].account_id == ""
+
+    def test_includes_trash_and_spam_members(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().threads().get().execute.return_value = {
+            "messages": [
+                self._thread_message("m1", internal_date="1700000000000", labels=["INBOX"]),
+                self._thread_message("m-trash", internal_date="1700000100000", labels=["TRASH"]),
+                self._thread_message("m-spam", internal_date="1700000200000", labels=["SPAM"]),
+            ],
+        }
+        client.service = mock_service
+        boxes = {m.provider_message_id: m.box for m in client.fetch_conversation("thread-1")}
+        assert boxes == {"m1": "ALL_MAIL", "m-trash": "TRASH", "m-spam": "SPAM"}
+
+    def test_orders_ascending_by_internal_date(self, client: GmailClient):
+        mock_service = MagicMock()
+        # Provider returns out of order; the client must sort oldest-first.
+        mock_service.users().threads().get().execute.return_value = {
+            "messages": [
+                self._thread_message("newest", internal_date="1700000200000", labels=["INBOX"]),
+                self._thread_message("oldest", internal_date="1700000000000", labels=["INBOX"]),
+                self._thread_message("middle", internal_date="1700000100000", labels=["INBOX"]),
+            ],
+        }
+        client.service = mock_service
+        ids = [m.provider_message_id for m in client.fetch_conversation("thread-1")]
+        assert ids == ["oldest", "middle", "newest"]
+
+    def test_skips_unparseable_message_without_aborting(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().threads().get().execute.return_value = {
+            "messages": [
+                self._thread_message("ok", internal_date="1700000000000", labels=["INBOX"]),
+                # ``labelIds`` as a non-iterable blows up label resolution; the
+                # per-message try/except must skip it, not abort the thread.
+                {"id": "bad", "threadId": "thread-1", "internalDate": "1700000100000",
+                 "labelIds": 123, "payload": {"headers": []}},
+            ],
+        }
+        client.service = mock_service
+        ids = [m.provider_message_id for m in client.fetch_conversation("thread-1")]
+        assert ids == ["ok"]
+
+    def test_http_error_raises_external_api_error(self, client: GmailClient):
+        from googleapiclient.errors import HttpError
+        mock_service = MagicMock()
+        resp = MagicMock()
+        type(resp).status = 404
+        mock_service.users().threads().get().execute.side_effect = HttpError(
+            resp=resp, content=b"not found",
+        )
+        client.service = mock_service
+        # A deleted thread (404) surfaces as a generic ExternalAPIError — the
+        # service translates it to 502 (no artificial single-message fallback).
+        with pytest.raises(EmailExternalAPIError, match="fetch thread"):
+            client.fetch_conversation("thread-gone")
+
+    def test_generic_exception_raises_external_api_error(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().threads().get().execute.side_effect = RuntimeError("boom")
+        client.service = mock_service
+        with pytest.raises(EmailExternalAPIError, match="RuntimeError"):
+            client.fetch_conversation("thread-1")

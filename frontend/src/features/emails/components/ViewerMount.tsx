@@ -1,4 +1,5 @@
 import EmailViewer from './EmailViewer';
+import ConversationViewerMount from './ConversationViewerMount';
 import useAttachmentDownloader from '../hooks/useAttachmentDownloader';
 import useEmailContent from '../hooks/useEmailContent';
 import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
@@ -11,6 +12,10 @@ type Props = {
   onReply: (email: EmailMetadataOut) => void | Promise<void>;
   onReplyAll: (email: EmailMetadataOut) => void | Promise<void>;
   onForward: (email: EmailMetadataOut) => void | Promise<void>;
+  // When true (conversation-grouped boxes) the opened row represents a
+  // thread, so mount the conversation viewer (full chain) instead of the
+  // mono-message viewer. Favoritos leaves it false/absent.
+  conversationMode?: boolean;
 };
 
 export default function ViewerMount({
@@ -21,8 +26,25 @@ export default function ViewerMount({
   onReply,
   onReplyAll,
   onForward,
+  conversationMode = false,
 }: Props) {
   if (!openedEmail) return null;
+  // Conversation path: the data-fetching hooks live per-message inside
+  // ``ConversationMessageBody``, so neither ``useEmailContent`` nor the
+  // downloader is instantiated at this level here. ``onRead`` is NOT
+  // propagated — marking the whole thread read is orchestrated by the
+  // conversation container.
+  if (conversationMode) {
+    return (
+      <ConversationViewerMount
+        openedEmail={openedEmail}
+        onClose={onClose}
+        onReply={onReply}
+        onReplyAll={onReplyAll}
+        onForward={onForward}
+      />
+    );
+  }
   return (
     <ViewerWithDownloader
       openedEmail={openedEmail}

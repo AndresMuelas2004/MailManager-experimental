@@ -76,6 +76,12 @@ export const handlers = [
   http.get(`${API_BASE}/mailboxes/:mailboxId/emails/:pmid/content`, () =>
     HttpResponse.json({ html_body: null, text_body: null, attachments: [] }),
   ),
+
+  // Conversation chain (conversation viewer). Happy-path empty thread;
+  // specs override with ``server.use(...)`` to return a populated chain.
+  http.get(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/emails/:pmid/conversation`, () =>
+    HttpResponse.json({ thread_id: '', messages: [] }),
+  ),
   // Received attachment binary download. Returns a binary stream with the
   // real name+extension on ``Content-Disposition`` (mirrors the backend
   // contract). Specs that exercise the "header missing" path override this

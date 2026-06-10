@@ -32,10 +32,14 @@ export default function useEmailList(
   searchQuery?: string,
   favorite?: boolean,
   page = 1,
+  groupByThread = false,
 ): UseEmailListReturn {
   const queryClient = useQueryClient();
   const trimmedQuery = (searchQuery ?? '').trim();
   const effectiveQ = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : undefined;
+  // ``groupByThread`` is a non-nullable boolean → it goes straight into the
+  // key (no ``?? null``). It namespaces the grouped (conversation) cache
+  // apart from the non-grouped (favourites) cache so the two never collide.
   const emailsKey = [
     'emails',
     mailboxId,
@@ -43,6 +47,7 @@ export default function useEmailList(
     accountId ?? null,
     effectiveQ ?? null,
     favorite ?? null,
+    groupByThread,
     page,
   ] as const;
   const accountsKey = ['accounts', mailboxId] as const;
@@ -50,7 +55,13 @@ export default function useEmailList(
   const emailsQuery = useQuery({
     queryKey: emailsKey,
     queryFn: ({ signal }) =>
-      listEmails(mailboxId, box, accountId, { q: effectiveQ, favorite, page, signal }),
+      listEmails(mailboxId, box, accountId, {
+        q: effectiveQ,
+        favorite,
+        page,
+        groupByThread,
+        signal,
+      }),
     enabled: mailboxId.length > 0,
     placeholderData: keepPreviousData,
   });
@@ -84,7 +95,7 @@ export default function useEmailList(
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: emailsKey });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite, page]);
+  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite, groupByThread, page]);
 
   const error = emailsQuery.error
     ? toUiError(emailsQuery.error)

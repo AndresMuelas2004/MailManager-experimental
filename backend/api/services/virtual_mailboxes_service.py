@@ -317,12 +317,15 @@ def list_emails_for_virtual_mailbox(
 ) -> EmailPageOut:
     """Return a page of the filtered listing produced by a virtual mailbox.
 
-    The dedup of the same provider message surfaced under two
-    ``account_id`` rows (a vmbox can aggregate accounts across different
-    real mailboxes) happens in SQL, BEFORE ``LIMIT``/``OFFSET``, via the
-    ``distinct_provider_message_id`` flag — so a page is never short by
-    a duplicate and ``total`` (a ``COUNT(DISTINCT provider_message_id)``)
-    is the correct deduplicated size.
+    The virtual listing ALWAYS groups by conversation (conversation view):
+    ``group_by_thread=True`` collapses each thread into its most-recent
+    message and ``total`` counts threads, not messages. Combined with
+    ``distinct_provider_message_id=True``, the same provider message
+    surfaced under two ``account_id`` rows (a vmbox can aggregate accounts
+    across different real mailboxes) is deduplicated in SQL BEFORE grouping
+    and BEFORE ``LIMIT``/``OFFSET`` — so a page is never short by a
+    duplicate, threads are never split across pages, and ``total`` is the
+    correct deduplicated thread count.
     """
     record = _load_owned_virtual_mailbox(virtual_mailbox_id, user_id)
 
@@ -344,6 +347,7 @@ def list_emails_for_virtual_mailbox(
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
             distinct_provider_message_id=True,
+            group_by_thread=True,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
@@ -362,6 +366,7 @@ def list_emails_for_virtual_mailbox(
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
             distinct_provider_message_id=True,
+            group_by_thread=True,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc

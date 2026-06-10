@@ -821,4 +821,5 @@ def row_to_email_metadata_out(row: dict[str, Any]) -> EmailMetadataOut:
         box=row["box"],
         has_attachments=bool(row.get("has_attachments", False)),
         is_favorite=bool(row.get("is_favorite", False)),
+        thread_message_count=int(row.get("thread_message_count", 1) or 1),
     )

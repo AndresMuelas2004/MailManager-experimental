@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { Paperclip, RefreshCw } from 'lucide-react';
+import { Paperclip, RefreshCw, Star } from 'lucide-react';
 
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
 import Spinner from '../../../components/common/Spinner';
@@ -27,6 +27,13 @@ type Props = {
   headerCheckboxState?: HeaderCheckboxState;
   bulkBar?: ReactNode;
   emptyMessage?: string;
+  // Conversation (thread-grouped) mode: the row is read-only + open. The star
+  // becomes a non-interactive thread indicator (aggregated ``is_favorite``)
+  // and a message-count chip shows next to the subject when the thread has
+  // more than one message in this box. Selection and the interactive favourite
+  // button are disabled simply by the page not passing their props. Favoritos
+  // leaves this false/absent and keeps the classic behaviour.
+  conversationMode?: boolean;
   // Pagination is optional: when the four props below are provided the
   // header bar shows the "from–to de total" range on the left and the
   // page controls on the right. Omitting them keeps the legacy
@@ -84,6 +91,7 @@ export default function EmailTable({
   headerCheckboxState = 'unchecked',
   bulkBar,
   emptyMessage,
+  conversationMode = false,
   page,
   pageSize,
   total,
@@ -233,6 +241,20 @@ export default function EmailTable({
                   onToggle={(next) => onToggleFavorite(email, next)}
                   size={18}
                 />
+              ) : conversationMode ? (
+                // Read-only thread indicator: filled amber when ANY message of
+                // the thread is favourite (aggregated by the backend), faint
+                // outline otherwise. Not a button — the whole row opens the
+                // conversation; favourite actions live in the viewer.
+                <div className="grid w-5 place-items-center" aria-hidden>
+                  <Star
+                    className={
+                      email.is_favorite ? 'fill-amber-400 text-amber-400' : 'text-zinc-300'
+                    }
+                    style={{ width: 18, height: 18 }}
+                    strokeWidth={1.75}
+                  />
+                </div>
               ) : (
                 <div className="w-5" />
               )}
@@ -250,6 +272,14 @@ export default function EmailTable({
               <div
                 className={`flex-1 flex items-center gap-1.5 truncate text-[13px] ${weight} text-zinc-900`}
               >
+                {conversationMode && email.thread_message_count > 1 ? (
+                  <span
+                    className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500"
+                    aria-label={`${email.thread_message_count} mensajes`}
+                  >
+                    {email.thread_message_count}
+                  </span>
+                ) : null}
                 {email.has_attachments ? (
                   <Paperclip
                     className="h-3.5 w-3.5 shrink-0 text-zinc-500"

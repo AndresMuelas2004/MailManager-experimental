@@ -312,7 +312,7 @@ class TestListEmailsForVirtualMailbox:
         def _list(
             account_ids, box, tokens, limit, offset, *,
             extra_filters=None, box_in=None, box_not_in=None,
-            distinct_provider_message_id=False,
+            distinct_provider_message_id=False, group_by_thread=False,
         ):
             captured["account_ids"] = account_ids
             captured["box"] = box
@@ -323,6 +323,7 @@ class TestListEmailsForVirtualMailbox:
             captured["box_in"] = box_in
             captured["box_not_in"] = box_not_in
             captured["distinct_provider_message_id"] = distinct_provider_message_id
+            captured["group_by_thread"] = group_by_thread
             if list_exc:
                 raise list_exc
             return rows or []
@@ -330,7 +331,7 @@ class TestListEmailsForVirtualMailbox:
         def _count(
             account_ids, box, tokens, *,
             extra_filters=None, box_in=None, box_not_in=None,
-            distinct_provider_message_id=False,
+            distinct_provider_message_id=False, group_by_thread=False,
         ):
             if count_captured is not None:
                 count_captured["account_ids"] = account_ids
@@ -340,6 +341,7 @@ class TestListEmailsForVirtualMailbox:
                 count_captured["box_in"] = box_in
                 count_captured["box_not_in"] = box_not_in
                 count_captured["distinct_provider_message_id"] = distinct_provider_message_id
+                count_captured["group_by_thread"] = group_by_thread
             return total if total is not None else len(rows or [])
 
         monkeypatch.setattr(
@@ -466,6 +468,20 @@ class TestListEmailsForVirtualMailbox:
         virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
         assert captured["distinct_provider_message_id"] is True
         assert count_captured["distinct_provider_message_id"] is True
+
+    def test_always_groups_by_thread_on_both_calls(self, monkeypatch):
+        # The virtual listing ALWAYS collapses each thread into its most-recent
+        # message (conversation view). Both list_filtered and count_filtered
+        # must receive group_by_thread=True so threads are never split across
+        # pages and total counts threads, not messages.
+        record = _fake_record()
+        count_captured: dict = {}
+        captured = self._patch_listing(
+            monkeypatch, record=record, count_captured=count_captured,
+        )
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
+        assert captured["group_by_thread"] is True
+        assert count_captured["group_by_thread"] is True
 
     def test_returns_envelope_with_total_from_count(self, monkeypatch):
         record = _fake_record()

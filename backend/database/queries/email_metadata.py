@@ -266,6 +266,144 @@ LIST_FILTERED_DISTINCT = """
     OFFSET %(offset)s
 """
 
+# ---------------------------------------------------------------------------
+# Conversation grouping (conversation view). Each thread collapses into one
+# representative row (its most-recent message). The aggregated fields are
+# window functions over the grouping key; the COUNT of messages-in-this-box
+# is ``count(*) OVER w`` (PostgreSQL forbids ``COUNT(DISTINCT …) OVER (…)``).
+#
+# Grouping-key asymmetry (deliberate — provider thread namespaces are
+# per-account, so accounts never merge; see repository_guide.md / the
+# functional spec "accounts are not merged"):
+#   - REGULAR (single account or unified): partition by (account_id,
+#     thread_key). Including account_id keeps two DISTINCT accounts under
+#     the same unified mailbox separate even in the pathological case where
+#     they share a thread_id string.
+#   - VIRTUAL: partition by thread_key alone, AFTER an inner dedup by
+#     provider_message_id (subnivel d1). This collapses the SAME provider
+#     account connected under two mailboxes (same provider_message_id, same
+#     thread_id) while genuinely distinct accounts stay separated by their
+#     per-namespace thread_id.
+#
+# thread_key = COALESCE(NULLIF(thread_id, ''), provider_message_id):
+#   threadless messages ('' / NULL thread_id) become singletons keyed by
+#   their own provider_message_id and are NEVER merged with one another.
+#
+# The three predicate slots are the SAME ones fed by
+# ``_build_filter_predicates`` — never inject free-form text.
+
+# REGULAR grouped listing (distinct_provider_message_id = False). No
+# cross-account duplicate can occur (each account appears once in its
+# mailbox), so a plain ``count(*)`` per partition is exact. The DISTINCT ON
+# picks the most-recent message of each (account_id, thread_key) as the
+# row representative; window aggregates are evaluated BEFORE the DISTINCT ON
+# so the representative already carries the whole-thread aggregates.
+LIST_GROUPED_BY_THREAD = """
+    SELECT * FROM (
+        SELECT DISTINCT ON (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))
+               em.provider_message_id, em.account_id, em.thread_id, em.from_email,
+               em.from_name, em.subject, em.received_at,
+               bool_and(em.is_read)        OVER w AS is_read,
+               em.box,
+               bool_or(em.has_attachments) OVER w AS has_attachments,
+               bool_or(em.is_favorite)     OVER w AS is_favorite,
+               em.to_email, em.to_name, a.mailbox_id,
+               count(*)                    OVER w AS thread_message_count
+        FROM email_metadata AS em
+        JOIN accounts AS a USING (account_id)
+        WHERE em.account_id = ANY(%(account_ids)s::uuid[])
+          {box_predicate}
+          {search_predicate}
+          {extra_predicate}
+        WINDOW w AS (PARTITION BY em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))
+        ORDER BY em.account_id,
+                 COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id),
+                 em.received_at DESC, em.provider_message_id
+    ) AS d
+    ORDER BY d.received_at DESC, d.account_id, d.provider_message_id
+    LIMIT %(limit)s
+    OFFSET %(offset)s
+"""
+
+# VIRTUAL grouped listing (distinct_provider_message_id = True). Three
+# levels: (1) inner ``d1`` dedups by provider_message_id with the SAME
+# winner-selection ORDER BY as ``LIST_FILTERED_DISTINCT`` (load-bearing
+# parity), exposing a computed ``thread_key``; (2) group by thread_key with
+# ``count(*)`` over the already-deduplicated rows; (3) paginate. Partitioning
+# by thread_key alone (no account_id) is what collapses one provider account
+# connected under two mailboxes — exactly the dedup intent of the virtual
+# listing.
+LIST_GROUPED_BY_THREAD_DISTINCT = """
+    SELECT * FROM (
+        SELECT DISTINCT ON (d1.thread_key)
+               d1.provider_message_id, d1.account_id, d1.thread_id, d1.from_email,
+               d1.from_name, d1.subject, d1.received_at,
+               bool_and(d1.is_read)        OVER w AS is_read,
+               d1.box,
+               bool_or(d1.has_attachments) OVER w AS has_attachments,
+               bool_or(d1.is_favorite)     OVER w AS is_favorite,
+               d1.to_email, d1.to_name, d1.mailbox_id,
+               count(*)                    OVER w AS thread_message_count
+        FROM (
+            SELECT DISTINCT ON (em.provider_message_id)
+                   em.provider_message_id, em.account_id, em.thread_id, em.from_email,
+                   em.from_name, em.subject, em.received_at, em.is_read, em.box,
+                   em.has_attachments, em.is_favorite, em.to_email, em.to_name,
+                   a.mailbox_id,
+                   COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id) AS thread_key
+            FROM email_metadata AS em
+            JOIN accounts AS a USING (account_id)
+            WHERE em.account_id = ANY(%(account_ids)s::uuid[])
+              {box_predicate}
+              {search_predicate}
+              {extra_predicate}
+            ORDER BY em.provider_message_id,
+                     (btrim(coalesce(em.to_email, '')) <> '') DESC,
+                     (btrim(coalesce(em.to_name,  '')) <> '') DESC,
+                     em.received_at DESC NULLS LAST
+        ) AS d1
+        WINDOW w AS (PARTITION BY d1.thread_key)
+        ORDER BY d1.thread_key, d1.received_at DESC, d1.account_id, d1.provider_message_id
+    ) AS d
+    ORDER BY d.received_at DESC, d.account_id, d.provider_message_id
+    LIMIT %(limit)s
+    OFFSET %(offset)s
+"""
+
+# Thread count for the REGULAR grouped listing — counts DISTINCT
+# (account_id, thread_key) pairs, aligned with ``LIST_GROUPED_BY_THREAD``.
+# ``COUNT(DISTINCT (a, b))`` over a row tuple is valid in PostgreSQL and
+# counts distinct non-null combinations; account_id is never NULL and
+# thread_key is never NULL (the COALESCE guarantees it), so no thread is
+# dropped from the total. The COALESCE is mandatory: ``COUNT(DISTINCT
+# thread_id)`` alone would skip every threadless ('' / NULL) message.
+COUNT_GROUPED_BY_THREAD = """
+    SELECT COUNT(DISTINCT (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))) AS total
+    FROM email_metadata AS em
+    JOIN accounts AS a USING (account_id)
+    WHERE em.account_id = ANY(%(account_ids)s::uuid[])
+      {box_predicate}
+      {search_predicate}
+      {extra_predicate}
+"""
+
+# Thread count for the VIRTUAL grouped listing — counts DISTINCT thread_key,
+# aligned with ``LIST_GROUPED_BY_THREAD_DISTINCT`` (which collapses one
+# provider account connected under two mailboxes). No inner dedup is needed:
+# the same provider_message_id under two account_ids carries the SAME
+# thread_key (shared thread_id, or shared provider_message_id when
+# threadless), so ``COUNT(DISTINCT thread_key)`` collapses it exactly as the
+# LIST does. The COALESCE is mandatory for the same threadless reason above.
+COUNT_GROUPED_BY_THREAD_DISTINCT = """
+    SELECT COUNT(DISTINCT COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)) AS total
+    FROM email_metadata AS em
+    JOIN accounts AS a USING (account_id)
+    WHERE em.account_id = ANY(%(account_ids)s::uuid[])
+      {box_predicate}
+      {search_predicate}
+      {extra_predicate}
+"""
+
 # Favourites toggle (single row, the API surface is one message at a time
 # per the no-bulk MVP decision). Returns the affected provider_message_id
 # so the service can detect "row not found" without a second roundtrip.
@@ -288,10 +426,41 @@ SYNC_FAVORITES_FOR_ACCOUNT = """
     WHERE account_id = %(account_id)s
 """
 
+# Conversation lazy-sync favourites: mark a SUBSET of an account's rows
+# (the thread members the provider reports as favourite) TRUE in a single
+# statement. Unlike SYNC_FAVORITES_FOR_ACCOUNT it does NOT touch rows
+# outside ``true_ids`` — the conversation sync only knows the thread it
+# just fetched, so it must never clear favourites elsewhere in the account.
+# One-directional by design (never sets FALSE).
+UPDATE_FAVORITES_TRUE_BATCH = """
+    UPDATE email_metadata
+    SET is_favorite = TRUE
+    WHERE account_id = %(account_id)s
+      AND provider_message_id = ANY(%(true_ids)s)
+"""
+
 EXISTS_BY_MESSAGE_ID = """
     SELECT 1 FROM email_metadata
     WHERE provider_message_id = %(provider_message_id)s
       AND account_id = %(account_id)s
+    LIMIT 1
+"""
+
+# Single-row read of a message's full metadata (incl. thread_id), with the
+# EXACT column list + JOIN of ``LIST_FILTERED`` so ``row_to_email_metadata_out``
+# maps it with no special-casing. Backs the conversation endpoint's base-message
+# lookup: the row yields both the ``thread_id`` (to fetch the thread) and the
+# presentation columns (to map the singleton EmailMetadataOut when thread_id is
+# empty), avoiding a second read.
+GET_METADATA_BY_MESSAGE = """
+    SELECT em.provider_message_id, em.account_id, em.thread_id, em.from_email,
+           em.from_name, em.subject, em.received_at, em.is_read, em.box,
+           em.has_attachments, em.is_favorite, em.to_email, em.to_name,
+           a.mailbox_id
+    FROM email_metadata AS em
+    JOIN accounts AS a USING (account_id)
+    WHERE em.account_id = %(account_id)s
+      AND em.provider_message_id = %(provider_message_id)s
     LIMIT 1
 """
 

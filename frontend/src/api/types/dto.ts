@@ -126,10 +126,30 @@ export const emailMetadataOutSchema = z.object({
   box: z.string(),
   has_attachments: z.boolean().default(false),
   is_favorite: z.boolean().default(false),
+  // Number of messages of the thread present in the listed box (conversation
+  // view). The backend aggregates is_read / has_attachments / is_favorite
+  // across the thread when grouping; this field is the thread's message count
+  // in that box. Defaults to 1 for non-grouped listings (favourites) and for
+  // every message inside ``ConversationOut`` (the viewer ignores it there).
+  thread_message_count: z.number().int().default(1),
 });
 export type EmailMetadataOut = z.infer<typeof emailMetadataOutSchema>;
 
 export const emailMetadataListSchema = z.array(emailMetadataOutSchema);
+
+// Full message chain of a conversation — response of
+// ``GET /mailboxes/{mid}/accounts/{aid}/emails/{pmid}/conversation``.
+// ``messages`` is in CHRONOLOGICAL ASCENDING order (oldest first). Each
+// message reuses ``emailMetadataOutSchema``; inside this envelope the
+// backend leaves ``has_attachments`` always false (B.lazy — attachments
+// are discovered per-message when the body is fetched) and
+// ``thread_message_count`` always 1 (unused by the viewer). The body is
+// NOT included here — it is fetched per message via ``getEmailContent``.
+export const conversationOutSchema = z.object({
+  thread_id: z.string(),
+  messages: z.array(emailMetadataOutSchema),
+});
+export type ConversationOut = z.infer<typeof conversationOutSchema>;
 
 // Paginated listing envelope. The backend wraps the page of emails in
 // ``{ items, total, limit, offset }``: ``total`` is the exact count of

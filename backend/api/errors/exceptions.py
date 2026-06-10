@@ -155,6 +155,18 @@ class EmailReplyContextError(ApiError):
     code = "email_reply_context_error"
 
 
+class ConversationFetchError(ApiError):
+    """Provider-side or unexpected failure while fetching a conversation
+    thread (membership + per-message state) for the conversation viewer.
+
+    Mapped to HTTP 502 — same family as ``EmailContentFetchError`` /
+    ``EmailReplyContextError``. Raised directly by the service only for
+    its own unexpected branches; a genuine provider ``EmailExternalAPIError``
+    surfaces as ``ExternalAPIError`` via ``translate_core_error``.
+    """
+    code = "conversation_fetch_error"
+
+
 class EmailListError(ApiError):
     code = "email_list_error"
 

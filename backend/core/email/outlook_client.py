@@ -14,6 +14,7 @@ from .email_client import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
     EmailClient,
@@ -91,6 +92,15 @@ _BOOTSTRAP_SELECT_FIELDS = (
     "receivedDateTime,isRead,parentFolderId"
 )
 
+# Conversation view ($filter=conversationId): bodies are fetched lazily
+# per message via fetch_email_content, so the select stays lightweight.
+# Adds ``sentDateTime`` (ordering fallback for Sent items) and ``flag``
+# (favourite state) on top of the bootstrap fields.
+_CONVERSATION_SELECT_FIELDS = (
+    "id,conversationId,from,toRecipients,subject,"
+    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag"
+)
+
 _DELTA_FOLDERS = ("inbox", "sentitems", "drafts", "deleteditems", "junkemail", "archive")
 
 _FOLDER_TO_BOX: dict[str, str] = {
@@ -112,6 +122,20 @@ _BOX_TO_FOLDER: dict[str, str] = {
 # full ``OutlookClient`` and reusable across multiple methods (chunk
 # uploads, downloads, send orchestration).
 # ---------------------------------------------------------------------------
+
+
+def _parse_graph_datetime(raw: Any) -> datetime:
+    """Parse a Graph ISO-8601 timestamp (``…Z``) into an aware ``datetime``.
+
+    Falls back to ``now(UTC)`` when the value is empty or malformed so a
+    single bad timestamp never aborts a thread/sync parse.
+    """
+    if not raw:
+        return datetime.now(timezone.utc)
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return datetime.now(timezone.utc)
 
 
 def _retry_after_seconds(headers: dict[str, str] | None) -> float | None:
@@ -522,14 +546,7 @@ class OutlookClient(EmailClient):
             msg.get("toRecipients"),
         )
 
-        received_raw = msg.get("receivedDateTime", "")
-        if received_raw:
-            try:
-                received_at = datetime.fromisoformat(received_raw.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                received_at = datetime.now(timezone.utc)
-        else:
-            received_at = datetime.now(timezone.utc)
+        received_at = _parse_graph_datetime(msg.get("receivedDateTime", ""))
 
         return EmailMetadata(
             provider_message_id=msg.get("id", ""),
@@ -1358,12 +1375,19 @@ class OutlookClient(EmailClient):
             f"{GRAPH_BASE_URL}/me/messages/"
             f"{urllib.parse.quote(provider_message_id, safe='')}"
         )
-        self._graph_request(
-            "PATCH",
-            url,
-            body={"flag": {"flagStatus": flag_status}},
-            extra_headers=_PREFER_IMMUTABLE_HEADERS,
-        )
+        try:
+            self._graph_request(
+                "PATCH",
+                url,
+                body={"flag": {"flagStatus": flag_status}},
+                extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+        except EmailExternalAPIError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Outlook unexpected set_favorite error ({type(exc).__name__}): {exc}"
+            ) from exc
 
     def list_favorite_ids(self) -> list[str]:
         """List ids of every flagged Outlook message in the mailbox.
@@ -1383,15 +1407,90 @@ class OutlookClient(EmailClient):
         )
         ids: list[str] = []
         while url:
-            response = self._graph_request(
-                "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
-            )
+            try:
+                response = self._graph_request(
+                    "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+                )
+            except EmailExternalAPIError:
+                raise
+            except Exception as exc:
+                raise EmailExternalAPIError(
+                    f"Outlook unexpected list_favorite_ids error ({type(exc).__name__}): {exc}"
+                ) from exc
             for msg in response.get("value", []) or []:
                 msg_id = str(msg.get("id") or "").strip()
                 if msg_id:
                     ids.append(msg_id)
             url = response.get("@odata.nextLink")
         return ids
+
+    def fetch_conversation(self, thread_id: str) -> list[ConversationMessage]:
+        """Fetch every message of an Outlook conversation (metadata + state, NO body).
+
+        Filters the whole mailbox with ``$filter=conversationId eq
+        '<id>'`` — the scope of ``/me/messages`` spans Sent Items, Junk
+        and Deleted Items, so the thread is reconstructed across folders.
+        The ``conversationId`` is base64 (contains ``+`` / ``/`` / ``=``)
+        and is percent-encoded exactly once before being wrapped in the
+        single quotes Graph requires. ``$orderby`` is deliberately
+        omitted — combining it with ``$filter=conversationId`` returns
+        ``400 InefficientFilter`` — so messages are sorted in the client
+        by ``receivedDateTime`` (falling back to ``sentDateTime`` for
+        Sent items that lack it). Each message is parsed with the same
+        :py:meth:`_parse_graph_message` used by sync and enriched with
+        ``flag.flagStatus`` for ``is_favorite``.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError("Outlook fetch_conversation requires authentication.")
+
+        folder_id_to_box = self._resolve_special_folder_ids()
+
+        encoded_conversation_id = urllib.parse.quote(thread_id, safe="")
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages"
+            f"?$filter=conversationId%20eq%20'{encoded_conversation_id}'"
+            f"&$select={_CONVERSATION_SELECT_FIELDS}"
+            "&$top=50"
+        )
+
+        messages: list[ConversationMessage] = []
+        while url:
+            response = self._graph_request(
+                "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+            for msg in response.get("value", []) or []:
+                parent_folder_id = msg.get("parentFolderId", "")
+                box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
+                try:
+                    meta = self._parse_graph_message(msg, box)
+                    received_at = meta.received_at
+                    if not msg.get("receivedDateTime") and msg.get("sentDateTime"):
+                        received_at = _parse_graph_datetime(msg.get("sentDateTime"))
+                    is_favorite = (msg.get("flag") or {}).get("flagStatus") == "flagged"
+                    messages.append(
+                        ConversationMessage(
+                            provider_message_id=meta.provider_message_id,
+                            thread_id=meta.thread_id,
+                            from_email=meta.from_email,
+                            from_name=meta.from_name,
+                            subject=meta.subject,
+                            received_at=received_at,
+                            is_read=meta.is_read,
+                            is_favorite=is_favorite,
+                            box=meta.box,
+                            to_email=meta.to_email,
+                            to_name=meta.to_name,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Outlook fetch_conversation: skipping unparseable message %s: %s",
+                        msg.get("id", "?"), exc,
+                    )
+            url = response.get("@odata.nextLink")
+
+        messages.sort(key=lambda m: (m.received_at, m.provider_message_id))
+        return messages
 
     # ------------------------------------------------------------------
     # Spam operations

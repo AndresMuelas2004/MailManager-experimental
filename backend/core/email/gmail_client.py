@@ -26,6 +26,7 @@ from .email_client import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
     EmailClient,
@@ -2013,6 +2014,72 @@ class GmailClient(EmailClient):
             references=references,
             box=box,
         )
+
+    def fetch_conversation(self, thread_id: str) -> list[ConversationMessage]:
+        """Fetch every message of a Gmail thread (metadata + state, NO body).
+
+        A single ``users.threads.get(format=metadata)`` call returns the
+        whole thread with every message embedded — including messages in
+        Sent / Spam / Trash, which are label changes rather than separate
+        threads. Each message is parsed with the same
+        :py:meth:`_parse_metadata_response` used by sync (so ``box`` /
+        ``is_read`` / ``to_*`` stay byte-for-byte consistent with the
+        incremental sync path) and enriched with the ``STARRED`` label
+        for ``is_favorite``. Messages are sorted ascending by
+        ``internalDate`` (the provider does not guarantee ordering).
+        """
+        if self.service is None:
+            raise EmailNotAuthenticatedError("Gmail fetch_conversation requires authentication.")
+        try:
+            thread = (
+                self.service.users()
+                .threads()
+                .get(
+                    userId="me",
+                    id=thread_id,
+                    format="metadata",
+                    metadataHeaders=["From", "To", "Subject", "Date"],
+                )
+                .execute()
+            )
+        except HttpError as exc:
+            status, reason = http_error_detail(exc)
+            raise EmailExternalAPIError(
+                f"Gmail failed to fetch thread {thread_id} (HTTP {status}: {reason})."
+            ) from exc
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Gmail unexpected threads.get error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+        messages: list[ConversationMessage] = []
+        for msg in (thread or {}).get("messages", []):
+            try:
+                meta = self._parse_metadata_response(msg)
+                is_favorite = "STARRED" in set(msg.get("labelIds") or [])
+                messages.append(
+                    ConversationMessage(
+                        provider_message_id=meta.provider_message_id,
+                        thread_id=meta.thread_id,
+                        from_email=meta.from_email,
+                        from_name=meta.from_name,
+                        subject=meta.subject,
+                        received_at=meta.received_at,
+                        is_read=meta.is_read,
+                        is_favorite=is_favorite,
+                        box=meta.box,
+                        to_email=meta.to_email,
+                        to_name=meta.to_name,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Gmail fetch_conversation: skipping unparseable message %s: %s",
+                    msg.get("id", "?"), exc,
+                )
+
+        messages.sort(key=lambda m: (m.received_at, m.provider_message_id))
+        return messages
 
     def _fetch_message_resource(self, provider_message_id: str) -> dict[str, Any]:
         """``messages.get(format=FULL)`` returning the full Message resource.
