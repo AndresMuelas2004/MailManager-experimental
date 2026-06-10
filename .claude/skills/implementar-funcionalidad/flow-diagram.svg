@@ -1,0 +1,443 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 2760" font-family="'Inter','Segoe UI',system-ui,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-success" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-loop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-stop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#b91c1c"/>
+    </marker>
+    <marker id="arrow-retry" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#9333ea"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="1680" height="2760" fill="#f8fafc"/>
+
+  <!-- ============ TÍTULO ============ -->
+  <text x="840" y="58" text-anchor="middle" font-size="34" font-weight="700" fill="#0f172a">/implementar-funcionalidad</text>
+  <text x="840" y="90" text-anchor="middle" font-size="15" fill="#64748b">Ejecución autónoma de una funcionalidad ya planificada · cadena fija de 5 subagentes encadenados sobre el mismo working tree · no replanifica ni pide aprobación</text>
+
+  <!-- ============ LEYENDA — 5 SUBAGENTES ============ -->
+  <g transform="translate(95,125)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#ea580c"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#7c2d12">backend-implementer</text>
+    <text x="22" y="58" font-size="12" fill="#9a3412">Implementa el backend</text>
+    <text x="22" y="74" font-size="12" fill="#9a3412">desde el plan</text>
+  </g>
+  <g transform="translate(390,125)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#6366f1"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#3730a3">frontend-implementer</text>
+    <text x="22" y="58" font-size="12" fill="#4338ca">Integra el frontend contra</text>
+    <text x="22" y="74" font-size="12" fill="#4338ca">el contrato fijo</text>
+  </g>
+  <g transform="translate(685,125)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#16a34a"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#14532d">tests-author-from-diff</text>
+    <text x="22" y="58" font-size="12" fill="#166534">Escribe los tests</text>
+    <text x="22" y="74" font-size="12" fill="#166534">leyendo el diff</text>
+  </g>
+  <g transform="translate(980,125)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#9333ea"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#6b21a8">guides-updater-from-diff</text>
+    <text x="22" y="58" font-size="12" fill="#7e22ce">Actualiza *_guide.md /</text>
+    <text x="22" y="74" font-size="12" fill="#7e22ce">repository_guide / README</text>
+  </g>
+  <g transform="translate(1275,125)" filter="url(#shadow)">
+    <rect width="260" height="90" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#0891b2"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#155e75">docs-updater-from-diff</text>
+    <text x="22" y="58" font-size="12" fill="#0e7490">Actualiza solo la</text>
+    <text x="22" y="74" font-size="12" fill="#0e7490">capa docs/</text>
+  </g>
+
+  <line x1="80" y1="248" x2="1600" y2="248" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ============ BANDA TRANSVERSAL — REGLAS DE ORQUESTACIÓN ============ -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="270" width="1520" height="118" rx="14" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+    <text x="100" y="296" font-size="12" font-weight="700" fill="#854d0e" letter-spacing="2">REGLAS DE ORQUESTACIÓN · válidas para toda la cadena</text>
+    <text x="100" y="322" font-size="12" fill="#854d0e">• Estrictamente secuencial: lanza uno, espera su resultado, lanza el siguiente. NUNCA en paralelo (mismo working tree; el diff es la entrada encadenada).</text>
+    <text x="100" y="344" font-size="12" fill="#854d0e">• Tú (el orquestador) encadenas con la herramienta Agent; los subagentes NO se llaman entre sí.</text>
+    <text x="100" y="366" font-size="12" fill="#854d0e">• Aislamiento de contexto: cada subagente arranca con ventana limpia · su ÚNICO canal de entrada es el task prompt → toda ruta debe ir explícita (nada se hereda).</text>
+  </g>
+
+  <!-- ============ LEYENDA SEMÁNTICA ENTRADA/SALIDA/LÍMITES ============ -->
+  <g transform="translate(80,400)">
+    <rect x="0" y="0" width="150" height="34" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="12" y="15" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA</text>
+    <text x="12" y="28" font-size="10" fill="#1d4ed8">flecha azul → fase</text>
+  </g>
+  <g transform="translate(250,400)">
+    <rect x="0" y="0" width="150" height="34" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="12" y="15" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="12" y="28" font-size="10" fill="#166534">fase → flecha verde</text>
+  </g>
+  <g transform="translate(420,400)">
+    <rect x="0" y="0" width="190" height="34" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="12" y="15" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="12" y="28" font-size="10" fill="#b45309">anotación bajo la fase</text>
+  </g>
+  <g transform="translate(630,400)">
+    <rect x="0" y="0" width="190" height="34" rx="8" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="12" y="15" font-size="10" font-weight="700" letter-spacing="1.5" fill="#7f1d1d">¿done? → PARADA</text>
+    <text x="12" y="28" font-size="10" fill="#991b1b">gate rojo tras cada fase</text>
+  </g>
+
+  <!-- ============ CAJA TERMINAL ROJA COMPARTIDA — PARADA ANTE BLOQUEO ============ -->
+  <g filter="url(#shadow)">
+    <rect x="1320" y="470" width="290" height="120" rx="14" fill="#fee2e2" stroke="#b91c1c" stroke-width="2.5"/>
+    <text x="1465" y="500" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c" letter-spacing="2">PARADA EXCEPCIONAL</text>
+    <text x="1465" y="528" text-anchor="middle" font-size="15" font-weight="700" fill="#7f1d1d">Detén la cadena</text>
+    <text x="1465" y="552" text-anchor="middle" font-size="11" fill="#991b1b">no lances el siguiente subagente</text>
+    <text x="1465" y="570" text-anchor="middle" font-size="11" fill="#991b1b">reporta el bloqueo literal al usuario</text>
+  </g>
+  <!-- línea vertical roja que recoge todos los gates -->
+  <line x1="1300" y1="640" x2="1300" y2="2390" stroke="#b91c1c" stroke-width="2" stroke-dasharray="3,3" opacity="0.5"/>
+  <line x1="1300" y1="590" x2="1300" y2="640" stroke="#b91c1c" stroke-width="2" opacity="0.5"/>
+  <path d="M 1300,500 L 1320,500" fill="none" stroke="#b91c1c" stroke-width="2.5" marker-start="url(#arrow-stop)"/>
+
+  <!-- =================================================================== -->
+  <!-- FASE 0 · ARRANQUE — PASO 1 — RESOLVER Y VALIDAR RUTAS               -->
+  <!-- =================================================================== -->
+  <text x="465" y="462" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">ARRANQUE — UNA SOLA VEZ</text>
+  <line x1="80" y1="475" x2="1180" y2="475" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ENTRADA -->
+  <g transform="translate(80,505)" filter="url(#shadow)">
+    <rect width="300" height="118" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA</text>
+    <text x="16" y="48" font-size="11" fill="#1d4ed8">$ARGUMENTS → un directorio que los</text>
+    <text x="16" y="65" font-size="11" fill="#1d4ed8">contiene, o las 3 rutas explícitas</text>
+    <text x="16" y="82" font-size="11" fill="#1d4ed8">de los .md de la feature.</text>
+    <text x="16" y="104" font-size="11" font-style="italic" fill="#1d4ed8">(trabajo del orquestador, no subagente)</text>
+  </g>
+  <!-- flecha azul ENTRADA → FASE -->
+  <line x1="380" y1="564" x2="445" y2="564" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="445" y="505" width="420" height="118" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2.5"/>
+    <text x="465" y="533" font-size="11" font-weight="700" fill="#64748b" letter-spacing="2">PASO 1 · ORQUESTADOR (no es un subagente)</text>
+    <text x="465" y="563" font-size="18" font-weight="700" fill="#1e293b">Resolver y validar rutas</text>
+    <text x="465" y="588" font-size="12" fill="#475569">Resolver las 3 rutas absolutas e identificarlas por sufijo:</text>
+    <text x="465" y="607" font-size="12" font-weight="600" fill="#1e293b">-backend.md · -frontend.md · -general-description.md</text>
+  </g>
+  <!-- flecha verde FASE → SALIDA -->
+  <line x1="865" y1="564" x2="930" y2="564" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,505)" filter="url(#shadow)">
+    <rect width="300" height="118" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="50" font-size="11" fill="#166534">3 rutas absolutas validadas.</text>
+    <text x="16" y="72" font-size="11" fill="#166534">Se inyectan en los task prompts</text>
+    <text x="16" y="89" font-size="11" fill="#166534">de cada subagente (nada se</text>
+    <text x="16" y="106" font-size="11" fill="#166534">hereda solo).</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(445,645)">
+    <rect width="420" height="92" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• NO lee el contenido de los .md (cada subagente lee los suyos).</text>
+    <text x="16" y="62" font-size="11" fill="#b45309">• Más de un trío y no está claro cuál usar → PREGUNTA al usuario (parada).</text>
+    <text x="16" y="80" font-size="11" fill="#b45309">• Falta uno o no existe en disco → DETENTE y repórtalo en una línea.</text>
+  </g>
+  <!-- flecha neutra LÍMITES → siguiente fase -->
+  <line x1="655" y1="737" x2="655" y2="800" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- =================================================================== -->
+  <!-- FASE 1 · PASO 2 — backend-implementer (naranja)                    -->
+  <!-- =================================================================== -->
+  <!-- ENTRADA -->
+  <g transform="translate(80,810)" filter="url(#shadow)">
+    <rect width="320" height="150" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA · task prompt (3 rutas)</text>
+    <text x="16" y="46" font-size="11" fill="#1d4ed8">-backend.md = referencia principal (plan</text>
+    <text x="16" y="62" font-size="11" fill="#1d4ed8">falible: completa huecos, escala diseño).</text>
+    <text x="16" y="84" font-size="11" fill="#1d4ed8">-general-description.md = leer UNA vez,</text>
+    <text x="16" y="100" font-size="11" fill="#1d4ed8">solo idea inicial a nivel usuario (no spec).</text>
+    <text x="16" y="122" font-size="11" fill="#1d4ed8">-frontend.md = NO leer para implementar;</text>
+    <text x="16" y="138" font-size="11" fill="#1d4ed8">abrir SOLO al final, solo sección endpoints.</text>
+  </g>
+  <line x1="400" y1="885" x2="465" y2="885" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="465" y="830" width="400" height="110" rx="14" fill="#fff7ed" stroke="#ea580c" stroke-width="2.5"/>
+    <text x="485" y="858" font-size="11" font-weight="700" fill="#ea580c" letter-spacing="2">PASO 2 · IMPLEMENTACIÓN BACKEND</text>
+    <text x="485" y="890" font-size="18" font-weight="700" fill="#7c2d12">backend-implementer</text>
+    <text x="485" y="914" font-size="12" fill="#9a3412">Implementa el backend desde el plan, alinea el contrato</text>
+    <text x="485" y="930" font-size="12" fill="#9a3412">de endpoints y deja listas las secciones tests / docs.</text>
+  </g>
+  <line x1="865" y1="885" x2="930" y2="885" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,810)" filter="url(#shadow)">
+    <rect width="320" height="150" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="46" font-size="11" fill="#166534">• Código backend en el working tree (diff).</text>
+    <text x="16" y="68" font-size="11" fill="#166534">• Secciones tests y documentación del</text>
+    <text x="16" y="84" font-size="11" fill="#166534">  -backend.md actualizadas (entrada de</text>
+    <text x="16" y="100" font-size="11" fill="#166534">  los pasos 4 y 5).</text>
+    <text x="16" y="122" font-size="11" fill="#166534">• Sección endpoints del -frontend.md</text>
+    <text x="16" y="138" font-size="11" fill="#166534">  alineada · señal done (o bloqueo).</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(465,965)">
+    <rect width="400" height="70" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• No implementa frontend.</text>
+    <text x="16" y="62" font-size="11" fill="#b45309">• Del -frontend.md solo toca la sección endpoints, y solo al final.</text>
+  </g>
+
+  <!-- GATE ¿done? -->
+  <g filter="url(#shadow)">
+    <polygon points="1120,945 1210,1000 1120,1055 1030,1000" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="1120" y="1004" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿done?</text>
+  </g>
+  <!-- gate binario: la rama "done" es la espina; solo se dibuja la excepcion "bloqueo" a la derecha -->
+  <!-- éxito: baja la espina -->
+  <line x1="655" y1="1035" x2="655" y2="1100" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="695" y="1075" font-size="11" font-weight="600" fill="#16a34a">SÍ · sigue la cadena</text>
+  <!-- bloqueo: rojo hacia la línea de parada -->
+  <line x1="1210" y1="1000" x2="1300" y2="1000" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="1255" y="990" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">bloqueo</text>
+
+  <!-- =================================================================== -->
+  <!-- FASE 2 · PASO 3 — frontend-implementer (índigo)                    -->
+  <!-- =================================================================== -->
+  <!-- ENTRADA -->
+  <g transform="translate(80,1110)" filter="url(#shadow)">
+    <rect width="320" height="132" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA · task prompt (2 rutas)</text>
+    <text x="16" y="46" font-size="11" fill="#1d4ed8">-frontend.md = referencia principal; su</text>
+    <text x="16" y="62" font-size="11" fill="#1d4ed8">sección endpoints es CONTRATO FIJO (ya</text>
+    <text x="16" y="78" font-size="11" fill="#1d4ed8">alineado en el paso 2; su sección tests</text>
+    <text x="16" y="94" font-size="11" fill="#1d4ed8">se actualiza solo si es necesario).</text>
+    <text x="16" y="116" font-size="11" fill="#1d4ed8">-general-description.md = leer una vez (idea).</text>
+  </g>
+  <line x1="400" y1="1176" x2="465" y2="1176" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="465" y="1126" width="400" height="100" rx="14" fill="#eef2ff" stroke="#6366f1" stroke-width="2.5"/>
+    <text x="485" y="1154" font-size="11" font-weight="700" fill="#6366f1" letter-spacing="2">PASO 3 · IMPLEMENTACIÓN FRONTEND</text>
+    <text x="485" y="1186" font-size="18" font-weight="700" fill="#3730a3">frontend-implementer</text>
+    <text x="485" y="1210" font-size="12" fill="#4338ca">Integra el frontend contra el contrato de endpoints fijo.</text>
+  </g>
+  <line x1="865" y1="1176" x2="930" y2="1176" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,1110)" filter="url(#shadow)">
+    <rect width="320" height="132" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="52" font-size="11" fill="#166534">• Código frontend en el working</text>
+    <text x="16" y="69" font-size="11" fill="#166534">  tree (diff).</text>
+    <text x="16" y="96" font-size="11" fill="#166534">• Señal done (o bloqueo).</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(465,1251)">
+    <rect width="400" height="70" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• Por norma NO lee el código backend (a lo sumo consulta puntual y acotada).</text>
+    <text x="16" y="62" font-size="11" fill="#b45309">• No reabre el contrato de endpoints.</text>
+  </g>
+
+  <!-- GATE ¿done? -->
+  <g filter="url(#shadow)">
+    <polygon points="1120,1231 1210,1286 1120,1341 1030,1286" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="1120" y="1290" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿done?</text>
+  </g>
+  <!-- gate binario: solo se dibuja la excepcion "bloqueo" a la derecha -->
+  <line x1="655" y1="1321" x2="655" y2="1386" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="695" y="1361" font-size="11" font-weight="600" fill="#16a34a">SÍ · sigue la cadena</text>
+  <line x1="1210" y1="1286" x2="1300" y2="1286" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="1255" y="1276" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">bloqueo</text>
+
+  <!-- =================================================================== -->
+  <!-- FASE 3 · PASO 4 — tests-author-from-diff (verde)                   -->
+  <!-- =================================================================== -->
+  <!-- ENTRADA -->
+  <g transform="translate(80,1396)" filter="url(#shadow)">
+    <rect width="320" height="132" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA</text>
+    <text x="16" y="48" font-size="11" fill="#1d4ed8">• 2 rutas md (-backend.md y -frontend.md),</text>
+    <text x="16" y="64" font-size="11" fill="#1d4ed8">  pero SOLO su sección tests.</text>
+    <text x="16" y="90" font-size="11" fill="#1d4ed8">• El DIFF del working tree (descubre por</text>
+    <text x="16" y="106" font-size="11" fill="#1d4ed8">  sí mismo lo implementado).</text>
+  </g>
+  <line x1="400" y1="1462" x2="465" y2="1462" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="465" y="1412" width="400" height="100" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2.5"/>
+    <text x="485" y="1440" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="2">PASO 4 · TESTS</text>
+    <text x="485" y="1472" font-size="18" font-weight="700" fill="#14532d">tests-author-from-diff</text>
+    <text x="485" y="1496" font-size="12" fill="#166534">Escribe los tests de la funcionalidad recién implementada.</text>
+  </g>
+  <line x1="865" y1="1462" x2="930" y2="1462" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,1396)" filter="url(#shadow)">
+    <rect width="320" height="132" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="52" font-size="11" fill="#166534">• Los tests de la funcionalidad</text>
+    <text x="16" y="69" font-size="11" fill="#166534">  recién implementada (en el</text>
+    <text x="16" y="86" font-size="11" fill="#166534">  working tree).</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(465,1537)">
+    <rect width="400" height="70" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• Trabaja SOLO desde el diff sin commitear + la sección tests de ambos md.</text>
+    <text x="16" y="62" font-size="11" fill="#b45309">• "misión abortada" = la implementación no produjo cambios → PARADA, avisa.</text>
+  </g>
+
+  <!-- GATE ¿done? -->
+  <g filter="url(#shadow)">
+    <polygon points="1120,1517 1210,1572 1120,1627 1030,1572" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="1120" y="1576" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿done?</text>
+  </g>
+  <!-- gate binario: solo se dibuja la excepcion "bloqueo" a la derecha -->
+  <line x1="655" y1="1607" x2="655" y2="1672" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="695" y="1647" font-size="11" font-weight="600" fill="#16a34a">SÍ · sigue la cadena</text>
+  <line x1="1210" y1="1572" x2="1300" y2="1572" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="1255" y="1562" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">bloqueo</text>
+
+  <!-- =================================================================== -->
+  <!-- FASE 4 · PASO 5 — guides-updater-from-diff (morado)                -->
+  <!-- =================================================================== -->
+  <!-- ENTRADA -->
+  <g transform="translate(80,1682)" filter="url(#shadow)">
+    <rect width="320" height="120" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA</text>
+    <text x="16" y="48" font-size="11" fill="#1d4ed8">• 1 ruta md (-backend.md), SOLO su</text>
+    <text x="16" y="64" font-size="11" fill="#1d4ed8">  sección de documentación.</text>
+    <text x="16" y="90" font-size="11" fill="#1d4ed8">• El diff del working tree.</text>
+  </g>
+  <line x1="400" y1="1742" x2="465" y2="1742" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="465" y="1692" width="400" height="100" rx="14" fill="#faf5ff" stroke="#9333ea" stroke-width="2.5"/>
+    <text x="485" y="1720" font-size="11" font-weight="700" fill="#9333ea" letter-spacing="2">PASO 5 · GUÍAS TÉCNICAS</text>
+    <text x="485" y="1752" font-size="18" font-weight="700" fill="#6b21a8">guides-updater-from-diff</text>
+    <text x="485" y="1776" font-size="12" fill="#7e22ce">Actualiza las guías de proyecto cuando proceda.</text>
+  </g>
+  <line x1="865" y1="1742" x2="930" y2="1742" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,1682)" filter="url(#shadow)">
+    <rect width="320" height="120" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="52" font-size="11" fill="#166534">• *_guide.md, repository_guide.md</text>
+    <text x="16" y="69" font-size="11" fill="#166534">  y README.md raíz actualizados</text>
+    <text x="16" y="86" font-size="11" fill="#166534">  cuando proceda.</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(465,1817)">
+    <rect width="400" height="52" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• NUNCA toca los CLAUDE.md ni la capa docs/.</text>
+  </g>
+
+  <!-- GATE ¿done? -->
+  <g filter="url(#shadow)">
+    <polygon points="1120,1772 1210,1827 1120,1882 1030,1827" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="1120" y="1831" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿done?</text>
+  </g>
+  <!-- gate binario: solo se dibuja la excepcion "bloqueo" a la derecha -->
+  <line x1="655" y1="1869" x2="655" y2="1934" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="695" y="1909" font-size="11" font-weight="600" fill="#16a34a">SÍ · sigue la cadena</text>
+  <line x1="1210" y1="1827" x2="1300" y2="1827" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="1255" y="1817" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">bloqueo</text>
+
+  <!-- =================================================================== -->
+  <!-- FASE 5 · PASO 6 — docs-updater-from-diff (cian)                    -->
+  <!-- =================================================================== -->
+  <!-- ENTRADA -->
+  <g transform="translate(80,1944)" filter="url(#shadow)">
+    <rect width="320" height="150" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#1e40af">ENTRADA</text>
+    <text x="16" y="48" font-size="11" fill="#1d4ed8">• Ruta absoluta del -general-description.md</text>
+    <text x="16" y="64" font-size="11" fill="#1d4ed8">  (fuente del PORQUÉ de las decisiones).</text>
+    <text x="16" y="90" font-size="11" fill="#1d4ed8">• El diff (comportamiento y cifras se</text>
+    <text x="16" y="106" font-size="11" fill="#1d4ed8">  verifican contra él).</text>
+    <text x="16" y="132" font-size="11" font-style="italic" fill="#1d4ed8">Aviso: puede ser una MODIFICACIÓN GRANDE</text>
+    <text x="16" y="148" font-size="11" font-style="italic" fill="#1d4ed8">de una feature anterior (lo aclara el md).</text>
+  </g>
+  <line x1="400" y1="2019" x2="465" y2="2019" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-loop)"/>
+
+  <!-- CAJA DE FASE -->
+  <g filter="url(#shadow)">
+    <rect x="465" y="1969" width="400" height="100" rx="14" fill="#ecfeff" stroke="#0891b2" stroke-width="2.5"/>
+    <text x="485" y="1997" font-size="11" font-weight="700" fill="#0891b2" letter-spacing="2">PASO 6 · DOCUMENTACIÓN DE CIERRE</text>
+    <text x="485" y="2029" font-size="18" font-weight="700" fill="#155e75">docs-updater-from-diff</text>
+    <text x="485" y="2053" font-size="12" fill="#0e7490">Actualiza la capa docs/ a partir del diff y del porqué.</text>
+  </g>
+  <line x1="865" y1="2019" x2="930" y2="2019" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- SALIDA -->
+  <g transform="translate(930,1944)" filter="url(#shadow)">
+    <rect width="320" height="150" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="16" y="24" font-size="10" font-weight="700" letter-spacing="1.5" fill="#15803d">SALIDA</text>
+    <text x="16" y="56" font-size="11" fill="#166534">• Capa docs/ actualizada.</text>
+  </g>
+
+  <!-- LÍMITES -->
+  <g transform="translate(465,2094)">
+    <rect width="400" height="52" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="16" y="22" font-size="10" font-weight="700" letter-spacing="1.5" fill="#92400e">LÍMITES / FRONTERAS</text>
+    <text x="16" y="44" font-size="11" fill="#b45309">• Actualiza SOLO la capa docs/.</text>
+  </g>
+
+  <!-- GATE ¿done? -->
+  <g filter="url(#shadow)">
+    <polygon points="1120,2049 1210,2104 1120,2159 1030,2104" fill="#ffffff" stroke="#475569" stroke-width="2"/>
+    <text x="1120" y="2108" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">¿done?</text>
+  </g>
+  <!-- gate binario: solo se dibuja la excepcion "bloqueo" a la derecha -->
+  <line x1="655" y1="2146" x2="655" y2="2215" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+  <text x="695" y="2188" font-size="11" font-weight="600" fill="#16a34a">SÍ · cadena completa</text>
+  <line x1="1210" y1="2104" x2="1300" y2="2104" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrow-stop)"/>
+  <text x="1255" y="2094" text-anchor="middle" font-size="11" font-weight="600" fill="#b91c1c">bloqueo</text>
+
+  <!-- =================================================================== -->
+  <!-- CIERRE                                                              -->
+  <!-- =================================================================== -->
+  <g filter="url(#shadow)">
+    <rect x="395" y="2225" width="520" height="118" rx="14" fill="#dcfce7" stroke="#16a34a" stroke-width="2.5"/>
+    <text x="655" y="2255" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d" letter-spacing="2">CIERRE</text>
+    <text x="655" y="2287" text-anchor="middle" font-size="18" font-weight="700" fill="#14532d">Resumen breve al usuario</text>
+    <text x="655" y="2312" text-anchor="middle" font-size="12" fill="#166534">Qué subagentes corrieron, cuál bloqueó (si alguno)</text>
+    <text x="655" y="2330" text-anchor="middle" font-size="12" fill="#166534">y por qué.</text>
+  </g>
+
+  <!-- etiqueta de la línea de parada compartida -->
+  <text x="1308" y="2360" font-size="11" font-weight="600" fill="#b91c1c">↑ todos los gates "¿bloqueo?" desembocan aquí: detén la cadena y reporta el bloqueo literal</text>
+
+  <!-- =================================================================== -->
+  <!-- NOTAS AL PIE                                                        -->
+  <!-- =================================================================== -->
+  <text x="840" y="2700" text-anchor="middle" font-size="11" fill="#64748b">Cadena estrictamente secuencial sobre un único working tree · el diff crece y encadena los pasos · sin commits ni push automáticos · cada subagente arranca con contexto limpio (todo va en su task prompt)</text>
+  <text x="840" y="2724" text-anchor="middle" font-size="11" fill="#94a3b8">Parada ante cualquier bloqueo: detén la cadena, no lances el siguiente, reporta el bloqueo literal</text>
+</svg>

@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1820 3060" font-family="'Inter','Segoe UI',system-ui,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-success" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-loop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-stop" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#b91c1c"/>
+    </marker>
+    <marker id="arrow-retry" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#9333ea"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="1820" height="3060" fill="#f8fafc"/>
+
+  <!-- ====================== TÍTULO ====================== -->
+  <text x="910" y="58" text-anchor="middle" font-size="34" font-weight="700" fill="#0f172a">/planear-implementacion-funcionalidad</text>
+  <text x="910" y="90" text-anchor="middle" font-size="15" fill="#64748b">Fase de investigación y planificación previa a implementar · investiga código + APIs externas, resuelve dudas contigo</text>
+  <text x="910" y="111" text-anchor="middle" font-size="15" fill="#64748b">y produce los 3 .md que dejan la feature lista · no escribe código · modo ultrathink</text>
+
+  <!-- ====================== LEYENDA DE ACTORES ====================== -->
+  <g transform="translate(150,140)" filter="url(#shadow)">
+    <rect width="370" height="90" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#94a3b8"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#1e293b">subagentes de exploración de código</text>
+    <text x="22" y="58" font-size="12" fill="#64748b">Varios en paralelo</text>
+    <text x="22" y="74" font-size="12" fill="#64748b">se reparten el repo</text>
+  </g>
+  <g transform="translate(560,140)" filter="url(#shadow)">
+    <rect width="370" height="90" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#9333ea"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#6b21a8">external-api-docs-researcher</text>
+    <text x="22" y="58" font-size="12" fill="#7e22ce">Investiga APIs externas</text>
+    <text x="22" y="74" font-size="12" fill="#7e22ce">3 rondas secuenciales</text>
+  </g>
+  <g transform="translate(970,140)" filter="url(#shadow)">
+    <rect width="370" height="90" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#2563eb"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#1e40af">AskUserQuestion</text>
+    <text x="22" y="58" font-size="12" fill="#1d4ed8">Resuelve dudas</text>
+    <text x="22" y="74" font-size="12" fill="#1d4ed8">y trade-offs contigo</text>
+  </g>
+  <g transform="translate(1380,140)" filter="url(#shadow)">
+    <rect width="370" height="90" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <circle cx="22" cy="26" r="7" fill="#0891b2"/>
+    <text x="40" y="32" font-size="15" font-weight="700" fill="#155e75">subagentes de revisión de docs</text>
+    <text x="22" y="58" font-size="12" fill="#0e7490">2+2 creados al momento</text>
+    <text x="22" y="74" font-size="12" fill="#0e7490">curan los .md de capa</text>
+  </g>
+
+  <line x1="80" y1="262" x2="1740" y2="262" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ====================== CONTEXTO GLOBAL ====================== -->
+  <text x="910" y="296" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">CONTEXTO GLOBAL — ENTRADA Y REGLA DURA</text>
+
+  <g filter="url(#shadow)">
+    <rect x="430" y="316" width="960" height="118" rx="14" fill="#eef2ff" stroke="#6366f1" stroke-width="2.5"/>
+    <text x="455" y="344" font-size="11" font-weight="700" fill="#4338ca" letter-spacing="2">ENTRADA GLOBAL · MODO</text>
+    <text x="455" y="372" font-size="14" fill="#3730a3">&#x24;ARGUMENTS = descripción detallada de la feature</text>
+    <text x="455" y="392" font-size="14" fill="#3730a3">alcance · comportamiento esperado · complejidad</text>
+    <text x="455" y="418" font-size="13" font-weight="700" fill="#4338ca">MODO: ultrathink — presupuesto máximo de extended thinking en toda la skill</text>
+  </g>
+
+  <!-- BANDA REGLA DURA -->
+  <g filter="url(#shadow)">
+    <rect x="150" y="456" width="1520" height="92" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="2" stroke-dasharray="6,4"/>
+    <text x="172" y="484" font-size="11" font-weight="700" fill="#92400e" letter-spacing="2">REGLA DURA — SOLO PLANIFICA</text>
+    <text x="172" y="510" font-size="12.5" fill="#b45309">No edita código de la app, ni tests, ni ningún otro .md del repo mientras planifica.</text>
+    <text x="172" y="530" font-size="12.5" fill="#b45309">Excepciones permitidas: los .md de externalAPIinformation/ (paso 1b) y las entradas de .gitignore para externalAPIinformation/ y nueva-implementacion-en-curso/.</text>
+  </g>
+
+  <line x1="910" y1="548" x2="910" y2="608" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ====================== PASO 1 · INVESTIGACIÓN (PARALELO) ====================== -->
+  <rect x="60" y="608" width="1700" height="1020" rx="20" fill="#ffffff" fill-opacity="0.5" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="640" y="596" width="540" height="22" fill="#f8fafc"/>
+  <text x="910" y="612" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">PASO 1 · INVESTIGACIÓN (EN PARALELO)</text>
+
+  <!-- fork de arranque hacia los dos carriles -->
+  <path d="M 910,618 L 910,648 L 460,648 L 460,690" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 910,618 L 910,648 L 1300,648 L 1300,690" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="700" y="640" text-anchor="middle" font-size="11" font-weight="600" fill="#64748b">se lanzan las dos vertientes a la vez</text>
+
+  <!-- Carril 1a) CODIGO AFECTADO -->
+  <g filter="url(#shadow)">
+    <rect x="210" y="690" width="500" height="118" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2.5"/>
+    <text x="230" y="717" font-size="11" font-weight="700" fill="#475569" letter-spacing="2">CARRIL 1a · CÓDIGO AFECTADO</text>
+    <text x="230" y="747" font-size="18" font-weight="700" fill="#1e293b">Investigar el código que la feature tocará</text>
+    <text x="230" y="772" font-size="12" fill="#64748b">Capas implicadas, convenciones y contratos existentes.</text>
+    <text x="230" y="790" font-size="12" fill="#64748b">Normalmente varios subagentes repartiéndose el repo.</text>
+  </g>
+
+  <!-- chips 1a: ENTRADA (izq), SALIDA (der), LÍMITES (abajo) -->
+  <g filter="url(#shadow)">
+    <rect x="70" y="700" width="118" height="78" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="84" y="720" font-size="10" font-weight="700" fill="#1e40af" letter-spacing="1.5">ENTRADA</text>
+    <text x="84" y="740" font-size="11" fill="#1d4ed8">Descripción</text>
+    <text x="84" y="755" font-size="11" fill="#1d4ed8">de la feature</text>
+  </g>
+  <line x1="188" y1="739" x2="208" y2="739" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="732" y="700" width="150" height="78" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="746" y="720" font-size="10" font-weight="700" fill="#15803d" letter-spacing="1.5">SALIDA</text>
+    <text x="746" y="740" font-size="11" fill="#166534">Todas las zonas</text>
+    <text x="746" y="755" font-size="11" fill="#166534">afectadas en</text>
+    <text x="746" y="770" font-size="11" fill="#166534">contexto</text>
+  </g>
+  <line x1="710" y1="739" x2="730" y2="739" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-success)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="210" y="826" width="500" height="58" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="230" y="846" font-size="10" font-weight="700" fill="#92400e" letter-spacing="1.5">LÍMITES / FRONTERAS</text>
+    <text x="230" y="868" font-size="11" fill="#b45309">Solo lectura / investigación — NO escribe código.</text>
+  </g>
+
+  <!-- Carril 1b) APIs EXTERNAS -->
+  <g filter="url(#shadow)">
+    <rect x="1010" y="690" width="580" height="78" rx="14" fill="#faf5ff" stroke="#9333ea" stroke-width="2.5"/>
+    <text x="1030" y="717" font-size="11" font-weight="700" fill="#7e22ce" letter-spacing="2">CARRIL 1b · APIs EXTERNAS (solo si la feature las requiere)</text>
+    <text x="1030" y="747" font-size="18" font-weight="700" fill="#6b21a8">Investigar cada API en 3 rondas</text>
+  </g>
+
+  <!-- chip ENTRADA 1b (izq) -->
+  <g filter="url(#shadow)">
+    <rect x="1600" y="690" width="150" height="78" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="1614" y="710" font-size="10" font-weight="700" fill="#1e40af" letter-spacing="1.5">ENTRADA</text>
+    <text x="1614" y="730" font-size="11" fill="#1d4ed8">Pares</text>
+    <text x="1614" y="745" font-size="11" fill="#1d4ed8">(API, tema) de</text>
+    <text x="1614" y="760" font-size="11" fill="#1d4ed8">la feature</text>
+  </g>
+  <line x1="1598" y1="729" x2="1588" y2="729" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <!-- PASO PREVIO OBLIGATORIO (ámbar) -->
+  <line x1="1300" y1="768" x2="1300" y2="800" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="1010" y="800" width="580" height="136" rx="14" fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
+    <text x="1030" y="827" font-size="11" font-weight="700" fill="#92400e" letter-spacing="2">PASO PREVIO OBLIGATORIO — LEER ANTES DE LANZAR</text>
+    <text x="1030" y="852" font-size="13" font-weight="700" fill="#854d0e">Leer el cuerpo del agente:</text>
+    <text x="1030" y="872" font-size="12" fill="#b45309">C:\Users\amuel\.claude\agents\external-api-docs-researcher.md</text>
+    <text x="1030" y="892" font-size="11.5" fill="#b45309">De ahí: (i) formato de task prompt esperado · (ii) el agente ya hace doble</text>
+    <text x="1030" y="908" font-size="11.5" fill="#b45309">pasada interna y persiste en externalAPIinformation/{tema}-{api}.md · (iii) si</text>
+    <text x="1030" y="926" font-size="11.5" fill="#b45309">ya existe, lo REFRESCA Y AMPLÍA conservando lo previo (base de rondas 2 y 3).</text>
+  </g>
+
+  <line x1="1300" y1="936" x2="1300" y2="958" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Contenedor punteado de las 3 RONDAS -->
+  <rect x="1000" y="958" width="600" height="540" rx="16" fill="#ffffff" fill-opacity="0.6" stroke="#9333ea" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="1130" y="948" width="340" height="20" fill="#f8fafc"/>
+  <text x="1300" y="963" text-anchor="middle" font-size="11" font-weight="700" fill="#7e22ce" letter-spacing="2">3 RONDAS SECUENCIALES</text>
+
+  <!-- Ronda 1 -->
+  <g filter="url(#shadow)">
+    <rect x="1030" y="978" width="540" height="100" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <text x="1050" y="1003" font-size="11" font-weight="700" fill="#7e22ce" letter-spacing="2">RONDA 1 · CREACIÓN</text>
+    <text x="1050" y="1028" font-size="14" font-weight="700" fill="#6b21a8">Un agente por par crea el .md de su par</text>
+    <text x="1050" y="1050" font-size="11.5" fill="#7e22ce">En paralelo · cada uno escribe su propio .md (no se pisan).</text>
+    <text x="1050" y="1068" font-size="11.5" fill="#7e22ce">ANOTA la ruta absoluta que devuelve cada agente.</text>
+  </g>
+
+  <line x1="1300" y1="1078" x2="1300" y2="1118" stroke="#9333ea" stroke-width="2.5" marker-end="url(#arrow-retry)"/>
+  <text x="1318" y="1103" font-size="10" font-weight="600" fill="#9333ea">barrera: espera a que TODA la ronda termine</text>
+
+  <!-- Ronda 2 -->
+  <g filter="url(#shadow)">
+    <rect x="1030" y="1118" width="540" height="100" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <text x="1050" y="1143" font-size="11" font-weight="700" fill="#7e22ce" letter-spacing="2">RONDA 2 · REVISIÓN Y MEJORA</text>
+    <text x="1050" y="1168" font-size="14" font-weight="700" fill="#6b21a8">Mismo par — revisa el .md existente</text>
+    <text x="1050" y="1190" font-size="11.5" fill="#7e22ce">Se le pasa la RUTA ABSOLUTA literal de la ronda 1.</text>
+    <text x="1050" y="1208" font-size="11.5" fill="#7e22ce">Reinvestiga, caza omisiones, corrige y rellena huecos.</text>
+  </g>
+
+  <line x1="1300" y1="1218" x2="1300" y2="1258" stroke="#9333ea" stroke-width="2.5" marker-end="url(#arrow-retry)"/>
+  <text x="1318" y="1243" font-size="10" font-weight="600" fill="#9333ea">barrera: espera a que TODA la ronda termine</text>
+
+  <!-- Ronda 3 -->
+  <g filter="url(#shadow)">
+    <rect x="1030" y="1258" width="540" height="100" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+    <text x="1050" y="1283" font-size="11" font-weight="700" fill="#7e22ce" letter-spacing="2">RONDA 3 · REVISIÓN FINAL Y ENRIQUECIMIENTO</text>
+    <text x="1050" y="1308" font-size="14" font-weight="700" fill="#6b21a8">Mismo par — pasada final sobre el .md mejorado</text>
+    <text x="1050" y="1330" font-size="11.5" fill="#7e22ce">Se le pasa la ruta del .md ya mejorado.</text>
+    <text x="1050" y="1348" font-size="11.5" fill="#7e22ce">Caza cualquier dato crítico, relevante o sutil que falte.</text>
+  </g>
+
+  <!-- nota paralelo dentro de ronda -->
+  <g filter="url(#shadow)">
+    <rect x="1030" y="1382" width="540" height="44" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+    <text x="1300" y="1409" text-anchor="middle" font-size="11" font-weight="600" fill="#4338ca">Dentro de cada ronda: agentes EN PARALELO · entre rondas: BARRERA secuencial</text>
+  </g>
+
+  <!-- chip SALIDA 1b -->
+  <g filter="url(#shadow)">
+    <rect x="1030" y="1438" width="540" height="44" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="1050" y="1458" font-size="10" font-weight="700" fill="#15803d" letter-spacing="1.5">SALIDA</text>
+    <text x="1050" y="1474" font-size="11.5" fill="#166534">Por cada par (API, tema): un único .md de máxima calidad en externalAPIinformation/</text>
+  </g>
+
+  <!-- LÍMITES 1b (debajo del contenedor de rondas) -->
+  <g filter="url(#shadow)">
+    <rect x="1010" y="1518" width="580" height="78" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="1030" y="1538" font-size="10" font-weight="700" fill="#92400e" letter-spacing="1.5">LÍMITES / FRONTERAS</text>
+    <text x="1030" y="1560" font-size="11.5" fill="#b45309">Solo investigación documental · barrera entre rondas (no solapar).</text>
+    <text x="1030" y="1578" font-size="11.5" fill="#b45309">Su producto entra como contexto del paso 2 — la implementación NO lo leerá.</text>
+  </g>
+
+  <!-- ====================== CONVERGENCIA HACIA PASO 2 ====================== -->
+  <path d="M 460,884 L 460,1660 L 910,1660 L 910,1700" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 1300,1596 L 1300,1660 L 910,1660" fill="none" stroke="#475569" stroke-width="2.5"/>
+  <text x="910" y="1650" text-anchor="middle" font-size="11" font-weight="600" fill="#64748b">ambos carriles convergen → todo en contexto</text>
+
+  <!-- ====================== PASO 2 · DUDAS Y DECISIONES ====================== -->
+  <rect x="636" y="1679" width="548" height="18" fill="#f8fafc"/>
+  <text x="910" y="1690" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">PASO 2 · RESOLUCIÓN DE DUDAS Y DECISIONES (CON EL USUARIO)</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="1704" width="700" height="132" rx="14" fill="#eff6ff" stroke="#2563eb" stroke-width="2.5"/>
+    <text x="580" y="1731" font-size="11" font-weight="700" fill="#2563eb" letter-spacing="2">PASO 2 · CON AskUserQuestion</text>
+    <text x="580" y="1761" font-size="18" font-weight="700" fill="#1e40af">Preguntar al USUARIO todo lo necesario</text>
+    <text x="580" y="1788" font-size="12" fill="#1d4ed8">Dudas de comportamiento no aclaradas en el argumento ·</text>
+    <text x="580" y="1806" font-size="12" fill="#1d4ed8">decisiones de diseño que sean trade-off · elecciones con más</text>
+    <text x="580" y="1824" font-size="12" fill="#1d4ed8">de una opción razonable — marcando la opción RECOMENDADA.</text>
+  </g>
+
+  <!-- actor USUARIO -->
+  <g filter="url(#shadow)">
+    <rect x="1290" y="1722" width="150" height="96" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <circle cx="1365" cy="1752" r="13" fill="#2563eb"/>
+    <text x="1365" y="1757" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">U</text>
+    <text x="1365" y="1788" text-anchor="middle" font-size="13" font-weight="700" fill="#1e40af">USUARIO</text>
+    <text x="1365" y="1806" text-anchor="middle" font-size="10" fill="#1d4ed8">decide los trade-offs</text>
+  </g>
+  <line x1="1288" y1="1770" x2="1262" y2="1770" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+  <line x1="1262" y1="1800" x2="1288" y2="1800" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <!-- chip ENTRADA paso 2 (izq) -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="1720" width="200" height="100" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="100" y="1740" font-size="10" font-weight="700" fill="#1e40af" letter-spacing="1.5">ENTRADA</text>
+    <text x="100" y="1760" font-size="11" fill="#1d4ed8">Toda la info en contexto:</text>
+    <text x="100" y="1778" font-size="11" fill="#1d4ed8">código afectado +</text>
+    <text x="100" y="1796" font-size="11" fill="#1d4ed8">descripción feature +</text>
+    <text x="100" y="1814" font-size="11" fill="#1d4ed8">.md de APIs externas</text>
+  </g>
+  <line x1="282" y1="1770" x2="558" y2="1770" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <!-- chip SALIDA paso 2 (debajo izq) -->
+  <g filter="url(#shadow)">
+    <rect x="560" y="1856" width="340" height="50" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="580" y="1876" font-size="10" font-weight="700" fill="#15803d" letter-spacing="1.5">SALIDA</text>
+    <text x="580" y="1896" font-size="11.5" fill="#166534">Todas las decisiones necesarias resueltas.</text>
+  </g>
+  <line x1="730" y1="1836" x2="730" y2="1854" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-success)"/>
+
+  <!-- LÍMITES paso 2 (debajo der) -->
+  <g filter="url(#shadow)">
+    <rect x="920" y="1856" width="340" height="50" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="940" y="1876" font-size="10" font-weight="700" fill="#92400e" letter-spacing="1.5">LÍMITES / FRONTERAS</text>
+    <text x="940" y="1896" font-size="11.5" fill="#b45309">No parar de preguntar hasta estar 100% seguro.</text>
+  </g>
+
+  <line x1="910" y1="1906" x2="910" y2="1968" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ====================== PASO 3 · REDACCIÓN DE LOS 3 DOCUMENTOS ====================== -->
+  <rect x="700" y="1947" width="420" height="18" fill="#f8fafc"/>
+  <text x="910" y="1958" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">PASO 3 · REDACCIÓN DE LOS TRES DOCUMENTOS</text>
+
+  <g filter="url(#shadow)">
+    <rect x="560" y="1972" width="700" height="92" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2.5"/>
+    <text x="580" y="1999" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="2">PASO 3 · REDACCIÓN</text>
+    <text x="580" y="2029" font-size="18" font-weight="700" fill="#14532d">Escribir los 3 .md en nueva-implementacion-en-curso/</text>
+    <text x="580" y="2052" font-size="12" fill="#166534">Crear el directorio si no existe · redactados en ESPAÑOL.</text>
+  </g>
+
+  <!-- chip ENTRADA paso 3 (izq) -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="1980" width="200" height="76" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="100" y="2000" font-size="10" font-weight="700" fill="#1e40af" letter-spacing="1.5">ENTRADA</text>
+    <text x="100" y="2020" font-size="11" fill="#1d4ed8">Dudas resueltas +</text>
+    <text x="100" y="2038" font-size="11" fill="#1d4ed8">toda la investigación</text>
+  </g>
+  <line x1="282" y1="2018" x2="558" y2="2018" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <!-- Los TRES documentos como artefactos -->
+  <line x1="910" y1="2064" x2="910" y2="2096" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+  <g filter="url(#shadow)">
+    <rect x="200" y="2096" width="430" height="118" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="220" y="2122" font-size="13" font-weight="700" fill="#14532d">implementation-&lt;feature-slug&gt;-backend.md</text>
+    <text x="220" y="2146" font-size="11.5" fill="#166534">Todo lo que afecte a backend/.</text>
+    <text x="220" y="2168" font-size="11.5" fill="#166534">VUELCA aquí TODO el conocimiento de las APIs</text>
+    <text x="220" y="2186" font-size="11.5" fill="#166534">externas: es la ÚNICA fuente que tendrá la</text>
+    <text x="220" y="2204" font-size="11.5" fill="#166534">implementación sobre ellas.</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="660" y="2096" width="430" height="118" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="680" y="2122" font-size="13" font-weight="700" fill="#14532d">implementation-&lt;feature-slug&gt;-frontend.md</text>
+    <text x="680" y="2146" font-size="11.5" fill="#166534">Todo lo que afecte a frontend/.</text>
+    <text x="680" y="2168" font-size="11.5" fill="#166534">+ SECCIÓN DEDICADA de endpoints: URL,</text>
+    <text x="680" y="2186" font-size="11.5" fill="#166534">método HTTP y forma de request/response</text>
+    <text x="680" y="2204" font-size="11.5" fill="#166534">= contrato API visto desde el frontend.</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1120" y="2096" width="430" height="118" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="1140" y="2122" font-size="12.5" font-weight="700" fill="#14532d">implementation-&lt;feature-slug&gt;-general-description.md</text>
+    <text x="1140" y="2146" font-size="11.5" fill="#166534">Descripción funcional a nivel de usuario:</text>
+    <text x="1140" y="2168" font-size="11.5" fill="#166534">qué cambia en la app para quien la usa.</text>
+    <text x="1140" y="2190" font-size="11.5" fill="#166534">Nada técnico ni de código.</text>
+  </g>
+
+  <!-- TRAMPA CRÍTICA -->
+  <g filter="url(#shadow)">
+    <rect x="200" y="2236" width="700" height="92" rx="12" fill="#fef2f2" stroke="#b91c1c" stroke-width="2" stroke-dasharray="4,3"/>
+    <text x="220" y="2262" font-size="11" font-weight="700" fill="#b91c1c" letter-spacing="2">TRAMPA CRÍTICA</text>
+    <text x="220" y="2286" font-size="12" fill="#991b1b">La implementación posterior es INDEPENDIENTE y NUNCA leerá los</text>
+    <text x="220" y="2304" font-size="12" fill="#991b1b">.md de externalAPIinformation/. Todo el conocimiento de las APIs</text>
+    <text x="220" y="2322" font-size="12" fill="#991b1b">externas debe quedar volcado en …-backend.md (única fuente).</text>
+  </g>
+
+  <!-- LÍMITES / REGLAS paso 3 -->
+  <g filter="url(#shadow)">
+    <rect x="920" y="2236" width="630" height="92" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="940" y="2262" font-size="10" font-weight="700" fill="#92400e" letter-spacing="1.5">LÍMITES / REGLAS</text>
+    <text x="940" y="2284" font-size="11.5" fill="#b45309">Mismo &lt;feature-slug&gt; kebab-case ASCII (sin tildes/comillas/espacios) en los tres.</text>
+    <text x="940" y="2302" font-size="11.5" fill="#b45309">SIEMPRE los tres docs (si una capa no cambia, indicarlo: "Sin cambios en backend/frontend").</text>
+    <text x="940" y="2320" font-size="11.5" fill="#b45309">nueva-implementacion-en-curso/ debe figurar en .gitignore (artefacto no versionado).</text>
+  </g>
+
+  <line x1="910" y1="2328" x2="910" y2="2392" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- ====================== PASO 4 · REVISIÓN FINAL (2 ITERACIONES) ====================== -->
+  <rect x="600" y="2371" width="620" height="18" fill="#f8fafc"/>
+  <text x="910" y="2382" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="3">PASO 4 · REVISIÓN FINAL CON SUBAGENTES (2 ITERACIONES SECUENCIALES)</text>
+
+  <!-- chip ENTRADA paso 4 (izq) -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="2420" width="200" height="76" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="100" y="2440" font-size="10" font-weight="700" fill="#1e40af" letter-spacing="1.5">ENTRADA</text>
+    <text x="100" y="2460" font-size="11" fill="#1d4ed8">Los 3 .md redactados</text>
+    <text x="100" y="2478" font-size="11" fill="#1d4ed8">+ el CÓDIGO REAL</text>
+  </g>
+  <line x1="282" y1="2458" x2="318" y2="2458" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-loop)"/>
+
+  <!-- Contenedor punteado de las 2 iteraciones -->
+  <rect x="320" y="2400" width="1230" height="430" rx="16" fill="#ffffff" fill-opacity="0.6" stroke="#0891b2" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="660" y="2390" width="550" height="20" fill="#f8fafc"/>
+  <text x="935" y="2405" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490" letter-spacing="2">2 ITERACIONES SECUENCIALES — 2 SUBAGENTES EN PARALELO CADA UNA</text>
+
+  <!-- ITERACIÓN 1 -->
+  <text x="490" y="2440" font-size="11" font-weight="700" fill="#0891b2" letter-spacing="2">ITERACIÓN 1</text>
+  <g filter="url(#shadow)">
+    <rect x="360" y="2452" width="330" height="118" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <text x="380" y="2477" font-size="12" font-weight="700" fill="#155e75">Subagente BACKEND</text>
+    <text x="380" y="2499" font-size="11" fill="#0e7490">Lee solo: ...-backend.md +</text>
+    <text x="380" y="2515" font-size="11" fill="#0e7490">...-general-description.md (rutas literales).</text>
+    <text x="380" y="2535" font-size="11" fill="#0e7490">Contrasta el plan vs código real, caza</text>
+    <text x="380" y="2553" font-size="11" fill="#0e7490">omisiones e imprecisiones, cura su .md.</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="710" y="2452" width="330" height="118" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <text x="730" y="2477" font-size="12" font-weight="700" fill="#155e75">Subagente FRONTEND</text>
+    <text x="730" y="2499" font-size="11" fill="#0e7490">Lee solo: ...-frontend.md +</text>
+    <text x="730" y="2515" font-size="11" fill="#0e7490">...-general-description.md (rutas literales).</text>
+    <text x="730" y="2535" font-size="11" fill="#0e7490">Mismo trabajo de curado sobre su capa.</text>
+    <text x="730" y="2553" font-size="11" fill="#0e7490">Ambos corren EN PARALELO.</text>
+  </g>
+
+  <!-- barrera secuencial entre iteraciones -->
+  <line x1="1040" y1="2511" x2="1090" y2="2511" stroke="#0891b2" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="1065" y="2495" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">barrera</text>
+  <text x="1065" y="2536" text-anchor="middle" font-size="10" font-weight="600" fill="#0e7490">iter.1 completa</text>
+
+  <!-- ITERACIÓN 2 -->
+  <text x="1240" y="2440" font-size="11" font-weight="700" fill="#0891b2" letter-spacing="2">ITERACIÓN 2</text>
+  <g filter="url(#shadow)">
+    <rect x="1110" y="2452" width="420" height="118" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <text x="1130" y="2477" font-size="12" font-weight="700" fill="#155e75">Otros 2 subagentes (BE + FE) en paralelo</text>
+    <text x="1130" y="2501" font-size="11" fill="#0e7490">Segunda pasada de calidad sobre los .md ya</text>
+    <text x="1130" y="2519" font-size="11" fill="#0e7490">corregidos: caza las omisiones e imprecisiones</text>
+    <text x="1130" y="2537" font-size="11" fill="#0e7490">que la iteración 1 aún dejó y vuelve a</text>
+    <text x="1130" y="2555" font-size="11" fill="#0e7490">actualizar cada .md de capa.</text>
+  </g>
+
+  <!-- LÍMITES paso 4 (dentro del contenedor, abajo) -->
+  <g filter="url(#shadow)">
+    <rect x="360" y="2600" width="1170" height="74" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="380" y="2620" font-size="10" font-weight="700" fill="#92400e" letter-spacing="1.5">LÍMITES / FRONTERAS</text>
+    <text x="380" y="2642" font-size="11.5" fill="#b45309">Cada subagente edita SOLO su .md de capa · general-description.md es contexto de SOLO LECTURA (no se edita: dos en paralelo se pisarían).</text>
+    <text x="380" y="2660" font-size="11.5" fill="#b45309">Subagentes creados AL MOMENTO, con contexto en blanco · las iteraciones son secuenciales (no solapar).</text>
+  </g>
+
+  <!-- chip SALIDA paso 4 (dentro, debajo de límites) -->
+  <g filter="url(#shadow)">
+    <rect x="360" y="2690" width="1170" height="50" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="380" y="2710" font-size="10" font-weight="700" fill="#15803d" letter-spacing="1.5">SALIDA</text>
+    <text x="380" y="2730" font-size="11.5" fill="#166534">Los 3 .md curados → planificación LISTA para la fase de implementación.</text>
+  </g>
+
+  <line x1="910" y1="2830" x2="910" y2="2890" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrow-success)"/>
+
+  <!-- ====================== CAJA FINAL ====================== -->
+  <g filter="url(#shadow)">
+    <rect x="500" y="2890" width="820" height="92" rx="14" fill="#dcfce7" stroke="#16a34a" stroke-width="2.5"/>
+    <text x="910" y="2922" text-anchor="middle" font-size="18" font-weight="700" fill="#14532d">Planificación lista para la fase de implementación</text>
+    <text x="910" y="2950" text-anchor="middle" font-size="12.5" fill="#15803d">Los 3 .md son la entrada de la skill /implementar-funcionalidad</text>
+    <text x="910" y="2968" text-anchor="middle" font-size="12.5" fill="#15803d">(fase independiente que se basa solo y exclusivamente en estos documentos).</text>
+  </g>
+
+  <!-- ====================== NOTAS AL PIE ====================== -->
+  <text x="910" y="3012" text-anchor="middle" font-size="11" fill="#64748b">No se escribe código de la app · solo se generan los 3 .md de la feature + los .md de APIs en externalAPIinformation/ · nueva-implementacion-en-curso/ no se versiona · modo ultrathink en toda la skill</text>
+  <text x="910" y="3034" text-anchor="middle" font-size="11" fill="#94a3b8">Dentro de cada ronda/iteración: paralelo · entre rondas/iteraciones: barrera secuencial (espera a que termine la anterior)</text>
+</svg>
