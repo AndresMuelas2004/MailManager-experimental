@@ -26,6 +26,9 @@
   - `backend/tests/integration/`
   - `backend/tests/e2e/`
   - `frontend/`
+  - `docs/` (plus its subdirectories `docs/features/` and `docs/limits/`, each with its own `CLAUDE.md`)
+
+  The `docs/` tree is the exception to the `*_guide.md` reference: its `CLAUDE.md` files reference no `*_guide.md` — the project-specific content is the documents themselves, indexed by each subdirectory's `README.md` (see § 5).
 
   **Hard rule**: these layer rules are non-negotiable and override any conflicting project-specific guidance.
 
@@ -33,6 +36,7 @@
 
   - `backend/` — API server organized in layers (FastAPI + Python).
   - `frontend/` — Client application (React + Vite + TypeScript + Tailwind).
+  - `docs/` — Narrative project documentation for the team (feature behavior + limits catalogs). See § 5.
 
   ### 3 Excluded Directories
 
@@ -62,11 +66,13 @@
 
   The layer `CLAUDE.md` references its guide. This root `CLAUDE.md` lists the layers that have their own rules (§ 1.1).
 
+  A third documentation home complements this pattern: `docs/` — narrative, project-specific documentation aimed at the engineering team and future maintainers, not at Claude as a source of architectural rules. Its structure: a directory-level `CLAUDE.md` (general rules), and two paired subdirectories — `docs/features/` (behavior-level description of each feature) and `docs/limits/` (exact figures and the exhaustive "what it does NOT support" list) — each with its own `CLAUDE.md` and a `README.md` index. Documents pair 1:1 by slug (`features/<slug>.md` ↔ `limits/<slug>.md`); never create or keep one half without the other. A document under `docs/` carries the same authority as a `*_guide.md` (§ 9).
+
   ### 6 Style and Code Quality
 
   - Python: PEP 8, FastAPI conventions, `from __future__ import annotations` in all modules.
   - TypeScript: ESLint config in `frontend/eslint.config.js`.
-  - Code language: English everywhere — identifiers, comments, docstrings, and all `.md` documentation files tracked by git.
+  - Code language: English everywhere — identifiers, comments, docstrings, and all `.md` documentation files tracked by git. Exception: documents under `docs/` may be written in the team's working language (see `docs/CLAUDE.md` § 6); every `CLAUDE.md` itself must remain in English.
   - Comments only where they clarify non-obvious logic; avoid noise or redundancy.
 
   ### 7 Immutable Files
@@ -93,13 +99,14 @@
   - Root `repository_guide.md`.
   - Root `README.md`.
   - Every `*_guide.md` in directories affected by the plan's changes.
+  - Every `docs/features/<slug>.md` / `docs/limits/<slug>.md` pair affected by the plan's changes — update both twins, and the two `README.md` indexes when a feature is added or renamed.
 
   ### 9 Documentation Priority
 
   When rules or information conflict, the following precedence applies (highest to lowest):
   **This root `CLAUDE.md`** — general architecture rules. Supreme authority.
-  **Layer `CLAUDE.md` files** (e.g. `backend/api/CLAUDE.md`) — structural rules for that layer. Override anything below.
-  **`*_guide.md` files** (e.g. `api_guide.md`, `repository_guide.md`) — project-specific details that supplement the `CLAUDE.md` files. Never contradict levels above.
+  **Layer `CLAUDE.md` files** (e.g. `backend/api/CLAUDE.md`, `docs/CLAUDE.md` and its subdirectory `CLAUDE.md` files) — structural rules for that layer. Override anything below.
+  **`*_guide.md` files and `docs/` documents** (e.g. `api_guide.md`, `repository_guide.md`, `docs/features/<slug>.md`, `docs/limits/<slug>.md`) — project-specific details that supplement the `CLAUDE.md` files. Never contradict levels above.
   **The source code itself** — the actual implementation. When code contradicts documentation at any level above, the documentation is correct and the code is what needs to change.
 
   This hierarchy applies to all decisions: error handling, layer boundaries, naming conventions, allowed imports, and any other rule. If a lower-priority source conflicts with a higher-priority one, always follow the higher-priority source and flag the conflict.
