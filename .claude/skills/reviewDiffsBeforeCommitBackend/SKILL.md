@@ -1,12 +1,11 @@
 ---
 name: reviewDiffsBeforeCommitBackend
-description: "Exhaustive pre-commit review: analyze diffs, determine affected backend layers, launch parallel review subagents, and consolidate findings into a severity-graded report."
-disable-model-invocation: true
+description: "Exhaustive pre-commit backend review: analyze diffs, determine affected backend layers, launch parallel background review subagents (error handling, dead code, tests, docs, queries, architecture compliance), wait silently, and consolidate findings into a severity-graded report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitBackend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
 ---
 
-Exhaustive pre-commit review: analyze diffs, determine affected backend layers, launch parallel review subagents, and consolidate findings into a severity-graded report.
+Exhaustive pre-commit review of the backend side: analyze diffs, determine affected backend layers, launch parallel background review subagents (including an architecture-compliance-reviewer), wait in silence, and consolidate findings into a severity-graded report.
 
-Usage: `/reviewDiffsBeforeCommit` (uses defaults) or `/reviewDiffsBeforeCommit --tests backend/tests/unit/ --md extra/doc.md`
+Usage: `/reviewDiffsBeforeCommitBackend` (uses defaults) or `/reviewDiffsBeforeCommitBackend --tests backend/tests/unit/ --md extra/doc.md`
 
 Optional $ARGUMENTS:
 - `--tests dir1 dir2 ...` — override default test directories (default: `backend/tests/unit/` `backend/tests/integration/` `backend/tests/e2e/`)
@@ -20,7 +19,7 @@ Execute these steps sequentially:
 
 1. Run `git diff --cached --name-only` (staged) and `git diff --name-only` (unstaged) via Bash. Combine both lists, deduplicate.
 
-2. If the combined list is empty — inform the user "No diffs found (staged or unstaged). Nothing to review." and STOP. Do NOT launch any agents.
+2. If the combined list is empty — inform the user "No diffs found (staged or unstaged). Nothing to review." and STOP. Do NOT launch any agents. If the list is non-empty but NO changed file path starts with `backend/` — inform the user "No backend files in the diffs. Nothing to review on the backend side." and STOP. Do NOT launch any agents.
 
 3. From the changed files, determine which of these 4 backend directories are affected (a directory is "affected" if at least one changed file's path starts with it):
    - `backend/api/`
@@ -89,14 +88,36 @@ For EACH **affected** test directory (filtered in Phase 1 step 5), launch:
 
 ### Query review (only if changed query files exist in the diffs):
 
-8. **queries-reviewer per changed query file** — `subagent_type: "queries-reviewer"`
+7. **queries-reviewer per changed query file** — `subagent_type: "queries-reviewer"`
    - From the diff file list (collected in Phase 1 step 7), use only the `.py` files in `backend/database/queries/` (exclude `__init__.py`) that were actually changed.
    - If no query files were changed → skip query review entirely, even if `backend/database/` is affected.
    - Launch one agent per changed query file. Each agent's prompt: "Analyze ONLY the file `{file_path}`. Focus exclusively on this file and on the usage flow of the query functions it contains. Do NOT read or analyze any other query file in `backend/database/queries/`. Follow all analysis phases (inventory, usage, efficiency, quality, cross-validation) scoped exclusively to this file."
 
+### Architecture compliance (always, exactly one agent):
+
+8. **architecture-compliance-reviewer** — `subagent_type: "architecture-compliance-reviewer"`
+   - `description`: `Backend architecture compliance review`
+   - Scope: ALL changed backend files from Phase 1 (every diff path starting with `backend/`, tests included).
+   - Prompt (substitute `<path N>` with the actual resolved backend paths):
+
+```
+Audit architectural compliance of the following modified backend files against the documentation hierarchy.
+
+Scope (resolved paths, all under `backend/`):
+- <path 1>
+- <path 2>
+- ...
+
+Goal: verify that EVERY architectural rule declared by the relevant CLAUDE.md hierarchy (root `CLAUDE.md`, every layer-level `backend/<layer>/CLAUDE.md` that applies to the scope, and any `*_guide.md` they reference) is fully respected by these files. Follow the phased workflow defined in your own agent definition strictly — do not skip Phase 2 (Documentation Hierarchy) even if you think you already know the project, because rules may have changed since your last run.
+
+Produce the full report structure defined in your agent definition (sections 1 through 10), with the verdict at section 9.
+
+This is a read-only audit: you must not modify any file. Do not propose edits to any `CLAUDE.md` (they are immutable per root `CLAUDE.md` § 7) — redirect every suggestion either to the code or to the corresponding `*_guide.md`.
+```
+
 ### After launching:
 
-Print a brief message listing all agents launched (count and types) and tell the user you will report when they all finish. Then STOP — do NOT add any more tool calls. Do NOT poll, retry, resume, or call any tool. Wait for automatic completion notifications.
+Print a brief message listing all agents launched (count and types) and tell the user you will report when they all finish. Then STOP — do NOT add any more tool calls. Do NOT poll, retry, resume, or call any tool, and do NOT do any other work in the main conversation. Wait for automatic completion notifications.
 
 ---
 
@@ -104,7 +125,7 @@ Print a brief message listing all agents launched (count and types) and tell the
 
 Only when ALL agents have reported back (via automatic completion notifications):
 
-1. Collect all findings from every subagent.
+1. Collect all findings from every subagent. Set the architecture-compliance-reviewer's report aside: it is presented verbatim in its own section and its findings are NOT decomposed into the Group A/B classification below — only its verdict and finding severities feed the verdict rules (step 6).
 
 2. Deduplicate: remove findings that overlap between reviewers (e.g., a dead-code finding that an error-reviewer also flagged).
 
@@ -130,7 +151,8 @@ Only when ALL agents have reported back (via automatic completion notifications)
 ### Executive Summary
 - Group A (new code): X blocker(s), Y major(s), Z minor(s), W suggestion(s)
 - Group B (pre-existing): X blocker(s), Y major(s), Z minor(s), W suggestion(s)
-- Verdict: BLOCK COMMIT / REVIEW BEFORE COMMIT / SAFE TO COMMIT (based on Group A only)
+- Architecture compliance: COMPLIANT / MOSTLY COMPLIANT / NON-COMPLIANT / CANNOT ASSESS — N blocker(s), M major(s), K minor(s), L nit(s)
+- Verdict: BLOCK COMMIT / REVIEW BEFORE COMMIT / SAFE TO COMMIT (based on Group A and the architecture verdict)
 
 ### Group A — New Code Findings
 
@@ -165,11 +187,16 @@ Only when ALL agents have reported back (via automatic completion notifications)
 
 #### Documentation
 - [Severity] finding...
+
+### Architecture Compliance
+<Full report returned by the architecture-compliance-reviewer agent, verbatim — sections 1 through 10.>
 ```
 
-6. Verdict rules — **based on Group A only** (Group B findings never block the commit):
-   - Any Blocker **in Group A** → **BLOCK COMMIT**
-   - No Blockers but any Major **in Group A** → **REVIEW BEFORE COMMIT**
-   - Only Minor/Suggestion **in Group A** or no Group A findings → **SAFE TO COMMIT**
+6. Verdict rules — based on **Group A** and the **architecture verdict** (Group B findings never block the commit):
+   - Any Blocker **in Group A**, or architecture verdict **NON-COMPLIANT**, or any **BLOCKER** finding in the architecture report → **BLOCK COMMIT**
+   - Else any Major **in Group A**, or architecture verdict **MOSTLY COMPLIANT** or **CANNOT ASSESS** → **REVIEW BEFORE COMMIT**
+   - Else → **SAFE TO COMMIT**
+   - If the architecture reviewer's report suggests editing any `CLAUDE.md`, rewrite that suggestion before presenting the report so it points at the corresponding `*_guide.md` or at the code instead (root `CLAUDE.md` § 7).
+   - If any agent crashed or returned nothing, say so explicitly in the Executive Summary and downgrade the verdict to at least **REVIEW BEFORE COMMIT**.
 
-7. If no findings at all across all agents, say: "All reviews passed. No issues found. SAFE TO COMMIT."
+7. If no findings at all across all agents and the architecture verdict is COMPLIANT, say: "All reviews passed. No issues found. SAFE TO COMMIT."

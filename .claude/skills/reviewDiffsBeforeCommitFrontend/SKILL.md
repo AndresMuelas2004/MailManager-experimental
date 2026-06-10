@@ -1,89 +1,65 @@
 ---
 name: reviewDiffsBeforeCommitFrontend
-description: "Pre-commit frontend architecture compliance check: read every frontend CLAUDE.md and verify the current diffs respect every rule, layer boundary, and convention stated in them. Use before committing frontend changes to catch violations early."
-disable-model-invocation: true
+description: "Pre-commit frontend architecture review: launches one background architecture-compliance-reviewer subagent over the modified frontend files, waits in silence, and relays its report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitFrontend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
 ---
 
-Pre-commit review focused exclusively on **frontend architectural compliance**. The goal is simple: make sure nothing in the current diffs breaks any rule defined in the frontend `CLAUDE.md` files.
+Pre-commit review of the **frontend** side. A single `architecture-compliance-reviewer` subagent audits the modified frontend files against the frontend documentation hierarchy. This skill does no inline review itself — it launches the reviewer in the background, waits in silence, and relays the report.
 
 Usage: `/reviewDiffsBeforeCommitFrontend`
 
 ---
 
-## Step 1 — Gather the diffs
+## Step 1 — Detect frontend diffs
 
-Run in parallel:
-- `git status` — see all changed and untracked files.
-- `git diff -- frontend/` and `git diff --cached -- frontend/` — see unstaged and staged frontend changes.
+Run in parallel via Bash:
+- `git diff --cached --name-only -- frontend/`
+- `git diff --name-only -- frontend/`
 
-If no frontend files are modified, stop and report that there is nothing to review.
+Combine both lists and deduplicate. If the combined list is empty → inform the user "No frontend diffs found (staged or unstaged). Nothing to review." and STOP without launching anything.
 
-## Step 2 — Load every frontend CLAUDE.md
+## Step 2 — Launch the architecture reviewer (background)
 
-Locate and **read in full** every `CLAUDE.md` under `frontend/` (both the root `frontend/CLAUDE.md` and any nested ones inside `frontend/src/**` or `frontend/e2e/`). These files are the source of truth for the frontend architecture.
+Launch exactly ONE agent:
 
-Use `Glob` with pattern `frontend/**/CLAUDE.md` to enumerate them, then read each one. Do not skim — the compliance check depends on knowing every rule.
+- `subagent_type`: `architecture-compliance-reviewer`
+- `description`: `Frontend architecture compliance review`
+- `run_in_background`: `true`
+- `prompt` (substitute `<path N>` with the actual resolved frontend paths from Step 1):
 
-Also read `frontend/frontend_guide.md` if it exists, since layer `CLAUDE.md` files reference it for project-specific details that complement the structural rules.
+```
+Audit architectural compliance of the following modified frontend files against the documentation hierarchy.
 
-## Step 3 — Extract the rules
+Scope (resolved paths, all under `frontend/`):
+- <path 1>
+- <path 2>
+- ...
 
-From the CLAUDE.md files, build a mental checklist of every hard rule that applies to code changes. Typical categories to watch for in a React + Vite + TypeScript + Tailwind frontend:
+Documentation hierarchy note for the frontend: unlike the backend layers, the nested frontend directories carry NO per-directory `*_guide.md`. The hierarchy is: the repository root docs (root `CLAUDE.md` and the files it imports), `frontend/CLAUDE.md`, the nested `frontend/**/CLAUDE.md` files (e.g. `frontend/src/api/CLAUDE.md`, `frontend/src/features/CLAUDE.md`), and a single layer guide `frontend/frontend_guide.md` at the frontend root — it is not referenced by any frontend `CLAUDE.md`, but it is the frontend's project-specific guide and counts at `*_guide.md` priority.
 
-- **Layer boundaries**: which directories may import from which (e.g., `api/` vs `features/` vs `components/` vs `app/`).
-- **Allowed dependencies**: what can and cannot be imported from each layer.
-- **Naming conventions**: files, components, hooks, types, DTOs.
-- **State management rules**: where data fetching lives (e.g., TanStack Query in `api/endpoints/`), where local state is allowed.
-- **Validation rules**: Zod schemas, DTO typing, runtime validation at boundaries.
-- **Styling rules**: Tailwind-only vs CSS modules, restrictions on global CSS.
-- **Security rules**: client-side rules about tokens, secrets, auth flows, dangerous HTML, redirects.
-- **Routing and guards**: where `RequireAuth` / route guards must wrap components.
-- **Testing rules**: what requires tests, where tests live (unit vs e2e), allowed testing utilities.
-- **Immutability rules**: files that must never be modified (layer `CLAUDE.md` files themselves, for example).
-- **Documentation rules**: when `*_guide.md` must be updated alongside code changes.
+Goal: verify that EVERY architectural rule declared by that hierarchy is fully respected by these files. Follow the phased workflow defined in your own agent definition strictly — do not skip Phase 2 (Documentation Hierarchy) even if you think you already know the project, because rules may have changed since your last run.
 
-Do not rely on memory — only cite rules that are actually written in the CLAUDE.md files you read in Step 2.
+Produce the full report structure defined in your agent definition (sections 1 through 10), with the verdict at section 9.
 
-## Step 4 — Map the diffs to the rules
+This is a read-only audit: you must not modify any file. Do not propose edits to any `CLAUDE.md` (they are immutable per root `CLAUDE.md` § 7) — redirect every suggestion either to the code or to `frontend/frontend_guide.md`.
+```
 
-For each changed file in the frontend diff:
+Print a one-line note that the reviewer was launched.
 
-1. Identify which layer it belongs to (root, `api/`, `app/`, `features/`, `components/`, `lib/`, `test/`, `e2e/`, etc.).
-2. Look at what the diff actually does (new imports, new files, changed exports, new dependencies, new components, style changes, test changes).
-3. Check every applicable rule from Step 3 against the change.
+## Step 3 — Wait in silence
 
-Be precise: quote the exact line from the CLAUDE.md that a change violates, and the exact diff line that violates it. Do not flag stylistic preferences that are not written as rules.
+After launching, STOP. Do NOT call any tool, do NOT poll, and do NOT do any other work in the main conversation. Wait for the agent's automatic completion notification.
 
-## Step 5 — Produce the compliance report
+## Step 4 — Relay the report
 
-Output a single structured report:
+Present the reviewer's full report verbatim (sections 1 through 10), then close with one mapped verdict line:
 
-### Compliance report
+- Verdict **NON-COMPLIANT**, or at least one **BLOCKER** finding → **BLOCK COMMIT**
+- Verdict **MOSTLY COMPLIANT** or **CANNOT ASSESS** → **REVIEW BEFORE COMMIT**
+- Verdict **COMPLIANT** → **SAFE TO COMMIT**
 
-**Scope**: list every frontend file in the diff, grouped by layer.
+If the reviewer crashes or returns nothing, report that explicitly; the verdict is then at least **REVIEW BEFORE COMMIT**.
 
-**CLAUDE.md files consulted**: bullet list with the path of every CLAUDE.md you read.
+## Important rules
 
-**Findings**: one of the following for each diff:
-
-- **PASS** — the change respects every applicable rule. State this briefly per file or per group.
-- **VIOLATION** — include:
-  - File and diff hunk (path + line range).
-  - The rule that is violated, quoting the exact sentence from the relevant CLAUDE.md and the file it came from.
-  - Why the diff violates it (one or two sentences).
-  - Suggested fix.
-- **AMBIGUOUS** — when a rule could be read either way. Explain the ambiguity, cite both interpretations, and ask the user which one to apply. Do not silently pick one.
-
-**Verdict**: at the end, one of:
-- `READY TO COMMIT` — zero violations.
-- `BLOCKED` — one or more violations; list them by file.
-- `NEEDS USER DECISION` — only ambiguities remain.
-
-## Important rules for this skill
-
-- Only review **frontend** changes. Ignore diffs outside `frontend/`.
-- Do not run tests, do not run the dev server, do not modify any file. This skill is read-only — it produces a report, nothing else.
-- Never propose edits to any `CLAUDE.md` file. If a rule seems wrong or outdated, flag it in the report as a note for the user; do not suggest editing the CLAUDE.md.
-- If a diff touches a file that the root or any layer `CLAUDE.md` marks as immutable, that is automatically a VIOLATION — no exceptions.
-- When a `*_guide.md` should have been updated to reflect a code change (per the root `CLAUDE.md` plan execution rules), flag it as a VIOLATION too, because the documentation-as-source-of-truth model depends on it.
-- Prefer citing the highest-priority source when rules overlap: root `CLAUDE.md` > layer `CLAUDE.md` > `*_guide.md`.
+- Read-only: never modify any file.
+- If the reviewer's report suggests editing any `CLAUDE.md`, rewrite that suggestion before presenting the report so it points at `frontend/frontend_guide.md` or at the code instead (root `CLAUDE.md` § 7).
