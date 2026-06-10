@@ -35,6 +35,7 @@ from core.email.outlook_client import (
     _DRAFTS_MAX_RETRIES,
     _DRAFTS_MAX_TOTAL,
     _FOLDER_TO_BOX,
+    _extract_attachment_id_from_location,
     _parse_graph_datetime,
 )
 
@@ -890,7 +891,7 @@ class TestSendEmail:
         with patch.object(client, "_graph_request", side_effect=[
             self._draft_response(), {},
         ]) as mock_graph:
-            result = client.send_email("Subject", "Body", ["a@b.com"])
+            result = client.send_email("Subject", "<p>Body</p>", ["a@b.com"])
 
         assert mock_graph.call_count == 2
         # First call: create draft
@@ -900,7 +901,10 @@ class TestSendEmail:
         assert "/send" not in first_args[1]
         draft_body = first_kwargs.get("body", first_args[2] if len(first_args) > 2 else None)
         assert draft_body["subject"] == "Subject"
-        assert draft_body["body"]["content"] == "Body"
+        # HTML send: Graph stores the body as contentType=HTML and the content
+        # is the composed HTML verbatim.
+        assert draft_body["body"]["contentType"] == "HTML"
+        assert draft_body["body"]["content"] == "<p>Body</p>"
         # Second call: send
         second_args, _ = mock_graph.call_args_list[1]
         assert second_args[0] == "POST"
@@ -2023,6 +2027,42 @@ class TestFetchDrafts:
         assert draft.created_at == datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         assert draft.updated_at == datetime(2024, 1, 2, 11, 0, 0, tzinfo=timezone.utc)
 
+    def test_parse_outlook_draft_flattens_graph_html_wrapper(self, client: OutlookClient):
+        # Graph returns contentType=HTML wrapped in a full
+        # <html><head><meta us-ascii></head><body>…</body></html> document;
+        # the parser flattens it to the clean <body> fragment to seed the
+        # composer.
+        msg = {
+            "id": "d-html",
+            "subject": "s",
+            "body": {
+                "contentType": "HTML",
+                "content": (
+                    "<html><head><meta charset=us-ascii></head>"
+                    "<body><p>hi</p></body></html>"
+                ),
+            },
+            "toRecipients": [],
+            "ccRecipients": [],
+            "bccRecipients": [],
+        }
+        draft = client._parse_outlook_draft(msg)
+        assert draft.body == "<p>hi</p>"
+
+    def test_parse_outlook_draft_converts_legacy_text_to_html(self, client: OutlookClient):
+        # A legacy draft stored as contentType=Text is converted to HTML via
+        # plain_text_to_html so the persisted body is always HTML.
+        msg = {
+            "id": "d-legacy",
+            "subject": "s",
+            "body": {"contentType": "Text", "content": "line1\nline2"},
+            "toRecipients": [],
+            "ccRecipients": [],
+            "bccRecipients": [],
+        }
+        draft = client._parse_outlook_draft(msg)
+        assert draft.body == "<p>line1<br>line2</p>"
+
 
 # ── fetch_email_content + cid resolution ────────────────────────────
 
@@ -2277,6 +2317,27 @@ class TestOutlookListMessageAttachments:
 # ── send_draft_with_attachments ────────────────────────────────────
 
 
+class TestExtractAttachmentIdFromLocation:
+    """``_extract_attachment_id_from_location`` parses the ImmutableId out of a
+    ``createUploadSession`` terminal Location header. It is the only thing that
+    recovers the upload-session attachment id, and the string-parse is fragile,
+    so it deserves direct coverage."""
+
+    def test_extracts_id_from_realistic_location(self):
+        location = (
+            "https://outlook.office.com/api/v2.0/Users('u')/Messages('m')/"
+            "Attachments('AAMkAGI2THVSAAA=')"
+        )
+        assert _extract_attachment_id_from_location(location) == "AAMkAGI2THVSAAA="
+
+    def test_returns_none_when_attachments_segment_missing(self):
+        location = "https://outlook.office.com/api/v2.0/Users('u')/Messages('m')"
+        assert _extract_attachment_id_from_location(location) is None
+
+    def test_returns_none_for_empty_location(self):
+        assert _extract_attachment_id_from_location("") is None
+
+
 class TestOutlookSendDraftWithAttachments:
     """Cover the non-atomic Outlook send-with-attachments path (D-07, D-18, D-27)."""
 
@@ -2358,6 +2419,44 @@ class TestOutlookSendDraftWithAttachments:
         assert len(uploads) == 1
         assert uploads[0].provider_attachment_id == "graph-att-1"
         assert uploads[0].draft_attachment_id == "local-1"
+
+    def test_large_attachment_routes_through_upload_session_not_simple(
+        self, authenticated_client, monkeypatch,
+    ):
+        # A >=3 MB per-attachment payload must take the createUploadSession +
+        # chunked-PUT path (_upload_attachment_via_session), NOT the simple
+        # POST. ``pick_outlook_attachment_strategy`` decides on ``att.size``,
+        # so the strategy can be exercised without 3 MB of real bytes. Without
+        # this test the entire chunked path is unexercised at the unit level.
+        from core.email.helpers import _OUTLOOK_UPLOAD_SESSION_THRESHOLD_BYTES
+
+        via_session_calls: list[str] = []
+        monkeypatch.setattr(
+            authenticated_client, "_upload_attachment_via_session",
+            lambda did, att: via_session_calls.append(att.draft_attachment_id) or "graph-session-att",
+        )
+
+        def _simple_must_not_run(did, att):
+            raise AssertionError("simple upload must not run for a >=3 MB attachment")
+
+        monkeypatch.setattr(
+            authenticated_client, "_upload_attachment_simple", _simple_must_not_run,
+        )
+        monkeypatch.setattr(
+            authenticated_client, "_graph_request",
+            lambda method, url, body=None, extra_headers=None: {},
+        )
+        self._stub_metadata(monkeypatch, authenticated_client)
+
+        big = self._attachment_input(
+            size=_OUTLOOK_UPLOAD_SESSION_THRESHOLD_BYTES,  # exactly at the inclusive cutoff
+            data=b"x" * 16,  # size (not byte length) drives the strategy
+        )
+        _, uploads = authenticated_client.send_draft_with_attachments(
+            "draft-1", ["to@x"], [], [], "Subject", "Body", [big],
+        )
+        assert via_session_calls == ["local-1"]
+        assert uploads[0].provider_attachment_id == "graph-session-att"
 
     def test_attachment_with_provider_id_skips_reupload(
         self, authenticated_client, monkeypatch,
@@ -2517,7 +2616,9 @@ class TestOutlookCreateDraftViaReply:
         # The composer fields ride inside ``message`` only.
         message = body["message"]
         assert message["subject"] == "Re: Hi"
-        assert message["body"] == {"contentType": "Text", "content": "Plain body"}
+        # Body is now HTML (the composer emits sanitised HTML; Graph stores it
+        # as contentType=HTML and re-wraps it on read).
+        assert message["body"] == {"contentType": "HTML", "content": "Plain body"}
         assert message["toRecipients"] == [{"emailAddress": {"address": "to@x"}}]
         assert message["ccRecipients"] == [{"emailAddress": {"address": "cc@x"}}]
 

@@ -60,10 +60,12 @@ from .helpers import (
     decode_mime_body,
     extract_filename_from_headers,
     find_referenced_cids,
+    html_to_plain_text_alternative,
     http_error_detail,
     inline_cid_images,
     parse_expiry,
     pick_gmail_send_strategy,
+    plain_text_to_html,
     resolve_attachment_mime_type,
     retry_with_backoff,
     unwrap_app_credentials,
@@ -1068,7 +1070,13 @@ class GmailClient(EmailClient):
         recipients: list[str],
     ) -> EmailMetadata:
         """
-        Send a plain text email using the Gmail API.
+        Send an HTML email using the Gmail API.
+
+        The ``body`` is HTML. The message is assembled as a
+        ``multipart/alternative`` with a derived ``text/plain`` part FIRST
+        and the ``text/html`` part SECOND (the order clients require to
+        prefer the richest representation). ``EmailMessage`` handles UTF-8
+        body encoding and RFC 2047 header encoding automatically.
         Returns metadata of the sent message.
         """
         if self.service is None:
@@ -1077,14 +1085,14 @@ class GmailClient(EmailClient):
         if not recipients:
             raise EmailRecipientsMissingError("Gmail send_email requires at least one recipient.")
 
-        from email.mime.text import MIMEText
+        from email.message import EmailMessage
 
-        # D-31: explicit text/plain (the composer is a plain <textarea>;
-        # both providers persist text/plain so MIME assembly with
-        # attachments stays consistent in send_draft_with_attachments).
-        message = MIMEText(body or "", "plain", "utf-8")
+        message = EmailMessage()
         message["to"] = ", ".join(recipients)
         message["subject"] = subject
+        # HTML body: text/plain alternative (derived) first, text/html second.
+        message.set_content(html_to_plain_text_alternative(body) or "", subtype="plain", charset="utf-8")
+        message.add_alternative(body or "", subtype="html", charset="utf-8")
 
         raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
         payload = {"raw": raw_message}
@@ -1230,12 +1238,13 @@ class GmailClient(EmailClient):
         - ``raw_bytes`` is the unencoded MIME content used by the
           resumable upload path (``message/rfc822`` body of the PUT).
 
-        Body is text/plain (D-31). Attachments are appended via
+        Body is HTML. Attachments are appended via
         :py:func:`build_mime_with_attachments` which delegates to
         Python's modern ``email.message.EmailMessage`` API and emits a
-        clean ``multipart/mixed`` (with a ``text/plain`` body part and
-        each attachment carrying ``Content-Disposition: attachment``,
-        RFC 2231 + RFC 2047 filename encoding).
+        ``multipart/mixed`` wrapping a ``multipart/alternative`` body
+        (derived ``text/plain`` + ``text/html``) followed by each
+        attachment carrying ``Content-Disposition: attachment``
+        (RFC 2231 + RFC 2047 filename encoding).
 
         ``extra_headers`` carries arbitrary RFC 5322 header injections.
         Used by the Reply / Forward flow to add ``In-Reply-To`` and
@@ -1280,9 +1289,10 @@ class GmailClient(EmailClient):
     ) -> DraftMetadata:
         """
         Create a draft in Gmail via users().drafts().create(). All fields
-        may be empty; Gmail accepts empty drafts. The body is sent as
-        ``text/plain`` (D-31). Attachments are NOT pushed here — they
-        are attached during ``send_draft_with_attachments`` (D-07).
+        may be empty; Gmail accepts empty drafts. The body is HTML, sent
+        as a ``multipart/alternative`` (derived ``text/plain`` +
+        ``text/html``). Attachments are NOT pushed here — they are
+        attached during ``send_draft_with_attachments`` (D-07).
 
         When ``thread_id`` is provided, Gmail's documented triple
         requirement applies: ``threadId`` + ``In-Reply-To`` / ``References``
@@ -1364,7 +1374,8 @@ class GmailClient(EmailClient):
         Full-field replacement — Gmail overwrites the entire draft with
         the new MIME message. The Gmail ``draft.id`` is preserved (the
         inner ``message.id`` may change, but we do not store it).
-        Body is sent as ``text/plain`` (D-31).
+        Body is HTML, sent as a ``multipart/alternative`` (derived
+        ``text/plain`` + ``text/html``).
         """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail update_draft requires authentication.")
@@ -1515,10 +1526,16 @@ class GmailClient(EmailClient):
     def _parse_gmail_draft(self, draft_response: dict[str, Any]) -> DraftMetadata:
         """Convert a Gmail drafts.get response (format=full) into DraftMetadata.
 
-        Extracts subject/to/cc/bcc from headers, body from the payload parts
-        (prefers text/plain, falls back to the HTML part — D-31). Uses
-        datetime.now() for created_at/updated_at because Gmail does not expose
-        a stable draft timestamp in the Message resource.
+        Extracts subject/to/cc/bcc from headers and the body from the
+        payload parts, **preferring the ``text/html`` part** so the
+        rich-text composer is seeded with HTML. A legacy draft that only
+        carries ``text/plain`` (created before the rich-text body, or by
+        another client) is converted to HTML via
+        :py:func:`plain_text_to_html` so the persisted ``body`` is always
+        HTML — the migration fixes the local rows, this fixes any legacy
+        draft that re-enters via ``sync_drafts``. Uses ``datetime.now()``
+        for created_at/updated_at because Gmail does not expose a stable
+        draft timestamp in the Message resource.
         """
         provider_draft_id = str(draft_response.get("id", ""))
         message = draft_response.get("message") or {}
@@ -1551,18 +1568,24 @@ class GmailClient(EmailClient):
         to_recipients = _parse_addrs(_header("To"))
         cc_recipients = _parse_addrs(_header("Cc"))
         bcc_recipients = _parse_addrs(_header("Bcc"))
-        # D-31: prefer text/plain. Drafts created/updated by the app
-        # always carry text/plain at the provider; legacy drafts that
-        # still have an HTML part fall through to ``html_body`` as a
-        # best-effort string (the user can re-edit the body in the
-        # composer if it shows tags — out-of-scope MVP).
+        # Prefer the text/html part — drafts created/updated by the app
+        # now carry an HTML body inside a multipart/alternative. A legacy
+        # draft with only a text/plain part (pre-rich-text, or authored by
+        # another client) is converted to HTML so the persisted body is
+        # always HTML and the composer never shows raw newlines.
         html_body, text_body = self._extract_body_from_payload(payload)
-        body = text_body if text_body is not None else (html_body or "")
-        # Gmail's MIMEText serialization (used in create_draft / update_draft)
-        # appends a single trailing newline that Gmail echoes back verbatim.
-        # Strip exactly one terminator so the round-tripped body matches what
-        # the user composed — Outlook returns body.content as-is, so this
-        # keeps cross-provider behaviour consistent.
+        if html_body is not None:
+            body = html_body
+        else:
+            body = plain_text_to_html(text_body) if text_body is not None else ""
+        # The MIME serialization of the body parts appends a single
+        # trailing newline that Gmail echoes back verbatim (verified for
+        # both the text/plain and the text/html alternative). Strip exactly
+        # one terminator (``\r\n`` first, then ``\n`` — order matters so a
+        # CRLF does not leave a stray ``\r``) so the round-tripped HTML
+        # matches what was composed. Skip the strip for a legacy body that
+        # was just wrapped by ``plain_text_to_html`` (it ends in
+        # ``</p>``, not a newline), so the guard is harmless there.
         if body.endswith("\r\n"):
             body = body[:-2]
         elif body.endswith("\n"):
@@ -1941,6 +1964,10 @@ class GmailClient(EmailClient):
         """
         try:
             resource = self._fetch_message_resource(provider_message_id)
+        except EmailReplyContextFetchError:
+            # Never double-wrap: a reply-context error surfacing from a future
+            # helper inside the try must pass through unchanged (core/CLAUDE.md §5).
+            raise
         except CoreError as exc:
             # Re-raise as a reply-context-specific error so the service
             # layer maps to ``EmailReplyContextError`` (HTTP 502) instead
