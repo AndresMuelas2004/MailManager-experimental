@@ -38,6 +38,11 @@ Service-layer tests use inline `FakeStore` classes combined with `monkeypatch.se
 
 `_patch_get_content_common` patches `email_metadata_store.exists → True` by default (metadata row present, so the service's pre-check short-circuits); tests that need a missing metadata row override this patch explicitly. It does **not** patch `get_email_content` — each test inside `TestGetEmailFullContent` patches it independently to control the cache-hit vs cache-miss branch.
 
+`_patch_list_emails` stubs **both** `list_filtered` and `count_filtered` because `list_emails` returns an `EmailPageOut` envelope (the page plus a separate total). A test that re-stubs only one to inject an error leaves the other hitting the real connection pool. Two traps when injecting that error:
+
+- **The injected stub must accept `**kwargs`.** The service calls both with keyword args (`extra_filters` / `box_not_in` / `operator_clauses`). A positional-only stub (`def _raise(_aids, _box, _tokens, _limit, _offset): …`) raises `TypeError` *before* the injected exception, so the test passes for the wrong reason — green even if the real error branch is broken. Mirror the kwargs-accepting `_record` / `_count` signatures.
+- **Inject the layer error, not a bare `RuntimeError`.** A `QueryError` (a `DatabaseError`) is what proves the `DatabaseError → DatabaseQueryError` translation runs; assert the typed `DatabaseQueryError`, not bare `Exception`. A `RuntimeError` only exercises the `except Exception` fallback and stays green even if the typed-translation branch regresses.
+
 ### `FakeEmailClient` call-record asymmetries
 
 `tests/shared/email_fakes.py::FakeEmailClient` records invocations of draft operations on `*_calls` lists. The lists intentionally use different tuple shapes per operation — do not assume a uniform schema:
@@ -55,6 +60,8 @@ Service-layer tests use inline `FakeStore` classes combined with `monkeypatch.se
 ### Trap — `test_virtual_mailboxes_service.py` patches `account_store.list_account_ids_by_user`
 
 The service resolves the user's owned-account set via a single `account_store.list_account_ids_by_user(user_id)` JOIN, NOT the older `mailbox_store.list_by_owner` + per-mailbox `list_by_mailbox` fan-out. A test that still patches the old pair leaves `list_account_ids_by_user` unpatched and the assertion falls through to a real DB call. Patch the JOIN method.
+
+`TestDatabaseErrorTranslation` injects a `QueryError` (a `DatabaseError`) into every CRUD/listing op specifically to lock that `except DatabaseError` is ordered **before** `except Exception`. The sibling `test_unexpected_*` cases inject only `RuntimeError`, which would stay green if the two handlers were swapped — silently downgrading a 503 `DatabaseQueryError` to a generic 500. Both kinds are needed; neither alone catches the regression.
 
 ### `TestSyncDrafts` — `RuntimeError` asymmetry vs `send_email`
 
@@ -83,6 +90,10 @@ Non-obvious guards verified by `test_draft_repository.py`:
 - **`mark_unavailable` and `touch_last_accessed` disagree on bad UUID.** Both go through `_single_update`. `touch_last_accessed` is the BackgroundTask after a successful download — a stray bad UUID there is a programming error; the helper logs at `debug` and returns silently (the user already got their bytes). `mark_unavailable` runs on the provider-404 path — the same silent return is acceptable here because the user's response is already locked into 404 `attachment_unavailable` regardless of whether the stamp succeeded. Don't propagate errors from inside `_single_update` without first redesigning the caller flows.
 - **`purge_expired_blobs` returns a 2-tuple `(count, freed_bytes)`.** Callers that unpack one value will crash silently (the second element is summed from the row sizes inside the `RETURNING` clause). The endpoint uses both for the admin response; tests assert both.
 - **`get_blob` returns `None` for three different reasons** — row absent, `blob` column SQL NULL, and bad UUID. All three are treated identically by the cache-aside path (cache-miss → fetch from provider). Asymmetric vs the rest of the repo where bad UUID raises; documented here so a maintainer adding a fourth caller knows not to expect a distinguishing signal.
+
+### `PgEmailMetadataStore` — filter/operator param namespaces must stay disjoint
+
+`list_filtered` / `count_filtered` emit three families of bind params into the same statement: `tok{i}` (free-text tokens), `extra_*` (saved-filter keys from `_EXTRA_FILTER_BUILDERS`), and `op{idx}` (lupa operator clauses from `_OPERATOR_CLAUSE_BUILDERS`, indexed **per occurrence** — `from:a from:b` → `op0`/`op1`, NOT keyed by kind, or the second clause would overwrite the first's bind value). The three prefixes must never collide: a rename that makes two families share a prefix silently overwrites bind values and corrupts the predicate with no error. `count_filtered` must reuse the SAME predicate builder as `list_filtered` (the operator-parity tests assert identical emitted SQL params) or the page and its total diverge.
 
 ### Attachment service / helpers — non-obvious invariants
 

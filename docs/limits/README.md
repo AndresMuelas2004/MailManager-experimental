@@ -15,7 +15,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [listado-de-correos.md](listado-de-correos.md) — Tamaño de página, paginación numerada (límite/offset, total exacto) y tope de selección.
 - [conversaciones.md](conversaciones.md) — Reglas de agregación de la fila-conversación, tamaño de lote del hilo por proveedor, asimetrías Gmail/Outlook y códigos de error del visor.
 - [visualizacion-de-correos.md](visualizacion-de-correos.md) — Etiquetas, atributos, protocolos y reglas CSS permitidos, y umbrales del saneamiento.
-- [lupa.md](lupa.md) — Mínimo de caracteres, debounce, tope de tokens y tope de resultados.
+- [lupa.md](lupa.md) — Mínimo de caracteres, debounce, topes de tokens y de operadores, catálogo cerrado de operadores y formatos de fecha aceptados.
 - [favoritos.md](favoritos.md) — Topes y asimetrías de conteo de la sincronización de favoritos.
 
 ### Organizar
