@@ -75,6 +75,38 @@ Migration `0010` seeds the Gmail and Outlook mailboxes under `SEEDED_USER_ID`, n
 
 Migration `0032` dropped `scope_kind` from the API contract but **kept** `scope_payload` as a `NOT NULL` column on the table (renaming it would have broken too many in-flight migrations). Tests that bypass the router to stage a `virtual_mailboxes` row — ownership tests against a foreign record, race-condition setups, etc. — must include `scope_payload` with at least `'{"account_ids":[]}'::jsonb`. Omitting it fails with a constraint violation whose message does not hint at the contract / schema divergence.
 
+### Trap — `GET /virtual-mailboxes` populated path: assert owner-scoping, not just the empty list
+
+`test_list_empty_returns_empty_array` only ever exercises the `[]` path. A cross-user leak in `LIST_VIRTUAL_MAILBOXES_BY_OWNER`'s `WHERE owner_user_id = %s` would pass it. `test_list_returns_only_owned_vmboxes` creates two owned vmboxes plus one inserted under a foreign owner (raw insert, `scope_payload='{"account_ids":[]}'::jsonb` per the trap above) and asserts the response contains EXACTLY the two owned ids — the only test that catches an owner-scoping regression.
+
+### Trap — empty-string filter values must be 422, not "no filter"
+
+`subject_contains=""` / `from_email=""` would reach the repository as `ILIKE '%%'` and match every row — a silent full-inbox dump indistinguishable from "no filter". `VirtualMailboxFilterPayload` carries `min_length=1` to reject them at the schema boundary; the test pins the 422. A regression that drops `min_length` turns "filter by nothing" into "match everything" with no error. Clear a filter by OMITTING the key, never by sending `""`.
+
+### Trap — `box` + `box_not_in` together silently returns zero rows
+
+`_validate_box_exclusivity` rejects a payload carrying both with 422. Unguarded, the repository would emit `box = X AND NOT (box = ANY(Y))` at once → a perpetually-empty bandeja with no error signal. The test asserts the 422; a regression surfaces as an always-empty listing, not an exception.
+
+### Trap — `box_not_in=[]` means "include TRASH/SPAM", not "use default"
+
+An explicit empty list is a valid opt-in to see TRASH/SPAM (the repository guard is `is not None`, not truthiness — see `database_guide.md`). The test seeds TRASH/SPAM rows and asserts they appear. A truthiness-check regression collapses `[]` to the default exclusion and the rows vanish — this test is the only thing that catches it.
+
+### Trap — cross-account dedup winner is decided by `to_email` completeness
+
+When the same `provider_message_id` exists under two `account_id`s (one OAuth account connected twice), `LIST_FILTERED_DISTINCT` collapses them and the row with a non-empty `to_email` wins regardless of `received_at`; `total` is `COUNT(DISTINCT provider_message_id)` (must not be 2). Pin BOTH the surviving `to_email` and `total == 1` — asserting only the count misses a winner-selection regression.
+
+### Trap — pagination determinism needs the `(account_id, provider_message_id)` secondary sort
+
+`ORDER BY received_at DESC` alone leaves same-second rows (mass newsletters) in arbitrary order, so OFFSET paging can repeat or skip a row. The determinism test seeds timestamp ties and asserts a stable full sweep across pages. A single-page assertion never catches this — the regression only shows when paging.
+
+### Trap — PATCH/DELETE on a vanished vmbox must be 404, not 500 / silent 200
+
+Race window between the ownership pre-check and the mutating SQL: on UPDATE the repository returns `None` → service raises `VirtualMailboxNotFound` (404); on DELETE it checks the affected-row count → 404. The historical UPDATE bug was the repo raising `QueryError("not found")` → `VirtualMailboxOperationError` (500). The tests pin PATCH-after-delete → 404 and DELETE-after-delete → 404; a refactor that re-raises on no-match (UPDATE) or skips the rowcount check (DELETE) silently restores the 500 / a misleading 200.
+
+### Trap — the virtual listing ALWAYS groups by thread; `total` counts threads
+
+`list_emails_for_virtual_mailbox` hardcodes `group_by_thread=True`, and filters (`is_favorite`, etc.) apply at the message level BEFORE grouping — two favourite messages sharing a `thread_id` collapse into one thread row. Tests asserting item count / `total` under a filter must expect thread counts, not message counts (e.g. two seeded favourites in one thread → one row, `total == 1`).
+
 ### Trap — `test_dev_login.py`: the TestClient host is `testclient`
 
 Starlette's `TestClient` presents client host `testclient`, not `127.0.0.1`/`localhost`. To exercise the dev-login happy path the test sets `DEV_LOGIN_TRUSTED_HOSTS=testclient`; otherwise every call 403s `dev_login_not_localhost`. The happy path also **removes** the standard `require_session` auth override (which injects a fixed user) and relies on the cookie the endpoint itself sets, restoring the override in a `finally` — dev-login is one of the few endpoints whose entire purpose is to mint the session the override otherwise fakes.

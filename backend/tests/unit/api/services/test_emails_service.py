@@ -8,6 +8,7 @@ All external dependencies are monkeypatched so tests run without DB or provider 
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from api.errors.exceptions import (
     AccountNotConnected,
     AccountNotFound,
+    ConversationFetchError,
     EmailContentFetchError,
     EmailFetchError,
     EmailListError,
@@ -34,7 +36,11 @@ from api.schemas.email import ReadStatusItem, ReadStatusRequest, SpamItem, SpamR
 from api.services import emails_service
 from core.email import EmailContent, EmailManager, SyncResult
 from core.email.errors import EmailAuthError, EmailExternalAPIError
-from tests.shared.email_fakes import FakeEmailClient, build_metadata
+from tests.shared.email_fakes import (
+    FakeEmailClient,
+    build_conversation_message,
+    build_metadata,
+)
 
 
 _MAILBOX_ID = "mb1"
@@ -1236,7 +1242,7 @@ def _patch_list_emails(
     def _record(
         account_ids, box, tokens, limit, offset,
         *, extra_filters=None, box_in=None, box_not_in=None,
-        distinct_provider_message_id=False,
+        distinct_provider_message_id=False, group_by_thread=False,
     ):
         if list_filtered_calls is not None:
             list_filtered_calls.append({
@@ -1249,13 +1255,14 @@ def _patch_list_emails(
                 "box_in": box_in,
                 "box_not_in": box_not_in,
                 "distinct_provider_message_id": distinct_provider_message_id,
+                "group_by_thread": group_by_thread,
             })
         return result_rows
 
     def _count(
         account_ids, box, tokens,
         *, extra_filters=None, box_in=None, box_not_in=None,
-        distinct_provider_message_id=False,
+        distinct_provider_message_id=False, group_by_thread=False,
     ):
         if count_filtered_calls is not None:
             count_filtered_calls.append({
@@ -1266,6 +1273,7 @@ def _patch_list_emails(
                 "box_in": box_in,
                 "box_not_in": box_not_in,
                 "distinct_provider_message_id": distinct_provider_message_id,
+                "group_by_thread": group_by_thread,
             })
         return total_value
 
@@ -1465,6 +1473,36 @@ class TestListEmails:
         # service directly without ``limit``, so it must still see 200.
         assert calls[0]["limit"] == 200
         assert calls[0]["offset"] == 0
+
+    def test_group_by_thread_flag_passed_to_both_store_calls(self, monkeypatch):
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            group_by_thread=True,
+        )
+        # The flag must reach BOTH list_filtered and count_filtered so the
+        # total counts threads, not messages (the page and total agree).
+        assert list_calls[0]["group_by_thread"] is True
+        assert count_calls[0]["group_by_thread"] is True
+
+    def test_group_by_thread_defaults_false(self, monkeypatch):
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        # Favourites and the regular ungrouped listing omit the flag → False.
+        emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+        assert list_calls[0]["group_by_thread"] is False
+        assert count_calls[0]["group_by_thread"] is False
 
 
 class TestListEmailsPagination:
@@ -2162,3 +2200,252 @@ class TestGetReplyContext:
         )
         # Self-reply: To = original.to.
         assert result.to_recipients == ["client@x.com"]
+
+
+# ==================================================================
+# get_conversation — conversation viewer (read + lazy sync).
+# Shares the ensure_mailbox_access → account lookup → silent auth →
+# manager call → translate cascade with get_reply_context, but reads the
+# base row via get_metadata (not exists), calls fetch_conversation, and
+# best-effort persists the thread via _lazy_sync_conversation.
+# ==================================================================
+
+
+_CONVERSATION_BASE_ROW = {
+    "provider_message_id": "m_base",
+    "account_id": _ACCOUNT_ID,
+    "mailbox_id": _MAILBOX_ID,
+    "thread_id": "thr-1",
+    "from_email": "sender@test.com",
+    "from_name": "Sender",
+    "subject": "Hello",
+    "received_at": "2025-01-15T10:00:00+00:00",
+    "is_read": False,
+    "box": "ALL_MAIL",
+}
+
+
+def _patch_get_conversation_common(
+    monkeypatch,
+    *,
+    base_row="default",
+    fake_client_kwargs=None,
+    persist_exc=None,
+    favorite_calls=None,
+):
+    """Common monkeypatches for ``get_conversation`` tests.
+
+    Patches the base-message read (``get_metadata``), the lazy-sync persist
+    helper (``persist_email_metadata_batch``) and the per-message favourite
+    re-apply (``email_metadata_store.update_favorite``) — the dependency set
+    of the conversation path, narrower than ``_patch_common``.
+    """
+    monkeypatch.setattr(
+        emails_service, "ensure_mailbox_access",
+        lambda _mb, _uid: {"mailbox_id": _MAILBOX_ID, "owner_user_id": _USER_ID},
+    )
+    monkeypatch.setattr(
+        emails_service.account_store, "get",
+        lambda _mb, _aid: _fake_account() if _aid == _ACCOUNT_ID else None,
+    )
+    monkeypatch.setattr(
+        emails_service, "load_wrapped_app_credentials",
+        lambda _prov: {"client_id": "cid", "client_secret": "cs"},
+    )
+    monkeypatch.setattr(
+        emails_service, "load_wrapped_account_tokens",
+        lambda _mb, _acc, _prov: {"access_token": "at", "refresh_token": "rt"},
+    )
+    monkeypatch.setattr(
+        emails_service.account_store, "upsert_tokens",
+        lambda *_a, **_kw: None,
+    )
+
+    row = _CONVERSATION_BASE_ROW if base_row == "default" else base_row
+    monkeypatch.setattr(
+        emails_service.email_metadata_store, "get_metadata",
+        lambda _aid, _mid: row,
+    )
+
+    kwargs = fake_client_kwargs or {}
+
+    def _build(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            mid = str(acc.get("mailbox_id", ""))
+            aid = str(acc.get("account_id", ""))
+            label = f"{mid}__{aid}"
+            manager.add_client(FakeEmailClient(
+                label,
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+                **kwargs,
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+
+    if persist_exc is not None:
+        def _persist(_aid, _meta, **_kw):
+            raise persist_exc
+        monkeypatch.setattr(emails_service, "persist_email_metadata_batch", _persist)
+    else:
+        monkeypatch.setattr(
+            emails_service, "persist_email_metadata_batch",
+            lambda _aid, _meta, **_kw: len(_meta),
+        )
+
+    def _update_favorite(account_id, provider_message_id, is_favorite):
+        if favorite_calls is not None:
+            favorite_calls.append((account_id, provider_message_id, is_favorite))
+        return True
+    monkeypatch.setattr(
+        emails_service.email_metadata_store, "update_favorite", _update_favorite,
+    )
+
+
+class TestGetConversation:
+
+    def test_threadless_base_maps_singleton_without_provider_call(self, monkeypatch):
+        # thread_id='' → single-message conversation mapped from the base row
+        # already read; the provider path is never entered.
+        base = dict(_CONVERSATION_BASE_ROW, thread_id="")
+        _patch_get_conversation_common(monkeypatch, base_row=base)
+        # A manager build would mean the provider branch was reached — make it
+        # explode so the singleton short-circuit is proven.
+        def _explode(_accounts):
+            raise AssertionError("manager must not be built for a threadless base")
+        monkeypatch.setattr(emails_service, "build_manager_for_accounts", _explode)
+
+        result = emails_service.get_conversation(
+            _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+        )
+        assert result.thread_id == ""
+        assert len(result.messages) == 1
+        # The singleton is mapped from the base row via row_to_email_metadata_out.
+        assert result.messages[0].provider_message_id == "m_base"
+        assert result.messages[0].mailbox_id == _MAILBOX_ID
+
+    def test_happy_path_orders_ascending_and_returns_conversation_out(self, monkeypatch):
+        # Provider returns members out of order; the response is sorted
+        # oldest-first and mapped from the FRESH provider state.
+        members = [
+            build_conversation_message(
+                provider_message_id="m_new", thread_id="thr-1",
+                received_at=datetime(2025, 1, 2, 9, 0), box="SENT", is_favorite=True,
+            ),
+            build_conversation_message(
+                provider_message_id="m_old", thread_id="thr-1",
+                received_at=datetime(2025, 1, 1, 9, 0), box="ALL_MAIL",
+            ),
+        ]
+        _patch_get_conversation_common(
+            monkeypatch,
+            fake_client_kwargs={"fetch_conversation_return": members},
+        )
+        result = emails_service.get_conversation(
+            _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+        )
+        assert result.thread_id == "thr-1"
+        assert [m.provider_message_id for m in result.messages] == ["m_old", "m_new"]
+        # Per-message state comes from the provider members; account/mailbox
+        # are stamped from the resolved account; has_attachments is B.lazy.
+        m_new = result.messages[1]
+        assert m_new.box == "SENT"
+        assert m_new.is_favorite is True
+        assert m_new.account_id == _ACCOUNT_ID
+        assert m_new.mailbox_id == _MAILBOX_ID
+        assert all(m.has_attachments is False for m in result.messages)
+
+    def test_lazy_sync_applies_favorite_per_message(self, monkeypatch):
+        favorite_calls: list = []
+        members = [
+            build_conversation_message(provider_message_id="m_fav", is_favorite=True),
+            build_conversation_message(provider_message_id="m_plain", is_favorite=False),
+        ]
+        _patch_get_conversation_common(
+            monkeypatch,
+            fake_client_kwargs={"fetch_conversation_return": members},
+            favorite_calls=favorite_calls,
+        )
+        emails_service.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
+        # Only the favourite message triggers the re-apply (the shared upsert
+        # does not carry is_favorite); the plain one is skipped.
+        assert favorite_calls == [(_ACCOUNT_ID, "m_fav", True)]
+
+    def test_persist_failure_is_best_effort(self, monkeypatch):
+        # A lazy-sync persist failure must NOT abort the viewer response.
+        members = [build_conversation_message(provider_message_id="m1")]
+        _patch_get_conversation_common(
+            monkeypatch,
+            fake_client_kwargs={"fetch_conversation_return": members},
+            persist_exc=RuntimeError("db write failed"),
+        )
+        result = emails_service.get_conversation(
+            _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+        )
+        assert result.thread_id == "thr-1"
+        assert [m.provider_message_id for m in result.messages] == ["m1"]
+
+    def test_email_not_found_when_base_row_missing(self, monkeypatch):
+        _patch_get_conversation_common(monkeypatch, base_row=None)
+        with pytest.raises(EmailNotFound):
+            emails_service.get_conversation(
+                _MAILBOX_ID, _ACCOUNT_ID, "missing", _USER_ID,
+            )
+
+    def test_account_not_found(self, monkeypatch):
+        _patch_get_conversation_common(monkeypatch)
+        with pytest.raises(AccountNotFound):
+            emails_service.get_conversation(
+                _MAILBOX_ID, "nonexistent", "m_base", _USER_ID,
+            )
+
+    def test_provider_external_error_translated_to_external_api_error(self, monkeypatch):
+        # A genuine provider failure (EmailExternalAPIError) surfaces as
+        # ExternalAPIError (502) via translate_core_error — NOT the
+        # ConversationFetchError fallback.
+        _patch_get_conversation_common(
+            monkeypatch,
+            fake_client_kwargs={
+                "fetch_conversation_exc": EmailExternalAPIError("thread fetch failed"),
+            },
+        )
+        with pytest.raises(ExternalAPIError):
+            emails_service.get_conversation(
+                _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+            )
+
+    def test_get_metadata_database_error_translated(self, monkeypatch):
+        from database.errors.exceptions import QueryError as DbQueryError
+        from api.errors.exceptions import DatabaseQueryError
+        _patch_get_conversation_common(monkeypatch)
+
+        def _raise(_aid, _mid):
+            raise DbQueryError("get_metadata fail")
+        monkeypatch.setattr(
+            emails_service.email_metadata_store, "get_metadata", _raise,
+        )
+        with pytest.raises(DatabaseQueryError):
+            emails_service.get_conversation(
+                _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+            )
+
+    def test_ownership_checked_first(self, monkeypatch):
+        from api.errors.exceptions import Forbidden
+        _patch_get_conversation_common(monkeypatch)
+
+        def _deny(_mb, _uid):
+            raise Forbidden("Foreign mailbox in conversation ownership test.")
+        monkeypatch.setattr(emails_service, "ensure_mailbox_access", _deny)
+        with pytest.raises(Forbidden):
+            emails_service.get_conversation(
+                _MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID,
+            )
+
+
+def test_conversation_fetch_error_maps_to_502():
+    # Lock the _STATUS_MAP registration: ConversationFetchError → 502, same
+    # family as EmailContentFetchError / EmailReplyContextError.
+    from fastapi import status
+    from api.errors.handlers import _STATUS_MAP
+    assert _STATUS_MAP[ConversationFetchError] == status.HTTP_502_BAD_GATEWAY

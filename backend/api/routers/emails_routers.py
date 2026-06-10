@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 
 from api.routers.routers_helpers import require_session
 from api.schemas.email import (
+    ConversationOut,
     EmailContentOut,
     EmailPageOut,
     EmailSendRequest,
@@ -54,6 +55,17 @@ def list_emails(
             "TRASH/SPAM by default (unless box explicitly selects one of them)."
         ),
     ),
+    group_by_thread: bool = Query(
+        default=False,
+        description=(
+            "When true, collapse each conversation (thread) into one row "
+            "(conversation view): the row represents the thread's most-recent "
+            "message, its is_read/has_attachments/is_favorite are aggregated "
+            "across the thread, thread_message_count is the number of messages "
+            "of the thread in this box, and total counts threads. Favourites "
+            "listings pass false (favourites are not grouped)."
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     user_id: str = Depends(require_session),
@@ -64,10 +76,12 @@ def list_emails(
     Returns an ``EmailPageOut`` envelope (``items`` + exact ``total`` of
     the filtered set + applied ``limit`` / ``offset``) so the client can
     render numbered pagination. Optionally filter to a single account,
-    by free text, or by favourite status.
+    by free text, or by favourite status, or collapse threads into
+    conversation rows via ``group_by_thread``.
     """
     return emails_service.list_emails(
         mailbox_id, box, user_id, account_id, q, limit, offset, favorite,
+        group_by_thread,
     )
 
 
@@ -233,4 +247,29 @@ def get_reply_context(
     """
     return emails_service.get_reply_context(
         mailbox_id, account_id, provider_message_id, action, user_id,
+    )
+
+
+@favorites_router.get(
+    "/accounts/{account_id}/emails/{provider_message_id}/conversation",
+    response_model=ConversationOut,
+)
+def get_conversation(
+    mailbox_id: str,
+    account_id: str,
+    provider_message_id: str,
+    user_id: str = Depends(require_session),
+) -> ConversationOut:
+    """Return the full message chain of a conversation (conversation viewer).
+
+    Read + lazy sync (not Provider-First — only reads from the provider and
+    completes the local copy). Identified by ``provider_message_id`` (not
+    ``thread_id``) because Outlook's ``conversationId`` is base64 with
+    ``/`` / ``+`` / ``=`` and would break a path segment; the backend
+    derives the thread from the message row. Mounted on the
+    ``favorites_router`` for the same URL-shape reason as
+    ``reply-context``.
+    """
+    return emails_service.get_conversation(
+        mailbox_id, account_id, provider_message_id, user_id,
     )

@@ -47,6 +47,55 @@ def test_list_empty_returns_empty_array(test_client):
     assert resp.json() == []
 
 
+def test_list_returns_only_owned_vmboxes(test_client, isolated_db):
+    # Owner-scoping of GET /virtual-mailboxes: two vmboxes owned by the
+    # authenticated user must be returned, and one inserted under a DIFFERENT
+    # owner must be excluded. The empty-list test alone never exercises the
+    # populated owner-scoped path, so a cross-user leak in
+    # LIST_VIRTUAL_MAILBOXES_BY_OWNER's ``WHERE owner_user_id = %s`` would go
+    # unnoticed.
+    import uuid
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    first = test_client.post(VMB_URL, json={
+        "display_name": "Owned A",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {},
+    })
+    assert first.status_code == 201, first.text
+    second = test_client.post(VMB_URL, json={
+        "display_name": "Owned B",
+        "account_ids": [_SEEDED_OUTLOOK_ACCOUNT],
+        "filter_payload": {},
+    })
+    assert second.status_code == 201, second.text
+    owned_ids = {
+        first.json()["virtual_mailbox_id"],
+        second.json()["virtual_mailbox_id"],
+    }
+
+    # A vmbox owned by a different user — must never surface in this list.
+    foreign_id = str(uuid.uuid4())
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO virtual_mailboxes
+                (virtual_mailbox_id, owner_user_id, display_name,
+                 scope_payload, filter_payload)
+            VALUES (%s, '11111111-1111-4000-a000-111111111111',
+                    'foreign', '{"account_ids":[]}'::jsonb, '{}'::jsonb)
+            """,
+            (foreign_id,),
+        )
+
+    resp = test_client.get(VMB_URL)
+    assert resp.status_code == 200, resp.text
+    returned_ids = {row["virtual_mailbox_id"] for row in resp.json()}
+    assert returned_ids == owned_ids
+    assert foreign_id not in returned_ids
+
+
 def test_create_happy_path(test_client, isolated_db):
     from tests.integration.conftest import TEST_USER_ID
     _reparent_seeded_user(isolated_db, TEST_USER_ID)
@@ -344,6 +393,10 @@ def test_emails_for_virtual_mailbox_filter_by_from_email(test_client, isolated_d
 
 
 def test_emails_for_virtual_mailbox_filter_by_is_favorite(test_client, isolated_db):
+    # The virtual listing now ALWAYS groups by thread (conversation view), so
+    # the two favourites — which share thread_id 'thread-gm-001' in the seed —
+    # collapse into ONE thread row. The is_favorite filter still applies BEFORE
+    # grouping; total counts threads, not messages.
     from tests.integration.conftest import TEST_USER_ID
     _reparent_seeded_user(isolated_db, TEST_USER_ID)
     with isolated_db.cursor() as cur:
@@ -363,10 +416,17 @@ def test_emails_for_virtual_mailbox_filter_by_is_favorite(test_client, isolated_
     assert resp.status_code == 200
     body = resp.json()
     rows = body["items"]
-    ids = {row["provider_message_id"] for row in rows}
-    assert ids == {"gmail-allmail-001", "gmail-allmail-002"}
-    # COUNT(DISTINCT provider_message_id) over the favourite-filtered set.
-    assert body["total"] == 2
+    # One thread row (the two favourites belong to the same thread).
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["thread_id"] == "thread-gm-001"
+    # Representative is the most-recent favourite of the thread; both members
+    # are favourites, so the aggregated row is favourite and counts 2.
+    assert row["provider_message_id"] == "gmail-allmail-002"
+    assert row["is_favorite"] is True
+    assert row["thread_message_count"] == 2
+    # COUNT(DISTINCT thread_key) over the favourite-filtered set → 1 thread.
+    assert body["total"] == 1
 
 
 def test_emails_for_virtual_mailbox_explicit_box_overrides_default(test_client, isolated_db):
