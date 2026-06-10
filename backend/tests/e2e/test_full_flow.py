@@ -1258,6 +1258,96 @@ def test_38b_search_emails_unified_mailbox(e2e_client):
         assert needle_lc in haystack
 
 
+def test_38d_search_operators_is_read_state(e2e_client):
+    """Gmail-style ``is:`` operator against real data: ``is:unread`` returns
+    only unread rows and ``is:read`` only read rows. The two halves are the
+    same logical contract (the read-state filter) and stay in one test."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    unread = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "is:unread"},
+    )
+    _assert_ok(unread)
+    for e in unread.json()["items"]:
+        assert e["is_read"] is False, (
+            f"is:unread returned read row {e.get('provider_message_id')}"
+        )
+
+    read = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "is:read"},
+    )
+    _assert_ok(read)
+    for e in read.json()["items"]:
+        assert e["is_read"] is True, (
+            f"is:read returned unread row {e.get('provider_message_id')}"
+        )
+
+
+def test_38e_search_operator_in_overrides_box(e2e_client):
+    """``in:sent`` in q overrides the route box: even with ``box=ALL_MAIL`` every
+    returned row is in the SENT box, and ``total`` reflects the overridden box."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    overridden = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "in:sent"},
+    )
+    _assert_ok(overridden)
+    body = overridden.json()
+    for e in body["items"]:
+        assert e["box"] == "SENT", (
+            f"in:sent returned row {e.get('provider_message_id')} in box {e['box']}"
+        )
+    # The in:sent override must reach the SAME set as querying box=SENT directly:
+    # total is computed over the overridden (SENT) box, not the route's ALL_MAIL.
+    direct_sent = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "SENT", "account_id": GMAIL_ACCOUNT_ID},
+    )
+    _assert_ok(direct_sent)
+    assert body["total"] == direct_sent.json()["total"]
+
+
+def test_38f_search_operator_and_combination_reduces_results(e2e_client):
+    """Combining an operator with ``is:read`` via AND narrows (never widens) the
+    result set, and every row of the combined query matches both predicates."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    base = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "is:read"},
+    )
+    _assert_ok(base)
+    base_total = base.json()["total"]
+
+    combined = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={
+            "box": "ALL_MAIL",
+            "account_id": GMAIL_ACCOUNT_ID,
+            "q": "is:read is:unread",
+        },
+    )
+    _assert_ok(combined)
+    body = combined.json()
+    # is:read AND is:unread is a contradiction → strictly empty, and never more
+    # than the is:read-only set.
+    assert body["items"] == []
+    assert body["total"] == 0
+    assert body["total"] <= base_total
+
+
 def test_38c_pagination_pages_do_not_overlap(e2e_client):
     """Paginate the Gmail ALL_MAIL listing with two adjacent pages and
     verify the envelope contract end-to-end against the real account:
@@ -1296,6 +1386,59 @@ def test_38c_pagination_pages_do_not_overlap(e2e_client):
     assert first_ids.isdisjoint(second_ids), (
         "Adjacent pages must not overlap — total ordering tie-break broken."
     )
+
+
+def test_38g_search_operator_before_after(e2e_client):
+    """Date operators ``before:``/``after:`` against the real Gmail account.
+
+    The primary value of this test is proving the runtime carries the IANA
+    timezone database (``tzdata``): the parser resolves the date as midnight
+    in ``Europe/Madrid`` (real CET/CEST, not a fixed offset), so a deployment
+    missing ``tzdata`` would raise at query time and 500 these requests — a
+    failure no other test layer can catch (unit/integration share the same
+    interpreter but only E2E exercises the deployed runtime + real DB). Fixed
+    boundaries keep the assertions deterministic against a live, mutating
+    inbox: a far-past ``after:`` lets every row through, while a far-future
+    ``after:`` and a far-past ``before:`` must return strictly nothing."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    # after: a date far in the past — every real email qualifies. Assert the
+    # per-row contract (received_at on/after the boundary; ISO-8601 strings
+    # sort chronologically) and, implicitly, that the request did not 500
+    # (which is exactly what a missing tzdata would cause).
+    after_past = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "after:2000-01-01"},
+    )
+    _assert_ok(after_past)
+    for e in after_past.json()["items"]:
+        assert e["received_at"] >= "2000-01-01", (
+            f"after:2000-01-01 returned row {e.get('provider_message_id')} "
+            f"with received_at {e['received_at']} before the boundary"
+        )
+
+    # after: a date far in the future — nothing qualifies.
+    after_future = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "after:2099-01-01"},
+    )
+    _assert_ok(after_future)
+    after_future_body = after_future.json()
+    assert after_future_body["items"] == []
+    assert after_future_body["total"] == 0
+
+    # before: a date far in the past — nothing qualifies either.
+    before_past = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": "before:2000-01-01"},
+    )
+    _assert_ok(before_past)
+    before_past_body = before_past.json()
+    assert before_past_body["items"] == []
+    assert before_past_body["total"] == 0
 
 
 def test_39_get_email_content_gmail(e2e_client):

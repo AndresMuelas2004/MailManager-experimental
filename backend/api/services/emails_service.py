@@ -78,7 +78,7 @@ from api.services.services_helpers import (
     load_wrapped_app_credentials,
     mark_as_deleted_batch,
     move_to_trash_batch,
-    parse_search_tokens,
+    parse_search_query,
     persist_email_content,
     persist_email_metadata_batch,
     raise_on_silent_auth_errors,
@@ -869,6 +869,16 @@ def list_emails(
         if not account_ids:
             return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
 
+    # ``parse_search_query`` is a pure string operation (no DB) computed
+    # once and shared by BOTH calls below, so ``count_filtered`` counts
+    # EXACTLY the set ``list_filtered`` lists (same box / tokens /
+    # extra_filters / box_not_in / operator_clauses). Two separate try
+    # blocks keep the failure messages unique per raise site (API
+    # CLAUDE.md §7).
+    parsed = parse_search_query(q)
+    tokens = parsed.tokens
+    operator_clauses = parsed.operator_clauses
+
     extra_filters: dict[str, Any] = {}
     box_arg: str | None = box
     box_not_in: list[str] | None = None
@@ -884,18 +894,22 @@ def list_emails(
             box_arg = None
             box_not_in = ["TRASH", "SPAM"]
 
-    # ``tokens`` is a pure string split (no DB) computed once and shared
-    # by BOTH calls below, so ``count_filtered`` counts EXACTLY the set
-    # ``list_filtered`` lists (same box / tokens / extra_filters /
-    # box_not_in). Two separate try blocks keep the failure messages
-    # unique per raise site (API CLAUDE.md §7).
-    tokens = parse_search_tokens(q)
+    # ``in:`` overrides the box shown — it wins over the route's ``box``
+    # and over the Favourites ``ALL_MAIL`` anchor (``is_favorite`` stays
+    # in ``extra_filters``, so ``in:sent`` means "favourites in Sent").
+    # Setting ``box_arg`` and clearing ``box_not_in`` keeps the
+    # mutually-exclusive contract the repository relies on.
+    if parsed.box_override is not None:
+        box_arg = parsed.box_override
+        box_not_in = None
+
     try:
         rows = email_metadata_store.list_filtered(
             account_ids, box_arg, tokens, limit, offset,
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
             group_by_thread=group_by_thread,
+            operator_clauses=operator_clauses or None,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
@@ -914,6 +928,7 @@ def list_emails(
             extra_filters=extra_filters or None,
             box_not_in=box_not_in,
             group_by_thread=group_by_thread,
+            operator_clauses=operator_clauses or None,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
