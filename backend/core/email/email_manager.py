@@ -5,6 +5,7 @@ from .email_client import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
     EmailClient,
@@ -484,6 +485,27 @@ class EmailManager:
         except Exception as exc:
             raise EmailExternalAPIError(
                 f"Unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def fetch_conversation(
+        self, account_label: str, thread_id: str,
+    ) -> list[ConversationMessage]:
+        """Fetch every message of a thread (metadata + state, NO body).
+
+        Delegates to the matching client's
+        :py:meth:`EmailClient.fetch_conversation`. Used by the
+        conversation viewer to reconstruct the full thread (including
+        messages the app never synced) and lazily complete the local
+        mailbox copy.
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.fetch_conversation(thread_id)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected fetch_conversation error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def list_message_attachments(

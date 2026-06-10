@@ -121,6 +121,44 @@ class ReplyContext:
 
 
 @dataclass
+class ConversationMessage:
+    """One message of a provider thread (metadata + state, NO body).
+
+    Returned by :py:meth:`EmailClient.fetch_conversation`. Shaped to
+    mirror :py:class:`EmailMetadata` (same columns + the service-stamped
+    ``account_id``) so the service can convert each instance into an
+    ``EmailMetadata`` and reuse the shared metadata-persistence path
+    when "completing the mailbox" with the messages a thread carries
+    that were never synced locally.
+
+    The one field that justifies a dedicated dataclass instead of
+    reusing ``EmailMetadata`` is ``is_favorite``: the favourite mark
+    lives on the ``email_metadata.is_favorite`` column, not on the sync
+    dataclass, so the provider's fresh favourite state for each message
+    would be lost otherwise. The service maps ``ConversationMessage →
+    EmailMetadata`` dropping ``is_favorite`` (applied separately via
+    ``update_favorite``) and uses the value directly for the viewer
+    response.
+
+    No body is carried — each message body is fetched lazily via the
+    existing ``fetch_email_content`` cache-aside path when the viewer
+    expands it.
+    """
+    provider_message_id: str
+    thread_id: str
+    from_email: str
+    from_name: str
+    subject: str
+    received_at: datetime
+    is_read: bool
+    is_favorite: bool
+    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH"
+    to_email: str = ""
+    to_name: str = ""
+    account_id: str = ""  # Stamped by the service layer before persistence
+
+
+@dataclass
 class DraftMetadata:
     """
     Normalized draft metadata returned by provider clients after creating a draft.
@@ -513,6 +551,25 @@ class EmailClient(ABC):
         service layer translates it into ``EmailReplyContextError``
         (HTTP 502) or :py:class:`EmailNotFound` (HTTP 404) depending
         on the underlying status.
+        """
+
+    @abstractmethod
+    def fetch_conversation(self, thread_id: str) -> list[ConversationMessage]:
+        """Fetch every message of a thread (metadata + state, NO body).
+
+        ``thread_id`` is the provider thread key (Gmail ``threadId`` /
+        Outlook ``conversationId``). Returns the thread's messages —
+        including those in Sent / Spam / Trash — as
+        :py:class:`ConversationMessage` instances sorted chronologically
+        ascending by ``received_at`` (oldest first). Bodies are NOT
+        fetched here; the viewer requests each body lazily via
+        :py:meth:`fetch_email_content`.
+
+        Must raise :py:class:`EmailNotAuthenticatedError` when the
+        client is not authenticated and a typed ``CoreError`` subclass
+        on any provider-side failure. ``account_id`` is left as ``""``
+        for the service layer to stamp before persistence (same
+        contract as :py:class:`EmailMetadata`).
         """
 
     @abstractmethod

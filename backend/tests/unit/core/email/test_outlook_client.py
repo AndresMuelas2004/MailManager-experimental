@@ -35,6 +35,7 @@ from core.email.outlook_client import (
     _DRAFTS_MAX_RETRIES,
     _DRAFTS_MAX_TOTAL,
     _FOLDER_TO_BOX,
+    _parse_graph_datetime,
 )
 
 
@@ -2922,3 +2923,187 @@ class TestClassifyAttachments:
         assert "logo123" in cid_map
         assert cid_map["logo123"].startswith("data:IMAGE/PNG;base64,")
         assert downloadable == []
+
+
+# ── _parse_graph_datetime ───────────────────────────────────────────
+
+
+class TestParseGraphDatetime:
+    """Module-level helper shared by _parse_graph_message and fetch_conversation."""
+
+    def test_parses_iso_z_suffix(self):
+        result = _parse_graph_datetime("2025-06-01T12:00:00Z")
+        assert result.year == 2025
+        assert result.month == 6
+        assert result.tzinfo is not None
+
+    def test_empty_falls_back_to_now(self):
+        result = _parse_graph_datetime("")
+        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+
+    def test_none_falls_back_to_now(self):
+        result = _parse_graph_datetime(None)
+        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+
+    def test_malformed_falls_back_to_now(self):
+        result = _parse_graph_datetime("not-a-date")
+        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+
+
+class TestParseGraphMessageSentDateFallback:
+    """_parse_graph_message was refactored to reuse _parse_graph_datetime."""
+
+    def test_missing_received_date_falls_back_to_now(self):
+        # A message with no receivedDateTime still parses (helper → now). The
+        # sentDateTime fallback itself is exercised at the fetch_conversation
+        # level, where the raw message is still available.
+        msg = _make_graph_message()
+        del msg["receivedDateTime"]
+        result = OutlookClient._parse_graph_message(msg, "SENT")
+        assert (datetime.now(timezone.utc) - result.received_at).total_seconds() < 5
+
+
+# ── fetch_conversation ──────────────────────────────────────────────
+
+
+class TestFetchConversation:
+    """Outlook conversation viewer — $filter=conversationId → members."""
+
+    _FOLDER_MAP = {"id-sent": "SENT", "id-trash": "TRASH", "id-spam": "SPAM"}
+
+    @staticmethod
+    def _conv_message(
+        msg_id: str,
+        *,
+        received: str | None = "2025-06-01T12:00:00Z",
+        sent: str | None = None,
+        parent_folder_id: str = "",
+        flag_status: str | None = None,
+        is_read: bool = True,
+        conversation_id: str = "conv1",
+    ) -> dict:
+        msg: dict = {
+            "id": msg_id,
+            "conversationId": conversation_id,
+            "from": {"emailAddress": {"address": "a@x.com", "name": "A"}},
+            "subject": "Hello",
+            "isRead": is_read,
+        }
+        if received is not None:
+            msg["receivedDateTime"] = received
+        if sent is not None:
+            msg["sentDateTime"] = sent
+        if parent_folder_id:
+            msg["parentFolderId"] = parent_folder_id
+        if flag_status is not None:
+            msg["flag"] = {"flagStatus": flag_status}
+        return msg
+
+    def test_not_authenticated_raises(self, client: OutlookClient):
+        assert client._access_token is None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.fetch_conversation("conv1")
+
+    def test_parses_members_box_and_favorite(self):
+        client = _make_authenticated_client()
+        messages = [
+            self._conv_message("m1", parent_folder_id="id-inbox", flag_status="flagged"),
+            self._conv_message("m2", parent_folder_id="id-sent", flag_status="notFlagged"),
+            self._conv_message("m3", parent_folder_id="id-spam"),
+        ]
+        with patch.object(client, "_resolve_special_folder_ids", return_value=self._FOLDER_MAP), \
+             patch.object(client, "_graph_request", return_value={"value": messages}):
+            members = client.fetch_conversation("conv1")
+
+        by_id = {m.provider_message_id: m for m in members}
+        # box derives from parentFolderId via the same folder map as sync.
+        assert by_id["m1"].box == "ALL_MAIL"
+        assert by_id["m2"].box == "SENT"
+        assert by_id["m3"].box == "SPAM"
+        # favourite derives from flag.flagStatus == "flagged".
+        assert by_id["m1"].is_favorite is True
+        assert by_id["m2"].is_favorite is False
+        assert by_id["m3"].is_favorite is False
+        assert by_id["m1"].thread_id == "conv1"
+        assert by_id["m1"].account_id == ""
+
+    def test_percent_encodes_conversation_id_and_omits_orderby(self):
+        client = _make_authenticated_client()
+        captured: dict = {}
+
+        def _capture(method, url, extra_headers=None):
+            captured["url"] = url
+            captured["headers"] = extra_headers
+            return {"value": []}
+
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", side_effect=_capture):
+            client.fetch_conversation("AAk/ABB+id==")
+
+        url = captured["url"]
+        # base64 conversationId chars must be percent-encoded exactly once and
+        # stay a single quoted $filter value.
+        assert "%2F" in url  # '/'
+        assert "%2B" in url  # '+'
+        assert "%3D" in url  # '='
+        assert "/" not in url.split("conversationId%20eq%20'")[1].split("'")[0]
+        # $orderby would trigger Graph 400 InefficientFilter with this filter.
+        assert "$orderby" not in url
+        assert "conversationId" in url
+
+    def test_uses_sent_date_when_received_missing(self):
+        client = _make_authenticated_client()
+        # A Sent-folder message often lacks receivedDateTime; the ordering
+        # timestamp must fall back to sentDateTime so it sorts correctly.
+        messages = [
+            self._conv_message(
+                "m-sent", received=None, sent="2025-06-02T08:00:00Z",
+                parent_folder_id="id-sent",
+            ),
+            self._conv_message(
+                "m-inbox", received="2025-06-01T08:00:00Z", parent_folder_id="id-inbox",
+            ),
+        ]
+        with patch.object(client, "_resolve_special_folder_ids", return_value=self._FOLDER_MAP), \
+             patch.object(client, "_graph_request", return_value={"value": messages}):
+            members = client.fetch_conversation("conv1")
+
+        sent = next(m for m in members if m.provider_message_id == "m-sent")
+        assert sent.received_at == _parse_graph_datetime("2025-06-02T08:00:00Z")
+        # Ascending order: the inbox message (older) precedes the sent one.
+        assert [m.provider_message_id for m in members] == ["m-inbox", "m-sent"]
+
+    def test_follows_pagination(self):
+        client = _make_authenticated_client()
+        page1 = {
+            "value": [self._conv_message("m1", received="2025-06-01T08:00:00Z")],
+            "@odata.nextLink": "https://graph/next-page",
+        }
+        page2 = {
+            "value": [self._conv_message("m2", received="2025-06-02T08:00:00Z")],
+        }
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", side_effect=[page1, page2]):
+            members = client.fetch_conversation("conv1")
+        assert {m.provider_message_id for m in members} == {"m1", "m2"}
+
+    def test_empty_value_returns_empty_list(self):
+        # A purged/deleted Outlook conversation returns value: [] (not 404) →
+        # an empty member list (ConversationOut(messages=[]) at the service).
+        client = _make_authenticated_client()
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", return_value={"value": []}):
+            assert client.fetch_conversation("conv-gone") == []
+
+    def test_skips_unparseable_member_without_aborting(self):
+        client = _make_authenticated_client()
+        messages = [
+            self._conv_message("ok", received="2025-06-01T08:00:00Z"),
+            # ``from`` as a string blows up _parse_graph_message; skip it.
+            {"id": "bad", "conversationId": "conv1", "from": "not-a-dict",
+             "subject": "x", "receivedDateTime": "2025-06-02T08:00:00Z", "isRead": True},
+        ]
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", return_value={"value": messages}):
+            members = client.fetch_conversation("conv1")
+        assert [m.provider_message_id for m in members] == ["ok"]
