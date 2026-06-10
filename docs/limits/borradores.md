@@ -60,7 +60,7 @@ Notas:
 |---|---|---|
 | Destinatarios "Para" / "Cc" / "Cco" | Listas **opcionales** (pueden ir vacías) | Contrato del borrador (a diferencia del envío directo, que exige ≥ 1 en "Para") |
 | Asunto | **Opcional**, sin mínimo ni máximo | Contrato del borrador |
-| Cuerpo | **Opcional**, sin mínimo ni máximo; **texto plano** | Contrato del borrador |
+| Cuerpo | **Opcional** (sin mínimo), máximo **1 000 000** caracteres; es **HTML** del editor enriquecido, saneado en el servidor antes de persistir | Contrato del borrador (`DraftCreate.body` / `DraftUpdate.body`); el tope, el saneamiento y la allowlist exacta viven en [composicion-y-envio.md](./composicion-y-envio.md) |
 | `reply_kind` (tipo de respuesta) | Solo `reply`, `reply_all` o `forward` (o vacío) | Validado en backend (Pydantic) y a nivel de columna (CHECK) |
 | Forma de cada dirección de email | Regex permisiva (`local@dominio.tld`), **solo cliente** | El backend del borrador no revalida la forma; ver [composicion-y-envio.md](./composicion-y-envio.md) |
 
@@ -103,7 +103,7 @@ El detalle técnico de un `502` (clase de excepción, error concreto del proveed
 
 | No soportado | Porqué breve |
 |---|---|
-| **Cuerpo rich-text / formato en el borrador** | El cuerpo es un `<textarea>` plano y el borrador se guarda y se manda como `text/plain`. Pegar HTML guarda el marcado en crudo. Un editor enriquecido introduciría un campo de formato aparte (no revivir el antiguo `body_html`); fuera del MVP. |
+| **Imágenes incrustadas / colores / tamaños / tablas en el cuerpo del borrador** | El cuerpo del borrador es HTML con formato (negrita, cursiva, subrayado, listas, enlaces), pero el editor y el saneador no admiten imágenes inline, color, tamaño de letra ni tablas. Catálogo completo del formato admitido y de lo que se limpia: [composicion-y-envio.md](./composicion-y-envio.md). |
 | **Bajar más de 100 borradores por cuenta** | La sincronización se queda con los 100 más recientes. Borradores antiguos más allá de ese tope no se traen. Suficiente para el MVP; subir el tope multiplicaría las llamadas al proveedor. |
 | **Cambiar la cuenta de origen de un borrador existente** | Implicaría mover el borrador y sus adjuntos a otra cuenta del proveedor. La app bloquea el selector; la alternativa es descartar y empezar de cero. |
 | **Merge en la sincronización** | La sincronización es un espejo del proveedor (replace): no fusiona estados ni resuelve conflictos campo a campo. El proveedor es la fuente de verdad. |

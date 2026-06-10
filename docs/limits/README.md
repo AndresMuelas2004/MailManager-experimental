@@ -23,7 +23,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [bandejas-ficticias.md](bandejas-ficticias.md) — Criterios de filtro admitidos, validaciones y límites de la vista virtual.
 
 ### Escribir y enviar
-- [composicion-y-envio.md](composicion-y-envio.md) — Validaciones mínimas del envío directo, reintentos y códigos de error.
+- [composicion-y-envio.md](composicion-y-envio.md) — Validaciones mínimas del envío directo, tope de tamaño del cuerpo, allowlist del saneador de texto enriquecido, reintentos y códigos de error.
 - [borradores.md](borradores.md) — Cap de borradores por cuenta, reintentos de envío y asimetrías Gmail/Outlook.
 - [responder-y-reenviar.md](responder-y-reenviar.md) — Recorte de la cita, permisos exactos, requisitos de threading y herencia de adjuntos.
 
