@@ -16,8 +16,8 @@ from api.errors.exceptions import (
     DatabaseQueryError,
     ExternalAPIError,
 )
-from api.schemas.account import AccountConnectResponse, AccountCreate, AccountOut, AccountUpdate
-from api.services import accounts_service
+from api.schemas.account import AccountConnectStartResponse, AccountCreate, AccountOut, AccountUpdate
+from api.services import accounts_service, oauth_pending
 from core.email import EmailAuthError, EmailManager
 from database import QueryError
 from tests.shared.email_fakes import FakeEmailClient
@@ -304,17 +304,25 @@ class TestDeleteAccount:
 
 
 # ------------------------------------------------------------------
-# connect_account
+# start_account_connect / complete_account_connect
 # ------------------------------------------------------------------
 
 
-class TestConnectAccount:
+@pytest.fixture(autouse=True)
+def _clean_pending_registry():
+    """The pending-connect registry is module-level state; isolate tests."""
+    oauth_pending._pending.clear()
+    yield
+    oauth_pending._pending.clear()
+
+
+class TestConnectAccountFlow:
 
     _MID = _FAKE_RECORD["mailbox_id"]
     _AID = _FAKE_RECORD["account_id"]
 
-    def _patch_connect_deps(self, monkeypatch, *, store=None, auth_exc=None):
-        """Wire all connect_account dependencies."""
+    def _patch_connect_deps(self, monkeypatch, *, store=None, auth_exc=None, auth_return=None):
+        """Wire all connect-flow dependencies."""
         _patch_access(monkeypatch)
         if store is None:
             store = FakeAccountStore(get_return=_FAKE_RECORD)
@@ -326,6 +334,13 @@ class TestConnectAccount:
         )
         monkeypatch.setattr(accounts_service, "unwrap_secret", lambda v: v)
 
+        if auth_return is None:
+            auth_return = {
+                "access_token": "tok",
+                "refresh_token": "ref",
+                "email_address": "user@example.com",
+            }
+
         def _build_manager(accounts):
             manager = EmailManager()
             for acc in accounts:
@@ -333,87 +348,112 @@ class TestConnectAccount:
                 aid = str(acc.get("account_id") or "")
                 label = f"{mid}__{aid}"
                 manager.add_client(
-                    FakeEmailClient(
-                        label,
-                        auth_exc=auth_exc,
-                        auth_return={"access_token": "tok", "refresh_token": "ref", "email_address": "user@example.com"},
-                    )
+                    FakeEmailClient(label, auth_exc=auth_exc, auth_return=auth_return)
                 )
             return manager
 
         monkeypatch.setattr(accounts_service, "build_manager_for_accounts", _build_manager)
+        return store
 
-    def test_happy_path_returns_connect_response(self, monkeypatch):
+    def _start(self):
+        return accounts_service.start_account_connect(self._MID, self._AID, "user-1")
+
+    # ---- start ----
+
+    def test_start_returns_authorization_url_and_registers_pending(self, monkeypatch):
         self._patch_connect_deps(monkeypatch)
-        result = accounts_service.connect_account(self._MID, self._AID, "user-1")
-        assert isinstance(result, AccountConnectResponse)
-        assert result.connected is True
-        assert result.email_address == "user@example.com"
+        result = self._start()
+        assert isinstance(result, AccountConnectStartResponse)
+        assert result.authorization_url.startswith("https://")
+        assert result.state == "fake-state"
+        pending = oauth_pending._pending.get("fake-state")
+        assert pending is not None
+        assert pending.account_id == self._AID
+        assert pending.user_id == "user-1"
 
-    def test_not_found_when_none(self, monkeypatch):
+    def test_start_not_found_when_none(self, monkeypatch):
         _patch_access(monkeypatch)
         store = FakeAccountStore(get_return=None)
         monkeypatch.setattr(accounts_service, "account_store", store)
         with pytest.raises(AccountNotFound):
-            accounts_service.connect_account(self._MID, self._AID, "user-1")
+            self._start()
 
-    def test_core_error_during_connect_translated(self, monkeypatch):
+    def test_start_core_error_translated(self, monkeypatch):
         self._patch_connect_deps(monkeypatch, auth_exc=EmailAuthError("token rejected"))
         with pytest.raises(AccountConnectAuthError):
-            accounts_service.connect_account(self._MID, self._AID, "user-1")
+            self._start()
 
-    def test_generic_exception_during_connect(self, monkeypatch):
+    def test_start_generic_exception_wrapped_by_manager(self, monkeypatch):
         self._patch_connect_deps(monkeypatch, auth_exc=RuntimeError("crash"))
-        with pytest.raises(ExternalAPIError, match="Unexpected connect_account error"):
-            accounts_service.connect_account(self._MID, self._AID, "user-1")
+        with pytest.raises(ExternalAPIError, match="Unexpected begin_connect error"):
+            self._start()
 
-    def test_database_error_on_upsert_tokens_translated(self, monkeypatch):
+    # ---- complete ----
+
+    def test_complete_happy_path_persists_tokens(self, monkeypatch):
+        store = self._patch_connect_deps(monkeypatch)
+        start = self._start()
+
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+
+        assert result["ok"] is True
+        assert result["provider"] == "gmail"
+        assert len(store.upserted_tokens) == 1
+        _, _, provider, payload = store.upserted_tokens[0]
+        assert provider == "gmail"
+        assert payload["access_token"] == "tok"
+        assert payload["email_address"] == "user@example.com"
+        # single-use: the pending entry is consumed
+        assert oauth_pending._pending == {}
+
+    def test_complete_unknown_state_reports_expired(self, monkeypatch):
         self._patch_connect_deps(monkeypatch)
-        store = accounts_service.account_store
+        result = accounts_service.complete_account_connect("nope", "auth-code", None, None)
+        assert result["ok"] is False
+        assert "unknown or expired" in result["message"]
+
+    def test_complete_provider_denied_reports_error_without_exchange(self, monkeypatch):
+        store = self._patch_connect_deps(monkeypatch)
+        start = self._start()
+        result = accounts_service.complete_account_connect(
+            start.state, None, "access_denied", "User cancelled",
+        )
+        assert result["ok"] is False
+        assert "access_denied" in result["message"]
+        assert store.upserted_tokens == []
+
+    def test_complete_missing_code_reports_error(self, monkeypatch):
+        self._patch_connect_deps(monkeypatch)
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "", None, None)
+        assert result["ok"] is False
+        assert "did not include a code" in result["message"]
+
+    def test_complete_core_error_reports_translated_message(self, monkeypatch):
+        self._patch_connect_deps(monkeypatch)
+        start = self._start()
+        # Make the exchange fail: rebuild managers whose client raises.
+        self._patch_connect_deps(monkeypatch, auth_exc=EmailAuthError("token rejected"))
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is False
+        assert "token rejected" in result["message"]
+
+    def test_complete_upsert_failure_reports_error(self, monkeypatch):
+        store = self._patch_connect_deps(monkeypatch)
+        start = self._start()
 
         def _fail(*args, **kwargs):
             raise QueryError("DB fail")
 
         monkeypatch.setattr(store, "upsert_tokens", _fail)
-        with pytest.raises(DatabaseQueryError):
-            accounts_service.connect_account(self._MID, self._AID, "user-1")
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is False
+        assert "persist tokens" in result["message"]
 
-    def test_generic_exception_on_upsert_tokens(self, monkeypatch):
-        self._patch_connect_deps(monkeypatch)
-        store = accounts_service.account_store
-
-        def _fail(*args, **kwargs):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(store, "upsert_tokens", _fail)
-        with pytest.raises(ApiError, match="Failed to persist tokens"):
-            accounts_service.connect_account(self._MID, self._AID, "user-1")
-
-    def test_connect_email_address_none_when_missing(self, monkeypatch):
-        _patch_access(monkeypatch)
-        store = FakeAccountStore(get_return=_FAKE_RECORD)
-        monkeypatch.setattr(accounts_service, "account_store", store)
-
-        fake_creds = {"client_id": "fake", "client_secret": SecretStr("fake")}
-        monkeypatch.setattr(
-            accounts_service, "load_wrapped_app_credentials", lambda p: fake_creds,
-        )
-        monkeypatch.setattr(accounts_service, "unwrap_secret", lambda v: v)
-
-        def _build_manager(accounts):
-            manager = EmailManager()
-            for acc in accounts:
-                mid = str(acc.get("mailbox_id") or "")
-                aid = str(acc.get("account_id") or "")
-                label = f"{mid}__{aid}"
-                manager.add_client(
-                    FakeEmailClient(
-                        label,
-                        auth_return={"access_token": "tok", "refresh_token": "ref"},
-                    )
-                )
-            return manager
-
-        monkeypatch.setattr(accounts_service, "build_manager_for_accounts", _build_manager)
-        result = accounts_service.connect_account(self._MID, self._AID, "user-1")
-        assert result.email_address is None
+    def test_complete_account_gone_reports_error(self, monkeypatch):
+        store = self._patch_connect_deps(monkeypatch)
+        start = self._start()
+        store._get_return = None
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is False
+        assert "no longer exists" in result["message"]

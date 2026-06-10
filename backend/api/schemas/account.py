@@ -49,14 +49,18 @@ class AccountOut(BaseModel):
     email_address: str | None = None
 
 
-class AccountConnectResponse(BaseModel):
+class AccountConnectStartResponse(BaseModel):
     """
-    Response model for account connection checks.
+    Response model for starting the interactive account-connect flow.
+
+    The connection is not established yet: the client must open
+    ``authorization_url`` in the user's browser; the provider redirects to
+    the API's OAuth callback, which completes the exchange and persists the
+    tokens.
     """
 
-    connected: bool
     provider: str
     account_id: str
     account_label: str
-    email_address: str | None = None
-    message: str
+    authorization_url: str
+    state: str

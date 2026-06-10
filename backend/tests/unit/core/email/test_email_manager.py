@@ -95,31 +95,37 @@ def test_authenticate_all_silent_records_errors_and_continues(
     assert fake_client_ok.authenticate_silent_calls == 1
 
 
-def test_connect_account_authenticates_only_requested_label(
+def test_begin_connect_targets_only_requested_label(
     manager: EmailManager, fake_client_ok, fake_client_ok_2
 ):
-    """Authenticates the specified account without touching others."""
+    """Starts the interactive flow on the specified account without touching others."""
     manager.add_client(fake_client_ok)
     manager.add_client(fake_client_ok_2)
-    manager.connect_account(fake_client_ok.get_account_label())
-    assert fake_client_ok.authenticate_calls == 1
-    assert fake_client_ok_2.authenticate_calls == 0
+    manager.begin_connect(fake_client_ok.get_account_label())
+    assert fake_client_ok.begin_interactive_auth_calls == 1
+    assert fake_client_ok_2.begin_interactive_auth_calls == 0
 
 
-def test_connect_account_not_found_raises_error(manager: EmailManager):
+def test_begin_connect_not_found_raises_error(manager: EmailManager):
     with pytest.raises(EmailAccountNotFoundError, match="not found"):
-        manager.connect_account("missing")
+        manager.begin_connect("missing")
     assert manager.get_last_errors() == {}
 
 
-def test_connect_account_authenticate_failure_propagates_without_recording(
+def test_complete_connect_not_found_raises_error(manager: EmailManager):
+    with pytest.raises(EmailAccountNotFoundError, match="not found"):
+        manager.complete_connect("missing", code="auth-code")
+    assert manager.get_last_errors() == {}
+
+
+def test_connect_failure_propagates_without_recording(
     manager: EmailManager, fake_client_fail_auth
 ):
     """Propagates auth failure without writing to _last_errors (single-account flow)."""
     manager.add_client(fake_client_fail_auth)
     with pytest.raises(Exception, match="boom"):
-        manager.connect_account(fake_client_fail_auth.get_account_label())
-    # Per core_guide.md: connect_account does not record errors in _last_errors
+        manager.begin_connect(fake_client_fail_auth.get_account_label())
+    # Per core_guide.md: the connect flow does not record errors in _last_errors
     # because it is a single-account interactive flow; exception propagation suffices.
     assert manager.get_last_errors() == {}
 

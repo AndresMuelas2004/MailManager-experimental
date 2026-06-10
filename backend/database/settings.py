@@ -156,6 +156,36 @@ _PROVIDER_CREDENTIALS_ENV_VARS: dict[str, str] = {
     "outlook": "MIA_OUTLOOK_CREDENTIALS_PATH",
 }
 
+_DEFAULT_GOOGLE_OAUTH_REDIRECT_URI = "http://localhost:8000/auth/google/callback"
+_DEFAULT_FRONTEND_ORIGIN = "http://localhost:5173"
+
+
+def get_google_oauth_redirect_uri() -> str:
+    """
+    Return the redirect URI for the interactive Google OAuth connect flow.
+
+    Google "Desktop app" clients accept any http://localhost loopback
+    redirect without prior registration, so the default works for local
+    development out of the box. Override with GOOGLE_OAUTH_REDIRECT_URI
+    when the API is reachable under another host. (Outlook does not need
+    an equivalent: its redirect URI comes from the credentials JSON and
+    must match the Azure app registration.)
+    """
+    return os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "").strip() or _DEFAULT_GOOGLE_OAUTH_REDIRECT_URI
+
+
+def get_frontend_origin() -> str:
+    """
+    Return the browser origin of the frontend SPA.
+
+    Used as the postMessage target origin on the OAuth callback page so
+    the connect result is only readable by our own app. Derived from the
+    first entry of CORS_ALLOWED_ORIGINS (same source create_app uses).
+    """
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", _DEFAULT_FRONTEND_ORIGIN)
+    first = raw.split(",")[0].strip()
+    return first or _DEFAULT_FRONTEND_ORIGIN
+
 
 def get_provider_credentials_path(provider: str) -> str | None:
     """

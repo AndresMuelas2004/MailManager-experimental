@@ -22,7 +22,7 @@ from database.repositories import session_repository as session_repo_module
 from database.repositories import user_repository as user_repo_module
 from database.repositories import virtual_mailbox_repository as virtual_mailbox_repo_module
 from api.routers.routers_helpers import require_session
-from api.services import accounts_service, attachments_service, drafts_service, emails_service, services_helpers
+from api.services import accounts_service, attachments_service, drafts_service, emails_service, oauth_pending, services_helpers
 from core.email import EmailManager
 from tests.shared.email_fakes import FakeEmailClient
 
@@ -174,6 +174,14 @@ def _override_require_session(app):
     app.dependency_overrides[require_session] = lambda: TEST_USER_ID
     yield
     app.dependency_overrides.pop(require_session, None)
+
+
+@pytest.fixture(autouse=True)
+def _clean_pending_connect_registry():
+    """The pending OAuth-connect registry is module-level state; isolate tests."""
+    oauth_pending._pending.clear()
+    yield
+    oauth_pending._pending.clear()
 
 
 def _apply_test_monkeypatches(monkeypatch, build_manager_fn):

@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.routers.routers_helpers import require_session
-from api.schemas.account import AccountConnectResponse, AccountCreate, AccountOut, AccountUpdate
+from api.schemas.account import AccountConnectStartResponse, AccountCreate, AccountOut, AccountUpdate
 from api.services import accounts_service
 
 
@@ -74,13 +74,15 @@ def delete_account(
     return accounts_service.delete_account(mailbox_id, account_id, user_id)
 
 
-@router.post("/{account_id}/connect", response_model=AccountConnectResponse)
+@router.post("/{account_id}/connect", response_model=AccountConnectStartResponse)
 def connect_account(
     mailbox_id: str,
     account_id: str,
     user_id: str = Depends(require_session),
-) -> AccountConnectResponse:
+) -> AccountConnectStartResponse:
     """
-    Verify and connect an account by running provider authentication.
+    Start the interactive connect flow: returns the provider authorization
+    URL the user's browser must open. The OAuth callback endpoint completes
+    the connection.
     """
-    return accounts_service.connect_account(mailbox_id, account_id, user_id)
+    return accounts_service.start_account_connect(mailbox_id, account_id, user_id)

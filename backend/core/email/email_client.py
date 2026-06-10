@@ -257,13 +257,32 @@ class EmailClient(ABC):
     """
 
     @abstractmethod
-    def authenticate(
+    def begin_interactive_auth(
         self,
         app_credentials: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        redirect_uri: str | None = None,
+    ) -> dict[str, Any]:
         """
-        Perform any authentication or token refresh needed for this client.
-        This method should be called before making API calls.
+        Start a user-driven OAuth flow without any local browser or server.
+
+        Builds the provider authorization URL that the END USER's browser
+        must open. Returns ``{"authorization_url": str, "state": str,
+        "flow_state": dict}`` where ``flow_state`` is an opaque,
+        process-local payload that ``complete_interactive_auth`` needs to
+        finish the exchange (it may hold live objects — never persist it).
+        """
+
+    @abstractmethod
+    def complete_interactive_auth(
+        self,
+        app_credentials: dict[str, Any] | None = None,
+        flow_state: dict[str, Any] | None = None,
+        code: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Exchange the authorization ``code`` captured by the redirect
+        callback for tokens, using the ``flow_state`` produced by
+        ``begin_interactive_auth``. Returns wrapped account tokens.
         """
 
     @abstractmethod

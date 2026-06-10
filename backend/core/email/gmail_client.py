@@ -50,6 +50,7 @@ from .errors import (
     EmailMissingRefreshTokenError,
     EmailMissingTokenError,
     EmailNotAuthenticatedError,
+    EmailProviderConfigError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
     EmailReplyContextFetchError,
@@ -360,37 +361,91 @@ class GmailClient(EmailClient):
         self._credentials: Credentials | None = None
         self._sender_email: str | None = None
 
-    def authenticate(
+    def begin_interactive_auth(
         self,
         app_credentials: dict[str, Any] | None = None,
+        redirect_uri: str | None = None,
     ) -> dict[str, Any]:
         """
-        Authenticate the Gmail client using OAuth2.
+        Build the Google authorization URL for a user-driven OAuth flow.
+
+        The backend runs headless (container), so no browser is opened and
+        no local callback server is started: the caller forwards the URL to
+        the end user's browser and Google redirects to *redirect_uri*,
+        which must be an HTTP endpoint of this API.
         """
         credentials_payload = unwrap_app_credentials(app_credentials)
         if not credentials_payload:
             raise EmailMissingAppCredentialsError("Gmail interactive auth requires app credentials.")
+        resolved_redirect = str(redirect_uri or "").strip()
+        if not resolved_redirect:
+            raise EmailProviderConfigError("Gmail interactive auth requires a redirect_uri.")
 
         client_config = self._build_client_config(credentials_payload)
         try:
-            flow = InstalledAppFlow.from_client_config(client_config, GMAIL_SCOPES)
+            flow = InstalledAppFlow.from_client_config(
+                client_config, GMAIL_SCOPES, redirect_uri=resolved_redirect,
+            )
         except Exception as exc:
             raise EmailInvalidCredentialsDataError(
                 f"Gmail failed to build OAuth flow from app credentials: {exc}"
             ) from exc
         try:
-            creds = flow.run_local_server(port=0)
-        except OSError as exc:
-            raise EmailExternalAPIError(
-                f"Gmail failed to start local OAuth callback server: {exc}"
-            ) from exc
+            # prompt="consent" guarantees a refresh_token even when the user
+            # already consented before (re-connecting a previously connected
+            # account); without it Google may omit the refresh_token and the
+            # account would silently die when the access token expires.
+            authorization_url, state = flow.authorization_url(
+                access_type="offline", prompt="consent",
+            )
         except Exception as exc:
             raise EmailExternalAPIError(
-                f"Gmail unexpected OAuth flow error ({type(exc).__name__}): {exc}"
+                f"Gmail unexpected OAuth authorization URL error ({type(exc).__name__}): {exc}"
             ) from exc
 
+        # The live Flow object carries the PKCE code_verifier generated for
+        # this URL — the exchange must reuse it, so it travels (in-process
+        # only) inside flow_state.
+        return {
+            "authorization_url": authorization_url,
+            "state": state,
+            "flow_state": {"flow": flow},
+        }
+
+    def complete_interactive_auth(
+        self,
+        app_credentials: dict[str, Any] | None = None,
+        flow_state: dict[str, Any] | None = None,
+        code: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Exchange the authorization code captured by the redirect callback
+        for Gmail tokens. *app_credentials* is unused for Gmail (the flow
+        object already carries the client config) but kept for signature
+        parity across providers.
+        """
+        auth_code = str(code or "").strip()
+        if not auth_code:
+            raise EmailExternalAPIError("Gmail OAuth completion is missing the authorization code.")
+        flow = (flow_state or {}).get("flow")
+        if flow is None:
+            raise EmailExternalAPIError("Gmail OAuth completion is missing the in-progress flow state.")
+
+        try:
+            flow.fetch_token(code=auth_code)
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Gmail failed to exchange the authorization code ({type(exc).__name__}): {exc}"
+            ) from exc
+
+        creds = flow.credentials
         self._credentials = creds
-        self.service = build("gmail", "v1", credentials=creds)
+        try:
+            self.service = build("gmail", "v1", credentials=creds)
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Gmail failed to initialize API service after connect ({type(exc).__name__}): {exc}"
+            ) from exc
         email_address = self._fetch_sender_email()
 
         token_record = {

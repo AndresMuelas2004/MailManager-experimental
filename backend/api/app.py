@@ -55,6 +55,7 @@ from api.routers.emails_routers import (
 )
 from api.routers.health_routers import router as health_router
 from api.routers.mailboxes_routers import router as mailboxes_router
+from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(oauth_callback_router)
     app.include_router(mailboxes_router)
     app.include_router(accounts_router)
     app.include_router(emails_router)

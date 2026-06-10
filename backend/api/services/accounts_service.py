@@ -5,6 +5,7 @@ Service layer for account operations.
 from __future__ import annotations
 
 import logging
+from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -13,14 +14,16 @@ from api.errors.exceptions import (
     AccountConnectAuthError,
     AccountNotFound,
     AccountOperationError,
+    ApiError,
 )
 from core.email import CoreError
 from api.schemas.account import (
-    AccountConnectResponse,
+    AccountConnectStartResponse,
     AccountCreate,
     AccountOut,
     AccountUpdate,
 )
+from api.services import oauth_pending
 from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
@@ -29,7 +32,12 @@ from api.services.services_helpers import (
     translate_database_error,
     unwrap_secret,
 )
-from database import account_store, DatabaseError
+from database import (
+    DatabaseError,
+    account_store,
+    get_frontend_origin,
+    get_google_oauth_redirect_uri,
+)
 
 
 def _resolve_display_label(record: dict) -> str:
@@ -142,7 +150,12 @@ def delete_account(mailbox_id: str, account_id: str, user_id: str) -> dict[str, 
     return {"status": "deleted"}
 
 
-def connect_account(mailbox_id: str, account_id: str, user_id: str) -> AccountConnectResponse:
+def start_account_connect(mailbox_id: str, account_id: str, user_id: str) -> AccountConnectStartResponse:
+    """
+    First half of the interactive connect flow: build the provider
+    authorization URL and register the pending flow. The exchange happens in
+    ``complete_account_connect`` when the OAuth callback arrives.
+    """
     ensure_mailbox_access(mailbox_id, user_id)
     try:
         record = account_store.get(mailbox_id, account_id)
@@ -158,6 +171,9 @@ def connect_account(mailbox_id: str, account_id: str, user_id: str) -> AccountCo
     account_label = f"{mailbox_id}__{account_id}"
     manager = build_manager_for_accounts([record])
     app_credentials = load_wrapped_app_credentials(provider)
+    # Gmail needs the API-side callback as redirect; Outlook reads its
+    # registered redirect from the credentials JSON (Azure must know it).
+    redirect_uri = get_google_oauth_redirect_uri() if provider == "gmail" else None
 
     connect_context = {
         "account_id": account_id,
@@ -165,30 +181,108 @@ def connect_account(mailbox_id: str, account_id: str, user_id: str) -> AccountCo
         "account_label": account_label,
     }
     try:
-        wrapped_tokens = manager.connect_account(account_label, app_credentials)
+        begin = manager.begin_connect(account_label, app_credentials, redirect_uri=redirect_uri)
     except CoreError as exc:
         raise translate_connect_error(exc, context=connect_context) from exc
     except Exception as exc:
-        logger.warning("Unexpected connect error (%s): %s", type(exc).__name__, exc)
-        raise AccountConnectAuthError("Failed to connect account.") from exc
+        logger.warning("Unexpected connect start error (%s): %s", type(exc).__name__, exc)
+        raise AccountConnectAuthError("Failed to start the account connect flow.") from exc
+
+    authorization_url = str(begin.get("authorization_url") or "")
+    state = str(begin.get("state") or "")
+    if not authorization_url or not state:
+        raise AccountConnectAuthError("Connect flow did not produce an authorization URL.")
+
+    oauth_pending.register(oauth_pending.PendingConnect(
+        state=state,
+        mailbox_id=mailbox_id,
+        account_id=account_id,
+        user_id=user_id,
+        provider=provider,
+        account_label=account_label,
+        flow_state=dict(begin.get("flow_state") or {}),
+    ))
+
+    return AccountConnectStartResponse(
+        provider=record.get("provider", ""),
+        account_id=account_id,
+        account_label=account_label,
+        authorization_url=authorization_url,
+        state=state,
+    )
+
+
+def complete_account_connect(
+    state: str,
+    code: str | None,
+    error: str | None,
+    error_description: str | None,
+) -> dict[str, Any]:
+    """
+    Second half of the interactive connect flow, invoked by the OAuth
+    redirect callback (no session: the single-use ``state`` token issued by
+    an authenticated start is the proof of legitimacy).
+
+    Never raises: the callback renders a human-facing HTML page, so every
+    failure is reported as ``{"ok": False, ...}`` instead of the JSON error
+    envelope. Returns ``{"ok", "provider", "message", "frontend_origin"}``.
+    """
+    result_base: dict[str, Any] = {"provider": None, "frontend_origin": get_frontend_origin()}
+    pending = oauth_pending.pop(str(state or ""))
+    if pending is None:
+        return {
+            **result_base,
+            "ok": False,
+            "message": "This connection attempt is unknown or expired. Close this tab and retry from the app.",
+        }
+    result_base["provider"] = pending.provider
+
+    if error:
+        description = str(error_description or "").strip()
+        message = f"The provider did not authorize the connection: {error}."
+        if description:
+            message = f"{message} {description}"
+        return {**result_base, "ok": False, "message": message}
+    if not str(code or "").strip():
+        return {**result_base, "ok": False, "message": "The authorization callback did not include a code."}
+
+    try:
+        record = account_store.get(pending.mailbox_id, pending.account_id)
+    except Exception as exc:
+        logger.warning("Account lookup failed completing connect (%s): %s", type(exc).__name__, exc)
+        return {**result_base, "ok": False, "message": "Failed to look up the account while completing the connection."}
+    if record is None:
+        return {**result_base, "ok": False, "message": "The account no longer exists. Close this tab and retry from the app."}
+
+    connect_context = {
+        "account_id": pending.account_id,
+        "provider": pending.provider,
+        "account_label": pending.account_label,
+    }
+    try:
+        manager = build_manager_for_accounts([record])
+        app_credentials = load_wrapped_app_credentials(pending.provider)
+        wrapped_tokens = manager.complete_connect(
+            pending.account_label, app_credentials, pending.flow_state, code,
+        )
+    except ApiError as exc:
+        logger.warning("Connect completion failed (%s): %s", type(exc).__name__, exc.message)
+        return {**result_base, "ok": False, "message": exc.message}
+    except CoreError as exc:
+        translated = translate_connect_error(exc, context=connect_context)
+        logger.warning("Connect completion failed (%s): %s", type(exc).__name__, translated.message)
+        return {**result_base, "ok": False, "message": translated.message}
+    except Exception as exc:
+        logger.warning("Unexpected connect completion error (%s): %s", type(exc).__name__, exc)
+        return {**result_base, "ok": False, "message": "Failed to complete the account connection."}
 
     token_payload = dict(wrapped_tokens or {})
     token_payload["access_token"] = unwrap_secret(token_payload.get("access_token"))
     token_payload["refresh_token"] = unwrap_secret(token_payload.get("refresh_token"))
-    email_address = token_payload.get("email_address")
     try:
-        account_store.upsert_tokens(mailbox_id, account_id, provider, token_payload)
-    except DatabaseError as exc:
-        raise translate_database_error(exc) from exc
+        account_store.upsert_tokens(pending.mailbox_id, pending.account_id, pending.provider, token_payload)
     except Exception as exc:
-        logger.warning("Unexpected token persist error (%s): %s", type(exc).__name__, exc)
-        raise AccountOperationError("Failed to persist tokens after connect.") from exc
+        logger.warning("Token persist failed completing connect (%s): %s", type(exc).__name__, exc)
+        return {**result_base, "ok": False, "message": "Failed to persist tokens after completing the connection."}
 
-    return AccountConnectResponse(
-        connected=True,
-        provider=record.get("provider", ""),
-        account_id=account_id,
-        account_label=account_label,
-        email_address=email_address,
-        message="Account connected successfully.",
-    )
+    return {**result_base, "ok": True, "message": "Account connected successfully. You can close this tab."}

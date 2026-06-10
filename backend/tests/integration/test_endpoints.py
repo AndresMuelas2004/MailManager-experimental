@@ -139,14 +139,28 @@ def test_delete_account(test_client, setup_mailbox_and_account):
     assert resp.json() == {"status": "deleted"}
 
 
-def test_connect_account(test_client, setup_mailbox_and_account):
+def test_connect_account_two_phase_flow(test_client, setup_mailbox_and_account):
+    """POST /connect returns the authorization URL; the OAuth callback
+    completes the connection and the state token is single-use."""
     mid, aid = setup_mailbox_and_account(test_client)
     resp = test_client.post(f"{_MAILBOX_URL}/{mid}/accounts/{aid}/connect")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["connected"] is True
     assert data["account_id"] == aid
-    assert "email_address" in data
+    assert data["authorization_url"].startswith("https://")
+    assert data["state"]
+
+    callback = test_client.get(
+        "/auth/google/callback", params={"state": data["state"], "code": "auth-code"},
+    )
+    assert callback.status_code == 200
+    assert "Account connected" in callback.text
+
+    replay = test_client.get(
+        "/auth/google/callback", params={"state": data["state"], "code": "auth-code"},
+    )
+    assert replay.status_code == 200
+    assert "Connection failed" in replay.text
 
 
 # ------------------------------------------------------------------
@@ -370,8 +384,15 @@ def test_outlook_account_connect(test_client):
     ).json()["account_id"]
     resp = test_client.post(f"{_MAILBOX_URL}/{mid}/accounts/{aid}/connect")
     assert resp.status_code == 200
-    assert resp.json()["connected"] is True
-    assert resp.json()["provider"] == "outlook"
+    data = resp.json()
+    assert data["provider"] == "outlook"
+    assert data["authorization_url"].startswith("https://")
+
+    callback = test_client.get(
+        "/auth/outlook/callback", params={"state": data["state"], "code": "auth-code"},
+    )
+    assert callback.status_code == 200
+    assert "Account connected" in callback.text
 
 
 # ==================================================================

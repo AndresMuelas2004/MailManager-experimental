@@ -194,7 +194,8 @@ class FakeEmailClient(EmailClient):
         self._restore_return = restore_return
         self._move_to_trash_return = move_to_trash_return
         self._fetch_messages_metadata_return = fetch_messages_metadata_return
-        self.authenticate_calls = 0
+        self.begin_interactive_auth_calls = 0
+        self.complete_interactive_auth_calls = 0
         self.authenticate_silent_calls = 0
         self.fetch_calls = 0
         self.verify_calls = 0
@@ -240,10 +241,27 @@ class FakeEmailClient(EmailClient):
         self.last_app_credentials = None
         self.last_user_tokens = None
         self.last_sync_cursor = None
+        self.last_redirect_uri = None
+        self.last_flow_state = None
+        self.last_auth_code = None
 
-    def authenticate(self, app_credentials=None) -> dict | None:
-        self.authenticate_calls += 1
+    def begin_interactive_auth(self, app_credentials=None, redirect_uri=None) -> dict:
+        self.begin_interactive_auth_calls += 1
         self.last_app_credentials = app_credentials
+        self.last_redirect_uri = redirect_uri
+        if self._auth_exc:
+            raise self._auth_exc
+        return {
+            "authorization_url": "https://provider.example/authorize?state=fake-state",
+            "state": "fake-state",
+            "flow_state": {"fake": True},
+        }
+
+    def complete_interactive_auth(self, app_credentials=None, flow_state=None, code=None) -> dict:
+        self.complete_interactive_auth_calls += 1
+        self.last_app_credentials = app_credentials
+        self.last_flow_state = flow_state
+        self.last_auth_code = code
         if self._auth_exc:
             raise self._auth_exc
         return self._auth_return

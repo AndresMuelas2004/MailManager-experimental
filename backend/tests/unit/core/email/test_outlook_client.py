@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call, patch
 
@@ -20,7 +21,6 @@ from core.email.errors import (
     EmailMissingRefreshTokenError,
     EmailMissingTokenError,
     EmailNotAuthenticatedError,
-    EmailProviderConfigError,
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
 )
@@ -118,13 +118,13 @@ class TestResolveScopes:
 
 
 class TestGuardClauses:
-    def test_authenticate_missing_credentials_raises_error(self, client: OutlookClient):
+    def test_begin_interactive_auth_missing_credentials_raises_error(self, client: OutlookClient):
         with pytest.raises(EmailMissingAppCredentialsError):
-            client.authenticate(app_credentials=None)
+            client.begin_interactive_auth(app_credentials=None)
 
-    def test_authenticate_missing_credentials_empty_dict_raises_error(self, client: OutlookClient):
+    def test_begin_interactive_auth_missing_credentials_empty_dict_raises_error(self, client: OutlookClient):
         with pytest.raises(EmailMissingAppCredentialsError):
-            client.authenticate(app_credentials={})
+            client.begin_interactive_auth(app_credentials={})
 
     def test_authenticate_silent_missing_credentials_raises_error(self, client: OutlookClient):
         with pytest.raises(EmailMissingAppCredentialsError):
@@ -1392,135 +1392,117 @@ _VALID_OUTLOOK_APP_CREDS = {
 }
 
 
-def _extract_callback_result(mock_server_cls):
-    """Reach into the closure of _OAuthHandler.do_GET to get callback_result."""
-    handler_cls = mock_server_cls.call_args[0][1]
-    freevars = handler_cls.do_GET.__code__.co_freevars
-    closure = handler_cls.do_GET.__closure__
-    idx = freevars.index("callback_result")
-    return closure[idx].cell_contents
-
-
-class TestAuthenticate:
+class TestInteractiveAuth:
 
     def _make_creds(self, **overrides):
         creds = dict(_VALID_OUTLOOK_APP_CREDS)
         creds.update(overrides)
         return creds
 
-    def test_happy_path_returns_wrapped_tokens(self):
+    def test_begin_returns_authorization_url_with_pkce_and_state(self):
         client = OutlookClient(account_label="mb__outlook")
         creds = self._make_creds()
 
-        with (
-            patch("http.server.ThreadingHTTPServer") as mock_server_cls,
-            patch("threading.Thread") as mock_thread_cls,
-            patch("threading.Event") as mock_event_cls,
-            patch("webbrowser.open", return_value=True),
-            patch("secrets.token_urlsafe", side_effect=["x" * 128, "state-value"]),
-            patch.object(client, "_token_request", return_value={
-                "access_token": "at",
-                "refresh_token": "rt",
-                "expires_in": 3600,
-            }),
+        with patch(
+            "core.email.outlook_client.secrets.token_urlsafe",
+            side_effect=["x" * 128, "state-value"],
         ):
-            mock_event = MagicMock()
-            mock_event_cls.return_value = mock_event
+            result = client.begin_interactive_auth(app_credentials=creds)
 
-            mock_server = MagicMock()
-            mock_server_cls.return_value = mock_server
+        parsed = urllib.parse.urlparse(result["authorization_url"])
+        query = urllib.parse.parse_qs(parsed.query)
+        assert parsed.netloc == "login.microsoftonline.com"
+        assert query["redirect_uri"] == [creds["redirect_uri"]]
+        assert query["code_challenge_method"] == ["S256"]
+        assert query["state"] == ["state-value"]
+        assert result["state"] == "state-value"
+        assert result["flow_state"]["code_verifier"] == "x" * 128
+        assert result["flow_state"]["redirect_uri"] == creds["redirect_uri"]
+        assert result["flow_state"]["tenant"] == creds["tenant"]
 
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
+    def test_begin_redirect_override_wins_over_credentials(self):
+        client = OutlookClient(account_label="mb__outlook")
+        creds = self._make_creds()
+        override = "http://localhost:8000/auth/outlook/callback"
 
-            def _wait_and_fill(timeout=None):
-                cb = _extract_callback_result(mock_server_cls)
-                cb["code"] = "auth-code-123"
-                cb["state"] = "state-value"
-                return True
+        result = client.begin_interactive_auth(app_credentials=creds, redirect_uri=override)
 
-            mock_event.wait.side_effect = _wait_and_fill
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(result["authorization_url"]).query)
+        assert query["redirect_uri"] == [override]
+        assert result["flow_state"]["redirect_uri"] == override
 
-            result = client.authenticate(app_credentials=creds)
-
-        assert result["access_token"].get_secret_value() == "at"
-        assert client._access_token == "at"
-
-    def test_missing_app_credentials_raises(self):
+    def test_begin_missing_app_credentials_raises(self):
         client = OutlookClient(account_label="mb__outlook")
         with pytest.raises(EmailMissingAppCredentialsError):
-            client.authenticate(app_credentials=None)
+            client.begin_interactive_auth(app_credentials=None)
 
-    def test_invalid_redirect_uri_raises(self):
+    def test_begin_missing_redirect_raises(self):
         client = OutlookClient(account_label="mb__outlook")
-        creds = self._make_creds(redirect_uri="https://example.com/cb")
-        with pytest.raises(EmailProviderConfigError, match="redirect_uri"):
-            client.authenticate(app_credentials=creds)
+        creds = self._make_creds(redirect_uri="")
+        with pytest.raises(EmailMissingAppCredentialsError):
+            client.begin_interactive_auth(app_credentials=creds)
 
-    def test_server_start_os_error_raises(self):
-        client = OutlookClient(account_label="mb__outlook")
-        creds = self._make_creds()
-        with (
-            patch("http.server.ThreadingHTTPServer", side_effect=OSError("port in use")),
-            patch("secrets.token_urlsafe", return_value="x" * 128),
-        ):
-            with pytest.raises(EmailExternalAPIError, match="failed to start"):
-                client.authenticate(app_credentials=creds)
-
-    def test_timeout_raises(self):
+    def test_complete_exchanges_code_with_pkce_verifier(self):
         client = OutlookClient(account_label="mb__outlook")
         creds = self._make_creds()
+        captured: dict = {}
+
+        def _fake_token_request(url, payload):
+            captured["url"] = url
+            captured["payload"] = payload
+            return {"access_token": "at", "refresh_token": "rt", "expires_in": 3600}
+
         with (
-            patch("http.server.ThreadingHTTPServer") as mock_server_cls,
-            patch("threading.Thread") as mock_thread_cls,
-            patch("threading.Event") as mock_event_cls,
-            patch("webbrowser.open", return_value=True),
-            patch("secrets.token_urlsafe", return_value="x" * 128),
+            patch.object(client, "_token_request", side_effect=_fake_token_request),
+            patch.object(client, "_fetch_sender_profile", return_value=("user@outlook.com", "User")),
         ):
-            mock_event = MagicMock()
-            mock_event.wait.return_value = False
-            mock_event_cls.return_value = mock_event
+            result = client.complete_interactive_auth(
+                app_credentials=creds,
+                flow_state={
+                    "code_verifier": "v" * 43,
+                    "redirect_uri": creds["redirect_uri"],
+                    "tenant": creds["tenant"],
+                    "scopes": list(OUTLOOK_SCOPES),
+                },
+                code="auth-code-123",
+            )
 
-            mock_server = MagicMock()
-            mock_server_cls.return_value = mock_server
+        assert captured["payload"]["grant_type"] == "authorization_code"
+        assert captured["payload"]["code"] == "auth-code-123"
+        assert captured["payload"]["code_verifier"] == "v" * 43
+        assert captured["payload"]["redirect_uri"] == creds["redirect_uri"]
+        assert result["access_token"].get_secret_value() == "at"
+        assert result["email_address"] == "user@outlook.com"
+        assert client._access_token == "at"
 
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-
-            with pytest.raises(EmailExternalAPIError, match="timeout"):
-                client.authenticate(app_credentials=creds)
-
-    def test_missing_access_token_in_response_raises(self):
+    def test_complete_missing_code_raises(self):
         client = OutlookClient(account_label="mb__outlook")
-        creds = self._make_creds()
+        with pytest.raises(EmailExternalAPIError, match="authorization code"):
+            client.complete_interactive_auth(
+                app_credentials=self._make_creds(),
+                flow_state={"code_verifier": "v" * 43, "redirect_uri": "http://localhost:8000/cb"},
+                code="",
+            )
 
-        with (
-            patch("http.server.ThreadingHTTPServer") as mock_server_cls,
-            patch("threading.Thread") as mock_thread_cls,
-            patch("threading.Event") as mock_event_cls,
-            patch("webbrowser.open", return_value=True),
-            patch("secrets.token_urlsafe", side_effect=["x" * 128, "state-value"]),
-            patch.object(client, "_token_request", return_value={}),
-        ):
-            mock_event = MagicMock()
-            mock_event_cls.return_value = mock_event
+    def test_complete_missing_flow_state_raises(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with pytest.raises(EmailExternalAPIError, match="flow state"):
+            client.complete_interactive_auth(
+                app_credentials=self._make_creds(), flow_state={}, code="auth-code-123",
+            )
 
-            mock_server = MagicMock()
-            mock_server_cls.return_value = mock_server
-
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-
-            def _wait_and_fill(timeout=None):
-                cb = _extract_callback_result(mock_server_cls)
-                cb["code"] = "auth-code-123"
-                cb["state"] = "state-value"
-                return True
-
-            mock_event.wait.side_effect = _wait_and_fill
-
+    def test_complete_missing_access_token_in_response_raises(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with patch.object(client, "_token_request", return_value={}):
             with pytest.raises(EmailExternalAPIError, match="missing access_token"):
-                client.authenticate(app_credentials=creds)
+                client.complete_interactive_auth(
+                    app_credentials=self._make_creds(),
+                    flow_state={
+                        "code_verifier": "v" * 43,
+                        "redirect_uri": "http://localhost:8000/cb",
+                    },
+                    code="auth-code-123",
+                )
 
 
 # ── delete_messages ──────────────────────────────────────────────

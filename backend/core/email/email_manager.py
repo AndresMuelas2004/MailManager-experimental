@@ -113,24 +113,47 @@ class EmailManager:
                 self._last_errors[client.get_account_label()] = exc
         return refreshed_tokens
 
-    def connect_account(
+    def begin_connect(
         self,
         account_label: str,
         app_credentials: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        redirect_uri: str | None = None,
+    ) -> dict[str, Any]:
         """
-        Authenticate a single account by its label.
-        This method is for UI flows, not for scripts or batch jobs.
+        Start the user-driven OAuth flow for a single account by its label.
+        Returns {"authorization_url", "state", "flow_state"} from the client.
         """
         self._last_errors = {}
         client = self._get_client_or_raise(account_label)
         try:
-            return client.authenticate(app_credentials)
+            return client.begin_interactive_auth(app_credentials, redirect_uri)
         except CoreError:
             raise
         except Exception as exc:
             raise EmailExternalAPIError(
-                f"Unexpected connect_account error ({type(exc).__name__}): {exc}"
+                f"Unexpected begin_connect error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def complete_connect(
+        self,
+        account_label: str,
+        app_credentials: dict[str, Any] | None = None,
+        flow_state: dict[str, Any] | None = None,
+        code: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Finish the user-driven OAuth flow for a single account by its label.
+        Returns the wrapped account tokens produced by the client.
+        """
+        self._last_errors = {}
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.complete_interactive_auth(app_credentials, flow_state, code)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected complete_connect error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def fetch_all_email_metadata(

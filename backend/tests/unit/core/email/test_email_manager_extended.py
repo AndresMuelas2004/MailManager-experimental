@@ -48,29 +48,36 @@ def test_authenticate_all_silent_no_refresh_returns_empty_dict(
     assert result == {}
 
 
-def test_connect_account_passes_app_credentials_to_client(
+def test_begin_connect_passes_credentials_and_redirect_to_client(
     manager: EmailManager, fake_client_factory
 ):
-    """connect_account forwards app_credentials to the client's authenticate()."""
+    """begin_connect forwards app_credentials and redirect_uri to the client."""
     client = fake_client_factory("acct1")
     manager.add_client(client)
 
     creds = {"client_id": "id", "client_secret": "s"}
-    manager.connect_account("acct1", app_credentials=creds)
+    result = manager.begin_connect("acct1", app_credentials=creds, redirect_uri="http://localhost:8000/cb")
 
     assert client.last_app_credentials == creds
+    assert client.last_redirect_uri == "http://localhost:8000/cb"
+    assert result["authorization_url"].startswith("https://")
+    assert result["state"]
 
 
-def test_connect_account_returns_token_dict_from_client(
+def test_complete_connect_returns_token_dict_from_client(
     manager: EmailManager, fake_client_factory
 ):
-    """connect_account returns whatever the client's authenticate() returns."""
+    """complete_connect forwards flow_state/code and returns the client tokens."""
     token_dict = {"access_token": "tok", "refresh_token": "rt"}
     client = fake_client_factory("acct1", auth_return=token_dict)
     manager.add_client(client)
 
-    result = manager.connect_account("acct1")
+    flow_state = {"fake": True}
+    result = manager.complete_connect("acct1", flow_state=flow_state, code="auth-code")
+
     assert result == token_dict
+    assert client.last_flow_state == flow_state
+    assert client.last_auth_code == "auth-code"
 
 
 def test_send_email_from_account_propagates_client_exception(
