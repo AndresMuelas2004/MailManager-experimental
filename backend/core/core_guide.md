@@ -31,8 +31,8 @@ Applies to every modification — not just when adding a new provider.
 `EmailManager` accumulates per-account failures in `_last_errors` (dict keyed by account label). Batch operations (`fetch_all_email_metadata`, `fetch_all_drafts`, `authenticate_all_silent`) collect per-client errors without aborting the others; the service layer inspects them afterwards via `get_last_errors()`.
 
 **Gotchas:**
-- `connect_account()` **resets** `_last_errors` at entry — any earlier errors are lost. Fine in practice because the interactive `/connect` endpoint never interleaves with batch operations, but worth remembering when writing new service functions.
-- `connect_account()` re-raises the error directly (`raise EmailExternalAPIError(...) from exc`) instead of storing it in `_last_errors` — the interactive flow has a single account, so there is nothing to aggregate.
+- `begin_connect()` / `complete_connect()` **reset** `_last_errors` at entry — any earlier errors are lost. Fine in practice because the interactive connect flow never interleaves with batch operations, but worth remembering when writing new service functions.
+- `begin_connect()` / `complete_connect()` re-raise the error directly (`raise EmailExternalAPIError(...) from exc`) instead of storing it in `_last_errors` — the interactive flow has a single account, so there is nothing to aggregate.
 
 ## `_execute_batch_get` retries; `_execute_batch_modify` is split per operation
 
@@ -47,9 +47,14 @@ Gmail has two batch skeletons. Both chunk by `_BATCH_SIZE = 100` and dispatch to
 
 Provider clients leave `EmailMetadata.account_id` as `""`. The service layer stamps it before persistence. **Trap:** always stamp before calling `persist_email_metadata_batch` — skipping it writes empty strings into the DB, and if a client sets it the service overwrites anyway. Do not try to fix this by stamping in the client; the cross-layer contract is that the service owns it.
 
+## Authentication — interactive flow invariants
+
+- **The interactive flow is split into `begin_interactive_auth` / `complete_interactive_auth`** (no browser, no local callback server — the backend runs headless in a container; the user's browser does the navigation and the API's HTTP callback receives the redirect). The `flow_state` returned by `begin` is an **opaque, process-local** payload: Gmail's holds the live google-auth `Flow` object because the PKCE `code_verifier` generated for the authorization URL must be reused in the exchange — it cannot be persisted or sent across processes. Outlook's is a plain dict, but the exchange must use **exactly** the same `redirect_uri` that built the authorization URL or the token endpoint rejects the code.
+- **Gmail's `begin_interactive_auth` passes `prompt="consent"`** so Google returns a `refresh_token` even when the user already consented in the past (re-connecting a previously connected account). Without it Google may omit the refresh token and the account silently dies when the first access token expires.
+
 ## Authentication — silent-refresh invariants
 
-- **`email_address` is fetched only during the interactive `authenticate` flow**, never during silent refresh. The `upsert_tokens` SQL uses `COALESCE(%(email_address)s, email_address)` so silent refreshes don't erase a previously stored value. Do not "fix" silent auth to also fetch it — Gmail's silent flow doesn't expose it without a second round-trip.
+- **`email_address` is fetched only during the interactive `complete_interactive_auth` flow**, never during silent refresh. The `upsert_tokens` SQL uses `COALESCE(%(email_address)s, email_address)` so silent refreshes don't erase a previously stored value. Do not "fix" silent auth to also fetch it — Gmail's silent flow doesn't expose it without a second round-trip.
 - **Outlook rotates refresh tokens; Gmail doesn't.** Outlook's auth server may return a new `refresh_token` on every refresh — always persist the returned refresh token. Gmail's refresh token is stable in practice. The upsert path handles both uniformly, but don't skip writing `refresh_token` for Outlook on the assumption that it's unchanged.
 
 ## Email metadata sync — invariants

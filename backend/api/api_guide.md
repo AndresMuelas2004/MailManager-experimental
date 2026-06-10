@@ -52,9 +52,17 @@ When an endpoint must authenticate against a provider and then perform a provide
 
 For the interactive `/connect` flow, `EmailAuthError` maps to `AccountConnectAuthError` (**401**), not `AccountNotConnected` (409). Reason: a connect-time auth failure means the user's credentials are wrong, not that they need to call `/connect` again — 409 would create a retry loop on the same endpoint.
 
-### `connect_account` response carries `email_address`
+### Interactive connect is two-phase; the callback service function never raises
 
-After a successful interactive OAuth flow, the service reads `email_address` from the Core layer's best-effort provider fetch and includes it in `AccountConnectResponse`. The field is `str | None`; `None` means the provider email fetch failed. `AccountOut` also exposes `email_address` from the `accounts` table so the frontend can list accounts with their email without a second round-trip.
+`POST /connect` only **starts** the flow (`start_account_connect` → authorization URL + single-use `state`); the actual token exchange happens when the provider redirects the user's browser to `GET /auth/{google|outlook}/callback`. Three deliberate asymmetries with the rest of the service layer:
+
+1. **The callback endpoints have no session dependency.** The redirect comes from Google/Microsoft, not from our SPA; the single-use `state` token (issued by an authenticated start, stored in `api/services/oauth_pending.py` with the requester's `user_id`) is the proof of legitimacy. Do not "fix" them by adding `require_session`.
+2. **`complete_account_connect` never raises.** The callback renders a human-facing HTML page (with a `postMessage` to the opener SPA), so the function converts every failure — including `ApiError`s from its own helpers — into `{"ok": False, "message"}` instead of letting the JSON error envelope reach a browser tab. It is the one service function exempt from the "services raise ApiError" rule.
+3. **The pending registry is process-local.** It may hold live objects (Gmail's `Flow` with the PKCE verifier), so it cannot be serialized; a multi-worker deployment would break the flow silently (start lands on worker A, callback on worker B). The project runs a single uvicorn worker — revisit before changing that.
+
+Redirect URIs are provider-asymmetric: Gmail's comes from `GOOGLE_OAUTH_REDIRECT_URI` (default `http://localhost:8000/auth/google/callback`; Google "Desktop app" clients accept any localhost redirect without registration), Outlook's comes from the credentials JSON and **must exactly match the Azure app registration** (currently `http://localhost:8000/auth/outlook/callback`). Changing either callback route path breaks the corresponding provider silently.
+
+`AccountOut.email_address` (persisted by `upsert_tokens` during the callback) is how the frontend learns the connection landed — the start response intentionally carries no email.
 
 ### Ghost email reconciliation runs only after a full (bootstrap) sync
 

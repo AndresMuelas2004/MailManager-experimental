@@ -27,7 +27,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
-- OAuth 2.0 interactive connect flow plus silent re-authentication.
+- OAuth 2.0 interactive connect flow (browser popup + API-side redirect callback, container-friendly) plus silent re-authentication.
 - PostgreSQL persistence for mailboxes, accounts, and tokens.
 - Strict layered architecture with centralized API error mapping.
 
@@ -178,6 +178,7 @@ The automated suites run from a host Python environment against a reachable Post
 | `MIA_GMAIL_CREDENTIALS_PATH` | Yes | Path to Gmail OAuth credentials JSON file. |
 | `MIA_OUTLOOK_CREDENTIALS_PATH` | Yes | Path to Outlook app credentials JSON file. |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID for OIDC authentication. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | No | Redirect URI for the interactive Gmail connect flow. Default: `http://localhost:8000/auth/google/callback` (Google "Desktop app" clients accept any localhost redirect without registration). |
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
@@ -218,7 +219,12 @@ Accounts:
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}`
 - `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}`
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}`
-- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/connect`
+- `POST /mailboxes/{mailbox_id}/accounts/{account_id}/connect` — starts the interactive OAuth flow; returns `{authorization_url, state}` for the browser popup.
+
+OAuth connect callbacks (no session — validated by the single-use `state` token):
+
+- `GET /auth/google/callback`
+- `GET /auth/outlook/callback`
 
 Emails:
 

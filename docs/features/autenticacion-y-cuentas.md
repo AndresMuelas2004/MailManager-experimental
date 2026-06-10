@@ -68,16 +68,21 @@ La página de cuentas conectadas muestra una tarjeta por cada cuenta vinculada �
 
 Solo se admiten dos proveedores: **Gmail** y **Outlook**. No hay forma de elegir otro: el desplegable de proveedor ofrece exactamente esos dos, y el servidor además lo verifica (cualquier otro valor se rechaza). El detalle de cuántas cuentas caben y qué otros proveedores **no** se soportan está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
 
-### 2.2 Añadir una cuenta: un proceso en dos pasos
+### 2.2 Añadir una cuenta: registro + autorización en una ventana emergente
 
 Vincular una cuenta no es una sola acción, sino dos encadenadas que la app ejecuta seguidas cuando el usuario pulsa "Añadir cuenta":
 
 1. **Registrar la cuenta**: se crea la ficha de la cuenta en la app (proveedor + etiqueta). En este punto la cuenta existe pero **todavía no está conectada**: no tiene credenciales y no puede leer correo.
-2. **Conectar la cuenta**: se lanza el flujo de autorización OAuth contra el proveedor (Google o Microsoft). El usuario da su consentimiento en el navegador y, al volver, la app guarda las credenciales y la cuenta queda operativa.
+2. **Conectar la cuenta**: la app abre una **ventana emergente** con la pantalla de consentimiento del proveedor (Google o Microsoft). El usuario elige su cuenta y consiente **en esa ventana**; el proveedor redirige de vuelta al servidor de la app, que guarda las credenciales, y la ventana avisa del resultado y se cierra sola si todo fue bien.
 
-Tras conectar, la app **sincroniza automáticamente** los correos y los borradores de esa cuenta y la tarjeta pasa de "Sincronizando correos…" a mostrar sus mensajes recientes. Si la sincronización inicial no encuentra correos, la tarjeta queda en "Sin correos todavía".
+Mientras la ventana está abierta, la página de cuentas queda a la espera (el botón muestra "Conectando…"). Al completarse la autorización, aparece la tarjeta de la cuenta nueva y la app **sincroniza automáticamente** sus correos y borradores: la tarjeta pasa de "Sincronizando correos…" a mostrar sus mensajes recientes. Si la sincronización inicial no encuentra correos, la tarjeta queda en "Sin correos todavía".
 
-> El registro y la conexión están separados a propósito. El registro es un dato local instantáneo; la conexión depende de un flujo externo (abrir el navegador, consentir, esperar el callback) que puede fallar o cancelarse. Si la conexión falla, la cuenta queda registrada pero marcada en error, y el usuario puede reintentar sin volver a teclear nada.
+**Si la conexión no se completa, la cuenta no se queda a medias.** Cuando el flujo falla antes de empezar (p. ej. el servidor no puede preparar la autorización), el usuario cancela el consentimiento, cierra la ventana emergente sin terminar, o se agota el tiempo de espera (la cifra exacta está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)), la app **deshace el registro del paso 1**: la cuenta se elimina y **no aparece ninguna tarjeta vacía**. Se muestra el motivo del error y el usuario puede volver a intentarlo desde el formulario. La razón de este rollback: una cuenta registrada pero sin credenciales no sirve para nada y no existe ninguna acción de "reconectar" en la tarjeta — dejarla viva solo acumularía tarjetas muertas.
+
+Dos detalles de la ventana emergente que conviene conocer:
+
+- La ventana se abre **en el momento del clic** (en blanco) y navega al proveedor en cuanto el servidor devuelve la URL de autorización. Si el navegador bloquea las ventanas emergentes para el sitio, la app lo detecta, avisa pidiendo permitirlas, y **no llega a registrar nada**.
+- Si la ventana se cierra sin haber comunicado el resultado, la app hace una comprobación final contra el servidor antes de dar el intento por fallido: si la conexión en realidad llegó a completarse (carrera entre el cierre y el aviso), la cuenta se da por conectada y no se deshace nada.
 
 ### 2.3 La etiqueta de la cuenta (display_label)
 
@@ -192,4 +197,4 @@ La correspondencia exacta de cada situación con su código y estado HTTP está 
 
 ## 7. Resumen en una frase
 
-> MailManager separa dos autorizaciones: el **login con Google** —que solo identifica al usuario de la app, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que es un proceso en dos pasos (registrar y luego autorizar por OAuth) tras el cual la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor, y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
+> MailManager separa dos autorizaciones: el **login con Google** —que solo identifica al usuario de la app, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que registra la cuenta y lanza la autorización OAuth en una **ventana emergente** cuyo callback recibe el propio servidor; si la autorización no se completa, el registro **se deshace** y no queda ninguna tarjeta vacía, y si se completa la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor, y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
