@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
 import ConversationMessageCard from './ConversationMessageCard';
+import { normaliseSubject } from '../../../lib/formatters';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -18,15 +19,6 @@ type Props = {
 
 function messageKey(message: EmailMetadataOut): string {
   return `${message.account_id}|${message.provider_message_id}`;
-}
-
-// Normalises the "Re:" / "Fwd:" prefix stack to the base subject for the
-// thread header. Strips any leading run of those prefixes (case-insensitive,
-// accepting the common locale variants); collapses to "(Sin asunto)" when the
-// subject is empty or prefix-only.
-function normaliseSubject(subject: string | null): string {
-  const stripped = (subject ?? '').replace(/^(\s*(re|fwd|fw|rv)\s*:\s*)+/i, '').trim();
-  return stripped.length > 0 ? stripped : '(Sin asunto)';
 }
 
 // Presentational conversation viewer: a Modal with the thread header (base

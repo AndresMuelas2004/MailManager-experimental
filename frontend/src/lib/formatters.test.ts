@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAccountMap, formatDate, formatShortDate, resolveAccount } from './formatters';
+import {
+  buildAccountMap,
+  formatDate,
+  formatShortDate,
+  normaliseSubject,
+  resolveAccount,
+} from './formatters';
 
 type TestAccount = {
   account_id: string;
@@ -28,6 +34,30 @@ describe('formatShortDate', () => {
     const today = new Date();
     expect(formatShortDate(today.toISOString())).toMatch(/^\d{1,2} [a-z]{3}$/);
     expect(formatShortDate('2020-06-20T10:00:00Z')).toMatch(/20 jun/);
+  });
+});
+
+describe('normaliseSubject', () => {
+  it('strips a single Re: prefix', () => {
+    expect(normaliseSubject('Re: Hola')).toBe('Hola');
+  });
+
+  it('strips a stacked prefix run with locale variants, case-insensitively', () => {
+    expect(normaliseSubject('RE: Fwd: FW: rv: Presupuesto')).toBe('Presupuesto');
+  });
+
+  it('keeps a subject without prefixes untouched', () => {
+    expect(normaliseSubject('Presupuesto 2026')).toBe('Presupuesto 2026');
+  });
+
+  it('does not strip prefixes in the middle of the subject', () => {
+    expect(normaliseSubject('Aviso: Re: no es prefijo')).toBe('Aviso: Re: no es prefijo');
+  });
+
+  it('collapses null, empty and prefix-only subjects to "(Sin asunto)"', () => {
+    expect(normaliseSubject(null)).toBe('(Sin asunto)');
+    expect(normaliseSubject('')).toBe('(Sin asunto)');
+    expect(normaliseSubject('Re: Fwd:')).toBe('(Sin asunto)');
   });
 });
 

@@ -217,6 +217,34 @@ describe('EmailTable', () => {
       expect(screen.queryByText('1', { selector: 'span' })).not.toBeInTheDocument();
     });
 
+    it('shows the base subject without the Re:/Fwd: prefix stack on thread rows', () => {
+      const { rerender } = render(
+        <EmailTable
+          emails={[makeEmail({ subject: 'Re: Fwd: Presupuesto', thread_message_count: 2 })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+        />,
+      );
+      expect(screen.getByText('Presupuesto')).toBeInTheDocument();
+      expect(screen.queryByText('Re: Fwd: Presupuesto')).not.toBeInTheDocument();
+
+      // Outside conversation mode the subject is rendered verbatim.
+      rerender(
+        <EmailTable
+          emails={[makeEmail({ subject: 'Re: Fwd: Presupuesto' })]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+        />,
+      );
+      expect(screen.getByText('Re: Fwd: Presupuesto')).toBeInTheDocument();
+    });
+
     it('renders no selection checkbox and no interactive favourite button (read-only row)', () => {
       render(
         <EmailTable

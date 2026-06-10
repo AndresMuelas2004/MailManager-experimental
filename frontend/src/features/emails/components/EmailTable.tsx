@@ -2,7 +2,12 @@ import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { Paperclip, RefreshCw, Star } from 'lucide-react';
 
-import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
+import {
+  buildAccountMap,
+  formatDate,
+  normaliseSubject,
+  resolveAccount,
+} from '../../../lib/formatters';
 import Spinner from '../../../components/common/Spinner';
 import Checkbox from '../../../components/common/Checkbox';
 import FavoriteButton from './FavoriteButton';
@@ -286,7 +291,13 @@ export default function EmailTable({
                     aria-label="Tiene adjuntos"
                   />
                 ) : null}
-                <span className="truncate">{email.subject ?? '(Sin asunto)'}</span>
+                <span className="truncate">
+                  {/* Thread rows show the base subject without the Re:/Fwd:
+                      prefix stack (docs/features/conversaciones.md § 3). */}
+                  {conversationMode
+                    ? normaliseSubject(email.subject)
+                    : (email.subject ?? '(Sin asunto)')}
+                </span>
               </div>
               <div className={`w-16 text-right text-xs ${weight} text-zinc-900`}>
                 {formatDate(email.received_at)}
