@@ -535,6 +535,13 @@ _DDL_STATEMENTS = [
     $$;
     """,
     "UPDATE alembic_version SET version_num = '0032_drop_virtual_mailbox_scope_kind';",
+    # Migration 0033: composite index backing the conversation grouping
+    # listing (DISTINCT ON / window functions over the thread key + order by
+    # received_at). Pure DDL, idempotent, no cache invalidation — the grouped
+    # queries are correct without it (it only avoids seq-scan + sort).
+    "CREATE INDEX IF NOT EXISTS idx_email_metadata_account_thread "
+    "ON email_metadata (account_id, thread_id, received_at DESC);",
+    "UPDATE alembic_version SET version_num = '0033_index_email_metadata_thread';",
 ]
 
 

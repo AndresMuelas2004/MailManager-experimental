@@ -164,6 +164,7 @@ class EmailMetadataStore(ABC):
         box_in: list[str] | None = None,
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
+        group_by_thread: bool = False,
     ) -> list[dict[str, Any]]:
         """List email metadata for the given accounts, optionally filtered.
 
@@ -194,6 +195,16 @@ class EmailMetadataStore(ABC):
         ``received_at``. Only virtual mailboxes need this — the regular
         box listing is always scoped to a single mailbox where the
         duplication is impossible, so it leaves the flag ``False``.
+
+        ``group_by_thread``: when ``True``, collapse each conversation
+        (keyed by ``COALESCE(NULLIF(thread_id, ''), provider_message_id)``)
+        into its most-recent message — aggregating ``is_read`` (AND),
+        ``has_attachments`` / ``is_favorite`` (OR) and projecting
+        ``thread_message_count``. Together with
+        ``distinct_provider_message_id`` it selects one of four SQL
+        templates (the 2x2 matrix). The companion ``count_filtered`` MUST
+        receive the SAME ``group_by_thread`` / ``distinct_provider_message_id``
+        axes or the paginated ``total`` will not match the listed rows.
         """
         raise NotImplementedError
 
@@ -208,6 +219,7 @@ class EmailMetadataStore(ABC):
         box_in: list[str] | None = None,
         box_not_in: list[str] | None = None,
         distinct_provider_message_id: bool = False,
+        group_by_thread: bool = False,
     ) -> int:
         """Count the email metadata rows that match ``list_filtered``.
 
@@ -221,6 +233,10 @@ class EmailMetadataStore(ABC):
         ``distinct_provider_message_id``: when ``True``, count distinct
         ``provider_message_id`` values (matching the deduplicated virtual
         mailbox listing) instead of raw rows.
+
+        ``group_by_thread``: when ``True``, count threads instead of
+        messages. It MUST mirror the same axis ``list_filtered`` uses or
+        the paginated ``total`` will disagree with the rows returned.
 
         Returns ``0`` without touching the database when ``account_ids``
         is empty (mirrors ``list_filtered`` returning ``[]``).
@@ -259,8 +275,41 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def set_favorites_true_batch(
+        self,
+        account_id: str,
+        provider_message_ids: list[str],
+    ) -> int:
+        """Mark a SUBSET of an account's messages favourite in one statement.
+
+        Sets ``is_favorite = TRUE`` for every ``provider_message_id`` in
+        ``provider_message_ids`` belonging to ``account_id``. Unlike
+        ``sync_favorites_for_account`` it does NOT force the other rows to
+        ``FALSE`` — the conversation lazy-sync only knows the thread it just
+        fetched, so it must not clear favourites elsewhere in the account.
+        One-directional by design. Returns the number of rows updated.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def exists(self, account_id: str, provider_message_id: str) -> bool:
         """Return True iff a row with this (account_id, provider_message_id) pair exists."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_metadata(
+        self, account_id: str, provider_message_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the message's full metadata row (incl. ``thread_id``) as a
+        dict, or ``None`` when no matching row exists.
+
+        Projects the same columns + ``mailbox_id`` as the listing query so
+        the row maps to ``EmailMetadataOut`` without special-casing. Used
+        by the conversation endpoint to resolve the base message's thread
+        and to map the singleton viewer response when the message has no
+        thread. Malformed UUIDs collapse to ``None`` (treated as "not
+        found"), consistent with ``exists``.
+        """
         raise NotImplementedError
 
     @abstractmethod

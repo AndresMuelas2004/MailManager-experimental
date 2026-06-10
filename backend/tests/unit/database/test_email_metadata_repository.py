@@ -717,6 +717,74 @@ def test_exists_propagates_connection_pool_error(monkeypatch):
         em_module.email_metadata_store.exists("acc1", "m1")
 
 
+# ===== get_metadata =====
+# Single-row read of a message's full metadata (incl. thread_id), backing
+# the conversation endpoint's base-message lookup. The error-capture
+# technique clones ``exists`` (InvalidTextRepresentation → None;
+# DatabaseError → raise; psycopg2.Error → QueryError; generic → QueryError
+# with the exception class name).
+
+
+def test_get_metadata_returns_row_as_dict(monkeypatch):
+    row = _row(thread_id="thr-7")
+    cursor = FakeCursor(fetchone_results=[row])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.get_metadata("acc1", "m1")
+    assert result is not None
+    # The returned value is a plain dict carrying thread_id (used to fetch
+    # the thread) plus the presentation columns (used to map the singleton).
+    assert isinstance(result, dict)
+    assert result["thread_id"] == "thr-7"
+    assert result["provider_message_id"] == "m1"
+    # The query projects mailbox_id from the JOIN on accounts.
+    assert result["mailbox_id"] == "mb1"
+    sql, params = cursor.executed[0]
+    assert params["account_id"] == "acc1"
+    assert params["provider_message_id"] == "m1"
+    # Reads through the accounts JOIN so the row maps without special-casing.
+    assert "JOIN accounts" in sql
+
+
+def test_get_metadata_returns_none_when_row_absent(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[None])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.get_metadata("acc1", "missing") is None
+
+
+def test_get_metadata_invalid_uuid_returns_none(monkeypatch):
+    # A malformed account UUID collapses to "not found", consistent with
+    # ``exists`` — never a 500.
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.get_metadata("not-a-uuid", "m1") is None
+
+
+def test_get_metadata_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to get email metadata row by message id"):
+        em_module.email_metadata_store.get_metadata("acc1", "m1")
+
+
+def test_get_metadata_generic_exception_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.get_metadata("acc1", "m1")
+
+
+def test_get_metadata_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.get_metadata("acc1", "m1")
+
+
 # ===== update_has_attachments (D-09) =====
 # Recomputes ``email_metadata.has_attachments`` from the live count of
 # non-inline rows in ``email_attachments``. The query is idempotent so
@@ -963,6 +1031,92 @@ def test_list_filtered_non_distinct_does_not_dedup(monkeypatch):
     sql, _ = cursor.executed[0]
     # The regular listing must use the plain LIST_FILTERED (no DISTINCT ON).
     assert "DISTINCT ON" not in sql
+
+
+# ===== list_filtered / count_filtered — group_by_thread (conversation view) =====
+# The (group_by_thread, distinct) matrix is a 2x2 selecting one of four
+# LIST/COUNT template pairs. These lock that selection by asserting on the
+# distinctive SQL surface of each template (window aggregates, partition
+# key, the inner provider_message_id dedup for the virtual variant). The
+# COUNT selector must track the LIST selector so the paginated total counts
+# exactly what the page lists.
+
+
+def test_list_filtered_grouped_regular_uses_account_thread_partition(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=2)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0, group_by_thread=True,
+    )
+    sql, _ = cursor.executed[0]
+    # group_by_thread=True + distinct=False → LIST_GROUPED_BY_THREAD.
+    assert "thread_message_count" in sql
+    assert "bool_and(em.is_read)" in sql
+    assert "bool_or(em.has_attachments)" in sql
+    assert "bool_or(em.is_favorite)" in sql
+    # Regular grouped key partitions by (account_id, thread_key) so two
+    # distinct accounts never merge into one thread row.
+    assert "PARTITION BY em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)" in sql
+    # threadless ('' / NULL) messages key by their own provider_message_id.
+    assert "COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)" in sql
+    # NOT the virtual variant (no inner provider_message_id dedup).
+    assert "DISTINCT ON (em.provider_message_id)" not in sql
+
+
+def test_list_filtered_grouped_virtual_dedups_then_partitions_by_thread_key(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=3)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1", "acc2"], None, [], 50, 0,
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+        group_by_thread=True,
+    )
+    sql, _ = cursor.executed[0]
+    # group_by_thread=True + distinct=True → LIST_GROUPED_BY_THREAD_DISTINCT.
+    assert "thread_message_count" in sql
+    # Inner level dedups by provider_message_id BEFORE grouping (collapses one
+    # provider account connected under two mailboxes).
+    assert "DISTINCT ON (em.provider_message_id)" in sql
+    # Outer grouping partitions by thread_key ALONE (no account_id) — that is
+    # what merges the same provider account across two mailboxes.
+    assert "PARTITION BY d1.thread_key" in sql
+    # Shared predicates still apply through the same helper.
+    assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
+
+
+def test_count_filtered_grouped_regular_counts_distinct_account_thread(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(4,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    total = em_module.email_metadata_store.count_filtered(
+        ["acc1"], "ALL_MAIL", [], group_by_thread=True,
+    )
+    assert total == 4
+    sql, _ = cursor.executed[0]
+    # group_by_thread=True + distinct=False → COUNT_GROUPED_BY_THREAD: counts
+    # DISTINCT (account_id, thread_key) pairs, mirroring the LIST partition.
+    assert "COUNT(DISTINCT (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)))" in sql
+
+
+def test_count_filtered_grouped_virtual_counts_distinct_thread_key(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[(2,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    total = em_module.email_metadata_store.count_filtered(
+        ["acc1", "acc2"], None, [],
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+        group_by_thread=True,
+    )
+    assert total == 2
+    sql, _ = cursor.executed[0]
+    # group_by_thread=True + distinct=True → COUNT_GROUPED_BY_THREAD_DISTINCT:
+    # counts DISTINCT thread_key (account_id dropped), mirroring the LIST.
+    assert "COUNT(DISTINCT COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))" in sql
+    assert "em.account_id," not in sql.split("COUNT(DISTINCT")[1].split(")")[0]
 
 
 # ===== count_filtered =====
