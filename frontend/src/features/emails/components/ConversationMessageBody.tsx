@@ -85,7 +85,7 @@ export default function ConversationMessageBody({ message }: Props) {
         srcDoc={wrapHtmlEmail(content.html_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
-        className="max-h-[60vh] min-h-[8rem] w-full border-0"
+        className="h-[70vh] w-full border-0"
       />
     );
   } else if (content?.text_body) {
@@ -95,7 +95,7 @@ export default function ConversationMessageBody({ message }: Props) {
         srcDoc={wrapPlainText(content.text_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
-        className="max-h-[60vh] min-h-[8rem] w-full border-0"
+        className="h-[70vh] w-full border-0"
       />
     );
   } else {
