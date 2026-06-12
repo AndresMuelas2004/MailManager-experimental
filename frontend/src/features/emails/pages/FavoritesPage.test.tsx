@@ -161,16 +161,23 @@ describe('FavoritesPage', () => {
     const star = await screen.findByRole('button', { name: 'Quitar de favoritos' });
     await user.click(star);
 
-    // Optimistic flip: the star immediately reflects "no longer favourite"
-    // (its accessible label switches) before the PATCH resolves.
-    const flipped = await screen.findByRole('button', { name: 'Marcar como favorito' });
+    // The pending key is set synchronously inside ``toggle`` (before the
+    // optimistic flip and before the PATCH is even dispatched), so the same star
+    // node is already disabled the instant the click is processed. Assert it
+    // synchronously rather than via an async query: the previous "await
+    // findByRole(flipped label) then expect disabled" coupled the anti
+    // double-click check to a poll that, under full-suite parallel load, could
+    // resolve only after the 50 ms PATCH had already settled and the per-row key
+    // was cleared — leaving the star enabled and the assertion flaky.
+    expect(star).toBeDisabled();
+
+    // Optimistic flip: the same node's accessible label switches to "no longer
+    // favourite" before the PATCH resolves.
+    await waitFor(() => expect(star).toHaveAttribute('aria-label', 'Marcar como favorito'));
     expect(patchSeen).toBe(true);
-    // While the toggle is in flight, that row's star is disabled (anti
-    // double-click).
-    expect(flipped).toBeDisabled();
 
     // Once the PATCH settles the star is interactive again.
-    await waitFor(() => expect(flipped).not.toBeDisabled());
+    await waitFor(() => expect(star).not.toBeDisabled());
   });
 
   it('routes the favourite PATCH to the email own mailbox_id, not the route mailbox', async () => {
