@@ -1,6 +1,6 @@
 ---
 name: implementar-funcionalidad
-description: "Ejecuta de forma autónoma la implementación de una funcionalidad ya planificada, a partir de los tres .md que la describen (backend, frontend y descripción general). Encadena en orden los subagentes de implementación backend-implementer y frontend-implementer, y cierra siempre, en este orden, con tests-author-from-diff, guides-updater-from-diff y docs-updater-from-diff. No replanifica ni pide aprobación. Invocación manual."
+description: "Ejecuta de forma autónoma la implementación de una funcionalidad ya planificada, a partir de los tres .md que la describen (backend, frontend y descripción general). Encadena en orden los subagentes de implementación backend-implementer y frontend-implementer, y cierra siempre, en este orden, con tests-author-from-diff, guides-updater-from-diff, docs-updater-from-diff y, como red de seguridad del entorno Python, deps-syncer-from-diff. No replanifica ni pide aprobación. Invocación manual."
 argument-hint: ruta al directorio (o a los tres archivos) con los .md de la funcionalidad — backend, frontend y general-description
 disable-model-invocation: true
 model: opus
@@ -79,8 +79,15 @@ Con una ruta md **…-backend.md**, trabaja desde el diff y desde solo la secci�
 ## Paso 6 — Documentación de cierre · `docs-updater-from-diff`
 
 @docs-updater-from-diff
-Paso final. Su task prompt **debe incluir la ruta absoluta del `…-general-description.md`**: la necesita como fuente del **porqué** de las decisiones; el resto —comportamiento y cifras— lo verifica contra el diff. Analiza los diffs existentes de la nueva implementación para conocer todos los detalles y actualiza **solo** la capa `docs/`. Existe la posibilidad de que la funcionalidad no sea nueva sino que sea una modificación grande de una anterior, menciónale también en el task prompt que existe esa posibilidad y que el archivo md en cuestión `…-general-description.md` se la aclarará. En ese mismo task prompt incluye literalmente una indicación del tipo: «Si el md en cuestión nombra que es una feature ya existente, acuérdate de no crear nuevos md en `docs/` sino de actualizar los de la feature ya existente».
+Último paso de documentación (tras él solo corre el Paso 7, la red de seguridad de dependencias). Su task prompt **debe incluir la ruta absoluta del `…-general-description.md`**: la necesita como fuente del **porqué** de las decisiones; el resto —comportamiento y cifras— lo verifica contra el diff. Analiza los diffs existentes de la nueva implementación para conocer todos los detalles y actualiza **solo** la capa `docs/`. Existe la posibilidad de que la funcionalidad no sea nueva sino que sea una modificación grande de una anterior, menciónale también en el task prompt que existe esa posibilidad y que el archivo md en cuestión `…-general-description.md` se la aclarará. En ese mismo task prompt incluye literalmente una indicación del tipo: «Si el md en cuestión nombra que es una feature ya existente, acuérdate de no crear nuevos md en `docs/` sino de actualizar los de la feature ya existente».
+
+## Paso 7 — Sincronización de dependencias · `deps-syncer-from-diff`
+
+@deps-syncer-from-diff
+Red de seguridad final del entorno Python, para que cuando el usuario corra los tests no fallen por una librería que faltaba en el `.venv` o por una dependencia que el código nuevo usa pero nadie declaró. Trabaja **solo desde el diff** (no necesita ningún `.md`): sincroniza el `.venv` desde los dos manifiestos y detecta, instala y fija (pinneadas) las dependencias de terceros ausentes, actualizando **ambos** `requirements.txt` según la convención de cada uno. Task prompt mínimo, p. ej.: *«Sincroniza las dependencias de la funcionalidad recién implementada trabajando solo desde el diff sin commitear del working tree: instala en `.venv` ambos manifiestos (`requirements.txt` raíz y `backend/requirements.txt`) y añade a ellos las dependencias de terceros nuevas que falten.»*
+
+A diferencia de los pasos anteriores, este es **best-effort**: si reporta un problema (fallo de red de pip, un nombre de paquete que no pudo resolver), inclúyelo en el resumen de cierre pero **no invalida** la implementación ya hecha. Trátalo como bloqueo de la cadena **solo** si devuelve `misión abortada` (no había diff: algo va muy mal).
 
 ## Cierre
 
-Cuando terminen los seis pasos (cinco subagentes encadenados) —o la cadena se detenga por un bloqueo—, devuélveme un **resumen breve**: qué subagentes corrieron, cuál bloqueó (si alguno) y por qué.
+Cuando terminen los siete pasos (seis subagentes encadenados) —o la cadena se detenga por un bloqueo—, devuélveme un **resumen breve**: qué subagentes corrieron, cuál bloqueó (si alguno) y por qué. Incluye también, si lo hubo, lo que `deps-syncer-from-diff` instaló o añadió a los `requirements.txt`.
