@@ -107,6 +107,10 @@ The `@playwright/mcp` server's `checkFile` guardrail permits writes to any path 
 - `part_id` — Gmail MIME part identifier (`payload.parts[].partId`). Used as the Gmail-side cache key in `email_attachments` because Gmail's `attachmentId` is not declared stable.
 - `draft_attachment_id` — local UUID PK of `draft_attachments`. The composer references it on remove and the partial-success persist path uses it as the join key against the upload result list.
 
+## Host Python Environment
+
+The host interpreter for this project is the venv at repo-root **`.venv`** (`.venv\Scripts\python.exe` on Windows) — never the global Python and never any other venv. The silent trap: the agent's PowerShell/Bash tool spawns a fresh shell that does **not** inherit an activated venv, so a bare `python` / `pip` resolves to the **global** interpreter and installs or runs in the wrong place (e.g. `pip install tzdata` landing in the global site-packages while `.venv` stays missing it). Always invoke the project interpreter explicitly: `.\.venv\Scripts\python.exe -m pip ...`, `.\.venv\Scripts\python.exe -m pytest ...`. Recreating the venv must install from `backend/requirements.txt` (where host-only deps like `tzdata` live — Windows `zoneinfo` has no system tz source, so a venv missing it crashes test collection at `ZoneInfo("Europe/Madrid")` in `services_helpers.py`).
+
 ## Testing
 
 - **E2E tests** (`backend/tests/e2e/`) — automated like unit and integration tests. They test all endpoints except interactive OAuth flows (`POST /auth/google`, `POST .../connect`) and `DELETE /auth/me` (cannot create a test user without the interactive login). Real third-party APIs and real DB persistence. Pre-configured test accounts are already inserted in the database with valid tokens and must never be deleted — E2E tests can be run without additional setup.
