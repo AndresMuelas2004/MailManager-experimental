@@ -742,6 +742,7 @@ function emailMetadataFixture(providerMessageId = 'pmid_1', accountId = 'acc_1')
     box: 'ALL_MAIL' as const,
     is_favorite: false,
     has_attachments: false,
+    thread_message_count: 1,
   };
 }
 

@@ -38,6 +38,7 @@ function makeEmail(overrides: Partial<EmailMetadataOut> = {}): EmailMetadataOut 
     box: 'ALL_MAIL',
     has_attachments: false,
     is_favorite: false,
+    thread_message_count: 1,
     ...overrides,
   };
 }
