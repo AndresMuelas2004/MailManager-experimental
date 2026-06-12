@@ -97,7 +97,7 @@ Migration `0032` dropped `scope_kind` from the API contract but **kept** `scope_
 
 ### Trap — `box_not_in=[]` means "include TRASH/SPAM", not "use default"
 
-An explicit empty list is a valid opt-in to see TRASH/SPAM (the repository guard is `is not None`, not truthiness — see `database_guide.md`). The test seeds TRASH/SPAM rows and asserts they appear. A truthiness-check regression collapses `[]` to the default exclusion and the rows vanish — this test is the only thing that catches it.
+An explicit empty list is a valid opt-in to see TRASH/SPAM (the repository guard is `is not None`, not truthiness — see `database_guide.md`). The test seeds TRASH/SPAM rows and asserts they appear. A truthiness-check regression collapses `[]` to the default exclusion and the rows vanish — this test is the only thing that catches it. The opt-in is NOT "show everything", though: the same test also seeds a `box='DELETED'` row and asserts it stays hidden, because `_build_filter_args` injects `DELETED` into every `box_not_in` branch (it is not a `FilterBox` value, so it can never be requested — see `repository_guide.md`). So under `box_not_in: []` the service hands the repository `["DELETED"]`, not `[]`; a test author who "extends" this to expect the DELETED row to surface is wrong. A companion test (`test_default_listing_excludes_deleted_rows`) pins the same carve-out on the default (no `box`) branch, isolating its assertion with a unique `subject_contains` so `total == 0` is exact.
 
 ### Trap — cross-account dedup winner is decided by `to_email` completeness
 

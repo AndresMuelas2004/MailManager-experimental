@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { RefreshCw } from 'lucide-react';
 
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
@@ -32,8 +33,14 @@ export default function VirtualMailboxViewPage() {
   // The virtual listing is always grouped by thread server-side, so the rows
   // arrive as conversations. Conversation mode makes each row read-only +
   // open; no selection / favourite wiring on this page.
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error } =
-    useVirtualMailboxEmails(virtualMailboxId!, mailboxId!, debouncedQ, page);
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, syncing } =
+    useVirtualMailboxEmails(
+      virtualMailboxId!,
+      mailboxId!,
+      record?.account_ids ?? [],
+      debouncedQ,
+      page,
+    );
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -63,7 +70,11 @@ export default function VirtualMailboxViewPage() {
     void composer.openForForward(email);
   };
 
-  const combinedError = error || viewer.error;
+  // Fold the vmbox-record load error into the single error banner. A 404 is
+  // already short-circuited by the isNotFound early-return below, so a
+  // loadError reaching the render here is a non-404 failure that must REPLACE
+  // the table — not stack a second banner above a still-rendered EmailTable.
+  const combinedError = loadError || error || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -145,6 +156,12 @@ export default function VirtualMailboxViewPage() {
             <p className="text-[15px] leading-[1.5] text-zinc-500">
               Vista filtrada — los correos siguen viviendo en sus bandejas reales.
             </p>
+            {syncing && (
+              <span className="inline-flex items-center gap-2 text-[13px] font-medium text-zinc-500">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                Sincronizando…
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 pt-2">
@@ -152,7 +169,6 @@ export default function VirtualMailboxViewPage() {
           <SearchHelpPopover />
         </div>
       </div>
-      {loadError && <div className="px-8 text-sm text-red-600">{loadError.message}</div>}
       {combinedError ? (
         <div className="px-8 text-sm text-red-600">{combinedError.message}</div>
       ) : (

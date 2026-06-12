@@ -361,8 +361,10 @@ class TestListEmailsForVirtualMailbox:
         captured = self._patch_listing(monkeypatch, record=record)
         virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
         assert captured["account_ids"] == [_ACCOUNT_ID]
-        # Default: exclude trash/spam when no explicit box.
-        assert captured["box_not_in"] == ["TRASH", "SPAM"]
+        # Default: exclude trash/spam when no explicit box. DELETED is always
+        # appended on top — it has no FilterBox membership and must never be
+        # visible in a virtual mailbox.
+        assert captured["box_not_in"] == ["TRASH", "SPAM", "DELETED"]
 
     def test_listing_silently_drops_revoked_accounts(self, monkeypatch):
         # Vmbox persisted two account ids but the user only owns one
@@ -396,16 +398,52 @@ class TestListEmailsForVirtualMailbox:
         assert captured["box"] == "TRASH"
         assert captured["box_not_in"] is None
 
-    def test_explicit_empty_box_not_in_disables_default_exclusion(self, monkeypatch):
-        # ``box_not_in=[]`` means "do not exclude any box" — caller is
-        # opting back into seeing TRASH and SPAM. The previous truthiness
-        # check collapsed the empty list to the default exclusion list,
-        # reversing the caller's intent.
+    def test_explicit_empty_box_not_in_opts_into_trash_and_spam_but_not_deleted(self, monkeypatch):
+        # ``box_not_in=[]`` means "do not exclude any selectable box" —
+        # caller is opting back into seeing TRASH and SPAM. The ``is not
+        # None`` guard keeps this distinct from the default (truthiness
+        # would collapse ``[]`` to the default exclusion, reversing the
+        # intent). DELETED is NOT selectable, so it is still appended: the
+        # opt-in reaches the repository as ``["DELETED"]``, not ``[]``.
         record = _fake_record(filter_payload={"box_not_in": []})
         captured = self._patch_listing(monkeypatch, record=record)
         virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
         assert captured["box"] is None
-        assert captured["box_not_in"] == []
+        assert captured["box_not_in"] == ["DELETED"]
+
+    def test_custom_box_not_in_override_still_excludes_deleted(self, monkeypatch):
+        # A custom exclusion list (here only SPAM) must still get DELETED
+        # appended — DELETED is never visible regardless of which boxes the
+        # caller chose to exclude. TRASH is absent because the caller did
+        # not list it.
+        record = _fake_record(filter_payload={"box_not_in": ["SPAM"]})
+        captured = self._patch_listing(monkeypatch, record=record)
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
+        assert captured["box"] is None
+        assert captured["box_not_in"] == ["SPAM", "DELETED"]
+
+    def test_build_filter_args_non_dict_fallback_excludes_deleted(self):
+        # Pure-function guard: a non-dict ``filter_payload`` falls back to
+        # the default exclusion, which must also carry DELETED.
+        box, box_not_in, extra_filters = virtual_mailboxes_service._build_filter_args(
+            "not a dict",
+        )
+        assert box is None
+        assert box_not_in == ["TRASH", "SPAM", "DELETED"]
+        assert extra_filters == {}
+
+    def test_build_filter_args_does_not_duplicate_preincluded_deleted(self):
+        # The ``"DELETED" not in box_not_in`` half of the append guard: a
+        # caller that already lists DELETED in its custom exclusion must not
+        # get it twice. Pure-function test for the idempotency branch — the
+        # append guard is otherwise only ever exercised on lists WITHOUT
+        # DELETED, so the dedup path would regress silently.
+        box, box_not_in, _ = virtual_mailboxes_service._build_filter_args(
+            {"box_not_in": ["TRASH", "DELETED"]},
+        )
+        assert box is None
+        assert box_not_in == ["TRASH", "DELETED"]
+        assert box_not_in.count("DELETED") == 1
 
     def test_foreign_virtual_mailbox_raises_404(self, monkeypatch):
         record = _fake_record(owner_user_id="stranger")
@@ -572,7 +610,10 @@ class TestListEmailsForVirtualMailbox:
 
     def test_in_applies_when_vmbox_opts_into_trash_and_spam(self, monkeypatch):
         # Config (c): vmbox created with box_not_in=[] (opt-in to TRASH/SPAM).
-        # No exclusion to violate, so in:trash narrows to TRASH (else branch).
+        # After the DELETED sanitisation _build_filter_args returns
+        # ["DELETED"], so this enters the ``elif box_not_in:`` branch (not the
+        # ``else``). The ["DELETED"] exclusion does not obstruct in:trash —
+        # DELETED is not a selectable in: value — so it still narrows to TRASH.
         record = _fake_record(filter_payload={"box_not_in": []})
         captured = self._patch_listing(monkeypatch, record=record)
         virtual_mailboxes_service.list_emails_for_virtual_mailbox(
@@ -716,3 +757,42 @@ class TestDatabaseErrorTranslation:
             virtual_mailboxes_service.list_emails_for_virtual_mailbox(
                 "vmb-1", _USER_ID,
             )
+
+    def test_list_translates_database_error(self, monkeypatch):
+        # ``list_virtual_mailboxes`` is a listing op whose only sibling
+        # (``test_unexpected_error_translates_to_operation_error``) injects a
+        # bare ``RuntimeError`` — which stays green under either handler order.
+        # A ``QueryError`` is needed to lock that ``except DatabaseError`` runs
+        # before ``except Exception``; otherwise a swap silently downgrades the
+        # 503 ``DatabaseQueryError`` to a 500.
+        def _raise(_uid):
+            raise QueryError("simulated DB failure on list_by_owner")
+
+        monkeypatch.setattr(
+            virtual_mailboxes_service.virtual_mailbox_store, "list_by_owner",
+            _raise,
+        )
+        with pytest.raises(DatabaseQueryError):
+            virtual_mailboxes_service.list_virtual_mailboxes(_USER_ID)
+
+    def test_owned_account_ids_lookup_translates_database_error(self, monkeypatch):
+        # ``_owned_account_ids`` has its OWN ordered ``except DatabaseError``
+        # block, shared by create / update / list_emails. None of the cases
+        # above inject a ``DatabaseError`` through it (they stub the catalogue
+        # lookup to succeed), so a handler swap inside the helper would go
+        # undetected. ``create`` runs the ownership lookup first, so one case
+        # here pins the helper's order for all three callers.
+        def _raise(_uid):
+            raise QueryError("simulated DB failure on list_account_ids_by_user")
+
+        monkeypatch.setattr(
+            virtual_mailboxes_service.account_store, "list_account_ids_by_user",
+            _raise,
+        )
+        payload = VirtualMailboxCreate(
+            display_name="X",
+            account_ids=[_ACCOUNT_ID],
+            filter_payload=VirtualMailboxFilterPayload(),
+        )
+        with pytest.raises(DatabaseQueryError):
+            virtual_mailboxes_service.create_virtual_mailbox(_USER_ID, payload)

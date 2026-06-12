@@ -43,6 +43,48 @@ function makeEmail(id: string) {
   };
 }
 
+function makeAccount(accountId: string, mailboxId: string) {
+  return {
+    account_id: accountId,
+    mailbox_id: mailboxId,
+    provider: 'gmail',
+    display_label: 'Gmail',
+    config: {},
+    email_address: `${accountId}@example.com`,
+  };
+}
+
+function makeMailbox(mailboxId: string) {
+  return {
+    mailbox_id: mailboxId,
+    display_name: mailboxId,
+    owner_user_id: 'u_test',
+    created_at: '2024-01-01T00:00:00Z',
+  };
+}
+
+// Serves a two-mailbox catalogue (a_1 ∈ mb_1, a_2 ∈ mb_2) so the sync fan-out
+// can resolve each account_id to its real mailbox_id, and records every
+// sync-metadata call the hook fires as ``{mailbox}/{account}`` pairs.
+function installCatalogueAndCaptureSync(seen: string[]) {
+  server.use(
+    http.get(`${API_BASE}/mailboxes`, () =>
+      HttpResponse.json([makeMailbox('mb_1'), makeMailbox('mb_2')]),
+    ),
+    http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () =>
+      HttpResponse.json([makeAccount('a_1', 'mb_1')]),
+    ),
+    http.get(`${API_BASE}/mailboxes/mb_2/accounts`, () =>
+      HttpResponse.json([makeAccount('a_2', 'mb_2')]),
+    ),
+    http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params, request }) => {
+      const accountId = new URL(request.url).searchParams.get('account_id');
+      seen.push(`${String(params.mailboxId)}/${accountId}`);
+      return HttpResponse.json({ total_synced: 0, accounts: [] });
+    }),
+  );
+}
+
 function wrapper({ children }: { children: ReactNode }) {
   const client = createTestQueryClient();
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -71,7 +113,7 @@ describe('useVirtualMailboxEmails — pagination', () => {
       ),
     );
 
-    const { result } = renderHook(() => useVirtualMailboxEmails(VMB_ID, 'mb_1', undefined, 1), {
+    const { result } = renderHook(() => useVirtualMailboxEmails(VMB_ID, 'mb_1', [], undefined, 1), {
       wrapper,
     });
 
@@ -91,7 +133,7 @@ describe('useVirtualMailboxEmails — pagination', () => {
       }),
     );
 
-    const { result } = renderHook(() => useVirtualMailboxEmails(VMB_ID, 'mb_1', undefined, 3), {
+    const { result } = renderHook(() => useVirtualMailboxEmails(VMB_ID, 'mb_1', [], undefined, 3), {
       wrapper,
     });
 
@@ -114,7 +156,7 @@ describe('useVirtualMailboxEmails — pagination', () => {
     );
 
     const { result, rerender } = renderHook(
-      ({ page }: { page: number }) => useVirtualMailboxEmails(VMB_ID, 'mb_1', undefined, page),
+      ({ page }: { page: number }) => useVirtualMailboxEmails(VMB_ID, 'mb_1', [], undefined, page),
       { wrapper, initialProps: { page: 1 } },
     );
 
@@ -131,5 +173,137 @@ describe('useVirtualMailboxEmails — pagination', () => {
     // Once the new page resolves the data swaps and the flag clears.
     await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('p2'));
     expect(result.current.isPlaceholder).toBe(false);
+  });
+});
+
+describe('useVirtualMailboxEmails — sync on open', () => {
+  it('fires one sync-metadata call per account, resolving each mailbox from the catalogue', async () => {
+    const seenSyncs: string[] = [];
+    installCatalogueAndCaptureSync(seenSyncs);
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1', 'a_2'], undefined, 1),
+      { wrapper },
+    );
+
+    // Two accounts spanning two real mailboxes → two syncs with the resolved
+    // mailbox_id (NOT the route's mb_1 for a_2).
+    await waitFor(() => expect(seenSyncs).toHaveLength(2));
+    expect(seenSyncs.sort()).toEqual(['mb_1/a_1', 'mb_2/a_2']);
+
+    await waitFor(() => expect(result.current.syncing).toBe(false));
+  });
+
+  it('refetches the listing after the sync resolves', async () => {
+    const seenSyncs: string[] = [];
+    installCatalogueAndCaptureSync(seenSyncs);
+
+    let listingCalls = 0;
+    server.use(
+      http.get(`${API_BASE}/virtual-mailboxes/${VMB_ID}/emails`, () => {
+        listingCalls += 1;
+        return HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 });
+      }),
+    );
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1'], undefined, 1),
+      { wrapper },
+    );
+
+    // First GET on mount, second GET caused by onSuccess invalidating
+    // ['virtual-mailbox-emails'].
+    await waitFor(() => expect(seenSyncs).toHaveLength(1));
+    await waitFor(() => expect(listingCalls).toBeGreaterThanOrEqual(2));
+    expect(result.current.emails[0]?.provider_message_id).toBe('m_1');
+  });
+
+  it('keeps syncing=true while the fan-out is in flight and clears it when done', async () => {
+    installCatalogueAndCaptureSync([]);
+    server.use(
+      // Delay the sync so the syncing window is observable.
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, async () => {
+        await delay(80);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1'], undefined, 1),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.syncing).toBe(true));
+    await waitFor(() => expect(result.current.syncing).toBe(false));
+  });
+
+  it('skips an account that is not in the catalogue (revoked / not owned)', async () => {
+    const seenSyncs: string[] = [];
+    installCatalogueAndCaptureSync(seenSyncs);
+
+    // a_1 resolves; a_unknown is not in the catalogue → only one sync.
+    renderHook(() => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1', 'a_unknown'], undefined, 1), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(seenSyncs).toHaveLength(1));
+    expect(seenSyncs).toEqual(['mb_1/a_1']);
+  });
+
+  it('does not block the listing when one account sync fails', async () => {
+    const seenSyncs: string[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes`, () =>
+        HttpResponse.json([makeMailbox('mb_1'), makeMailbox('mb_2')]),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () =>
+        HttpResponse.json([makeAccount('a_1', 'mb_1')]),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_2/accounts`, () =>
+        HttpResponse.json([makeAccount('a_2', 'mb_2')]),
+      ),
+      // a_2's sync (mb_2) fails with 500; a_1's (mb_1) succeeds.
+      http.post(`${API_BASE}/mailboxes/mb_2/emails/sync-metadata`, () =>
+        HttpResponse.json({ error: { code: 'sync_failed', message: 'boom' } }, { status: 500 }),
+      ),
+      http.post(`${API_BASE}/mailboxes/mb_1/emails/sync-metadata`, ({ request }) => {
+        const accountId = new URL(request.url).searchParams.get('account_id');
+        seenSyncs.push(`mb_1/${accountId}`);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+      http.get(`${API_BASE}/virtual-mailboxes/${VMB_ID}/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1', 'a_2'], undefined, 1),
+      { wrapper },
+    );
+
+    // The healthy account still synced, the listing still shows, error stays
+    // null and syncing settles back to false (allSettled never rejects).
+    await waitFor(() => expect(seenSyncs).toEqual(['mb_1/a_1']));
+    await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('m_1'));
+    await waitFor(() => expect(result.current.syncing).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+
+  it('does not re-fire the sync when the account set is unchanged across re-renders', async () => {
+    const seenSyncs: string[] = [];
+    installCatalogueAndCaptureSync(seenSyncs);
+
+    const { rerender } = renderHook(
+      ({ ids }: { ids: string[] }) => useVirtualMailboxEmails(VMB_ID, 'mb_1', ids, undefined, 1),
+      { wrapper, initialProps: { ids: ['a_1'] } },
+    );
+
+    await waitFor(() => expect(seenSyncs).toHaveLength(1));
+
+    // A fresh array with the same contents must not re-trigger the sync
+    // (gating is by syncKey, the stable projection of the target set).
+    rerender({ ids: ['a_1'] });
+    await delay(50);
+    expect(seenSyncs).toHaveLength(1);
   });
 });

@@ -583,12 +583,29 @@ def test_filter_by_box_not_in_excludes_only_listed_box(test_client, isolated_db)
 
 
 def test_filter_by_empty_box_not_in_includes_trash_and_spam(test_client, isolated_db):
-    """``box_not_in=[]`` means "exclude nothing" — TRASH and SPAM must
-    surface. A refactor that switches the guard to a truthiness check
+    """``box_not_in=[]`` means "exclude nothing selectable" — TRASH and SPAM
+    must surface. A refactor that switches the guard to a truthiness check
     (``if box_not_in:``) would collapse the empty list to the default
-    exclusion and reverse the caller's intent."""
+    exclusion and reverse the caller's intent.
+
+    DELETED is the exception: it is NOT a selectable box, so even the
+    "exclude nothing" opt-in must keep it hidden. A DELETED row seeded
+    here must never surface."""
     from tests.integration.conftest import TEST_USER_ID
     _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('deleted-optin-001', %s, NULL, 'd@x.com', 'D',
+                    'deleted optin row', '2026-05-10T10:00:00+00:00',
+                    FALSE, 'DELETED', '', '')
+            """,
+            (_SEEDED_GMAIL_ACCOUNT,),
+        )
 
     create = test_client.post(VMB_URL, json={
         "display_name": "Include everything",
@@ -600,6 +617,44 @@ def test_filter_by_empty_box_not_in_includes_trash_and_spam(test_client, isolate
     boxes = {r["box"] for r in rows}
     assert "TRASH" in boxes
     assert "SPAM" in boxes
+    # DELETED is excluded even under the "exclude nothing" opt-in.
+    assert "DELETED" not in boxes
+    assert "deleted-optin-001" not in {r["provider_message_id"] for r in rows}
+
+
+def test_default_listing_excludes_deleted_rows(test_client, isolated_db):
+    """A ``box='DELETED'`` row must never appear in a default (no explicit
+    ``box``) virtual-mailbox listing. The default exclusion is the negative
+    ``box_not_in`` predicate, which historically translated ``["TRASH","SPAM"]``
+    to ``AND NOT (box = ANY(...))`` and let DELETED slip through. The fix
+    appends DELETED to every ``box_not_in`` branch. A unique ``subject_contains``
+    isolates the assertion to the seeded DELETED row so ``total`` is exact."""
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('deleted-default-001', %s, NULL, 'd@x.com', 'D',
+                    'zzz unique deleted subject', '2026-05-10T10:00:00+00:00',
+                    FALSE, 'DELETED', '', '')
+            """,
+            (_SEEDED_GMAIL_ACCOUNT,),
+        )
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Default excludes deleted",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"subject_contains": "zzz unique deleted subject"},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    body = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    rows = body["items"]
+    assert "deleted-default-001" not in {r["provider_message_id"] for r in rows}
+    assert body["total"] == 0
 
 
 def test_listing_dedups_same_provider_message_id_across_accounts(test_client, isolated_db):

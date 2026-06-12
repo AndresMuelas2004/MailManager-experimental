@@ -1,9 +1,16 @@
-import { useCallback } from 'react';
-import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo } from 'react';
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
 import { listVirtualMailboxEmails } from '../../../api/endpoints/virtualMailboxes';
 import { listAccounts } from '../../../api/endpoints/accounts';
 import { listMailboxes } from '../../../api/endpoints/mailboxes';
+import { syncEmailMetadata } from '../../../api/endpoints/emails';
 import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
@@ -28,6 +35,7 @@ const MIN_SEARCH_LENGTH = 2;
 export default function useVirtualMailboxEmails(
   virtualMailboxId: string,
   mailboxId: string,
+  accountIds: string[],
   searchQuery?: string,
   page = 1,
 ): UseVirtualMailboxEmailsReturn {
@@ -92,6 +100,60 @@ export default function useVirtualMailboxEmails(
   const accounts: AccountOut[] = accountQueries.flatMap((q) => q.data ?? []);
   const accountsLoading = mailboxesQuery.isLoading || accountQueries.some((q) => q.isLoading);
 
+  // Resolve the vmbox's account_ids against the already-loaded catalogue to
+  // recover each account's real mailbox_id (an account aggregated by the vmbox
+  // can live under a different real mailbox than the route's). No extra
+  // requests: the catalogue is the same one resolveAccount() already consumes.
+  const accountById = useMemo(() => {
+    const m = new Map<string, AccountOut>();
+    for (const a of accounts) m.set(a.account_id, a);
+    return m;
+  }, [accounts]);
+
+  const syncTargets = useMemo(
+    () =>
+      accountIds
+        .map((aid) => accountById.get(aid))
+        .filter((a): a is AccountOut => a !== undefined)
+        .map((a) => ({ mailboxId: a.mailbox_id, accountId: a.account_id })),
+    [accountIds, accountById],
+  );
+
+  const syncMutation = useMutation({
+    mutationFn: (targets: { mailboxId: string; accountId: string }[]) =>
+      Promise.allSettled(targets.map((t) => syncEmailMetadata(t.mailboxId, t.accountId))),
+    // The fan-out can pull in new emails for accounts the vmbox aggregates
+    // from other real mailboxes → invalidate ONLY ['virtual-mailbox-emails']
+    // (the vmbox listing does not consume the bare ['emails'] key). Minimal
+    // blast radius. Promise.allSettled never rejects, so onSuccess always runs
+    // and refreshes the listing even when one account's sync failed.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] }),
+  });
+
+  // Sync the vmbox's accounts on open (mirrors how the regular listing syncs
+  // in useEmailList), gated until the catalogue resolved so account_id can be
+  // mapped to its mailbox_id. ``syncKey`` is the stable projection of the
+  // target set: the effect re-fires when the SET of accounts changes but not
+  // on reorders or unrelated re-renders.
+  const accountsReady = !accountsLoading && accounts.length > 0;
+  const syncKey = syncTargets
+    .map((t) => `${t.mailboxId}:${t.accountId}`)
+    .sort()
+    .join('|');
+
+  useEffect(() => {
+    if (virtualMailboxId.length === 0) return;
+    if (!accountsReady) return;
+    if (syncTargets.length === 0) return;
+    syncMutation.mutate(syncTargets);
+    // syncMutation identity is stable per TanStack Query docs; gate by syncKey
+    // (the identity of the accounts to sync) so reorders / unrelated re-renders
+    // don't re-fire. syncTargets is read inside but excluded from deps — its
+    // identity changes every render (useMemo over objects); syncKey is its
+    // stable projection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualMailboxId, syncKey, accountsReady]);
+
   const total = emailsQuery.data?.total ?? 0;
 
   return {
@@ -102,7 +164,7 @@ export default function useVirtualMailboxEmails(
     pageSize: EMAILS_PAGE_SIZE,
     totalPages: Math.max(1, Math.ceil(total / EMAILS_PAGE_SIZE)),
     loading: emailsQuery.isLoading || accountsLoading,
-    syncing: emailsQuery.isFetching && !emailsQuery.isLoading,
+    syncing: syncMutation.isPending || (emailsQuery.isFetching && !emailsQuery.isLoading),
     isPlaceholder: emailsQuery.isPlaceholderData,
     error,
     refresh,

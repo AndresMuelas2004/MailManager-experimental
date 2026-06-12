@@ -281,13 +281,20 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
     view (and the spec for fake mailboxes): when the user did not set
     a ``box`` explicitly, TRASH and SPAM are excluded unless an
     explicit ``box_not_in`` override is provided.
+
+    ``DELETED`` is excluded on TOP of that rule in every ``box_not_in``
+    branch (default, custom override, and the ``box_not_in: []`` opt-in):
+    it is a local hard-delete state with no ``FilterBox`` membership, so
+    a user can never ask to see it, and the negative ``box_not_in``
+    predicate would otherwise leak it (the positive ``box`` predicate
+    cannot, since ``box = X`` never matches ``DELETED``).
     """
     extra_filters: dict[str, Any] = {}
     box: str | None = None
     box_not_in: list[str] | None = None
 
     if not isinstance(filter_payload, dict):
-        return None, ["TRASH", "SPAM"], {}
+        return None, ["TRASH", "SPAM", "DELETED"], {}
 
     box_value = filter_payload.get("box")
     box_not_in_value = filter_payload.get("box_not_in")
@@ -300,6 +307,16 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
         box_not_in = [str(v) for v in box_not_in_value]
     else:
         box_not_in = ["TRASH", "SPAM"]
+
+    # ``DELETED`` is a local hard-delete state with NO product surface (it is
+    # not a member of ``FilterBox``), so it must never appear in a virtual
+    # mailbox regardless of the box filter. The positive-box branch already
+    # excludes it by construction (``AND box = X``); here we guarantee it for
+    # every ``box_not_in`` branch — default, custom override, and the
+    # ``box_not_in: []`` opt-in alike. The ``not in`` guard keeps the result
+    # idempotent if a caller ever pre-includes ``DELETED`` in the list.
+    if box_not_in is not None and "DELETED" not in box_not_in:
+        box_not_in.append("DELETED")
 
     for key in ALLOWED_FILTER_KEYS - {"box", "box_not_in"}:
         if key in filter_payload and filter_payload[key] is not None:
@@ -359,20 +376,26 @@ def list_emails_for_virtual_mailbox(
             if ov != box:
                 return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
         elif box_not_in:
-            # Fake mailbox carries exclusions (the default
-            # ``["TRASH","SPAM"]`` or an explicit non-empty list):
-            # ``in:`` of an excluded box is empty; otherwise it narrows
-            # to that single box.
+            # Fake mailbox carries exclusions: the default
+            # ``["TRASH","SPAM","DELETED"]``, an explicit non-empty list
+            # (always with ``DELETED`` appended), or the ``box_not_in: []``
+            # opt-in which ``_build_filter_args`` returns as ``["DELETED"]``.
+            # ``in:`` of an excluded box is empty; otherwise it narrows to
+            # that single box. ``DELETED`` is never a legal ``in:`` value
+            # (no ``in:deleted``; ``in:trash`` maps to ``TRASH``), so the
+            # ever-present ``DELETED`` entry can never block a legitimate
+            # ``in:`` here.
             if ov in box_not_in:
                 return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
             box = ov
             box_not_in = None
         else:
-            # ``box`` is None AND ``box_not_in`` is falsy — reachable when
-            # the fake mailbox was created with ``box_not_in: []`` (an
-            # explicit opt-in to see TRASH/SPAM), which ``_build_filter_args``
-            # returns as an empty list. No exclusion to violate, so any
-            # ``in:`` is compatible and narrows to that box.
+            # ``box`` is None AND ``box_not_in`` is falsy. After the DELETED
+            # sanitisation in ``_build_filter_args`` this branch is no longer
+            # reachable from that helper (every ``box_not_in`` path now
+            # carries at least ``["DELETED"]``); kept as a defensive fallback
+            # so a future caller passing an empty exclusion still narrows the
+            # listing to the requested ``in:`` box instead of mis-handling it.
             box = ov
             box_not_in = None
 
