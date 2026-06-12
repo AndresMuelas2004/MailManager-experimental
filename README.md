@@ -253,7 +253,7 @@ Virtual mailboxes (saved filtered views — "bandejas ficticias"):
 - `GET /virtual-mailboxes/{virtual_mailbox_id}` — Fetch one (404 `virtual_mailbox_not_found` for a foreign / missing id).
 - `PATCH /virtual-mailboxes/{virtual_mailbox_id}` — Replace `display_name` / `account_ids` / `filter_payload`.
 - `DELETE /virtual-mailboxes/{virtual_mailbox_id}` — Delete one.
-- `GET /virtual-mailboxes/{virtual_mailbox_id}/emails` — List the emails matching the saved filter across the (still-owned) accounts in the snapshot. Same paginated `{ items, total, limit, offset }` envelope as `GET /emails` (`limit` default 50, max 500). Always grouped by conversation (one row per thread); `total` is the deduplicated thread count across accounts that share a provider message.
+- `GET /virtual-mailboxes/{virtual_mailbox_id}/emails` — List the emails matching the saved filter across the (still-owned) accounts in the snapshot. Reads only the local synced copy (no provider call — the open-time sync is orchestrated client-side by fanning out per-account `sync-metadata`). Same paginated `{ items, total, limit, offset }` envelope as `GET /emails` (`limit` default 50, max 500). Always grouped by conversation (one row per thread); `total` is the deduplicated thread count across accounts that share a provider message. Hard-deleted (`DELETED`) messages are never returned, even when no box filter is set.
 
 Drafts:
 

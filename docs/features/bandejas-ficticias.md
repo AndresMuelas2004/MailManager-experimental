@@ -92,6 +92,8 @@ El filtro de carpeta tiene un comportamiento con matiz importante:
 - **Si se elige una carpeta concreta** (Enviados, Spam o Papelera): la bandeja muestra **solo** esa carpeta, ignorando la exclusión por defecto. Es decir, una bandeja "Papelera de estas cuentas" sí enseña la papelera.
 - **Si se pide explícitamente "no excluir nada"**: existe una forma de ver papelera y spam **junto con** el resto. No es un botón evidente en el formulario actual; es una capacidad del filtro pensada para vistas que quieran abarcarlo todo.
 
+> Los correos **borrados de forma definitiva** (el estado interno "DELETED" en el que queda un correo tras vaciarlo) **nunca aparecen** en una bandeja ficticia, ni siquiera con "no excluir nada". No es una carpeta que el usuario pueda pedir (no está entre las opciones de carpeta seleccionables), así que se oculta siempre, igual que ya está oculto en el resto de la app. La exclusión de papelera y spam es opcional; la de los borrados es permanente.
+
 Hay una regla de coherencia: **no se puede pedir a la vez "solo esta carpeta" y "todo excepto estas carpetas"**. Son criterios contradictorios; la app rechaza esa combinación con un error de validación en lugar de aplicar las dos cosas y devolver una bandeja perpetuamente vacía (que el usuario confundiría con "no hay correos").
 
 #### Ejemplo
@@ -163,9 +165,15 @@ El motivo: una bandeja ficticia puede agregar cuentas que viven en **bandejas re
 
 Abrir un correo desde una bandeja ficticia permite las mismas acciones que desde un buzón normal: leer el contenido, responder, responder a todos, reenviar. Todo se comporta exactamente igual que en [adjuntos.md](adjuntos.md) y el resto de la app, porque por debajo el correo es un mensaje real de una cuenta real.
 
-### 6.4 No hay botón de "sincronizar" aquí
+### 6.4 Al abrir, la bandeja sincroniza primero sus cuentas
 
-La bandeja ficticia **no** ofrece un botón para sincronizar correo nuevo. La sincronización se hace desde las bandejas reales; la ficticia solo **muestra** lo que esas ya bajaron. Un "sincronizar" en este contexto tendría que abanicar peticiones a todas las cuentas implicadas, lo que es una decisión de producto aparte. Lo que sí hace la vista es **refrescarse de forma agresiva**: cada vez que el usuario vuelve a abrir la bandeja, vuelve a pedir la lista al instante, sin servir una versión cacheada antigua. La razón es que estas vistas son curadas y sensibles al tiempo ("lo de hoy", "lo no leído"): el usuario espera ver lo recién llegado en cuanto entra, no una foto de hace medio minuto.
+Al **entrar** en una bandeja ficticia, la app **sincroniza primero las cuentas implicadas** —las mismas cuentas cuyos correos alimentan la vista— y luego muestra el listado, exactamente igual que ya ocurre al abrir una bandeja real. Lo que el usuario percibe:
+
+- Ve **al instante** lo que ya había (no hay pantalla en blanco) y, mientras tanto, un indicador de "sincronizando". Cuando la sincronización termina, el listado **se refresca solo** y aparecen los correos recién bajados (p. ej. los de este mes).
+- Ya **no** hace falta abrir antes la bandeja real de una cuenta para que la ficticia esté al día. Antes sí: una cuenta que el usuario no abría a diario se quedaba con datos viejos en la ficticia porque esta no sincronizaba por su cuenta.
+- Coste asumido (y deseado): abrir una bandeja ficticia consume algo de cuota del proveedor y tarda un poco más en estar 100% al día, igual que abrir una bandeja normal.
+
+Matiz importante: el **listado en sí sigue leyendo solo de la base de datos local**. Lo que sincroniza es el **paso previo** a mostrar, y esa orquestación la hace la app cliente lanzando la sincronización de cada cuenta implicada una a una (la misma sincronización por cuenta que usa una bandeja real). Por eso la vista sigue **refrescándose de forma agresiva**: cuando la sincronización termina vuelve a pedir la lista al instante, sin servir una versión cacheada antigua. Estas vistas son curadas y sensibles al tiempo ("lo de hoy", "lo no leído"): el usuario espera ver lo recién llegado en cuanto entra.
 
 ### 6.5 También se pagina, igual que cualquier bandeja
 
@@ -208,7 +216,8 @@ Una bandeja ficticia pertenece a su creador. Intentar acceder a la de otro usuar
 
 Para fijar expectativas (la lista completa con el porqué de cada límite está en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md)):
 
-- **No descarga correo nuevo** del proveedor ni importa mensajes que no estén ya sincronizados. Si una cuenta favorita en el proveedor todavía no se ha sincronizado en la app, no aparece.
+- **El listado, por sí mismo, no importa metadata nueva**: la consulta que pinta la tabla lee solo de la base de datos local. Lo que sí ocurre es que **al abrir la vista se dispara una sincronización** de las cuentas implicadas (como en una bandeja real, ver § 6.4) antes de mostrar; el límite que queda es que el propio listado no va al proveedor — es el paso de apertura el que sincroniza, no la consulta del listado.
+- **Nunca muestra correos borrados** (estado "DELETED"): un correo eliminado de forma definitiva no aparece bajo ningún filtro, ni siquiera con "no excluir nada", porque no es una carpeta solicitable (§ 4.1).
 - **No es una carpeta real**: no existe en Gmail/Outlook, no se puede mover un correo "a" una bandeja ficticia.
 - **No autoexpande** la lista de cuentas al conectar cuentas nuevas (§ 3.1).
 - **No ofrece selección múltiple ni acciones en bloque** (la vista agrupa por conversación, donde la fila es de solo lectura): la bandeja es de **solo lectura** respecto a su definición, y las acciones operan **por mensaje** sobre los correos reales subyacentes, desde el visor de la conversación.
@@ -218,4 +227,4 @@ Para fijar expectativas (la lista completa con el porqué de cada límite está 
 
 ## Resumen en una frase
 
-> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que junta en una sola pantalla los correos **ya sincronizados** de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera y spam excluidos por defecto—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas (antes de paginar, para no descuadrar páginas ni el total), se navega por páginas numeradas igual que cualquier bandeja, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).
+> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que **sincroniza primero las cuentas implicadas al abrirse** (como una bandeja real) y junta en una sola pantalla los correos de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera y spam excluidos por defecto, y los borrados «DELETED» ocultos **siempre**—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas (antes de paginar, para no descuadrar páginas ni el total), se navega por páginas numeradas igual que cualquier bandeja, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).

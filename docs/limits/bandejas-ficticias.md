@@ -4,7 +4,7 @@ Catálogo cuantitativo de **hasta dónde llega** una bandeja ficticia (virtual):
 
 El **comportamiento** (flujos, UX, casos borde y el porqué de las decisiones de diseño) está en **[../features/bandejas-ficticias.md](../features/bandejas-ficticias.md)**. Aquí solo van los números y los límites.
 
-Todos estos valores están **hardcodeados** y aplican por igual a todos los usuarios y a ambos proveedores (Gmail y Outlook). Una bandeja ficticia **nunca llama al proveedor** (solo filtra lo ya sincronizado en la base de datos local), así que ningún límite depende de cuotas externas.
+Todos estos valores están **hardcodeados** y aplican por igual a todos los usuarios y a ambos proveedores (Gmail y Outlook). El **listado** de una bandeja ficticia **nunca llama al proveedor** (solo filtra lo ya sincronizado en la base de datos local), así que ningún límite del listado depende de cuotas externas. Matiz: **al abrir** la vista sí se dispara una sincronización previa de las cuentas implicadas (orquestada por el frontend, reutilizando la sincronización por cuenta de las bandejas reales), que sí consume cuota del proveedor — pero eso es el paso de apertura, no la consulta del listado. Ver § 5 y [../features/bandejas-ficticias.md](../features/bandejas-ficticias.md) § 6.4.
 
 ---
 
@@ -39,6 +39,7 @@ El lenguaje de filtros es una **lista cerrada de 6 claves**. Cualquier otra clav
 - **Todos los criterios rellenados se aplican a la vez (AND)**: añadir filtros siempre **estrecha** el resultado, nunca lo amplía.
 - **`box` y `box_not_in` son mutuamente excluyentes**: enviar ambos a la vez se rechaza con error de validación. El motivo: el motor de consulta emitiría dos condiciones de carpeta contradictorias y devolvería **cero filas siempre**, indistinguible de "no hay coincidencias".
 - **Exclusión por defecto de papelera y spam**: si no se indica ni `box` ni `box_not_in`, la bandeja excluye `TRASH` y `SPAM` automáticamente. Para incluirlos, hay que enviar `box_not_in: []` ("no excluir nada").
+- **Exclusión permanente de los borrados (`DELETED`)**: el estado interno `DELETED` (correo eliminado de forma definitiva tras vaciarlo) se excluye **siempre**, incluso con `box_not_in: []`. No es un valor de carpeta seleccionable (no está entre los admitidos de `box`/`box_not_in`), así que el usuario no puede pedirlo; se oculta en todas las ramas de filtro. A diferencia de la de papelera/spam, esta exclusión **no** se puede desactivar.
 - **Los criterios de filtro también se cruzan (AND) con la lupa de texto libre** si el usuario escribe algo en ella.
 
 ---
@@ -79,7 +80,7 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 
 | No soporta | Ejemplo | Por qué |
 |------------|---------|---------|
-| **Descargar correo nuevo / importar metadata** | Un favorito que existe en Gmail pero aún no se ha sincronizado no aparece | La bandeja solo **muestra** lo que las bandejas reales ya bajaron; no llama al proveedor. Importar nuevos mensajes es responsabilidad de la sincronización general, no de esta vista. |
+| **El listado importa metadata por sí mismo** | La consulta que pinta la tabla no va al proveedor; lee solo de la BD local | El **listado** solo filtra lo ya sincronizado. Lo que sí ocurre es que **al abrir** la vista se sincronizan antes las cuentas implicadas (paso orquestado por el frontend, ver § 3 y el gemelo de comportamiento § 6.4); el límite que queda es que la consulta del listado en sí no llama al proveedor — importar metadata lo hace el paso de sincronización de apertura, no el listado. |
 | **Autoexpansión de la lista de cuentas** | Conectar una cuenta nueva no la mete sola en bandejas existentes | La lista es una "foto" fija elegida a mano. El modo "todas mis cuentas" autoexpandible se retiró (migración 0032) porque mezclaba correo sensible sin avisar. Para añadir una cuenta hay que editar la bandeja. |
 | **Ser una carpeta real** | No se puede "mover un correo a" una bandeja ficticia | Es una vista calculada, no una carpeta en Gmail/Outlook. |
 | **Selección múltiple y acciones en bloque** | No hay un "vaciar bandeja ficticia" ni casillas de selección | La vista agrupa por conversación, donde la fila es de solo lectura; las acciones (papelera, leído, favorito) operan **por mensaje** desde el visor de la conversación, sobre los correos reales subyacentes (ver [conversaciones.md](conversaciones.md)). |
@@ -98,6 +99,7 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 | Todas las cuentas de la bandeja dejan de ser del usuario | Listado **vacío** (no error) | Sin cuentas válidas no hay nada que mostrar, pero la definición sigue existiendo. |
 | El mismo mensaje llega por dos cuentas (misma cuenta de proveedor bajo dos bandejas reales) | Se muestra **una sola fila** | Deduplicación del mensaje en el servidor **antes** de colapsar por hilo y de cortar la página (no después): así una página nunca queda corta por un duplicado y el total es correcto. Orden: deduplicar `provider_message_id` → agrupar por hilo → contar hilos → paginar; el total es el conteo de **hilos distintos** (no de mensajes). Preferencia de la copia superviviente del mensaje: **destinatario (`to_email`) no vacío > nombre de destinatario (`to_name`) no vacío > `received_at` más reciente**. Exclusivo de bandejas ficticias (en un buzón de una sola cuenta no puede ocurrir). |
 | Bandeja con `box` = `TRASH`/`SPAM`/`SENT` | Muestra solo esa carpeta, ignorando la exclusión por defecto | `box` explícito tiene prioridad sobre el "excluye papelera/spam por defecto". |
+| Correos borrados (`DELETED`) | **Nunca** aparecen en la vista | `DELETED` no es una carpeta solicitable (no está en los valores de `box`/`box_not_in`); se excluye en todas las ramas de filtro, incluida `box_not_in: []`. La exclusión es permanente, no opcional (§ 2). |
 
 ---
 
@@ -107,4 +109,4 @@ Estas entradas se rechazan **explícitamente** (error de validación en el borde
 
 ---
 
-> Una bandeja ficticia llega hasta: **nombre de 1–120 caracteres, al menos 1 cuenta (sin tope superior, lista fija sin autoexpansión), exactamente 6 criterios de filtro combinados con AND (`box`/`box_not_in` excluyentes, papelera y spam fuera por defecto), `from_email` por igualdad exacta y `subject_contains` por subcadena, más la lupa interna (2 caracteres mínimo, 10 palabras), navegación por páginas de 50 hilos distintos (agrupados por conversación, deduplicados antes de colapsar y paginar) con total exacto y sin scroll infinito, y refresco inmediato al reabrir** — y deliberadamente no descarga correo nuevo, no autoexpande cuentas, no filtra por fecha/etiquetas/adjuntos ni ordena por relevancia. El comportamiento completo está en [../features/bandejas-ficticias.md](../features/bandejas-ficticias.md).
+> Una bandeja ficticia llega hasta: **nombre de 1–120 caracteres, al menos 1 cuenta (sin tope superior, lista fija sin autoexpansión), exactamente 6 criterios de filtro combinados con AND (`box`/`box_not_in` excluyentes, papelera y spam fuera por defecto, borrados «DELETED» fuera siempre), `from_email` por igualdad exacta y `subject_contains` por subcadena, más la lupa interna (2 caracteres mínimo, 10 palabras), navegación por páginas de 50 hilos distintos (agrupados por conversación, deduplicados antes de colapsar y paginar) con total exacto y sin scroll infinito, sincronización de las cuentas implicadas al abrir, y refresco inmediato al reabrir** — y deliberadamente su listado no importa metadata por sí mismo (lo hace el paso de sincronización de apertura), no autoexpande cuentas, no filtra por fecha/etiquetas/adjuntos ni ordena por relevancia. El comportamiento completo está en [../features/bandejas-ficticias.md](../features/bandejas-ficticias.md).
