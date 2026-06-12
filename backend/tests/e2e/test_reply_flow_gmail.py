@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 import psycopg2
 import pytest
 
+from ._reply_helpers import bootstrap_reply_source
 from .e2e_config import (
     GMAIL_ACCOUNT_ID,
     GMAIL_MAILBOX_ID,
@@ -44,29 +45,6 @@ def _db_conn():
 
 def _assert_ok(response, *, expected: int = 200) -> None:
     assert response.status_code == expected, response.text
-
-
-def _fetch_one_inbox_message(account_id: str) -> tuple[str, str] | None:
-    """Return ``(provider_message_id, thread_id)`` for one inbox row.
-
-    Excludes rows without a stored ``from_email`` so the reply flow
-    test always picks a real received message (orphan rows from
-    previous failed runs can land in ``ALL_MAIL`` without a sender).
-    """
-    conn = _db_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT provider_message_id, thread_id FROM email_metadata "
-                "WHERE account_id = %s AND box = 'ALL_MAIL' "
-                "AND from_email IS NOT NULL AND from_email <> '' "
-                "ORDER BY received_at DESC NULLS LAST LIMIT 1",
-                (account_id,),
-            )
-            row = cur.fetchone()
-            return (row[0], row[1]) if row else None
-    finally:
-        conn.close()
 
 
 def _delete_draft_row_locally(provider_draft_id: str, account_id: str) -> None:
@@ -84,13 +62,13 @@ def _delete_draft_row_locally(provider_draft_id: str, account_id: str) -> None:
 
 def test_47_reply_flow_gmail(e2e_client):
     """End-to-end Reply flow against real Gmail."""
-    # 0. Ensure we have at least one inbox message to reply to.
-    sync_resp = e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata")
-    _assert_ok(sync_resp)
-    msg = _fetch_one_inbox_message(GMAIL_ACCOUNT_ID)
-    if msg is None:
-        pytest.skip("No synced inbox emails available for Gmail reply flow")
-    original_pmid, original_thread_id = msg
+    # 0. Bootstrap a source message with a known, retrievable body so the
+    # seeded reply quote (<blockquote>) is deterministic regardless of the
+    # account's current mailbox state (see _reply_helpers for the rationale).
+    src = bootstrap_reply_source(e2e_client, GMAIL_MAILBOX_ID, GMAIL_ACCOUNT_ID)
+    if src is None:
+        pytest.skip("Could not bootstrap a Gmail reply source message")
+    original_pmid, original_thread_id = src
 
     # 1. GET /reply-context — produces the prefill payload.
     ctx_resp = e2e_client.get(
@@ -208,7 +186,8 @@ def test_47_reply_flow_gmail(e2e_client):
         # from Gmail) and assert the rendered HTML carries the quote markup —
         # confirming the multipart/alternative text/html leg round-tripped.
         content_resp = e2e_client.get(
-            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content",
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content"
+            f"?account_id={GMAIL_ACCOUNT_ID}",
         )
         _assert_ok(content_resp)
         html_body = content_resp.json().get("html_body")

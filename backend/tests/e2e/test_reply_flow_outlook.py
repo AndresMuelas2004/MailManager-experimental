@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 import psycopg2
 import pytest
 
+from ._reply_helpers import bootstrap_reply_source
 from .e2e_config import (
     OUTLOOK_ACCOUNT_ID,
     OUTLOOK_MAILBOX_ID,
@@ -40,31 +41,6 @@ def _db_conn():
 
 def _assert_ok(response, *, expected: int = 200) -> None:
     assert response.status_code == expected, response.text
-
-
-def _fetch_one_inbox_message(account_id: str) -> tuple[str, str] | None:
-    """Return ``(provider_message_id, thread_id)`` for one inbox row.
-
-    Excludes rows without a stored ``from_email`` so the reply flow
-    test always picks a real received message (orphan drafts from
-    previous failed runs can land in ``ALL_MAIL`` without a sender,
-    making them unsuitable as Reply source — see the ``sender``
-    fallback in :py:meth:`OutlookClient._reply_context_from_graph_message`).
-    """
-    conn = _db_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT provider_message_id, thread_id FROM email_metadata "
-                "WHERE account_id = %s AND box = 'ALL_MAIL' "
-                "AND from_email IS NOT NULL AND from_email <> '' "
-                "ORDER BY received_at DESC NULLS LAST LIMIT 1",
-                (account_id,),
-            )
-            row = cur.fetchone()
-            return (row[0], row[1]) if row else None
-    finally:
-        conn.close()
 
 
 def _delete_draft_row_locally(provider_draft_id: str, account_id: str) -> None:
@@ -82,12 +58,14 @@ def _delete_draft_row_locally(provider_draft_id: str, account_id: str) -> None:
 
 def test_48_reply_flow_outlook(e2e_client):
     """End-to-end Reply flow against real Outlook."""
-    sync_resp = e2e_client.post(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata")
-    _assert_ok(sync_resp)
-    msg = _fetch_one_inbox_message(OUTLOOK_ACCOUNT_ID)
-    if msg is None:
-        pytest.skip("No synced inbox emails available for Outlook reply flow")
-    original_pmid, original_thread_id = msg
+    # Bootstrap a source message whose body is retrievable from the provider
+    # so the seeded reply quote (<blockquote>) is deterministic. The most
+    # recent ALL_MAIL row is not safe on this account (body-less SENT shadow
+    # copies) — see _reply_helpers for the full rationale.
+    src = bootstrap_reply_source(e2e_client, OUTLOOK_MAILBOX_ID, OUTLOOK_ACCOUNT_ID)
+    if src is None:
+        pytest.skip("Could not bootstrap an Outlook reply source message")
+    original_pmid, original_thread_id = src
 
     # 1. GET /reply-context.
     ctx_resp = e2e_client.get(
@@ -203,7 +181,8 @@ def test_48_reply_flow_outlook(e2e_client):
         # whose ``body.contentType`` is HTML) and assert the rendered HTML
         # carries the quote markup — confirming the HTML body round-tripped.
         content_resp = e2e_client.get(
-            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{sent_pmid}/content",
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{sent_pmid}/content"
+            f"?account_id={OUTLOOK_ACCOUNT_ID}",
         )
         _assert_ok(content_resp)
         html_body = content_resp.json().get("html_body")

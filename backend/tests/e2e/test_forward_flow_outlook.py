@@ -189,7 +189,8 @@ def test_50_forward_flow_outlook(e2e_client):
             time.sleep(4)
         assert synced, "sent forward was never persisted to email_metadata"
         content_resp = e2e_client.get(
-            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{sent_pmid}/content",
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{sent_pmid}/content"
+            f"?account_id={OUTLOOK_ACCOUNT_ID}",
         )
         _assert_ok(content_resp)
         html_body = content_resp.json().get("html_body")

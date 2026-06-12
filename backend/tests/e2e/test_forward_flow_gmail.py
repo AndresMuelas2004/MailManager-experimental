@@ -199,7 +199,8 @@ def test_49_forward_flow_gmail(e2e_client):
             time.sleep(4)
         assert synced, "sent forward was never persisted to email_metadata"
         content_resp = e2e_client.get(
-            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content",
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{sent_pmid}/content"
+            f"?account_id={GMAIL_ACCOUNT_ID}",
         )
         _assert_ok(content_resp)
         html_body = content_resp.json().get("html_body")
