@@ -40,10 +40,6 @@ Tests that inject `fetch_drafts_exc=RuntimeError(...)` and assert the standard `
 - **`total_synced` (rows touched) is deliberately ≠ `accounts[i].favorites_synced` (provider-list size).** `total_synced` is the rowcount of the single full-replace UPDATE across the whole account; `favorites_synced` is `len(favorite_ids)` from the provider. `test_sync_favorites_full_replace_for_account` pins `total_synced=4` vs `favorites_synced=2` — asserting equality is wrong. A provider favourite absent from local `email_metadata` is counted in `favorites_synced` but creates no row (Option A — `test_sync_favorites_ignores_unknown_provider_id_no_new_row`).
 - **The existence pre-check fires before the manager is built.** `set_favorite` calls `email_metadata_store.exists()` and 404s with `email_not_found` BEFORE `build_manager_for_accounts`, so a missing row spends no provider round trip. `test_set_favorite_missing_email_does_not_call_provider` proves it by stubbing the builder to raise and asserting its call-count stays 0 — a status-only 404 assertion would not distinguish a pre-check 404 from a post-build one.
 
-### `failing_test_client` — parametrize with `indirect=True`
-
-The fixture reads its parametrize value to configure which `FakeEmailClient` method raises and what error. The failure behavior is injected via `@pytest.mark.parametrize(..., indirect=True)` — this is not obvious from the fixture signature. Use existing `test_core_error_translation.py` entries as templates when writing a new error-translation case.
-
 ### `configurable_test_client` — mutable `config` dict
 
 Returns `(client, config)`. `config` is a mutable dict that `FakeEmailClient` reads by reference, so tests can change provider behavior between API calls within a single test. Supported keys include `metadata`, `deletes`, `label_updates`, `is_full_sync`, `existing_message_ids`, `sync_cursor_return`, and the explicit `*_return` overrides: `delete_return`, `restore_return`, `move_to_trash_return`, `fetch_messages_metadata_return`. Misspelling any of these silently produces a no-op fake (not an error), so the test passes for the wrong reason. Siblings: `test_client` gives a static fake; `failing_test_client` injects one failure via parametrize.
@@ -55,21 +51,6 @@ Per-test fixture that overrides the auth dependency to return the **seeded** use
 ### DDL inside a test transaction — only PostgreSQL-transactional statements
 
 Tests that prove "NULL `owner_user_id` is forbidden by the API" (`test_null_owner_mailbox_*`) issue an `ALTER TABLE ... DROP NOT NULL` inside the per-test transaction so they can stage the disallowed state. PostgreSQL DDL is transactional and rolls back cleanly with the test, so this is safe. Do **not** copy this pattern with non-transactional DDL like `CREATE INDEX CONCURRENTLY`, `VACUUM`, or `REINDEX CONCURRENTLY` — those cannot run inside a transaction and would leak schema changes across tests.
-
-### Auth override removal pattern — `finally` is essential
-
-Tests that verify real session validation temporarily remove the `require_session` override:
-
-```python
-override = app.dependency_overrides.pop(require_session, None)
-try:
-    # test code
-finally:
-    if override is not None:
-        app.dependency_overrides[require_session] = override
-```
-
-Without the `finally`, a test failure leaves the override removed and poisons every subsequent test in the session.
 
 ### `_insert_draft` and the `now()` invariance trap
 
@@ -146,31 +127,23 @@ GET endpoints that read exclusively from the database (no provider calls) are co
 3. **Cover all parameter variants.** Use `@pytest.mark.parametrize` for every valid combination of filter params.
 4. **New DB-only GET endpoints follow these rules.** If a new GET reads data not covered by the current seed, extend the seed (new migration + update the data section below) before writing the tests.
 
-### Seeded fake data (migration `0010_seed_fake_data_for_get_tests`)
+### Trap — `test_email_content.py`: the content endpoint is cache-aside, so prefetch/purge timing drives its tests
 
-Data inserted into the real database for testing DB-only GET endpoints. Not authenticated with any provider — exists only so tests can assert exact records.
+`GET .../emails/{id}/content` is the "GET with external dependency" exception — cache-aside + a sync-time prefetch + a sync-time TTL purge — so three setup invariants silently decide whether each test exercises what it claims:
 
-Fixed UUIDs:
-
-| Entity | ID |
-|---|---|
-| User | `11111111-1111-4000-a000-111111111111` |
-| Gmail mailbox | `aaaaaaaa-aaaa-4000-a000-aaaaaaaaa001` |
-| Outlook mailbox | `aaaaaaaa-aaaa-4000-a000-aaaaaaaaa002` |
-| Gmail account | `bbbbbbbb-bbbb-4000-a000-bbbbbbbbb001` |
-| Outlook account | `bbbbbbbb-bbbb-4000-a000-bbbbbbbbb002` |
-
-User: `name=inventadoParaEndpointGet`, `email=inventadoParaEndpointGet@fake.test`, `google_sub=inventadoParaEndpointGet-google-sub`.
-
-Accounts: Gmail label `Gmail inventada - inventadoParaEndpointGet` (`gmailinventada@gmail.com`), Outlook label `Outlook inventada - inventadoParaEndpointGet` (`outlookinventada@outlook.com`).
-
-Email distribution per account (50 total each): `ALL_MAIL=30`, `SENT=10`, `TRASH=4`, `SPAM=6`. SENT rows have `from_email` = the account's email address and `from_name = inventadoParaEndpointGet`. TRASH rows have `previous_box='ALL_MAIL'`; SPAM rows have `previous_box=NULL`. Emails span `2026-03-01` to `2026-03-13` with unique subjects and varied `is_read` values. Full data also available at `tests/fixtures/seed_get_endpoints.json`.
+- **`sample_metadata` dated 2024 is load-bearing**: it sits OUTSIDE the 48h prefetch window, so `sync-metadata` does NOT pre-cache the body and the follow-up GET is a genuine MISS. Re-dating the seed to `now()` turns every "cache miss" test into a false green. (The silent-auth content test sidesteps this by seeding `email_metadata` via raw SQL and skipping `sync-metadata` — the injected `auth_silent_exc` would 409 the sync before any row persists.)
+- **`BackgroundTasks` run synchronously under Starlette's `TestClient`**: the prefetch/purge scheduled off the response execute before the call returns, so their DB side effects are observable in the same request. A side effect made async-only would stop being visible with no failure signal.
+- **The purge test must keep its seeded row `is_read=TRUE`**: purge runs BEFORE prefetch in one sync, and the purge target is a recent `ALL_MAIL` row that is ALSO an eligible prefetch target — left unread, the prefetch re-caches the body the purge just deleted and `assert synced_row is None` flips red.
 
 ## Attachments — invariants worth their tokens
 
 ### `send_draft_with_attachments_exc` is the correct injection point for send failures
 
 The unified send path goes through `EmailManager.send_draft_with_attachments`, so a `FakeEmailClient(send_draft_exc=…)` injection is silently inert against `drafts_service.send_draft`. Use `send_draft_with_attachments_exc=EmailAttachmentSendFailed(detail={...})` to exercise the partial-success persistence path (D-27) end-to-end.
+
+### `fetch_content_exc` (not `list_message_attachments_exc`) is the content-viewer failure injection point
+
+The cache-miss content viewer makes a SINGLE provider call after the D4 unification — `fetch_content_with_attachments` (body + attachments fused) — so `list_message_attachments_exc` is **silently inert** here (it asserts a false-green 200 instead of the 502); `list_message_attachments` survives only for the Outlook Forward path. Inject `fetch_content_exc` for any content-endpoint provider-failure test, even though the same endpoint also discovers and persists attachments on that miss.
 
 ### Draft-attachment endpoints are local-only — no provider call
 

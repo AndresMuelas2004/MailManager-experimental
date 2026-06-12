@@ -47,14 +47,16 @@ The recipient-autocomplete data hook (`useRecipientSuggestions`) is invoked by `
 
 ## 2. TanStack Query key namespaces
 
-All cache keys follow `[<resource>, <scope>, ...<filters>]`. The six namespaces in active use:
+All cache keys follow `[<resource>, <scope>, ...<filters>]`. The seven namespaces in active use:
 
-- `['emails', mailboxId, box, accountId?, q?, favorite?, page]` — regular mailbox listings (`useEmailList`).
+- `['emails', mailboxId, box, accountId?, q?, favorite?, groupByThread, page]` — regular mailbox listings (`useEmailList`). `groupByThread` is a non-nullable boolean (it goes straight into the key, no `?? null`); it namespaces the grouped conversation cache apart from the ungrouped (favourites) cache so the two never collide.
 - `['virtual-mailbox-emails', virtualMailboxId, q?, page]` — listings produced by a virtual mailbox (`useVirtualMailboxEmails`).
 - `['virtual-mailbox', virtualMailboxId]` — a single virtual mailbox record (`useVirtualMailbox`).
 - `['virtual-mailboxes']` — the list of every virtual mailbox owned by the user (`useVirtualMailboxes`).
 - `['contact-suggestions', q]` — recipient autocomplete results (`useRecipientSuggestions`). The second slot is `null` (not the query) while gating is off (`q` under 2 chars), so the disabled state caches under a stable key instead of churning one entry per keystroke prefix.
-- `['drafts', mailboxId]`, `['accounts', mailboxId]`, `['mailboxes']` — straightforward resource listings.
+- `['conversation', mailboxId, accountId, providerMessageId]` — the message chain of an opened conversation (`useConversation`), invalidated + optimistically rewritten via the bare `['conversation']` prefix by `useFavorite` because `is_favorite` renders per-message inside the viewer.
+- `['drafts', mailboxId, accountId ?? null]` — drafts listing (`useDraftsList`); the `accountId` third slot (`?? null`) scopes a single account's drafts, while the bare `['drafts', mailboxId]` prefix invalidates all accounts at once.
+- `['accounts', mailboxId]`, `['mailboxes']` — straightforward resource listings.
 
 When a mutation can affect emails across several mailboxes (favourites toggle, bulk move-to-trash, bulk mark-as-spam, favourites sync, metadata sync) the invalidation uses the bare prefix `['emails']` (no `mailboxId` scope) plus `['virtual-mailbox-emails']`. The wider blast radius is the price of correctness: a vmbox can aggregate emails from several real mailboxes, so a scoped invalidation would silently leave stale rows in sibling caches. The favourites toggle and favourites sync additionally invalidate `['conversation']` (and optimistically rewrite the open `ConversationOut`) because `is_favorite` is rendered per-message inside the conversation viewer, so an open thread would otherwise show a stale star after a toggle fired from a row; the bulk and metadata-sync mutations do not touch `['conversation']`.
 
@@ -66,7 +68,7 @@ The one exception is `useVirtualMailboxEmails`' **open-time sync** fan-out (one 
 
 This override only re-reads the **local** synced copy on re-open; it does not by itself pull genuinely new mail from the provider. That is the job of the **open-time sync** the same hook runs (the vmbox listing endpoint is local-only on the backend by design — the provider sync is orchestrated client-side here, never inside `virtual_mailboxes_service`; see `repository_guide.md`). On open the hook fans out one `sync-metadata` call per aggregated account, resolving each account's **real** `mailbox_id` from the already-loaded catalogue (a vmbox account can live under a different real mailbox than the route — the same per-mailbox fan-out trap as §5 / §8), and refreshes the listing when the fan-out settles. The two mechanisms are complementary, not redundant: the cache override re-shows local rows instantly, the fan-out brings the new ones down.
 
-No other hook overrides the global cache policy; reach for a project-specific override only when the global defaults are demonstrably wrong for the surface in question.
+`useConversation` (`frontend/src/features/emails/hooks/useConversation.ts`) applies the **same** override (`refetchOnMount: 'always'` + `staleTime: 0`) for the same reason: a conversation is a time-sensitive view whose state the backend refreshes on every fetch, so re-opening the viewer must show the current state, not a 30 s stale snapshot. No other hook overrides the global cache policy; reach for a project-specific override only when the global defaults are demonstrably wrong for the surface in question.
 
 ## 4. Virtual mailboxes live inside the `emails` feature
 
@@ -101,28 +103,7 @@ Every page that mounts `EmailTable` must decide both `view` and `isSent` explici
 
 No listing page hardcodes `isSent` any more (except `FavoritesPage`, which is `view='mixed'` so `isSent` is unused). `AccountInboxPage`, `UnifiedInboxPage` and `VirtualMailboxViewPage` all derive it because the lupa's `in:` operator can shift the **effective** box of every returned row server-side — so the columns must follow that box, not the route/saved one. The shared rule is `(parseInOperator(debouncedQ) ?? <fallback>) === 'SENT'`, where the fallback is the route `box` for the inbox pages and `record?.filter_payload?.box` for the vmbox page (a vmbox can be a saved SENT view). This is **cosmetic only**: the box sent to the backend is unchanged; the real override is applied server-side from `q`. `parseInOperator` (`lib/searchOperators.ts`) is a deliberate mirror of the backend's `_IN_VALUES` map — a divergence degrades a column at worst, never the result set, so it does not need to track the backend in lockstep. `SearchHelpPopover` (mounted next to every `SearchInput`) is a static operator cheat-sheet; its English operator syntax must stay in sync with the backend parser, but its Spanish copy and the help text are UI-only.
 
-## 7. Route map and mounting tree
-
-Routes are declared in a single source — `frontend/src/app/routes/router.tsx`. The mailbox-scoped routes mount under `MailboxLayoutPage` and inherit `:mailboxId`:
-
-```
-/login                                                  → LoginPage
-/                                                       → MailboxGatewayPage (auth required)
-/create-mailbox                                         → CreateMailboxPage
-/m/:mailboxId
-  /accounts                                             → ConnectedAccountsPage (lazy)
-  /inbox  /sent  /spam  /trash                          → UnifiedInboxPage (lazy, box prop)
-  /drafts                                               → DraftsPage (lazy)
-  /favorites                                            → FavoritesPage (lazy)
-  /virtual-mailboxes                                    → VirtualMailboxesPage (lazy, from features/emails/pages)
-  /virtual-mailboxes/:virtualMailboxId                  → VirtualMailboxViewPage (lazy, from features/emails/pages)
-  /account/:accountId/{inbox,sent,spam,trash}           → AccountInboxPage (lazy, box prop)
-  /account/:accountId/drafts                            → AccountDraftsPage (lazy)
-```
-
-Every non-boot-path page uses `React.lazy()`. The router never knows anything about the `features/` internals beyond the page module's existence — a page move (e.g. the virtual-mailbox collapse documented in §4) is a one-line router edit and zero changes elsewhere.
-
-## 8. Server-side pagination across the email listings
+## 7. Server-side pagination across the email listings
 
 Every email listing (unified, account, favourites, virtual, and search results) is server-paginated with a single fixed page size, `EMAILS_PAGE_SIZE` (`frontend/src/lib/constants.ts`). It lives in `lib/` — not in `api/` or a feature — precisely because both the `api/endpoints/` layer (which converts `page → limit`/`offset` on the wire) and the `features/` layer (`useEmailList`, `useVirtualMailboxEmails`, `EmailPagination`, `useBulkBar`) consume it, and `api/` may not import from `features/`. The page is a 1-based URL search param (`?page=`); `page=1` is encoded by **omitting** the param so the canonical first-page URL stays clean. Changing the active search term (`q`) must reset to page 1 in the **same** `setSearchParams` update that writes `q` (every listing page does `params.delete('page')` next to the `q` edit) — otherwise the URL would briefly point at a page that does not exist for the new filter.
 
@@ -134,7 +115,7 @@ The pager and the `1–N de Z` range render **inside `EmailTable`'s sticky top b
 
 `useSelection` stores only keys in a `Set`, so it forgets the `EmailMetadataOut` objects of rows that scroll off the visible page. With server pagination a selection can span pages the table is no longer rendering, and the bulk actions need the full object of EVERY selected row — `mailbox_id` drives the per-mailbox HTTP fan-out (a vmbox can span real mailboxes) and the read/unread counts decide the toggle target. `useBulkBar` therefore wraps `toggle` / `toggleTopN` / `clear` to mirror every mutation into a parallel `Map<key, EmailMetadataOut>` (React state, not a ref, so the bar re-renders), and reads the selected set from the Map rather than from `selection.getSelected(visiblePage)`. The `Set` stays the source of truth for "is this selected" (the table consumes `isSelected` / `headerState` / `size`); the `Map` is the data store. A regression that reverts `useBulkBar` to deriving the selection from the visible `emails` array would silently drop every off-page selected row from a bulk action. Consumers MUST call `toggle` / `toggleTopN` / `clear` off the returned (wrapped) `selection`, never off the raw `useSelection` result, or the two fall out of sync. The bar clears the selection whenever the debounced search term changes (a same-page `q` change does not unmount the hook, so the Set/Map would otherwise survive into a filtered result that no longer shows those rows). For that cross-page selection to be reachable from the UI at all, the in-header pager stays visible **while the bulk bar is shown** (bulk bar on the left, pager on the right; `BulkActionsBar` is deliberately not `w-full` so it does not push the pager out) — hide the pager in selection mode and the `Map` can never accumulate rows from a second page.
 
-## 9. Composer body is HTML — emptiness, dirty-state, and size invariants
+## 8. Composer body is HTML — emptiness, dirty-state, and size invariants
 
 The composed message `body` is HTML end to end (the rich-text composer, TipTap). Three cross-file invariants are not reconstructable from any single file:
 

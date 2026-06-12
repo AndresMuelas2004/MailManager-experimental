@@ -169,12 +169,37 @@ El cuerpo se renderiza dentro de un iframe con permisos mínimos.
 | Aspecto | Valor / regla |
 |---------|---------------|
 | Qué se cachea | El HTML **ya saneado** (no el original), más el texto plano, en la base de datos local. |
-| Cuándo se puebla | En la primera apertura del correo (cache-aside): miss → descarga del proveedor → saneado → persistencia → entrega. |
+| Cuándo se puebla | En la primera apertura del correo (cache-aside): miss → **una** descarga del proveedor (cuerpo + adjuntos en la misma consulta) → saneado → persistencia → entrega. |
 | Reaperturas | Instantáneas, **sin** llamada al proveedor ni re-saneamiento. |
-| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). |
+| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). El **último vaciado** acompañó a la unificación de cuerpo+adjuntos en una sola lectura del proveedor (migración `0036`). |
 | Invalidación por borrado/desconexión | El borrado de un correo o la desconexión de una cuenta limpian su contenido cacheado automáticamente (cascada en la base de datos). |
 
 No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda completo. (El límite de tamaño relevante es el de los **adjuntos**, documentado en [adjuntos.md](adjuntos.md).)
+
+### 9.1 Tiempo de vivencia (TTL deslizante) del contenido cacheado
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Vida útil del cuerpo cacheado | **30 días desde el último acceso** (columna `last_accessed_at` de `email_content`). Es el **mismo plazo** que el TTL del binario de los adjuntos descargados ([adjuntos.md](adjuntos.md)), pero con un mecanismo de purga distinto (ver más abajo). |
+| Qué reinicia el contador | Cada apertura del correo (acierto de caché) sella `last_accessed_at = now()`. Toca **solo** ese campo, nunca `fetched_at` (el cuerpo es inmutable: una lectura no es una re-descarga). El sellado es best-effort: si falla, no rompe la lectura del correo. |
+| Cuándo arranca el contador | Al **persistir** la fila (cada fila de `email_content` es una entrada de caché creada al guardarse, así que `last_accessed_at` nunca es nulo). A diferencia del TTL de adjuntos, no hay guarda `IS NOT NULL` en la purga. |
+| Qué se purga | **Solo** el contenido caducado de `email_content`. Una re-apertura posterior lo vuelve a descargar (cache-aside) con el contador a cero. |
+| Mecanismo de purga | **Automático durante las sincronizaciones**, no manual ni programado (no hay cron en el MVP, y **tampoco** endpoint admin —a diferencia de la purga de adjuntos). Un único `DELETE` indexado por `(account_id, last_accessed_at)`. |
+| Alcance de cada purga | Solo las **cuentas que se sincronizan** en esa petición. Una cuenta que no se sincronice durante mucho tiempo **no se limpia** hasta que vuelva a sincronizarse. |
+| Cuándo corre | En segundo plano (`BackgroundTask`), **después** de que la sincronización haya respondido; **antes** de la pre-carga (libera espacio que la pre-carga luego rellena). No ralentiza la sincronización. |
+
+### 9.2 Pre-carga de contenido (prefetch post-sincronización)
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Qué se pre-carga | Cuerpo **+ adjuntos** (la misma ruta que una apertura normal) de los correos **no leídos** (`is_read = FALSE`), de la **bandeja de entrada** (`box = 'ALL_MAIL'`). |
+| Ventana de "reciente" | Recibidos en las **últimas 48 horas** (`received_at >= now() - INTERVAL '48 hours'`). |
+| Tope por cuenta y sincronización | **50** correos como máximo (los **más recientes** primero, `ORDER BY received_at DESC`), por cuenta, en cada sincronización. Es el único valor que pasa el código Python; el TTL (30 días) y la ventana (48 h) viven en las propias consultas SQL. |
+| Qué se excluye | Los correos cuyo cuerpo **ya está cacheado** (`LEFT JOIN email_content … IS NULL`): nunca se re-descargan. También quedan fuera enviados, spam, papelera y los correos **ya leídos**. |
+| Concurrencia | **Secuencial**, mensaje a mensaje (no en paralelo), para no chocar con los topes de peticiones simultáneas por usuario/buzón de Gmail y Outlook (429). |
+| Tolerancia a fallos | Best-effort: corre en el `BackgroundTask` tras responder; un fallo en un correo no aborta el resto y nunca afecta a la respuesta de sincronización ya enviada. |
+| Reintentos | **Ninguno**: lo que falle se reintentará en la siguiente sincronización (si el correo sigue siendo no leído y reciente). |
+| Índices | No añade índice nuevo: la selección de objetivos reutiliza los índices existentes de `email_metadata` (volumen del MVP). |
 
 ---
 
@@ -191,7 +216,11 @@ No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda co
 | **Edición del correo** | El visor es de **solo lectura**; no es un editor. |
 | **Recuperación de imágenes embebidas corruptas** | Si una imagen `cid:` no se puede resolver, se deja un icono de imagen rota (best-effort); no hay reintento ni reconstrucción. |
 | **Relleno automático de correos "solo Outlook" vacíos** | Solo se registra un aviso; no se inventa contenido. |
+| **Purga del contenido por cron o por endpoint manual** | El barrido del TTL de los cuerpos cacheados ocurre **solo** durante las sincronizaciones, sobre las cuentas que se sincronizan. No hay programador (igual que el TTL de adjuntos) **ni** endpoint admin (a diferencia de los adjuntos). Una cuenta que no se sincronice no se limpia. |
+| **Pre-carga de enviados, spam, papelera o correo ya leído** | La pre-carga se limita a los **no leídos recientes de la bandeja de entrada**: son los que el usuario va a abrir con más probabilidad; ampliarla gastaría cuota del proveedor en cuerpos que casi nunca se consultan. |
+| **Re-pre-carga de un no leído de hace más de 48 h cuyo cuerpo ya se liberó por TTL** | La ventana de pre-carga son 48 h: un no leído más antiguo cuyo contenido ya se purgó **no** se vuelve a preparar solo; se carga bajo demanda (breve espera) la próxima vez que se abra. |
+| **Pre-carga garantizada o completa** | Es best-effort y tope de 50 por cuenta y sincronización: si hay más de 50 no leídos recientes, o si la preparación de alguno falla, esos cuerpos se cargarán bajo demanda (o en la siguiente sincronización). No hay reintento inmediato. |
 
 ---
 
-> El visor llega hasta: **solo 5 protocolos** (`http`, `https`, `mailto`, `cid`, `data`), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail**, imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa**, todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura. El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).
+> El visor llega hasta: **solo 5 protocolos** (`http`, `https`, `mailto`, `cid`, `data`), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail**, imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa**, todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura. La caché tiene un **TTL deslizante de 30 días** desde el último acceso (purgado **solo durante las sincronizaciones**, sobre las cuentas sincronizadas), y se **pre-cargan** los **no leídos de las últimas 48 h** de la bandeja de entrada, **hasta 50 por cuenta y sincronización**, en segundo plano y de forma secuencial. El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).

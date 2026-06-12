@@ -17,7 +17,7 @@ Al hacer clic en un correo de la lista, se abre una ventana modal con la cabecer
 Lo importante de este flujo:
 
 - **El cuerpo no se descarga durante la sincronización del buzón.** La lista solo trae metadata (asunto, remitente, fecha). El contenido completo (HTML + texto) se baja **solo al abrir el correo**, una vez. Por eso la lista carga rápido aunque haya miles de correos.
-- **La primera apertura puede tardar uno o dos segundos** (hay que ir al proveedor, sanear el HTML y guardarlo). Las siguientes aperturas del mismo correo son **instantáneas**: el contenido ya saneado queda cacheado en la base de datos local y se sirve directo, sin volver a llamar a Gmail/Outlook ni a re-procesar nada (patrón *cache-aside*, sección 7).
+- **La primera apertura puede tardar uno o dos segundos** (hay que ir al proveedor, sanear el HTML y guardarlo). Las siguientes aperturas del mismo correo son **instantáneas**: el contenido ya saneado queda cacheado en la base de datos local y se sirve directo, sin volver a llamar a Gmail/Outlook ni a re-procesar nada (patrón *cache-aside*, sección 7). Además, el contenido de los correos **no leídos recientes de la bandeja de entrada se prepara por adelantado** durante la sincronización, así que muchas veces ni siquiera la *primera* apertura tiene espera (ver sección 7.2).
 - **Marcar como leído** ocurre en paralelo: abrir un correo no leído lo marca como leído una sola vez (no se repite si el usuario reabre la misma ventana).
 
 Si el correo ya no existe en nuestra base de datos local (por ejemplo, fue borrado entre el listado y el clic), la app responde con un error claro de "correo no encontrado" en lugar de intentar descargarlo del proveedor.
@@ -147,8 +147,32 @@ El cuerpo saneado de cada correo se guarda en la base de datos local de la app l
 - **Reabrir el mismo correo es instantáneo** y no consume cuota del proveedor: se sirve el HTML ya saneado desde la caché.
 - **Lo que se cachea es el resultado YA saneado**, no el HTML original. Es decir, el trabajo de limpieza se hace una sola vez por correo.
 - La lista de adjuntos descargables (ver [adjuntos.md](adjuntos.md)) se recalcula en cada apertura para mantenerse coherente aunque una purga por TTL haya borrado los binarios.
+- **Bajar el cuerpo es además algo más rápido** que antes: en una apertura sin caché, la app pide al proveedor el cuerpo y la lista de adjuntos en **una sola consulta** en lugar de dos.
 
-### 7.1 Por qué a veces "se refresca solo" un correo viejo
+### 7.1 La caché no vive para siempre: tiempo de vivencia deslizante
+
+El contenido guardado tiene un **tiempo de vivencia (TTL) deslizante**: si pasas mucho tiempo sin volver a abrir un correo, su contenido cacheado se elimina automáticamente para liberar espacio en la base de datos. El reloj **se reinicia con cada apertura**, así que el contenido de los correos que consultas a menudo permanece siempre disponible y rápido; solo se libera lo que llevabas mucho tiempo sin mirar.
+
+Como el cuerpo de un correo es inmutable (no cambia con el tiempo), este TTL es **pura liberación de espacio**, no caducidad por frescura: borrar el cuerpo no pierde nada, porque siempre se puede volver a pedir al proveedor. Es el **mismo criterio de antigüedad** que ya usa la app para los binarios de los adjuntos descargados (ver [adjuntos.md](adjuntos.md)); el plazo exacto está en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
+
+La limpieza de lo caducado **no la dispara un proceso programado**: ocurre **durante las sincronizaciones**, sobre las cuentas que se sincronizan. Una cuenta que pase mucho tiempo sin sincronizarse no se limpia hasta que vuelva a sincronizar. Para el usuario es transparente: la purga corre en segundo plano, después de que la sincronización ya haya respondido, y no la ralentiza.
+
+### 7.2 Pre-carga: preparar por adelantado los no leídos recientes
+
+Para que abrir el correo reciente sea inmediato, la app **pre-carga su contenido por adelantado**. Cada vez que se sincroniza una bandeja (algo que ocurre, como mínimo, al entrar y abrirla), y **después de que la sincronización haya respondido**, un trabajo en segundo plano prepara el cuerpo de los correos **no leídos**, **recibidos hace poco**, de la **bandeja de entrada** de cada cuenta sincronizada. Así, cuando el usuario vaya a abrirlos uno a uno, aparecen al instante, sin spinner.
+
+Detalles del comportamiento:
+
+- **Solo los no leídos recientes de la bandeja de entrada.** No se pre-cargan los enviados, ni el spam, ni la papelera, ni los correos ya leídos. La ventana de "reciente" y el número máximo de correos preparados por cuenta en cada sincronización están en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
+- **Lo que ya estuviera cacheado no se vuelve a pedir.** La pre-carga salta los correos cuyo cuerpo ya está en la caché: nunca re-descarga lo que ya tiene.
+- **Es best-effort y secuencial.** Los cuerpos se preparan de uno en uno (no en paralelo) para no chocar con los límites de peticiones simultáneas de Gmail/Outlook; si la preparación de un correo falla, no aborta la del resto. Como ocurre en segundo plano tras responder, un fallo aquí nunca afecta a la sincronización ni a la lista que el usuario ya está viendo.
+- **Prepara el cuerpo Y los adjuntos**, igual que una apertura normal. Esto es deliberado: si solo se guardara el cuerpo, la siguiente apertura sería un acierto de caché que ya no volvería a descubrir los adjuntos (el descubrimiento solo ocurre al bajar el contenido), y el clip y las tarjetas de adjunto quedarían ocultos para siempre en el correo pre-cargado.
+
+### 7.3 Si reabres un correo viejo cuyo contenido ya se liberó
+
+Si abres un correo tan antiguo que su contenido ya se había eliminado de la caché por el TTL, la app lo vuelve a pedir al proveedor **una única vez** (con una breve espera de carga), lo sanea y lo guarda otra vez, con su tiempo de vivencia **renovado** desde esa apertura. Es exactamente el mismo flujo que una primera apertura: no se pierde nada, solo se vuelve a pagar el coste de carga de algo que llevabas mucho tiempo sin mirar.
+
+### 7.4 Por qué a veces "se refresca solo" un correo viejo
 
 La caché del contenido se **invalida deliberadamente** cuando la cadena de saneamiento cambia de forma relevante (por ejemplo, cuando se mejoró el tratamiento de los bloques de Outlook, de los acentos o de las imágenes embebidas). En esos momentos, los correos cacheados con la versión antigua del saneamiento se vacían de la caché para forzar a que se vuelvan a bajar y a procesar con las reglas nuevas la próxima vez que se abran. Para el usuario es transparente: como mucho, un correo concreto vuelve a tardar uno o dos segundos en abrirse esa primera vez tras el cambio. El borrado de un correo o la desconexión de una cuenta también limpian su contenido cacheado automáticamente.
 
@@ -163,9 +187,11 @@ La caché del contenido se **invalida deliberadamente** cuando la cadena de sane
 - **Newsletter responsive de escritorio**: se ve la versión de escritorio correctamente, porque las reglas responsive sobreviven al saneamiento.
 - **Correo con fondo de color**: el marco/fondo del remitente se conserva y no queda tapado por el blanco del visor.
 - **Correo borrado entre el listado y el clic**: error de "correo no encontrado", sin gastar llamada al proveedor.
+- **Correo muy antiguo cuyo contenido se liberó por TTL**: se vuelve a pedir al proveedor una vez (breve espera) y se re-cachea con el contador a cero (sección 7.3). No se pierde nada.
+- **Correo no leído de hace más de la ventana de pre-carga cuyo contenido ya se había liberado**: **no** se vuelve a pre-cargar solo; se cargará bajo demanda, con una breve espera, la próxima vez que se abra. La pre-carga solo cubre los no leídos recientes (sección 7.2).
 
 ---
 
 ## 9. Resumen en una frase
 
-> Al abrir un correo, la app descarga su cuerpo una sola vez, lo pasa por una cadena de saneamiento en el servidor que conserva la apariencia (estilos, imágenes, diseño responsive, fondo) pero elimina todo lo peligroso (scripts, etiquetas/atributos/protocolos no permitidos, reglas CSS que traen recursos externos, cabeceras del documento), resuelve las imágenes embebidas `cid:` a `data:` solo cuando el cuerpo las usa de verdad, corrige el mojibake de los correos que mienten sobre su codificación (UTF-8-first en Gmail) y descarta los bloques pensados solo para Outlook de escritorio para no duplicar contenido; después lo muestra dentro de un iframe aislado que no puede ejecutar JavaScript ni tocar la sesión, y cachea el resultado ya saneado para que reabrir el mismo correo sea instantáneo. Las listas exactas de lo permitido y lo no soportado están en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
+> Al abrir un correo, la app descarga su cuerpo una sola vez (en una única consulta que trae también sus adjuntos), lo pasa por una cadena de saneamiento en el servidor que conserva la apariencia (estilos, imágenes, diseño responsive, fondo) pero elimina todo lo peligroso (scripts, etiquetas/atributos/protocolos no permitidos, reglas CSS que traen recursos externos, cabeceras del documento), resuelve las imágenes embebidas `cid:` a `data:` solo cuando el cuerpo las usa de verdad, corrige el mojibake de los correos que mienten sobre su codificación (UTF-8-first en Gmail) y descarta los bloques pensados solo para Outlook de escritorio para no duplicar contenido; después lo muestra dentro de un iframe aislado que no puede ejecutar JavaScript ni tocar la sesión, y cachea el resultado ya saneado para que reabrir el mismo correo sea instantáneo. Esa caché tiene un tiempo de vivencia deslizante que se reinicia con cada apertura (libera sola el contenido que llevas mucho sin abrir, recuperable bajo demanda), y la app pre-carga por adelantado —en segundo plano, tras sincronizar— el contenido de los no leídos recientes de la bandeja de entrada para que abrirlos sea instantáneo. Las listas exactas de lo permitido y lo no soportado, el plazo del TTL y los topes de la pre-carga están en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).

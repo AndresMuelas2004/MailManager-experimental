@@ -16,14 +16,7 @@
 
 **Authority rule**: the code of this layer must respect what is documented here. If there is a discrepancy between this guide and existing code, this guide is the reference — fix the code, not the guide. When new functionality is added, update this guide at the end of the task to reflect the new reality.
 
-## Endpoints that skip `require_session`
-
-| Endpoint | Why |
-|---|---|
-| `GET /health` | Unauthenticated health check — no user context needed. |
-| `POST /auth/google` | Creates the session — cannot require a prior one. |
-| `POST /auth/logout` | Must work even with expired sessions. |
-| `POST /auth/dev-login` | Dev-only backdoor gated by `DEV_LOGIN_ENABLED` + `DEV_LOGIN_TRUSTED_HOSTS` host check. It mints the session, so it cannot require one. |
+## Account deletion (`DELETE /auth/me`)
 
 `DELETE /auth/me` requires `require_session`. After deleting the user row, PostgreSQL `CASCADE` takes care of every associated artefact (mailboxes, accounts, tokens, sessions); the service only clears the session cookie afterwards.
 
@@ -67,6 +60,10 @@ Redirect URIs are provider-asymmetric: Gmail's comes from `GOOGLE_OAUTH_REDIRECT
 ### Ghost email reconciliation runs only after a full (bootstrap) sync
 
 `_reconcile_ghost_emails` runs inside `sync-metadata` only when `is_full_sync=True`. It diffs stored `provider_message_id`s against `sync_result.upserts`, verifies suspect IDs against the provider via `verify_message_existence`, and deletes the ones the provider no longer reports. Every step is in its own `except Exception` — the reconciliation is best-effort and cannot fail the sync endpoint.
+
+### `sync-metadata` schedules a post-response content prefetch + purge (best-effort, off the response path)
+
+`sync_email_metadata` takes `background_tasks: BackgroundTasks | None = None` **keyword-only**; the router injects it, direct callers (service tests, scripts) omit it. When present, the service registers `_run_content_prefetch_and_purge` to run AFTER the `SyncResultOut` is sent. The task (1) purges the synced accounts' expired cached bodies (`purge_expired_email_content`), then (2) prefetches, sequentially and message-by-message, the body+attachments of each account's recent-unread-uncached inbox mail (`_fetch_and_persist_email_content`, the same helper the cache-miss viewer uses — body-only would hide attachments forever on pre-cached mail). It reuses the manager **already authenticated** during the sync (no re-auth, no token re-persist in the seconds it runs). The whole task is best-effort: every failure is logged and swallowed so it can neither affect the already-sent response nor abort the remaining work. The targets are collected inside the per-account loop using the loop key directly — `label` IS the `account_label` (`_build_auth_context` keys `label_lookup` by it), so it is passed straight through; reconstructing `f"{mailbox_id}__{aid}"` is a bug. When `background_tasks is None` nothing is scheduled and the sync contract is identical to before. Rationale + figures (TTL, window, cap) in `repository_guide.md`.
 
 ### `manage_trash` — TRASH verification gate + split restore flow
 
@@ -141,7 +138,7 @@ Endpoints that build `DraftOut` directly from a row (skipping the helper) ALWAYS
 
 ### `get_email_full_content` cache miss: persist BEFORE recompute is load-bearing
 
-The cache-miss branch first upserts the discovered attachments into `email_attachments`, THEN calls `recompute_has_attachments`. Inverting the order leaves `has_attachments=false` because the COUNT(*) subquery runs against an empty table. Failing to call `recompute` at all leaves the listing icon stale until the next purge cycle.
+The cache-miss branch (extracted into the shared `_fetch_and_persist_email_content` helper, reused verbatim by the sync-time content prefetch) makes a **single** unified provider read — `manager.fetch_content_with_attachments` returns body + downloadable list + `cid_map` in one round trip (D4; the old two-call `fetch_email_content` + `list_message_attachments` path is gone). It then first upserts the discovered attachments into `email_attachments`, THEN calls `recompute_has_attachments`. Inverting the order leaves `has_attachments=false` because the COUNT(*) subquery runs against an empty table. Failing to call `recompute` at all leaves the listing icon stale until the next purge cycle. The body/attachment persistence inside the helper is best-effort (logged, never aborting) — the provider read already succeeded, so a DB hiccup must not turn a readable email into a 502; the unified read is the **single** hard provider-failure point (`EmailContentFetchError`/502).
 
 `_persist_attachment_metadata` runs each `meta.filename` through `core.email.sanitize_filename` (imported directly from `core.email`, NOT re-exported via `services_helpers`) with per-email dedup (`existing=` accumulates the names already sanitised within the same message). This closes the asymmetry with draft attachments (`add_draft_attachment`), which always sanitised: received attachments now also get path-traversal / reserved-name neutralisation and ` (1)`, ` (2)` collision suffixes before persistence. The upsert SQL already carries `filename = EXCLUDED.filename`, so a later re-discovery (HTML cache miss) refreshes the row to the sanitised value with no SQL change.
 
@@ -175,6 +172,8 @@ When Outlook fails mid-flight uploading attachments before the final `POST /mess
 
 The endpoint reads `email_attachments` on **every** request, including cache hits. A previous TTL purge can wipe `email_attachment_blobs` while leaving the metadata rows intact; reading the list always keeps the response's `is_downloaded` flag honest. Skipping the read on cache hit would surface stale `is_downloaded=true` entries that 502 on click.
 
+The cache-hit branch also refreshes the body cache's **sliding TTL** via `touch_email_content_last_accessed` (best-effort, soft-fail — a touch failure must not break the read). The touch is done **inline** in the service (a cheap UPDATE), NOT through `BackgroundTasks`, to keep framework types out of the service signature; it bumps **only** `last_accessed_at`, never `fetched_at` (see `repository_guide.md` for the E2E HIT assertion this protects). No touch is needed on cache miss — the upsert stamps `last_accessed_at = now()` itself.
+
 ### `copy_attachments_from_email` — 200 on partial failure, R-12 idempotency
 
 `POST .../drafts/{pdid}/attachments/copy-from-email` always returns HTTP 200 even when individual attachments fail to copy. Per-row failures (provider 404/410, `unavailable_at` set at the source, blob lookup failure, D-02 / D-03 cap hit, already-copied) surface via the `skipped[]` array as structured `{filename, reason}` records — never as the endpoint's status code. Mid-flight errors that abort the whole batch (mailbox not found, ownership pre-check failure, source `email_metadata` missing) still raise their typed `ApiError` and reach the global status map. `AttachmentInsertError` is the **only** per-row exception that escalates to the response status (the row vanishing under us is a DB integrity issue, not a per-attachment failure).
@@ -195,7 +194,7 @@ Three things the call shape does not reveal:
 
 - **The threadless (`thread_id=''`) short-circuit makes NO provider call.** The base row is read once via `email_metadata_store.get_metadata` (a missing row → 404 `email_not_found`, since the user clicked a listed row); when its `thread_id` is empty the service returns a one-message `ConversationOut` mapped straight from that row. The auth + `fetch_conversation` cascade runs only for real threads.
 - **`ConversationOut.messages` is mapped from the provider's FRESH state, not a DB re-read** (`_conversation_message_to_out`) — for the **real-thread** path. The threadless short-circuit above is the exception: its single message is mapped from the DB row (`row_to_email_metadata_out`), so there `is_read` / `is_favorite` reflect the last synced state, not a fresh provider call. A message that moved box or was read out-of-band is reflected on this open even if the best-effort lazy sync that follows failed. `has_attachments` of every viewer message is **always `False`** (B.lazy — the clip appears once the body is opened via `get_email_full_content`); `is_favorite` IS faithful because `ConversationMessage` carries it.
-- **`_lazy_sync_conversation` is best-effort and only affects the next LISTING, never this response.** It upserts the thread's messages (so reopening serves bodies from DB and the content pre-check passes) and re-applies the thread's favourite members in a **single** batch (`set_favorites_true_batch` — the shared upsert never touches `is_favorite`). It is **one-directional**: it only ever sets `is_favorite=TRUE`; un-starring a message at the provider is NOT propagated here, only by the favourites toggle / `/favorites/sync`. Every step is swallowed on failure — a cache-fill hiccup must not abort the viewer. Frontend invalidates the listings afterwards to refresh thread counts/order; the backend does not.
+- **`_lazy_sync_conversation` is best-effort and only affects the next LISTING, never this response.** It upserts the thread's messages (so reopening serves bodies from DB and the content pre-check passes) and re-applies the thread's favourite members in a **single** batch (`set_favorites_true_batch` — the shared upsert never touches `thread_id` / `is_favorite` / `has_attachments`). It is **one-directional**: it only ever sets `is_favorite=TRUE`; un-starring a message at the provider is NOT propagated here, only by the favourites toggle / `/favorites/sync`. Every step is swallowed on failure — a cache-fill hiccup must not abort the viewer. Frontend invalidates the listings afterwards to refresh thread counts/order; the backend does not.
 
 `ConversationFetchError` (502, same family as `EmailContentFetchError` / `EmailReplyContextError`) is raised only for the service's own unexpected branches; a genuine provider `EmailExternalAPIError` surfaces as `ExternalAPIError` (502) via `translate_core_error`.
 
@@ -256,11 +255,3 @@ All `ApiError` subclasses live in `api/errors/exceptions.py` and must be registe
 - Add request/response schemas in `api/schemas/auth.py`.
 - The existing `AuthTokenError` subclasses are provider-agnostic and reusable. See `auth_guide.md` for the auth-layer side of the checklist.
 - `POST /auth/dev-login` is a test backdoor, not a provider flow. It bypasses OIDC entirely (no `verify_*_token`, no `AuthSettings.client_id`, no `translate_auth_error`) and must NOT be used as a template when adding a real identity provider — copy from `google_login` instead.
-
-### New draft operation
-
-- Schema in `api/schemas/draft.py`.
-- Service function in `api/services/drafts_service.py` following `create_draft`'s canonical sequence: `ensure_mailbox_access` → account lookup → outer `try: ... except ApiError: raise / except Exception: → <DraftXxxError>`.
-- Provider interaction via `EmailManager` — extend `EmailManager` + each `*Client`. Provider-First: the provider call runs first, only persist to `drafts` if it succeeds.
-- New `DraftXxxError` subclass in `exceptions.py` **and** its status in `handlers.py::_STATUS_MAP`.
-- Unit / integration / E2E tests in the corresponding test dirs (see each test guide's Extension Checklist).

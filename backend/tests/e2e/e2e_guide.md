@@ -30,22 +30,9 @@ Three endpoints are **excluded** from the automated suite because they require i
 | `POST /mailboxes/{mid}/accounts/{aid}/connect` | Initiates interactive per-provider OAuth flow |
 | `DELETE /auth/me` | Cannot create a test user without `POST /auth/google` |
 
-### `GOOGLE_CLIENT_ID` derived automatically
-
-`GOOGLE_CLIENT_ID` is **not** required as an env var — `_setup_google_client_id` extracts the `client_id` from the credentials file pointed to by `MIA_GMAIL_CREDENTIALS_PATH` at runtime.
-
 ### Test configuration in `e2e_config.py`
 
 Pre-existing test account identifiers are centralized in `e2e_config.py` with env var overrides. These accounts must exist in the real database with valid OAuth refresh tokens before running the suite — the suite never creates or deletes them.
-
-| Identifier | Env override | Default |
-|---|---|---|
-| `TEST_USER_ID` | `E2E_TEST_USER_ID` | developer's pre-seeded user UUID |
-| `GMAIL_MAILBOX_ID` | `E2E_GMAIL_MAILBOX_ID` | `28a83414-36f5-4115-ab61-977d5a06a8e1` |
-| `OUTLOOK_MAILBOX_ID` | `E2E_OUTLOOK_MAILBOX_ID` | `b61e15d5-153e-42ee-a4c6-2c943bd13c07` |
-| `GMAIL_ACCOUNT_ID` | `E2E_GMAIL_ACCOUNT_ID` | `9805b672-032b-4d74-9696-4db53a5eb512` |
-| `OUTLOOK_ACCOUNT_ID` | `E2E_OUTLOOK_ACCOUNT_ID` | `3c55eb17-9d5e-4d31-a3b5-14c6c24279b9` |
-| `SEND_RECIPIENT` | `E2E_SEND_RECIPIENT` | `muelonmuelon12@gmail.com` |
 
 `SEND_RECIPIENT` is the destination address used by every send and draft test. Override via `E2E_SEND_RECIPIENT` when running the suite where the default address is not available.
 
@@ -61,10 +48,6 @@ The `display_label` values live only in the database (not in any code file), so 
 | outlook | `3c55eb17-9d5e-4d31-a3b5-14c6c24279b9` | `b61e15d5-153e-42ee-a4c6-2c943bd13c07` | `pruebaOutlook` |
 
 **Extension rule**: when a new provider is added to `backend/core/email/`, create a corresponding real account in the database, register its identifiers in `e2e_config.py`, add the row to this table, and extend the suite with provider-specific tests (see Extension Checklist below).
-
-### Test independence — no global skip-all
-
-Each test checks its own prerequisites via `flow_state` keys using the `_require()` helper. If a dependency test fails, only the dependent test is `SKIPPED`; independent tests still run. There is no global "skip everything after the first failure" behavior.
 
 ## Traps and Behavioral Contracts
 
@@ -85,8 +68,6 @@ When drafts are **synced** from the provider (Section 5c), the draft is intentio
 ### Provider-specific behavior worth knowing
 
 - **Outlook re-wraps and normalises HTML bodies server-side.** Draft bodies now ship as HTML (`contentType: HTML`; reversed D-31, API field is `body`, not `body_html`). On read, Graph returns the content wrapped in a full `<html><head><meta …us-ascii></head><body>…</body></html>` document — `_parse_outlook_draft` flattens it back to a fragment, but the round-trip is NOT byte-for-byte (Graph also rewrites whitespace). Outlook draft-body tests MUST assert by containment (`"E2E updated body" in data["body"]`), never by equality. Gmail's `raw` round-trips closer to verbatim but its `_parse_gmail_draft` strips one trailing newline from the HTML part — assert by containment there too. The send/forward flow tests should additionally confirm the sent body arrives as HTML at the provider (Gmail: a `text/html` part inside `multipart/alternative`; Outlook: `body.contentType == "html"`).
-- **Send-draft response IDs differ by provider**: Gmail returns a **new** `provider_message_id` (Gmail creates a new Message on send, different from the draft ID). Outlook returns the **same** ID as the draft thanks to `Prefer: IdType="ImmutableId"` used at draft creation.
-- **Email content cache-aside tests (`test_46a..d`).** Cover the MISS → persist and HIT → serve-from-DB paths for both providers. `test_46a` (Gmail MISS) and `test_46c` (Outlook MISS) explicitly delete the `email_content` row before calling the endpoint and assert the row was written after the response; `test_46b` (Gmail HIT) and `test_46d` (Outlook HIT) depend on the prior MISS via `flow_state` keys (`gmail_content_msg_id` / `gmail_content_fetched_at` / `outlook_content_*`) and verify that `fetched_at` is unchanged on the second call — proving the provider was not re-fetched. Test order is load-bearing: 46a before 46b, 46c before 46d. `test_38` and `test_39` cover list/get content too, but without the explicit MISS/HIT split — `test_46a..d` are the authoritative cache-aside spec.
 - **Attachments e2e tests (`test_46e..m`).** Cover the local-only draft-attachment lifecycle (POST → DELETE without provider contact, one Gmail + one Outlook variant), the send-with-attachment paths against both providers (`test_46h`/`test_46i`), the three states of the admin purge endpoint (`test_46j..l`) — `503 purge_disabled` when `ATTACHMENTS_PURGE_TOKEN` is unset, `401 invalid_admin_token` when set but the header is wrong, `200 {purged_count, freed_bytes}` otherwise — and the cache-aside **download** endpoint (`test_46m`). The blocked-extension test runs against Gmail only because the blocklist is uniform (D-04a). **Accepted gaps**: `test_46l` does NOT pre-seed an expired blob — it asserts `purged_count >= 0`/`freed_bytes >= 0`, so a no-op purge against a clean database passes trivially. `test_46m` reuses `bootstrap_attachment_message` (Gmail path), so it only exercises the real download when the bootstrap produces a real downloadable row — for Gmail the cache-aside `/content` priming always persists one (the `'bootstrap'` synthetic row is Outlook-only, gated behind `_force_has_attachments`). The 30 MB multipart cap still has no E2E coverage (unit + integration only).
 
 ### Forward tests bootstrap real provider state
@@ -110,26 +91,6 @@ The `created_resources` fixture tracks temp mailbox IDs and session IDs. On tear
 
 Runs Alembic migrations against the real E2E database once per session using `backend/database/alembic.ini`. If the database exists but has no `alembic_version` row, it stamps the existing tables as `0001_initial_schema` before upgrading to `head`. This keeps the suite idempotent across cold starts and post-migration runs.
 
-## Extension Checklist — Adding a New Provider
-
-When adding a new provider:
-
-- [ ] Add account creation for the provider.
-- [ ] Add connect step for the provider.
-- [ ] Add operation steps (send, fetch, read-status, spam, trash) for the provider.
-- [ ] Add a draft creation test for the provider.
-- [ ] Add two draft sync tests (single-account and mailbox-wide) for the provider.
-- [ ] Add a draft listing test for the provider.
-- [ ] Add a draft update test for the provider — must create a draft first and clean up the local row afterward.
-- [ ] Add a draft deletion test for the provider.
-- [ ] Add a draft send test for the provider — must create a draft first, send it, and verify the local row was deleted. Safety-net cleanup in a `finally` block.
-- [ ] Add a reply flow test for the provider (`reply-context → create reply draft → send → threading assertion via bounded sync-metadata poll`).
-- [ ] Add a forward flow test for the provider (bootstrap an inbox message with an attachment, then `reply-context?action=forward → create forward draft → copy-from-email → send`, asserting the provider's `copied_count` expectation).
-- [ ] Add a favourites flow test for the provider (`PATCH .../favorite` toggle with original-state restore in a `finally` block, `POST /favorites/sync`, and `GET /emails?favorite=true` listing with `group_by_thread=false`).
-- [ ] Ensure flow assertions include the new provider behavior.
-
-The E2E suite should always represent the full set of supported providers.
-
 ## Search endpoint coverage — `test_38a`–`test_38g`
 
 `GET /mailboxes/{mailbox_id}/emails?q=…` (free text + Gmail-style operators) and its pagination envelope are exercised by the `test_38*` block. Why the dedicated mention here — each test is the executable spec for a contract not visible from the router signature alone:
@@ -138,8 +99,19 @@ The E2E suite should always represent the full set of supported providers.
 - `test_38c` pins the `EmailPageOut` envelope against the real account: `total` is the whole filtered set (not the page length), and two adjacent pages share no `provider_message_id` — proving OFFSET paging is stable thanks to the total-ordering tie-break. Skips when the account has < 3 emails.
 - `test_38d` is the spec for the `is:read` / `is:unread` operators (every returned row must satisfy the read-state predicate). Both halves stay in one test — they are the same logical contract.
 - `test_38e` pins the **asymmetry** of `in:`: with `box=ALL_MAIL&q=in:sent` every row is in `SENT`, and `total` equals a direct `box=SENT` query — so the override reaches the COUNT predicate, not only the listing. A regression that applied `in:` to the page but not the count would pass a bare status check.
-- `test_38f` pins that contradictory operators (`is:read is:unread`) resolve to **zero rows in SQL** (`items == []`, `total == 0`), never a 422 — the executable counterpart to the `repository_guide.md` "contradictions resolve in SQL, not via code" note.
+- `test_38f` pins two things about ANDed operators: contradictory ones (`is:read is:unread`) resolve to **zero rows in SQL** (`items == []`, `total == 0`), never a 422 (the executable counterpart to the `repository_guide.md` "contradictions resolve in SQL, not via code" note); AND, against an `is:read`-only baseline measured first in the same test, that combining operators **narrows, never widens** (`total <= base_total`).
 - `test_38g` is the only place that proves the deployed runtime carries the IANA tz database (`tzdata`): `before:`/`after:` parse the date as midnight in `Europe/Madrid`, so a missing `tzdata` would 500 these requests — a failure neither unit nor integration can catch (they share the interpreter; only E2E exercises the real runtime). Fixed far-past/far-future boundaries keep it deterministic against a live inbox.
+
+## Email-content cache-aside coverage — `test_46a`–`test_46d`
+
+MISS/HIT pair per provider (`46a`/`46b` Gmail, `46c`/`46d` Outlook) over `GET .../emails/{id}/content`. Two couplings invisible from the assertions:
+
+- The `_delete_email_content` between `sync-metadata` and the GET is **load-bearing**: `sync-metadata` schedules a background content prefetch of recent unread mail that may pre-cache the target, so without the delete the "MISS" GET silently resolves as a HIT and the provider-fetch branch goes untested (the `is None` assert right after pins the restored MISS).
+- The HIT tests assert `fetched_at` **unchanged** across the read — the executable guard for the sliding-TTL invariant (a hit bumps only `last_accessed_at`, never `fetched_at`). A regression that re-stamped `fetched_at` on a hit turns these red.
+
+## Recipient-autocomplete coverage — `test_46n`
+
+`GET /contacts/suggestions?q=…` is DB-only (no provider call). The needle is the first 5 chars of `SEND_RECIPIENT`'s local part, so the SENT rows the send/draft tests leave carry it on `to_email` and make a match likely without making it required — the assertion is **containment-only** (every `{email, name}` item carries the fragment) and tolerates an empty list, exactly like `test_38a`/`38b` against a live inbox. The `q` < 2 → 422 boundary rides the **same** test (`common_mistakes.md` § 1).
 
 ## Favourites coverage — `test_favorites_flow_gmail.py` / `test_favorites_flow_outlook.py` (`test_58`–`test_63`)
 
