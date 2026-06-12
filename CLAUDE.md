@@ -123,3 +123,7 @@
   ### 11 Integration and E2E Test Execution
 
   Never run the integration or E2E test suites on your own initiative. Run them only when the user explicitly requests it; in that case you may decide to run them.
+
+  ### 12 Application Startup and Live Browser Verification
+
+  Never start any part of the application stack — database, backend, or frontend (via Podman/compose, uvicorn, the Vite dev server, or any other means) — and never verify a change you made by navigating the running app on localhost with the Playwright MCP (or any other browser automation tool) on your own initiative. These actions are allowed only when the user literally requests them in the conversation. In particular, never include them as final verification steps in plans, and never perform them voluntarily as a "check that my change works" step — live verification belongs to the user unless explicitly delegated.
