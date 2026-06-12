@@ -570,6 +570,16 @@ _DDL_STATEMENTS = [
       AND lower(left(btrim(body), 64)) NOT LIKE '%<br%';
     """,
     "UPDATE alembic_version SET version_num = '0034_convert_drafts_body_to_html';",
+    # Migration 0035: invalidate email_content cache after allow-listing the
+    # legacy ``background`` attribute (table/cell background-image carrier).
+    # HTML cached before this change had the attribute stripped, so product
+    # grids that paint the thumbnail via ``<td background="https://…">`` (e.g.
+    # AliExpress EDM) rendered as grey boxes. TRUNCATE forces a cache-aside
+    # refetch + re-sanitise on next view. No-op on a greenfield bootstrap
+    # (the table is already empty from the TRUNCATE above); for incremental
+    # upgrades the per-migration TRUNCATE in 0035 still runs via Alembic.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = '0035_invalidate_email_content_cache_background_attr';",
 ]
 
 

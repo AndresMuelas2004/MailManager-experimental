@@ -726,3 +726,53 @@ def test_geometry_mirror_preserves_count_when_lxml_normalises_entities():
     assert 'height="80"' in result
     # Original table width must survive as well.
     assert 'width="600"' in result
+
+
+# ---------------------------------------------------------------------------
+# Legacy ``background`` attribute — table/cell background-image carrier
+# (AliExpress EDM product grids and similar templates render the thumbnail
+# through ``<td background="https://…">`` instead of an ``<img>``).
+# ---------------------------------------------------------------------------
+
+
+def test_preserves_background_attribute_on_td():
+    """The thumbnail URL lives in the ``background`` attribute on the cell.
+
+    Before the attribute was allow-listed, bleach dropped it and only the
+    placeholder ``background-color`` remained, so each product cell rendered as
+    a grey box (the AliExpress "Ofertas imprescindibles" grid bug).
+    """
+    html = (
+        '<table><tr><td '
+        'background="https://ae01.alicdn.com/kf/thumb.png" '
+        'style="background-size:cover;background-color:rgba(0,0,0,0.2)">.</td></tr></table>'
+    )
+    result = sanitize_email_html(html)
+    assert 'background="https://ae01.alicdn.com/kf/thumb.png"' in result
+
+
+def test_preserves_background_attribute_on_table():
+    html = '<table background="https://cdn.example.com/bg.png"><tr><td>x</td></tr></table>'
+    result = sanitize_email_html(html)
+    assert 'background="https://cdn.example.com/bg.png"' in result
+
+
+def test_preserves_data_url_background_attribute_from_resolved_cid():
+    """``inline_cid_images`` rewrites ``background="cid:…"`` into a ``data:`` URL
+    on the same attribute, so the resolved value must survive bleach too.
+    """
+    html = (
+        '<table><tr><td background="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==">'
+        '.</td></tr></table>'
+    )
+    result = sanitize_email_html(html)
+    assert 'background="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="' in result
+
+
+def test_strips_javascript_background_attribute():
+    """``background`` is a URI attribute, so the protocol allowlist must be
+    enforced on it exactly like on ``src``/``href``.
+    """
+    html = '<table><tr><td background="javascript:alert(1)">.</td></tr></table>'
+    result = sanitize_email_html(html)
+    assert "javascript:" not in result

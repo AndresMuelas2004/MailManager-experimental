@@ -57,13 +57,21 @@ _ALLOWED_TAGS: list[str] = [
     "td", "tfoot", "th", "thead", "tr", "u", "ul", "wbr",
 ]
 
+# ``background`` is the legacy HTML attribute that points a table/cell at a
+# background image (``<td background="https://…">``). Email templates lean on
+# it heavily as an alternative to ``<img>`` for product thumbnails and hero
+# tiles (e.g. AliExpress EDM grids). It MUST stay in the allowlist or bleach
+# drops it, leaving only the placeholder ``background-color`` and rendering the
+# cell as a grey box. bleach treats ``background`` as a URI attribute, so the
+# protocol allowlist below is still enforced on it (``javascript:`` is stripped
+# exactly like on ``src``/``href``).
 _ALLOWED_ATTRIBUTES: dict[str, list[str]] = {
     "*": ["class", "id", "style", "dir", "lang", "title", "align", "valign"],
     "a": ["href", "target", "rel"],
     "img": ["src", "alt", "width", "height", "border"],
-    "td": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor"],
-    "th": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor"],
-    "table": ["border", "cellpadding", "cellspacing", "width", "align", "bgcolor"],
+    "td": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background"],
+    "th": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background"],
+    "table": ["border", "cellpadding", "cellspacing", "width", "align", "bgcolor", "background"],
     "font": ["color", "size", "face"],
     "ol": ["start", "type"],
 }

@@ -97,13 +97,15 @@ Nota: `style` está en la lista (se conserva el bloque, ya saneado, para que sob
 | Todas (`*`) | `class`, `id`, `style`, `dir`, `lang`, `title`, `align`, `valign` |
 | `a` | `href`, `target`, `rel` |
 | `img` | `src`, `alt`, `width`, `height`, `border` |
-| `td` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor` |
-| `th` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor` |
-| `table` | `border`, `cellpadding`, `cellspacing`, `width`, `align`, `bgcolor` |
+| `td` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background` |
+| `th` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background` |
+| `table` | `border`, `cellpadding`, `cellspacing`, `width`, `align`, `bgcolor`, `background` |
 | `font` | `color`, `size`, `face` |
 | `ol` | `start`, `type` |
 
 Cualquier atributo fuera de esta tabla (incluidos manejadores de eventos como `onclick`, `onload`, etc.) se elimina.
+
+> **El atributo `background` (no confundir con `bgcolor`).** Es el atributo HTML heredado que apunta una tabla o celda a una **imagen de fondo** (`<td background="https://…">`). Muchas plantillas de correo lo usan como alternativa a `<img>` para las miniaturas de producto y los mosaicos de cabecera (p. ej. las rejillas de AliExpress). Está en la lista blanca de `td`/`th`/`table`; sin él, `bleach` lo eliminaría y la celda quedaría solo con su `background-color` de relleno, mostrándose como un **recuadro gris**. `bleach` lo trata como atributo de URI, así que **se le aplica el mismo filtro de protocolos** que a `src`/`href` (un `background="javascript:…"` se elimina).
 
 ---
 

@@ -50,6 +50,7 @@ El resultado que ve el usuario es un correo **visualmente equivalente al origina
 
 - **La maquetación y los estilos**: colores, fuentes, tamaños, márgenes, bordes, tablas, columnas. Se mantiene tanto el CSS embebido en bloques `<style>` como el que va inline en cada elemento.
 - **Las imágenes embebidas** del propio correo (logos, banners, firmas con foto), incluidas las referenciadas con `cid:` (ver sección 4).
+- **Las imágenes de fondo de tablas y celdas** definidas con el atributo HTML heredado `background` (`<td background="https://…">`). Muchas plantillas (las rejillas de producto de AliExpress, por ejemplo) pintan ahí la miniatura en lugar de usar `<img>`. Se conservan; si se descartaran, la celda se quedaría solo con su color de relleno y se vería como un **recuadro gris** en vez de la imagen. La lista exacta de etiquetas que admiten este atributo está en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
 - **Los diseños responsive**: las reglas que adaptan el correo a distintos anchos de pantalla sobreviven, así que las plantillas de newsletter modernas renderizan su versión de escritorio correctamente dentro del visor.
 - **El color de fondo del correo**: si el remitente fijó un fondo (por ejemplo, un marco lavanda alrededor del contenido), se preserva en lugar de quedar tapado por el fondo blanco del visor.
 - **Los enlaces**: se mantienen y, al pulsarlos, **abren en una pestaña nueva** del navegador (nunca dentro del visor).
