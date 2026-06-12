@@ -355,11 +355,20 @@ class GmailClient(EmailClient):
     This class will be responsible for talking to the official Gmail API.
     """
 
-    def __init__(self, account_label: str = "gmail") -> None:
+    def __init__(
+        self,
+        account_label: str = "gmail",
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._account_label = account_label
         self.service = None
         self._credentials: Credentials | None = None
         self._sender_email: str | None = None
+        # Injection point for the favourite-listing page retry loop so
+        # tests do not wait on real backoff delays. Defaults to
+        # ``time.sleep`` in production.
+        self._sleep = sleep
 
     def begin_interactive_auth(
         self,
@@ -1825,7 +1834,18 @@ class GmailClient(EmailClient):
             )
 
     def list_favorite_ids(self) -> list[str]:
-        """List message ids labelled STARRED via ``users.messages.list``."""
+        """List message ids labelled STARRED via ``users.messages.list``.
+
+        Each page (the initial request and every ``nextPageToken``) is
+        retried on transient errors with the same manual loop the rest of
+        the Gmail client uses (``_BATCH_MAX_RETRIES + 1`` = 5 attempts,
+        fixed ``_BATCH_RETRY_DELAY`` = 1s between tries, classified by
+        :py:func:`_is_retryable`). Google does not guarantee a
+        ``Retry-After`` header, so the backoff is fixed (mirrors
+        ``_batch_modify_labels`` / ``_execute_batch_get``). A transient
+        hiccup on one page therefore no longer aborts the whole
+        reconciliation. ``self._sleep`` keeps the waits instant in tests.
+        """
         if self.service is None:
             raise EmailNotAuthenticatedError("Gmail list_favorite_ids requires authentication.")
         ids: list[str] = []
@@ -1839,17 +1859,7 @@ class GmailClient(EmailClient):
             }
             if page_token:
                 list_kwargs["pageToken"] = page_token
-            try:
-                response = self.service.users().messages().list(**list_kwargs).execute()
-            except HttpError as exc:
-                status, reason = http_error_detail(exc)
-                raise EmailExternalAPIError(
-                    f"Gmail failed to list STARRED messages (HTTP {status}: {reason})."
-                ) from exc
-            except Exception as exc:
-                raise EmailExternalAPIError(
-                    f"Gmail unexpected STARRED list error ({type(exc).__name__}): {exc}"
-                ) from exc
+            response = self._list_favorites_page_with_retries(list_kwargs)
             for msg in response.get("messages", []) or []:
                 msg_id = str(msg.get("id") or "").strip()
                 if msg_id:
@@ -1857,6 +1867,48 @@ class GmailClient(EmailClient):
             page_token = response.get("nextPageToken")
             if not page_token:
                 return ids
+
+    def _list_favorites_page_with_retries(
+        self, list_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fetch one STARRED-listing page, retrying transient failures.
+
+        Mirrors the manual retry loop of ``_batch_modify_labels`` /
+        ``_execute_batch_get``: up to ``_BATCH_MAX_RETRIES + 1`` attempts,
+        a fixed ``_BATCH_RETRY_DELAY`` wait between them, and
+        :py:func:`_is_retryable` deciding whether an exception is worth
+        retrying. Non-retryable errors (404/400/403/410) propagate
+        immediately as :py:class:`EmailExternalAPIError`; a still-failing
+        transient after the last attempt does too.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(_BATCH_MAX_RETRIES + 1):
+            try:
+                return self.service.users().messages().list(**list_kwargs).execute()
+            except HttpError as exc:
+                if not _is_retryable(exc):
+                    status, reason = http_error_detail(exc)
+                    raise EmailExternalAPIError(
+                        f"Gmail failed to list STARRED messages (HTTP {status}: {reason})."
+                    ) from exc
+                last_exc = exc
+            except Exception as exc:
+                # Network noise (timeouts, resets) is retryable; a genuinely
+                # unexpected error is re-raised on the final attempt below.
+                last_exc = exc
+            if attempt < _BATCH_MAX_RETRIES:
+                self._sleep(_BATCH_RETRY_DELAY)
+        if isinstance(last_exc, HttpError):
+            status, reason = http_error_detail(last_exc)
+            raise EmailExternalAPIError(
+                f"Gmail failed to list STARRED messages after "
+                f"{_BATCH_MAX_RETRIES + 1} attempts (HTTP {status}: {reason})."
+            ) from last_exc
+        raise EmailExternalAPIError(
+            f"Gmail failed to list STARRED messages after "
+            f"{_BATCH_MAX_RETRIES + 1} attempts "
+            f"({type(last_exc).__name__}: {last_exc})."
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Spam operations

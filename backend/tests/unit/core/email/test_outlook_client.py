@@ -3190,3 +3190,162 @@ class TestFetchConversation:
              patch.object(client, "_graph_request", return_value={"value": messages}):
             members = client.fetch_conversation("conv1")
         assert [m.provider_message_id for m in members] == ["ok"]
+
+
+# ── Favourites — set_favorite / list_favorite_ids retries (Q2) ─────────
+
+
+def _make_favorite_client() -> OutlookClient:
+    """Authenticated client with an instant (no-op) sleep for retry loops."""
+    client = OutlookClient(account_label="mb__outlook", sleep=lambda _s: None)
+    client._access_token = "token"
+    return client
+
+
+def _raw(status: int, *, headers: dict | None = None, body: dict | None = None):
+    """Build a ``_graph_request_raw`` return tuple (status, headers, bytes)."""
+    payload = json.dumps(body).encode("utf-8") if body is not None else b""
+    return (status, headers or {}, payload)
+
+
+class TestOutlookSetFavoriteRetries:
+    def test_success_single_patch(self):
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(200, body={"id": "m1"}),
+        ) as raw_mock:
+            client.set_favorite("m1", True)
+        raw_mock.assert_called_once()
+        method, url = raw_mock.call_args.args[0], raw_mock.call_args.args[1]
+        assert method == "PATCH"
+        assert "/me/messages/m1" in url
+        assert raw_mock.call_args.kwargs["body"] == {"flag": {"flagStatus": "flagged"}}
+
+    def test_unflag_sends_notflagged(self):
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(200, body={"id": "m1"}),
+        ) as raw_mock:
+            client.set_favorite("m1", False)
+        assert raw_mock.call_args.kwargs["body"] == {"flag": {"flagStatus": "notFlagged"}}
+
+    def test_retries_on_429_with_retry_after_then_succeeds(self):
+        client = _make_favorite_client()
+        seq = [
+            _raw(429, headers={"Retry-After": "0"}),
+            _raw(200, body={"id": "m1"}),
+        ]
+        with patch.object(client, "_graph_request_raw", side_effect=seq) as raw_mock:
+            client.set_favorite("m1", True)
+        assert raw_mock.call_count == 2
+
+    def test_retries_on_503_then_succeeds(self):
+        client = _make_favorite_client()
+        seq = [_raw(503), _raw(200, body={"id": "m1"})]
+        with patch.object(client, "_graph_request_raw", side_effect=seq) as raw_mock:
+            client.set_favorite("m1", True)
+        assert raw_mock.call_count == 2
+
+    def test_permanent_400_does_not_retry(self):
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(400),
+        ) as raw_mock:
+            with pytest.raises(EmailExternalAPIError):
+                client.set_favorite("m1", True)
+        raw_mock.assert_called_once()  # no retry on a permanent error
+
+    def test_permanent_403_does_not_retry(self):
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(403),
+        ) as raw_mock:
+            with pytest.raises(EmailExternalAPIError):
+                client.set_favorite("m1", True)
+        raw_mock.assert_called_once()
+
+    def test_exhausts_retries_on_persistent_transient(self):
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(503),
+        ) as raw_mock:
+            with pytest.raises(EmailExternalAPIError):
+                client.set_favorite("m1", True)
+        # 3 total attempts (1 + 2 retries) from _OUTLOOK_RETRY_DELAYS_SECONDS.
+        assert raw_mock.call_count == 3
+
+    def test_prefer_immutable_header_on_every_attempt(self):
+        client = _make_favorite_client()
+        seq = [_raw(429, headers={"Retry-After": "0"}), _raw(200, body={"id": "m1"})]
+        with patch.object(client, "_graph_request_raw", side_effect=seq) as raw_mock:
+            client.set_favorite("m1", True)
+        for call_args in raw_mock.call_args_list:
+            headers = call_args.kwargs.get("extra_headers") or {}
+            assert headers.get("Prefer") == 'IdType="ImmutableId"'
+
+    def test_unauthenticated_raises(self):
+        client = _make_favorite_client()
+        client._access_token = None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.set_favorite("m1", True)
+
+    def test_empty_id_is_noop(self):
+        client = _make_favorite_client()
+        with patch.object(client, "_graph_request_raw") as raw_mock:
+            client.set_favorite("", True)
+        raw_mock.assert_not_called()
+
+
+class TestOutlookListFavoriteIdsRetries:
+    def test_collects_ids_single_page(self):
+        client = _make_favorite_client()
+        page = {"value": [{"id": "a"}, {"id": "b"}]}
+        with patch.object(client, "_graph_request_raw", return_value=_raw(200, body=page)):
+            assert client.list_favorite_ids() == ["a", "b"]
+
+    def test_paginates_via_nextlink(self):
+        client = _make_favorite_client()
+        page1 = {"value": [{"id": "a"}], "@odata.nextLink": "https://graph/next"}
+        page2 = {"value": [{"id": "b"}]}
+        with patch.object(
+            client, "_graph_request_raw",
+            side_effect=[_raw(200, body=page1), _raw(200, body=page2)],
+        ) as raw_mock:
+            assert client.list_favorite_ids() == ["a", "b"]
+        # Second call follows the opaque nextLink URL verbatim.
+        assert raw_mock.call_args_list[1].args[1] == "https://graph/next"
+
+    def test_retries_transient_page_then_succeeds(self):
+        client = _make_favorite_client()
+        page = {"value": [{"id": "a"}]}
+        with patch.object(
+            client, "_graph_request_raw",
+            side_effect=[_raw(503), _raw(200, body=page)],
+        ) as raw_mock:
+            assert client.list_favorite_ids() == ["a"]
+        assert raw_mock.call_count == 2
+
+    def test_permanent_error_aborts_listing(self):
+        client = _make_favorite_client()
+        with patch.object(client, "_graph_request_raw", return_value=_raw(400)):
+            with pytest.raises(EmailExternalAPIError):
+                client.list_favorite_ids()
+
+    def test_prefer_immutable_header_on_each_page(self):
+        client = _make_favorite_client()
+        page1 = {"value": [{"id": "a"}], "@odata.nextLink": "https://graph/next"}
+        page2 = {"value": [{"id": "b"}]}
+        with patch.object(
+            client, "_graph_request_raw",
+            side_effect=[_raw(200, body=page1), _raw(200, body=page2)],
+        ) as raw_mock:
+            client.list_favorite_ids()
+        for call_args in raw_mock.call_args_list:
+            headers = call_args.kwargs.get("extra_headers") or {}
+            assert headers.get("Prefer") == 'IdType="ImmutableId"'
+
+    def test_unauthenticated_raises(self):
+        client = _make_favorite_client()
+        client._access_token = None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.list_favorite_ids()

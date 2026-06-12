@@ -11,7 +11,8 @@
  */
 
 import { screen, waitFor } from '@testing-library/react';
-import { http, HttpResponse } from 'msw';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse, delay } from 'msw';
 import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
@@ -126,5 +127,88 @@ describe('FavoritesPage', () => {
     expect(
       screen.getAllByRole('checkbox', { name: 'Seleccionar correo' }).length,
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('toggles the row star with optimistic feedback and disables it while in flight (F3)', async () => {
+    // Hold the PATCH open so the optimistic flip and the in-flight disabled
+    // state are both observable before the request settles.
+    let patchSeen = false;
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeFavorite('f1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.patch(
+        `${API_BASE}/mailboxes/mb_1/accounts/a_1/emails/:pmid/favorite`,
+        async ({ params, request }) => {
+          patchSeen = true;
+          const body = (await request.json()) as { favorite?: boolean };
+          await delay(50);
+          return HttpResponse.json({
+            provider_message_id: String(params.pmid),
+            account_id: String(params.accountId),
+            is_favorite: Boolean(body.favorite),
+          });
+        },
+      ),
+    );
+
+    renderFavorites();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText('Subject f1')).toBeInTheDocument());
+    // The fixture is favourite, so the row star reads "Quitar de favoritos".
+    const star = await screen.findByRole('button', { name: 'Quitar de favoritos' });
+    await user.click(star);
+
+    // Optimistic flip: the star immediately reflects "no longer favourite"
+    // (its accessible label switches) before the PATCH resolves.
+    const flipped = await screen.findByRole('button', { name: 'Marcar como favorito' });
+    expect(patchSeen).toBe(true);
+    // While the toggle is in flight, that row's star is disabled (anti
+    // double-click).
+    expect(flipped).toBeDisabled();
+
+    // Once the PATCH settles the star is interactive again.
+    await waitFor(() => expect(flipped).not.toBeDisabled());
+  });
+
+  it('routes the favourite PATCH to the email own mailbox_id, not the route mailbox', async () => {
+    // The listing surfaces an email whose REAL mailbox (mb_other) differs from
+    // the route mailbox (mb_1) — the cross-mailbox virtual-bandeja case. The
+    // toggle must hit mb_other, not mb_1.
+    let patchedMailbox: string | null = null;
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: [{ ...makeFavorite('f1'), mailbox_id: 'mb_other' }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.patch(
+        `${API_BASE}/mailboxes/:mailboxId/accounts/a_1/emails/:pmid/favorite`,
+        async ({ params, request }) => {
+          patchedMailbox = String(params.mailboxId);
+          const body = (await request.json()) as { favorite?: boolean };
+          return HttpResponse.json({
+            provider_message_id: String(params.pmid),
+            account_id: String(params.accountId),
+            is_favorite: Boolean(body.favorite),
+          });
+        },
+      ),
+    );
+
+    renderFavorites();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText('Subject f1')).toBeInTheDocument());
+    const star = await screen.findByRole('button', { name: 'Quitar de favoritos' });
+    await user.click(star);
+
+    await waitFor(() => expect(patchedMailbox).toBe('mb_other'));
   });
 });

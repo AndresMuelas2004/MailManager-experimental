@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .email_client import (
     AttachmentBinary,
@@ -90,6 +90,13 @@ _PREFER_IMMUTABLE_HEADERS: dict[str, str] = {"Prefer": 'IdType="ImmutableId"'}
 # multiply HTTP round trips, larger chunks waste bandwidth on retries.
 _OUTLOOK_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 _OUTLOOK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+# Transient Graph statuses worth retrying. Kept identical to the literal
+# already classified inline by the attachment loops (and to Gmail's
+# ``_RETRYABLE_STATUS_CODES``) so both providers share one transient set.
+# ``509`` / ``409`` are deliberately excluded in MVP — see
+# docs/limits/favoritos.md.
+_OUTLOOK_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
@@ -214,11 +221,20 @@ class OutlookClient(EmailClient):
     and to the Microsoft identity platform for OAuth2 authentication.
     """
 
-    def __init__(self, account_label: str = "outlook") -> None:
+    def __init__(
+        self,
+        account_label: str = "outlook",
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._account_label = account_label
         self._access_token: str | None = None
         self._sender_email: str | None = None
         self._sender_name: str | None = None
+        # Injection point for the favourite retry loops so tests do not
+        # wait on real backoff delays. Defaults to ``time.sleep`` in
+        # production.
+        self._sleep = sleep
 
     # ------------------------------------------------------------------
     # Authentication
@@ -1320,12 +1336,71 @@ class OutlookClient(EmailClient):
     # Favourites — followupFlag (Outlook flag)
     # ------------------------------------------------------------------
 
+    def _graph_request_json_with_retries(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: dict[str, Any] | None = None,
+        operation: str,
+    ) -> dict[str, Any]:
+        """Run one Graph request with ``Retry-After``-aware retries.
+
+        Drives :py:meth:`_graph_request_raw` through the same manual
+        backoff loop as :py:meth:`fetch_attachment_binary`: transient
+        statuses (``_OUTLOOK_RETRYABLE_STATUS_CODES`` plus the synthetic
+        ``503`` ``_graph_request_raw`` folds ``URLError`` into) back off
+        and retry, honouring ``Retry-After`` when present and falling
+        back to ``_OUTLOOK_RETRY_DELAYS_SECONDS`` (3 attempts total).
+        Any other status propagates immediately as
+        :py:class:`EmailExternalAPIError` without consuming a retry —
+        permanent errors (``400``/``401``/``403``/``404``/``409``/``422``)
+        never retry. ``_PREFER_IMMUTABLE_HEADERS`` is re-sent on every
+        attempt (and, for paginated callers, every page) because Graph
+        does not remember the preference across calls.
+
+        Used by the favourite PATCH (``set_favorite``) and each page of
+        the favourite listing (``list_favorite_ids``). ``self._sleep`` is
+        the injection point that keeps the retry waits instant in tests.
+        """
+        for attempt, delay in enumerate(_OUTLOOK_RETRY_DELAYS_SECONDS, start=1):
+            status, headers, payload = self._graph_request_raw(
+                method, url, body=body, extra_headers=_PREFER_IMMUTABLE_HEADERS,
+            )
+            if 200 <= status < 300:
+                if status == 204 or not payload:
+                    return {}
+                try:
+                    parsed = json.loads(payload.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+                    raise EmailExternalAPIError(
+                        f"Outlook {operation} returned an unparseable response "
+                        f"({type(exc).__name__})."
+                    ) from exc
+                return parsed if isinstance(parsed, dict) else {}
+            if status not in _OUTLOOK_RETRYABLE_STATUS_CODES:
+                # Permanent failure — fail immediately without retrying.
+                raise EmailExternalAPIError(
+                    f"Outlook {operation} failed (HTTP {status})."
+                )
+            # Retryable status: back off and retry, unless this was the
+            # last attempt — then fall through to the post-loop raise.
+            if attempt < len(_OUTLOOK_RETRY_DELAYS_SECONDS):
+                retry_after = _retry_after_seconds(headers)
+                self._sleep(retry_after if retry_after is not None else delay)
+        raise EmailExternalAPIError(
+            f"Outlook {operation} exhausted retries on transient errors."
+        )
+
     def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
         """Toggle ``flag.flagStatus`` for a single Outlook message.
 
         Uses the Immutable-ID Prefer header (every message-touching
-        Graph call must repeat it, see core_guide.md). The toggle is
-        idempotent at Graph: re-setting the same value is a no-op.
+        Graph call must repeat it, see core_guide.md) and retries
+        transient throttling/5xx responses honouring ``Retry-After`` (3
+        attempts) via :py:meth:`_graph_request_json_with_retries`. The
+        toggle is idempotent at Graph: re-setting the same value is a
+        no-op, so a retry after a timeout is safe.
         """
         if self._access_token is None:
             raise EmailNotAuthenticatedError("Outlook set_favorite requires authentication.")
@@ -1336,19 +1411,12 @@ class OutlookClient(EmailClient):
             f"{GRAPH_BASE_URL}/me/messages/"
             f"{urllib.parse.quote(provider_message_id, safe='')}"
         )
-        try:
-            self._graph_request(
-                "PATCH",
-                url,
-                body={"flag": {"flagStatus": flag_status}},
-                extra_headers=_PREFER_IMMUTABLE_HEADERS,
-            )
-        except EmailExternalAPIError:
-            raise
-        except Exception as exc:
-            raise EmailExternalAPIError(
-                f"Outlook unexpected set_favorite error ({type(exc).__name__}): {exc}"
-            ) from exc
+        self._graph_request_json_with_retries(
+            "PATCH",
+            url,
+            body={"flag": {"flagStatus": flag_status}},
+            operation="set_favorite",
+        )
 
     def list_favorite_ids(self) -> list[str]:
         """List ids of every flagged Outlook message in the mailbox.
@@ -1357,6 +1425,9 @@ class OutlookClient(EmailClient):
         through ``@odata.nextLink`` until the result set is exhausted.
         ImmutableId is preferred so the returned ids stay stable across
         future moves (and match the ids already in ``email_metadata``).
+        Each page (the initial request and every ``nextLink``) retries
+        transient errors honouring ``Retry-After`` — a throttled page is
+        retried, not fatal to the reconciliation.
         """
         if self._access_token is None:
             raise EmailNotAuthenticatedError("Outlook list_favorite_ids requires authentication.")
@@ -1368,16 +1439,9 @@ class OutlookClient(EmailClient):
         )
         ids: list[str] = []
         while url:
-            try:
-                response = self._graph_request(
-                    "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
-                )
-            except EmailExternalAPIError:
-                raise
-            except Exception as exc:
-                raise EmailExternalAPIError(
-                    f"Outlook unexpected list_favorite_ids error ({type(exc).__name__}): {exc}"
-                ) from exc
+            response = self._graph_request_json_with_retries(
+                "GET", url, operation="list_favorite_ids",
+            )
             for msg in response.get("value", []) or []:
                 msg_id = str(msg.get("id") or "").strip()
                 if msg_id:
@@ -2485,20 +2549,31 @@ class OutlookClient(EmailClient):
         method: str,
         url: str,
         *,
+        body: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         """Authenticated Graph request returning raw status + headers + bytes.
 
         Used by ``fetch_attachment_binary`` to read ``/$value`` (binary
-        body, not JSON). Errors do not raise from this method — the
-        caller drives retry / classification per status.
+        body, not JSON) and by the favourite retry loops (``set_favorite``
+        PATCH / ``list_favorite_ids`` GET) which need the response headers
+        to honour ``Retry-After``. Errors do not raise from this method —
+        the caller drives retry / classification per status.
+
+        When ``body`` is provided it is JSON-serialised and sent with a
+        ``Content-Type: application/json`` header (the favourite PATCH);
+        ``body=None`` keeps the bodyless GET behaviour unchanged.
         """
         headers: dict[str, str] = {
             "Authorization": f"Bearer {self._access_token}",
         }
+        data: bytes | None = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode("utf-8")
         if extra_headers:
             headers.update(extra_headers)
-        req = urllib.request.Request(url, headers=headers, method=method)
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=60) as response:
                 return (

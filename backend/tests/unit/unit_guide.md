@@ -71,6 +71,10 @@ When `fetch_drafts_exc=RuntimeError(...)`, `EmailManager.fetch_all_drafts` captu
 
 `_DRAFTS_MAX_TOTAL = 100` is enforced inside `GmailClient._list_all_draft_ids` (single page + paginated) and inside `OutlookClient.fetch_drafts`' `$top=100` loop. `TestSyncDrafts` uses `FakeEmailClient.fetch_drafts_return`, which bypasses both loops entirely and cannot exercise the cap. Any change to `_DRAFTS_MAX_TOTAL` requires updating `test_gmail_client.py::TestFetchDrafts` and `test_outlook_client.py::TestFetchDrafts`.
 
+### `_make_favorite_client()` — per-provider auth asymmetry (not copy-paste-safe)
+
+`test_gmail_client.py` and `test_outlook_client.py` each define a `_make_favorite_client()` for the favourites tests, but they are **not** interchangeable: the Outlook one MUST set `client._access_token = "token"` (Outlook gates on `_access_token`), while the Gmail one sets nothing (Gmail gates on `client.service`, which each test mocks). Copy the Gmail helper into an Outlook test and every case raises `EmailNotAuthenticatedError` before reaching the code under test — surfacing as a wrong-exception assertion that points nowhere near the missing token line. (The `test_unauthenticated_raises` cases reset `_access_token = None` precisely because the Outlook helper is authenticated by default.)
+
 ### `PgDraftStore` error-wrapping invariants
 
 Non-obvious guards verified by `test_draft_repository.py`:

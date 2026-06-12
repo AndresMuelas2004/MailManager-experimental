@@ -52,6 +52,8 @@ Es decir, el toggle de favorito ahora vive en **dos** sitios según el contexto:
 
 Cuando el usuario pulsa la estrella, la app aplica un **cambio optimista**: la estrella se rellena (o se vacía) **al instante**, sin esperar a que el proveedor confirme. El usuario no percibe la latencia de Gmail/Outlook.
 
+Esta respuesta instantánea cubre **las dos formas de marcar** por igual (§ 2): la estrella clicable de la fila en la pestaña de Favoritos **y** el botón "Favorito" de cada mensaje del visor de la conversación. Este último es el punto donde más se nota la mejora: antes la estrella del visor **no daba ningún feedback** hasta recargar la vista (parecía que el clic "no hacía nada"), y ahora se rellena/vacía en el acto como cualquier otra. (Mientras tanto, en segundo plano la app reconcilia con el estado real del servidor, de modo que no hay parpadeo entre el cambio optimista y el refresco.)
+
 Por debajo, la app sigue la **Regla Provider-First**: primero llama al proveedor para aplicar la etiqueta/bandera y **solo si el proveedor confirma** persiste el cambio en la base de datos local. El proveedor es la fuente de verdad; nunca guardamos un favorito que el proveedor rechazó.
 
 ### 3.1 Qué ve el usuario en cada desenlace
@@ -138,6 +140,8 @@ La sincronización informa de dos cantidades que **casi nunca coinciden** y conv
 ### 5.4 Qué ve el usuario
 
 El botón muestra "Sincronizando…" con un icono girando mientras dura, y al terminar el listado se refresca solo. Si una cuenta falla la autenticación o el proveedor responde con error, la sincronización completa se aborta y se muestra el error. No hay confirmación de éxito con números en pantalla: el usuario percibe el resultado en el propio listado actualizado.
+
+Tanto el listado de favoritos del proveedor (en la sincronización, ambos proveedores) como la propia marca/desmarca en Outlook **reintentan automáticamente ante fallos temporales** del proveedor (throttling "demasiadas peticiones", caídas momentáneas, hipos de red), respetando el tiempo de espera que el proveedor indique. El efecto para el usuario es que **fallan muchas menos veces** por un problema puntual: solo se ve el error cuando el fallo persiste tras los reintentos. (En Gmail la marca ya reintentaba; esta revisión cerró la asimetría llevando los reintentos también al lado Outlook y al listado de ambos proveedores. Los topes exactos de intentos están en [`../limits/favoritos.md`](../limits/favoritos.md).)
 
 ---
 
