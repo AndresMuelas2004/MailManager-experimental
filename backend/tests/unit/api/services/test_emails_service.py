@@ -126,6 +126,44 @@ class TestSyncEmailMetadata:
         assert len(result.accounts) == 1
         assert result.accounts[0].account_id == _ACCOUNT_ID
 
+    def test_background_tasks_none_schedules_no_prefetch(self, monkeypatch):
+        """Direct callers (service tests, scripts) omit ``background_tasks``;
+        the post-response prefetch/purge is a best-effort optimisation and must
+        simply be skipped when absent, leaving the sync contract unchanged."""
+        _patch_common(monkeypatch)
+        ran = []
+        monkeypatch.setattr(
+            emails_service, "_run_content_prefetch_and_purge",
+            lambda *a, **kw: ran.append(a),
+        )
+        # No background_tasks kwarg → nothing scheduled, no prefetch run.
+        result = emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+        assert result.total_synced == 1
+        assert ran == []
+
+    def test_background_tasks_schedules_prefetch_for_synced_accounts(self, monkeypatch):
+        """When the router injects ``BackgroundTasks``, the service registers the
+        prefetch/purge job with the account_label + account_id of every synced
+        account (``label`` is already the account_label — never reconstructed)."""
+        _patch_common(monkeypatch)
+        added = []
+
+        class _FakeBackgroundTasks:
+            def add_task(self, fn, *args):
+                added.append((fn, args))
+
+        bt = _FakeBackgroundTasks()
+        emails_service.sync_email_metadata(
+            _MAILBOX_ID, _USER_ID, background_tasks=bt,
+        )
+        assert len(added) == 1
+        fn, args = added[0]
+        assert fn is emails_service._run_content_prefetch_and_purge
+        # args = (manager, prefetch_targets, synced_account_ids)
+        _manager, targets, account_ids = args
+        assert targets == [(_LABEL, _ACCOUNT_ID)]
+        assert account_ids == [_ACCOUNT_ID]
+
     def test_empty_accounts_returns_zero(self, monkeypatch):
         _patch_common(monkeypatch)
         monkeypatch.setattr(
@@ -1762,6 +1800,19 @@ def _patch_get_content_common(monkeypatch, *, fake_client_kwargs=None):
 
     # Stub persist helper (best-effort, no-op by default)
     monkeypatch.setattr(emails_service, "persist_email_content", lambda *_a, **_kw: None)
+    # The unified cache-miss path (``_fetch_and_persist_email_content``) also
+    # recomputes ``has_attachments`` and lists the attachment rows after the
+    # provider read; stub both so the service test never touches the real DB.
+    # The cache-HIT path touches the sliding TTL — stub that too (asserted in
+    # the dedicated hit test).
+    monkeypatch.setattr(emails_service, "recompute_has_attachments", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        emails_service.email_attachment_store, "list_by_message",
+        lambda _aid, _mid: [],
+    )
+    monkeypatch.setattr(
+        emails_service, "touch_email_content_last_accessed", lambda *_a, **_kw: None,
+    )
 
 
 class TestGetEmailFullContent:
@@ -1780,13 +1831,57 @@ class TestGetEmailFullContent:
         assert result.html_body == "<p>cached</p>"
         assert result.text_body == "cached"
 
-    def test_db_miss_fetches_from_provider(self, monkeypatch):
-        """When DB returns None, fetch from provider and persist."""
-        _patch_get_content_common(monkeypatch, fake_client_kwargs={
-            "email_content": EmailContent(
-                html_body="<p>from provider</p>", text_body="from provider",
+    def test_db_hit_touches_sliding_ttl_and_skips_provider(self, monkeypatch):
+        """A cache hit refreshes ``last_accessed_at`` (sliding TTL) and does NOT
+        build a provider manager — the body is served straight from the DB."""
+        _patch_get_content_common(monkeypatch)
+        monkeypatch.setattr(
+            emails_service, "get_email_content",
+            lambda _aid, _mid, **_kw: {"html_body": "<p>cached</p>", "text_body": "cached"},
+        )
+
+        touch_calls = []
+        monkeypatch.setattr(
+            emails_service, "touch_email_content_last_accessed",
+            lambda aid, mid: touch_calls.append((aid, mid)),
+        )
+        # If the hit branch reached the provider, this would explode.
+        monkeypatch.setattr(
+            emails_service, "build_manager_for_accounts",
+            lambda _accs: (_ for _ in ()).throw(
+                AssertionError("provider must not be built on a cache hit"),
             ),
-        })
+        )
+
+        result = emails_service.get_email_full_content(
+            _MAILBOX_ID, "m1", _ACCOUNT_ID, _USER_ID,
+        )
+        assert result.html_body == "<p>cached</p>"
+        assert touch_calls == [(_ACCOUNT_ID, "m1")]
+
+    def test_db_miss_fetches_from_provider(self, monkeypatch):
+        """When DB returns None, fetch from provider (a SINGLE unified read) and
+        persist. D4: ``fetch_content_with_attachments`` returns the body AND the
+        attachment list in one round trip — verified via the fake's call list."""
+        captured_clients = []
+
+        def _capture_build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                label = f"{acc.get('mailbox_id', '')}__{acc.get('account_id', '')}"
+                client = FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    email_content=EmailContent(
+                        html_body="<p>from provider</p>", text_body="from provider",
+                    ),
+                )
+                captured_clients.append(client)
+                manager.add_client(client)
+            return manager
+
+        _patch_get_content_common(monkeypatch)
+        monkeypatch.setattr(emails_service, "build_manager_for_accounts", _capture_build)
         monkeypatch.setattr(
             emails_service, "get_email_content",
             lambda _aid, _mid, **_kw: None,
@@ -1806,6 +1901,9 @@ class TestGetEmailFullContent:
         # Verify persist was called with the account_id and message id
         assert persist_calls[0][0] == _ACCOUNT_ID
         assert persist_calls[0][1] == "m1"
+        # Exactly ONE unified provider read happened (body + attachments fused).
+        assert len(captured_clients) == 1
+        assert captured_clients[0].fetch_content_with_attachments_calls == ["m1"]
 
     def test_sanitizes_html(self, monkeypatch):
         """HTML body from provider is sanitized before being persisted and returned."""
@@ -1847,7 +1945,10 @@ class TestGetEmailFullContent:
             )
 
     def test_core_error_translated(self, monkeypatch):
-        """CoreError from manager.fetch_email_content is translated to EmailContentFetchError."""
+        """CoreError from manager.fetch_content_with_attachments is translated to
+        EmailContentFetchError (mapped to ExternalAPIError). After D4 unification
+        this is the SINGLE provider failure point in the cache-miss path; the
+        fake raises it via the same ``fetch_content_exc`` injection."""
         _patch_get_content_common(monkeypatch, fake_client_kwargs={
             "fetch_content_exc": EmailExternalAPIError("provider down"),
         })
@@ -1920,6 +2021,118 @@ class TestGetEmailFullContent:
             emails_service.get_email_full_content(
                 _MAILBOX_ID, "m1", _ACCOUNT_ID, _USER_ID,
             )
+
+
+# ==================================================================
+# _run_content_prefetch_and_purge — post-sync background job (best-effort).
+# Purges expired cached bodies for the synced accounts, then prefetches the
+# body+attachments of each account's unread-recent-uncached inbox messages.
+# Every failure is logged and swallowed so it can never abort the rest.
+# ==================================================================
+
+
+class TestRunContentPrefetchAndPurge:
+
+    def test_purges_then_prefetches_every_target(self, monkeypatch):
+        """Purge runs first (one indexed DELETE for all accounts), then every
+        selected message is fetched + persisted via the shared helper."""
+        purge_calls = []
+        monkeypatch.setattr(
+            emails_service, "purge_expired_email_content",
+            lambda account_ids: purge_calls.append(account_ids) or 0,
+        )
+        monkeypatch.setattr(
+            emails_service, "list_unread_recent_uncached",
+            lambda aid, limit, **_kw: {"acc1": ["m1", "m2"], "acc2": ["m3"]}[aid],
+        )
+        fetched = []
+        monkeypatch.setattr(
+            emails_service, "_fetch_and_persist_email_content",
+            lambda _mgr, label, aid, pmid: fetched.append((label, aid, pmid)),
+        )
+
+        manager = EmailManager()
+        emails_service._run_content_prefetch_and_purge(
+            manager,
+            [("mb1__acc1", "acc1"), ("mb1__acc2", "acc2")],
+            ["acc1", "acc2"],
+        )
+        # Purge scoped to exactly the synced accounts, once.
+        assert purge_calls == [["acc1", "acc2"]]
+        # Every selected message of every target was prefetched.
+        assert fetched == [
+            ("mb1__acc1", "acc1", "m1"),
+            ("mb1__acc1", "acc1", "m2"),
+            ("mb1__acc2", "acc2", "m3"),
+        ]
+
+    def test_uses_configured_prefetch_limit(self, monkeypatch):
+        """The cap passed to the target selector is the module's _PREFETCH_LIMIT
+        (the only value Python controls — window/TTL live in the SQL)."""
+        monkeypatch.setattr(emails_service, "purge_expired_email_content", lambda _a: 0)
+        seen_limits = []
+        monkeypatch.setattr(
+            emails_service, "list_unread_recent_uncached",
+            lambda aid, limit, **_kw: seen_limits.append(limit) or [],
+        )
+        monkeypatch.setattr(
+            emails_service, "_fetch_and_persist_email_content",
+            lambda *a, **kw: None,
+        )
+
+        emails_service._run_content_prefetch_and_purge(
+            EmailManager(), [("mb1__acc1", "acc1")], ["acc1"],
+        )
+        assert seen_limits == [emails_service._PREFETCH_LIMIT]
+
+    def test_target_selection_failure_skips_account_not_the_rest(self, monkeypatch):
+        """If selecting targets for one account raises, that account is skipped
+        and the loop continues to the next (best-effort)."""
+        monkeypatch.setattr(emails_service, "purge_expired_email_content", lambda _a: 0)
+
+        def _select(aid, _limit, **_kw):
+            if aid == "acc1":
+                raise RuntimeError("selection boom")
+            return ["m9"]
+
+        monkeypatch.setattr(emails_service, "list_unread_recent_uncached", _select)
+        fetched = []
+        monkeypatch.setattr(
+            emails_service, "_fetch_and_persist_email_content",
+            lambda _mgr, label, aid, pmid: fetched.append((aid, pmid)),
+        )
+
+        # Must not raise — the first account's selection failure is swallowed.
+        emails_service._run_content_prefetch_and_purge(
+            EmailManager(),
+            [("mb1__acc1", "acc1"), ("mb1__acc2", "acc2")],
+            ["acc1", "acc2"],
+        )
+        # Only the surviving account's message was prefetched.
+        assert fetched == [("acc2", "m9")]
+
+    def test_single_message_fetch_failure_does_not_abort_remaining(self, monkeypatch):
+        """A failure fetching one message must not abort the rest of the batch."""
+        monkeypatch.setattr(emails_service, "purge_expired_email_content", lambda _a: 0)
+        monkeypatch.setattr(
+            emails_service, "list_unread_recent_uncached",
+            lambda _aid, _limit, **_kw: ["m1", "m2", "m3"],
+        )
+
+        attempted = []
+
+        def _fetch(_mgr, _label, _aid, pmid):
+            attempted.append(pmid)
+            if pmid == "m2":
+                raise RuntimeError("provider hiccup")
+
+        monkeypatch.setattr(emails_service, "_fetch_and_persist_email_content", _fetch)
+
+        emails_service._run_content_prefetch_and_purge(
+            EmailManager(), [("mb1__acc1", "acc1")], ["acc1"],
+        )
+        # m2 blew up but m3 was still attempted.
+        assert attempted == ["m1", "m2", "m3"]
 
 
 # ==================================================================

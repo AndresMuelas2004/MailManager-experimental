@@ -498,16 +498,26 @@ class EmailManager:
                 f"Unexpected restore_from_spam error ({type(exc).__name__}): {exc}"
             ) from exc
 
-    def fetch_email_content(self, account_label: str, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single email by account label."""
+    def fetch_content_with_attachments(
+        self, account_label: str, provider_message_id: str,
+    ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:
+        """Body + attachments + inline ``cid_map`` in a single provider read.
+
+        Delegates to the matching client's
+        :py:meth:`EmailClient.fetch_content_with_attachments`. Used by the
+        cache-aside content endpoint AND the sync-time content prefetch —
+        both need the body and the attachment list discovered together so a
+        pre-cached message still surfaces its attachments on open (a cache
+        hit never re-discovers them).
+        """
         client = self._get_client_or_raise(account_label)
         try:
-            return client.fetch_email_content(provider_message_id)
+            return client.fetch_content_with_attachments(provider_message_id)
         except CoreError:
             raise
         except Exception as exc:
             raise EmailExternalAPIError(
-                f"Unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
+                f"Unexpected fetch_content_with_attachments error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def fetch_conversation(

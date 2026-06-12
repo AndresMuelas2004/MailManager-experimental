@@ -1950,7 +1950,7 @@ class TestFetchEmailContentCidResolution:
             ],
         }
         client = self._build_client_with_payload(payload)
-        content = client.fetch_email_content("msg1")
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("msg1")
         assert content.html_body is not None
         assert "cid:" not in content.html_body
         assert "data:image/png;base64," in content.html_body
@@ -1976,7 +1976,7 @@ class TestFetchEmailContentCidResolution:
             client.service.users.return_value.messages.return_value
             .attachments.return_value.get.return_value.execute.return_value
         ) = {"data": _b64url(image_bytes)}
-        content = client.fetch_email_content("msg1")
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("msg1")
         assert "data:image/jpeg;base64," in content.html_body
 
     def test_skips_image_without_content_id(self):
@@ -1995,7 +1995,7 @@ class TestFetchEmailContentCidResolution:
             ],
         }
         client = self._build_client_with_payload(payload)
-        content = client.fetch_email_content("msg1")
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("msg1")
         assert "<p>hi</p>" in content.html_body
 
     def test_soft_fallback_on_attachment_fetch_error(self):
@@ -2024,7 +2024,7 @@ class TestFetchEmailContentCidResolution:
             client.service.users.return_value.messages.return_value
             .attachments.return_value.get.return_value.execute.side_effect
         ) = HttpError(resp=_FakeResp(), content=b"boom")
-        content = client.fetch_email_content("msg1")
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("msg1")
         # Soft fallback: the cid: reference is left intact, no exception raised
         assert 'src="cid:broken"' in content.html_body
 
@@ -2034,8 +2034,48 @@ class TestFetchEmailContentCidResolution:
             "body": {"data": _b64url(b'<p>plain html</p>')},
         }
         client = self._build_client_with_payload(payload)
-        content = client.fetch_email_content("msg1")
+        content, attachments, cid_map = client.fetch_content_with_attachments("msg1")
         assert content.html_body == "<p>plain html</p>"
+        # No inline images and no downloadable parts → empty triple tail.
+        assert attachments == []
+        assert cid_map == {}
+
+    def test_classifies_downloadable_attachment_when_body_is_text_only(self):
+        # ``_classify_attachments`` runs UNCONDITIONALLY in the unified read
+        # (the old fetch_email_content guarded it behind ``if html_body``). A
+        # text-only body that still carries a downloadable part must surface
+        # that attachment in the second tuple element — otherwise pre-cached
+        # text mail would hide its clip forever (the cache hit never
+        # re-discovers attachments).
+        pdf_bytes = b"%PDF-1.4 fake"
+        payload = {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                {
+                    "mimeType": "text/plain",
+                    "body": {"data": _b64url(b"just text, no html")},
+                },
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "invoice.pdf",
+                    "headers": [
+                        {"name": "Content-Disposition", "value": 'attachment; filename="invoice.pdf"'},
+                    ],
+                    "body": {"attachmentId": "att-pdf", "size": len(pdf_bytes)},
+                },
+            ],
+        }
+        client = self._build_client_with_payload(payload)
+        content, attachments, cid_map = client.fetch_content_with_attachments("msg1")
+        # Body is text-only (no HTML), yet the PDF is still classified as a
+        # downloadable attachment.
+        assert content.html_body is None
+        assert content.text_body == "just text, no html"
+        assert len(attachments) == 1
+        assert attachments[0].filename == "invoice.pdf"
+        assert attachments[0].is_inline is False
+        # No inline images referenced → empty cid_map.
+        assert cid_map == {}
 
 
 # ── _extract_body_from_payload + charset detection ──────────────────

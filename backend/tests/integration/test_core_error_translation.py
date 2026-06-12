@@ -619,7 +619,12 @@ def test_move_to_trash_core_error_translations(
 def test_get_email_content_silent_auth_error_returns_409(
     failing_test_client, setup_mailbox_and_account, isolated_db,
 ):
-    """Silent auth failure before fetch_email_content -> AccountNotConnected (409)."""
+    """Silent auth failure before fetch_content_with_attachments -> AccountNotConnected (409).
+
+    Seeds ``email_metadata`` directly (received_at=now()) and calls GET /content
+    WITHOUT sync-metadata, so the prefetch never runs — the 409 comes from the
+    silent-auth guard on the cache-miss read, unaffected by the TTL/prefetch work.
+    """
     mid, aid = setup_mailbox_and_account(failing_test_client)
     # Seed metadata directly so the new exists() pre-check passes.
     # sync-metadata cannot be used here because the same auth_silent_exc
@@ -655,10 +660,15 @@ def test_get_email_content_silent_auth_error_returns_409(
 def test_get_email_content_runtime_error_returns_502(
     failing_test_client, setup_mailbox_and_account,
 ):
-    """RuntimeError during fetch_email_content -> manager wraps -> 502 external_api_error."""
+    """RuntimeError during fetch_content_with_attachments -> manager wraps -> 502 external_api_error.
+
+    ``sample_metadata`` is dated 2024 (outside the 48h prefetch window), so the
+    post-sync prefetch selects nothing and the RuntimeError is raised by the
+    unified read on the cache-miss GET that follows.
+    """
     mid, aid = setup_mailbox_and_account(failing_test_client)
     # Sync metadata first so the account is connected and `m1` exists,
-    # so the new exists() pre-check passes before reaching fetch_email_content.
+    # so the new exists() pre-check passes before reaching the unified read.
     failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
     resp = failing_test_client.get(
         f"{_MAILBOX_URL}/{mid}/emails/m1/content?account_id={aid}",

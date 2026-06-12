@@ -8,7 +8,16 @@ import logging
 import uuid
 from typing import Any
 
+from fastapi import BackgroundTasks
+
 logger = logging.getLogger(__name__)
+
+# Sync-time content prefetch: at most the 50 most-recent unread (<=48h) inbox
+# messages per account per sync (D6). The TTL (30 days) and the recency window
+# (48 hours) live in the SQL strings (``PURGE_EXPIRED_FOR_ACCOUNTS`` /
+# ``LIST_UNREAD_RECENT_UNCACHED``) — the only value the Python passes is this
+# cap. The target box is ``ALL_MAIL`` (inbox), fixed inside the query.
+_PREFETCH_LIMIT = 50
 
 from api.errors.exceptions import (
     AccountNotFound,
@@ -72,6 +81,7 @@ from api.services.services_helpers import (
     ensure_mailbox_access,
     get_email_content,
     get_trash_emails_by_ids,
+    list_unread_recent_uncached,
     load_suspect_message_ids,
     load_sync_cursors,
     load_wrapped_account_tokens,
@@ -81,6 +91,7 @@ from api.services.services_helpers import (
     parse_search_query,
     persist_email_content,
     persist_email_metadata_batch,
+    purge_expired_email_content,
     raise_on_silent_auth_errors,
     recompute_has_attachments,
     restore_from_trash_batch,
@@ -88,6 +99,7 @@ from api.services.services_helpers import (
     row_to_email_metadata_out,
     sanitize_email_html,
     sanitize_outbound_html,
+    touch_email_content_last_accessed,
     translate_core_error,
     translate_database_error,
     unwrap_secret,
@@ -211,8 +223,18 @@ def sync_email_metadata(
     mailbox_id: str,
     user_id: str,
     account_id: str | None = None,
+    *,
+    background_tasks: BackgroundTasks | None = None,
 ) -> SyncResultOut:
-    """Fetch and persist email metadata for a mailbox, or a single account if specified."""
+    """Fetch and persist email metadata for a mailbox, or a single account if specified.
+
+    When ``background_tasks`` is provided (the HTTP router injects it), a
+    post-response background task purges expired cached bodies and prefetches
+    the content of recent unread inbox mail for the synced accounts so opening
+    those messages is instant. Direct callers (service-level tests, scripts)
+    may omit it — the prefetch/purge is a best-effort optimisation and is
+    simply skipped when absent, leaving the sync contract unchanged.
+    """
     ensure_mailbox_access(mailbox_id, user_id)
 
     if account_id is not None:
@@ -272,12 +294,21 @@ def sync_email_metadata(
 
         account_details: list[AccountSyncDetail] = []
         total_synced = 0
+        # Content prefetch/purge targets, collected only for the accounts
+        # effectively synced (those that did NOT ``continue`` on empty ids).
+        # ``label`` IS the account_label (``_build_auth_context`` keys
+        # ``label_lookup`` by it), so it is passed straight to the prefetch
+        # — do NOT reconstruct ``f"{mailbox_id}__{aid}"``.
+        prefetch_targets: list[tuple[str, str]] = []
+        synced_account_ids: list[str] = []
 
         for label, sync_result in results.items():
             ids = label_lookup.get(label)
             if not ids:
                 continue
             mid, aid, provider = ids
+            prefetch_targets.append((label, aid))
+            synced_account_ids.append(aid)
 
             upserted = persist_email_metadata_batch(aid, sync_result.upserts, fallback=EmailFetchError)
             deleted = delete_email_metadata_batch(aid, sync_result.deletes, fallback=EmailFetchError)
@@ -317,12 +348,72 @@ def sync_email_metadata(
                 sync_cursor=sync_result.new_cursor,
             ))
 
+        # After responding (D2/D3), purge expired cached bodies and prefetch
+        # recent-unread inbox content for the synced accounts, reusing the
+        # already-authenticated ``manager``. Best-effort, off the response
+        # path — skipped when no ``BackgroundTasks`` was injected.
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _run_content_prefetch_and_purge,
+                manager,
+                prefetch_targets,
+                synced_account_ids,
+            )
+
         return SyncResultOut(total_synced=total_synced, accounts=account_details)
     except ApiError:
         raise
     except Exception as exc:
         logger.warning("Unexpected sync error (%s): %s", type(exc).__name__, exc)
         raise EmailFetchError("Failed to sync email metadata.") from exc
+
+
+def _run_content_prefetch_and_purge(
+    manager: EmailManager,
+    targets: list[tuple[str, str]],
+    account_ids: list[str],
+) -> None:
+    """Post-sync background job: purge expired cached bodies, then prefetch.
+
+    Runs after the sync response is sent (FastAPI ``BackgroundTasks``).
+    Entirely best-effort — every failure is logged and swallowed so it can
+    never affect the already-sent response nor abort the remaining work:
+
+    1. Purge cached bodies idle for 30+ days for the synced accounts (one
+       indexed DELETE, frees space before the prefetch refills it).
+    2. Prefetch, sequentially and message-by-message (D2 — sidesteps both
+       providers' per-user / per-mailbox concurrency 429s), the body +
+       attachments of up to ``_PREFETCH_LIMIT`` recent-unread inbox messages
+       per account that are not yet cached. A failure on one message does
+       not abort the rest.
+
+    The ``manager`` is the one authenticated during the sync; the prefetch
+    runs seconds later so the tokens are still fresh — it does NOT
+    re-authenticate nor re-persist tokens (the next sync handles rotation).
+    """
+    purge_expired_email_content(account_ids)
+    for account_label, account_id in targets:
+        try:
+            pmids = list_unread_recent_uncached(
+                account_id, _PREFETCH_LIMIT, fallback=EmailFetchError,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Content prefetch target selection failed for account '%s' (%s): %s",
+                account_id, type(exc).__name__, exc,
+            )
+            continue
+        for pmid in pmids:
+            try:
+                _fetch_and_persist_email_content(
+                    manager, account_label, account_id, pmid,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Content prefetch failed for message '%s' of account '%s' (%s): %s",
+                    pmid, account_id, type(exc).__name__, exc,
+                )
+                continue
 
 
 def send_email(mailbox_id: str, payload: EmailSendRequest, user_id: str) -> dict[str, str]:
@@ -1193,6 +1284,79 @@ def sync_favorites(
         ) from exc
 
 
+def _fetch_and_persist_email_content(
+    manager: EmailManager,
+    account_label: str,
+    account_id: str,
+    provider_message_id: str,
+) -> EmailContentOut:
+    """One provider read → sanitise + persist body (+TTL) + attachments → out.
+
+    Shared by ``get_email_full_content`` (cache miss) AND the sync-time
+    content prefetch. A SINGLE ``fetch_content_with_attachments`` read
+    returns the body, the downloadable attachment list and the inline
+    ``cid_map`` together (D4 — one provider round trip instead of two).
+
+    The body and attachment persistence are best-effort (logged, never
+    aborting): the provider read already succeeded, so a DB hiccup must
+    not turn a readable email into a 502. The provider read itself is the
+    one hard failure point — it raises ``EmailContentFetchError`` (502),
+    which the cache-miss caller surfaces and the prefetch caller swallows.
+
+    The prefetch MUST go through this full path (body AND attachments):
+    persisting only the body would make the next open a cache HIT that
+    never re-discovers attachments (discovery happens only here), hiding
+    the clip and the attachments forever on pre-cached mail.
+    """
+    try:
+        content, metadata_list, _cid_map = manager.fetch_content_with_attachments(
+            account_label, provider_message_id,
+        )
+    except CoreError as exc:
+        raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected error during provider fetch_content_with_attachments (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise EmailContentFetchError(
+            "Unexpected provider failure while fetching email content with attachments."
+        ) from exc
+
+    sanitized_html = sanitize_email_html(content.html_body) if content.html_body else None
+
+    # The upsert stamps ``last_accessed_at = now()`` for the new row, so a
+    # fresh cache entry starts its 30-day TTL on persist (no separate touch).
+    try:
+        persist_email_content(
+            account_id, provider_message_id, sanitized_html, content.text_body,
+            fallback=EmailContentFetchError,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Content fetched but DB persist failed for account '%s' (%s): %s",
+            account_id, type(exc).__name__, exc,
+        )
+
+    _persist_attachment_metadata(account_id, provider_message_id, metadata_list)
+    try:
+        recompute_has_attachments(
+            account_id, provider_message_id, fallback=EmailContentFetchError,
+        )
+    except Exception as exc:
+        logger.warning(
+            "has_attachments recompute failed for account '%s' (%s): %s",
+            account_id, type(exc).__name__, exc,
+        )
+
+    attachments_out = _load_email_attachments_out(account_id, provider_message_id)
+    return EmailContentOut(
+        html_body=sanitized_html,
+        text_body=content.text_body,
+        attachments=attachments_out,
+    )
+
+
 def get_email_full_content(
     mailbox_id: str,
     provider_message_id: str,
@@ -1243,10 +1407,15 @@ def get_email_full_content(
 
     row = get_email_content(account_id, provider_message_id, fallback=EmailContentFetchError)
     if row is not None:
-        # Cache hit on the HTML body; the email_attachments table is the
-        # source of truth for the attachment list (D-13). Reading it
-        # always (not only on miss) keeps the response consistent if a
-        # TTL purge later wiped the blobs but kept the metadata rows.
+        # Cache hit on the HTML body. Refresh the sliding TTL: an open
+        # counts as an access, so frequently-read mail never expires
+        # (best-effort — a touch failure must not break the read, and it
+        # touches ONLY ``last_accessed_at``, not ``fetched_at``).
+        touch_email_content_last_accessed(account_id, provider_message_id)
+        # The email_attachments table is the source of truth for the
+        # attachment list (D-13). Reading it always (not only on miss)
+        # keeps the response consistent if a TTL purge later wiped the
+        # blobs but kept the metadata rows.
         attachments_out = _load_email_attachments_out(account_id, provider_message_id)
         return EmailContentOut(
             html_body=row["html_body"],
@@ -1264,64 +1433,11 @@ def get_email_full_content(
             _persist_refreshed_tokens(updated_tokens, label_lookup, fallback=EmailContentFetchError)
         raise_on_silent_auth_errors(manager.get_last_errors(), fallback=EmailContentFetchError)
 
-        try:
-            content = manager.fetch_email_content(account_label, provider_message_id)
-        except CoreError as exc:
-            raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected error during provider fetch_email_content (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise EmailContentFetchError(
-                "Unexpected provider failure while fetching email content."
-            ) from exc
-
-        # D-06 + D-13 cache miss: discover attachments at the same time
-        # as the body. The provider call is one round trip more than
-        # before but keeps the user-visible UX consistent (icon clip
-        # appears on next refresh).
-        try:
-            metadata_list, _cid_map = manager.list_message_attachments(
-                account_label, provider_message_id,
-            )
-        except CoreError as exc:
-            raise translate_core_error(exc, fallback=EmailContentFetchError) from exc
-        except Exception as exc:
-            logger.warning(
-                "Unexpected error during provider list_message_attachments (%s): %s",
-                type(exc).__name__, exc,
-            )
-            raise EmailContentFetchError(
-                "Unexpected provider failure while listing message attachments."
-            ) from exc
-
-        sanitized_html = sanitize_email_html(content.html_body) if content.html_body else None
-
-        try:
-            persist_email_content(account_id, provider_message_id, sanitized_html, content.text_body, fallback=EmailContentFetchError)
-        except Exception as exc:
-            logger.warning(
-                "Content fetched but DB persist failed for account '%s' (%s): %s",
-                account_id, type(exc).__name__, exc,
-            )
-
-        _persist_attachment_metadata(account_id, provider_message_id, metadata_list)
-        try:
-            recompute_has_attachments(
-                account_id, provider_message_id, fallback=EmailContentFetchError,
-            )
-        except Exception as exc:
-            logger.warning(
-                "has_attachments recompute failed for account '%s' (%s): %s",
-                account_id, type(exc).__name__, exc,
-            )
-
-        attachments_out = _load_email_attachments_out(account_id, provider_message_id)
-        return EmailContentOut(
-            html_body=sanitized_html,
-            text_body=content.text_body,
-            attachments=attachments_out,
+        # Single provider read (D4): body + attachments + cid_map together.
+        # The shared helper sanitises, persists the body (with a fresh TTL),
+        # persists/recomputes attachments, and returns the out model.
+        return _fetch_and_persist_email_content(
+            manager, account_label, account_id, provider_message_id,
         )
     except ApiError:
         raise

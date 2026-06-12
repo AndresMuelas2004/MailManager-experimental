@@ -2016,21 +2016,35 @@ class GmailClient(EmailClient):
 
         return all_updated
 
-    def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single Gmail message.
+    def fetch_content_with_attachments(
+        self, provider_message_id: str,
+    ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:
+        """Body + attachments + inline ``cid_map`` in ONE ``messages.get(format=FULL)``.
 
-        Inlines referenced ``cid:…`` images as ``data:`` URLs (D-13 strict:
-        only CIDs actually referenced by the HTML body are inlined; the
-        rest are reported separately via :py:meth:`list_message_attachments`
-        as downloadable attachments).
+        Fuses what ``fetch_email_content`` + ``list_message_attachments``
+        did with two ``messages.get`` calls (40 quota units) into a single
+        read (20 units). Inlines referenced ``cid:…`` images as ``data:``
+        URLs (D-13 strict).
+
+        ``_classify_attachments`` runs UNCONDITIONALLY — NOT guarded by
+        ``if html_body`` as ``fetch_email_content`` did. A text-only body
+        (``html_body is None``) can still carry downloadable attachments,
+        and guarding the classification on the HTML body would silently
+        drop them. The ``if html_body and cid_map`` guard wraps ONLY the
+        inline substitution.
         """
         payload = self._fetch_message_payload(provider_message_id)
         html_body, text_body = self._extract_body_from_payload(payload)
-        if html_body:
-            cid_map, _ = self._classify_attachments(payload, provider_message_id, html_body)
-            if cid_map:
-                html_body = inline_cid_images(html_body, cid_map)
-        return EmailContent(html_body=html_body, text_body=text_body)
+        cid_map, attachments = self._classify_attachments(
+            payload, provider_message_id, html_body,
+        )
+        if html_body and cid_map:
+            html_body = inline_cid_images(html_body, cid_map)
+        return (
+            EmailContent(html_body=html_body, text_body=text_body),
+            attachments,
+            cid_map,
+        )
 
     def list_message_attachments(
         self,

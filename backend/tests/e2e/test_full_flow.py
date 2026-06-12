@@ -1883,7 +1883,13 @@ def _assert_content_payload(data: dict) -> None:
 
 
 def test_46a_email_content_gmail_miss(e2e_client, flow_state):
-    """Cache MISS: empty email_content → endpoint fetches from provider + persists."""
+    """Cache MISS: empty email_content → endpoint fetches from provider + persists.
+
+    The ``_delete_email_content`` below is now LOAD-BEARING: ``sync-metadata``
+    runs a background content prefetch for recent unread inbox mail, so it may
+    pre-cache ``msg_id`` seconds after responding. Deleting the row right after
+    the sync neutralises that prefetch and restores a genuine MISS for the GET.
+    """
     sync_resp = e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata")
     _assert_ok(sync_resp)
 
@@ -1906,6 +1912,16 @@ def test_46a_email_content_gmail_miss(e2e_client, flow_state):
     assert row is not None
     assert row[0] == data["html_body"]
     assert row[1] == data["text_body"]
+
+    # Follow-up (same test, per common_mistakes #1): a second GET now resolves
+    # from the just-persisted cache and returns the identical payload — the
+    # immediate cache-hit side effect of the MISS we just exercised.
+    second = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/{msg_id}/content",
+        params={"account_id": GMAIL_ACCOUNT_ID},
+    )
+    _assert_ok(second)
+    assert second.json() == data
 
     flow_state["gmail_content_msg_id"] = msg_id
     flow_state["gmail_content_fetched_at"] = row[2].isoformat()
@@ -1933,6 +1949,9 @@ def test_46b_email_content_gmail_hit(e2e_client, flow_state):
 
 
 def test_46c_email_content_outlook_miss(e2e_client, flow_state):
+    # The post-sync ``_delete_email_content`` is LOAD-BEARING for the same
+    # reason as test_46a: the sync's background content prefetch may pre-cache
+    # ``msg_id``, and the delete restores a genuine MISS for the GET below.
     sync_resp = e2e_client.post(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata")
     _assert_ok(sync_resp)
 
@@ -1955,6 +1974,15 @@ def test_46c_email_content_outlook_miss(e2e_client, flow_state):
     assert row is not None
     assert row[0] == data["html_body"]
     assert row[1] == data["text_body"]
+
+    # Follow-up (same test, per common_mistakes #1): a second GET resolves from
+    # the just-persisted cache and returns the identical payload.
+    second = e2e_client.get(
+        f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/{msg_id}/content",
+        params={"account_id": OUTLOOK_ACCOUNT_ID},
+    )
+    _assert_ok(second)
+    assert second.json() == data
 
     flow_state["outlook_content_msg_id"] = msg_id
     flow_state["outlook_content_fetched_at"] = row[2].isoformat()

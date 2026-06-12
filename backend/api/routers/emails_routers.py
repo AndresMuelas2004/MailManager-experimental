@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from api.routers.routers_helpers import require_session
 from api.schemas.email import (
@@ -95,14 +95,21 @@ def list_emails(
 @router.post("/sync-metadata", response_model=SyncResultOut)
 def sync_email_metadata(
     mailbox_id: str,
+    background_tasks: BackgroundTasks,
     account_id: str | None = Query(default=None),
     user_id: str = Depends(require_session),
 ) -> SyncResultOut:
     """
     Fetch and persist email metadata for a mailbox.
     Optionally sync only a single account.
+
+    After responding, a background task purges expired cached email
+    bodies and prefetches the content of recent unread inbox mail for
+    the synced accounts (best-effort; does not affect this response).
     """
-    return emails_service.sync_email_metadata(mailbox_id, user_id, account_id)
+    return emails_service.sync_email_metadata(
+        mailbox_id, user_id, account_id, background_tasks=background_tasks,
+    )
 
 
 @router.post("/send")

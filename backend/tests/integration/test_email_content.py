@@ -24,6 +24,67 @@ def _content_url(mailbox_id: str, message_id: str, account_id: str) -> str:
     return f"{_MAILBOX_URL}/{mailbox_id}/emails/{message_id}/content?account_id={account_id}"
 
 
+def _seed_metadata(
+    cur, account_id: str, provider_message_id: str, *,
+    received_at: str = "now()", is_read: bool = False, box: str = "ALL_MAIL",
+) -> None:
+    """Insert one ``email_metadata`` row directly. ``received_at`` is an SQL
+    expression (``now()`` or a literal timestamptz) so prefetch-window tests can
+    place a row inside / outside the 48h window deterministically."""
+    cur.execute(
+        f"""
+        INSERT INTO email_metadata (
+            provider_message_id, account_id, thread_id, from_email,
+            from_name, subject, received_at, is_read, box
+        )
+        VALUES (%(pmid)s, %(aid)s::uuid, %(thr)s, %(fe)s, %(fn)s, %(subj)s,
+                {received_at}, %(read)s, %(box)s)
+        """,
+        {
+            "pmid": provider_message_id, "aid": account_id, "thr": f"t-{provider_message_id}",
+            "fe": "sender@example.com", "fn": "Sender", "subj": f"subj-{provider_message_id}",
+            "read": is_read, "box": box,
+        },
+    )
+
+
+def _patch_content_manager(monkeypatch, *, html_body=None, text_body=None, **client_kwargs):
+    """Patch ``build_manager_for_accounts`` so every account's ``FakeEmailClient``
+    returns the given body from the unified content read. Used by the prefetch
+    tests to prove the body lands in ``email_content``."""
+    from tests.shared.email_fakes import FakeEmailClient
+    from api.services import emails_service
+    from core.email import EmailManager
+
+    def _build(accounts):
+        manager = EmailManager()
+        for account in accounts:
+            mailbox_id = str(account.get("mailbox_id") or "")
+            account_id = str(account.get("account_id") or "")
+            label = f"{mailbox_id}__{account_id}"
+            manager.add_client(
+                FakeEmailClient(
+                    label,
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    email_content=EmailContent(html_body=html_body, text_body=text_body),
+                    **client_kwargs,
+                )
+            )
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+
+
+def _fetch_content_row(cur, account_id: str, provider_message_id: str):
+    """Return ``(html_body, text_body, last_accessed_at)`` for a cached row, or None."""
+    cur.execute(
+        "SELECT html_body, text_body, last_accessed_at FROM email_content "
+        "WHERE account_id = %s AND provider_message_id = %s",
+        (account_id, provider_message_id),
+    )
+    return cur.fetchone()
+
+
 # ------------------------------------------------------------------
 # Happy path — DB miss, fetched from FakeEmailClient
 # ------------------------------------------------------------------
@@ -40,7 +101,10 @@ def test_get_email_content_db_miss_fetches_from_provider(
     resp = test_client.get(_content_url(mid, "m1", aid))
     assert resp.status_code == 200
     data = resp.json()
-    # FakeEmailClient.fetch_email_content returns EmailContent(html_body=None, text_body=None)
+    # FakeEmailClient.fetch_content_with_attachments returns the default
+    # EmailContent(html_body=None, text_body=None). ``sample_metadata`` is dated
+    # 2024 (outside the 48h prefetch window) so the post-sync prefetch caches
+    # nothing and this GET is a genuine cache MISS.
     assert data["html_body"] is None
     assert data["text_body"] is None
 
@@ -154,32 +218,19 @@ def test_get_email_content_missing_mailbox(test_client):
     [{"fetch_content_exc": EmailExternalAPIError("API timeout.")}],
     indirect=True,
 )
-def test_get_email_content_core_error_returns_502(
+def test_get_email_content_provider_error_returns_502(
     failing_test_client, setup_mailbox_and_account,
 ):
-    """CoreError during fetch_email_content is translated to 502."""
-    mid, aid = setup_mailbox_and_account(failing_test_client)
-    failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    """A provider failure on the cache-miss read is translated to 502.
 
-    resp = failing_test_client.get(_content_url(mid, "m1", aid))
-    assert resp.status_code == 502
-    assert resp.json()["error"]["code"] == "external_api_error"
-
-
-@pytest.mark.parametrize(
-    "failing_test_client",
-    [{"list_message_attachments_exc": EmailExternalAPIError("Attachment listing timeout.")}],
-    indirect=True,
-)
-def test_get_email_content_list_attachments_core_error_returns_502(
-    failing_test_client, setup_mailbox_and_account,
-):
-    """CoreError during cache-miss attachment discovery is the SECOND
-    502 translation path in ``get_email_full_content`` — distinct from the
-    ``fetch_email_content`` one. ``fetch_content`` succeeds (default content)
-    so the flow reaches ``list_message_attachments``, which raises; a
-    regression that drops or mis-translates this branch is not caught by
-    ``test_get_email_content_core_error_returns_502``.
+    After the D4 unification the viewer makes a SINGLE provider call —
+    ``fetch_content_with_attachments`` (body + attachments fused) — so there is
+    now exactly ONE provider failure point. The fake raises it via
+    ``fetch_content_exc``. The old companion test that injected
+    ``list_message_attachments_exc`` was removed: the viewer no longer calls
+    ``list_message_attachments`` (that method survives only for the Outlook
+    Forward path), so that injection is no longer read here and would assert a
+    200 instead of a 502.
     """
     mid, aid = setup_mailbox_and_account(failing_test_client)
     failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
@@ -497,3 +548,221 @@ def test_get_email_content_cache_miss_sanitizes_persisted_filename(
     assert rows[0]["mime_type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+# ==================================================================
+# Sliding TTL — a cache HIT refreshes ``last_accessed_at`` (but not the body).
+# ==================================================================
+
+
+def test_get_email_content_cache_hit_refreshes_last_accessed(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """Opening a cached body counts as an access: the HIT branch bumps
+    ``last_accessed_at`` to ~now so frequently-read mail never expires. A row
+    seeded with a 60-day-old ``last_accessed_at`` must come back fresh."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_content (
+                provider_message_id, account_id, html_body, text_body,
+                fetched_at, last_accessed_at
+            )
+            VALUES (%(pmid)s, %(aid)s::uuid, %(html)s, %(txt)s,
+                    now() - INTERVAL '60 days', now() - INTERVAL '60 days')
+            """,
+            {"pmid": "m1", "aid": aid, "html": "<p>cached</p>", "txt": "cached"},
+        )
+
+    resp = test_client.get(_content_url(mid, "m1", aid))
+    assert resp.status_code == 200
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT fetched_at, last_accessed_at, "
+            "       now() - last_accessed_at AS recency "
+            "FROM email_content WHERE account_id = %s AND provider_message_id = %s",
+            (aid, "m1"),
+        )
+        row = cur.fetchone()
+    # last_accessed_at jumped to ~now (well under a minute old).
+    assert row["recency"].total_seconds() < 60
+    # The body is immutable — a read is not a re-fetch, so fetched_at stays
+    # ~60 days old (the touch must NOT bump it, or the E2E HIT assertions break).
+    fetched_age = (row["last_accessed_at"] - row["fetched_at"]).total_seconds()
+    assert fetched_age > 59 * 24 * 3600  # still ~60 days between fetch and now
+
+
+# ==================================================================
+# Sync-time content prefetch — the post-response BackgroundTask pre-caches the
+# body of recent (<=48h) unread ALL_MAIL mail. TestClient runs BackgroundTasks
+# synchronously after the response, so the effect is observable in the same call.
+# ==================================================================
+
+
+def test_sync_metadata_prefetches_recent_unread_inbox_content(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """A recent unread ALL_MAIL message whose body is not yet cached gets its
+    content prefetched during sync → a later GET /content is a pure cache hit."""
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    # Seed an eligible target BEFORE the sync so the prefetch selects it.
+    with isolated_db.cursor() as cur:
+        _seed_metadata(cur, aid, "recent-unread-1", received_at="now()")
+
+    # The unified provider read returns a body for the prefetch to persist.
+    _patch_content_manager(monkeypatch, html_body="<p>prefetched body</p>", text_body="prefetched body")
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+
+    # The body must already be in email_content (prefetched off the response).
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        row = _fetch_content_row(cur, aid, "recent-unread-1")
+    assert row is not None
+    assert row["html_body"] == "<p>prefetched body</p>"
+
+
+def test_sync_metadata_prefetch_respects_window_box_and_read_flags(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Only unread + recent(<=48h) + ALL_MAIL + not-yet-cached messages are
+    prefetched. Read mail, >48h mail, and SENT/SPAM mail are all skipped."""
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    with isolated_db.cursor() as cur:
+        _seed_metadata(cur, aid, "ok-recent-unread", received_at="now()")
+        _seed_metadata(cur, aid, "skip-read", received_at="now()", is_read=True)
+        _seed_metadata(
+            cur, aid, "skip-old",
+            received_at="now() - INTERVAL '72 hours'",
+        )
+        _seed_metadata(cur, aid, "skip-sent", received_at="now()", box="SENT")
+        _seed_metadata(cur, aid, "skip-spam", received_at="now()", box="SPAM")
+
+    _patch_content_manager(monkeypatch, html_body="<p>body</p>", text_body="body")
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "SELECT provider_message_id FROM email_content WHERE account_id = %s::uuid",
+            (aid,),
+        )
+        cached = {r[0] for r in cur.fetchall()}
+    # Only the eligible message was prefetched.
+    assert "ok-recent-unread" in cached
+    assert cached.isdisjoint({"skip-read", "skip-old", "skip-sent", "skip-spam"})
+
+
+def test_sync_metadata_prefetch_skips_already_cached_message(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """A recent unread inbox message whose body is ALREADY cached is excluded
+    from the prefetch (served from cache, never re-fetched). The pre-existing
+    cached body is left untouched even though the provider would return a
+    different one."""
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    with isolated_db.cursor() as cur:
+        _seed_metadata(cur, aid, "already-cached", received_at="now()")
+        cur.execute(
+            """
+            INSERT INTO email_content (provider_message_id, account_id, html_body, text_body)
+            VALUES ('already-cached', %(aid)s::uuid, %(html)s, %(txt)s)
+            """,
+            {"aid": aid, "html": "<p>original cached</p>", "txt": "original"},
+        )
+
+    # If the prefetch wrongly re-fetched, it would overwrite with this body.
+    _patch_content_manager(monkeypatch, html_body="<p>SHOULD NOT APPEAR</p>", text_body="nope")
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        row = _fetch_content_row(cur, aid, "already-cached")
+    assert row["html_body"] == "<p>original cached</p>"
+
+
+def test_sync_metadata_prefetch_best_effort_does_not_fail_sync(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """A provider failure during the prefetch must NOT affect the sync response
+    (200) — the prefetch is best-effort and runs off the response path. The
+    eligible target is seeded recent so the prefetch branch genuinely executes
+    (otherwise the 200 would be a false green that never exercised it)."""
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    with isolated_db.cursor() as cur:
+        _seed_metadata(cur, aid, "recent-but-fetch-fails", received_at="now()")
+
+    # The unified read raises → the prefetch swallows it (per message).
+    _patch_content_manager(
+        monkeypatch,
+        fetch_content_exc=EmailExternalAPIError("prefetch provider down"),
+    )
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    # Sync still succeeds despite the prefetch failure.
+    assert resp.status_code == 200
+
+    # No content row was persisted (the fetch failed before persist).
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        row = _fetch_content_row(cur, aid, "recent-but-fetch-fails")
+    assert row is None
+
+
+# ==================================================================
+# Sync-time purge — expired cached bodies (idle 30+ days) of the SYNCED
+# accounts are evicted; a row of a non-synced account is untouched (per-account).
+# ==================================================================
+
+
+def test_sync_metadata_purges_expired_content_for_synced_account_only(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """The post-sync purge deletes ``email_content`` rows idle 30+ days for the
+    synced account, but leaves a different (non-synced) account's expired row
+    intact — the eviction is scoped per account, not global."""
+    synced_mid, synced_aid = setup_mailbox_and_account(test_client)
+    other_mid, other_aid = setup_mailbox_and_account(test_client)
+
+    # Seed an EXPIRED cached body for each account (metadata row first — FK).
+    with isolated_db.cursor() as cur:
+        for acc in (synced_aid, other_aid):
+            _seed_metadata(cur, acc, "expired-1", received_at="now()")
+            cur.execute(
+                """
+                INSERT INTO email_content (
+                    provider_message_id, account_id, html_body, text_body,
+                    fetched_at, last_accessed_at
+                )
+                VALUES ('expired-1', %(aid)s::uuid, '<p>old</p>', 'old',
+                        now() - INTERVAL '40 days', now() - INTERVAL '40 days')
+                """,
+                {"aid": acc},
+            )
+
+    # Avoid re-prefetching the just-purged row in the same sync: mark it read so
+    # it is not an eligible prefetch target (keeps the assertion deterministic).
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE email_metadata SET is_read = TRUE WHERE provider_message_id = 'expired-1'",
+        )
+
+    # Sync ONLY the first mailbox → only synced_aid is purged.
+    resp = test_client.post(f"{_MAILBOX_URL}/{synced_mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        synced_row = _fetch_content_row(cur, synced_aid, "expired-1")
+        other_row = _fetch_content_row(cur, other_aid, "expired-1")
+    # The synced account's stale body was evicted; the other account's survives.
+    assert synced_row is None
+    assert other_row is not None

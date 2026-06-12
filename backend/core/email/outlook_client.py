@@ -787,20 +787,6 @@ class OutlookClient(EmailClient):
             ) from exc
 
     @staticmethod
-    def _parse_graph_datetime(value: Any) -> datetime:
-        """Parse an ISO-8601 datetime from a Graph response with soft
-        fallback to ``datetime.now(timezone.utc)``. Accepts both ``Z``
-        suffix and ``+00:00`` offsets.
-        """
-        if isinstance(value, str) and value:
-            try:
-                raw = value[:-1] + "+00:00" if value.endswith("Z") else value
-                return datetime.fromisoformat(raw)
-            except ValueError:
-                pass
-        return datetime.now(timezone.utc)
-
-    @staticmethod
     def _build_draft_graph_payload(
         to_recipients: list[str],
         cc_recipients: list[str],
@@ -904,8 +890,8 @@ class OutlookClient(EmailClient):
             ) from exc
 
         provider_draft_id = str(response.get("id", ""))
-        created_at = self._parse_graph_datetime(response.get("createdDateTime"))
-        updated_at = self._parse_graph_datetime(response.get("lastModifiedDateTime"))
+        created_at = _parse_graph_datetime(response.get("createdDateTime"))
+        updated_at = _parse_graph_datetime(response.get("lastModifiedDateTime"))
 
         return DraftMetadata(
             provider_draft_id=provider_draft_id,
@@ -989,8 +975,8 @@ class OutlookClient(EmailClient):
             ) from exc
 
         provider_draft_id = str(response.get("id", ""))
-        created_at = self._parse_graph_datetime(response.get("createdDateTime"))
-        updated_at = self._parse_graph_datetime(response.get("lastModifiedDateTime"))
+        created_at = _parse_graph_datetime(response.get("createdDateTime"))
+        updated_at = _parse_graph_datetime(response.get("lastModifiedDateTime"))
 
         return DraftMetadata(
             provider_draft_id=provider_draft_id,
@@ -1043,8 +1029,8 @@ class OutlookClient(EmailClient):
             ) from exc
 
         returned_id = str(response.get("id") or provider_draft_id)
-        created_at = self._parse_graph_datetime(response.get("createdDateTime"))
-        updated_at = self._parse_graph_datetime(response.get("lastModifiedDateTime"))
+        created_at = _parse_graph_datetime(response.get("createdDateTime"))
+        updated_at = _parse_graph_datetime(response.get("lastModifiedDateTime"))
 
         return DraftMetadata(
             provider_draft_id=returned_id,
@@ -1203,7 +1189,7 @@ class OutlookClient(EmailClient):
 
         Extracts address fields from the ``emailAddress.address`` sub-keys
         and parses ``createdDateTime`` / ``lastModifiedDateTime`` via the
-        shared :py:meth:`_parse_graph_datetime` helper.
+        shared :py:func:`_parse_graph_datetime` helper.
 
         Body handling depends on ``contentType``:
 
@@ -1242,8 +1228,8 @@ class OutlookClient(EmailClient):
             bcc_recipients=_addrs("bccRecipients"),
             subject=subject,
             body=body_text,
-            created_at=self._parse_graph_datetime(msg.get("createdDateTime")),
-            updated_at=self._parse_graph_datetime(msg.get("lastModifiedDateTime")),
+            created_at=_parse_graph_datetime(msg.get("createdDateTime")),
+            updated_at=_parse_graph_datetime(msg.get("lastModifiedDateTime")),
         )
 
     def delete_messages(self, message_ids: list[str]) -> list[str]:
@@ -1574,16 +1560,30 @@ class OutlookClient(EmailClient):
                 )
         return existing
 
-    def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single Outlook message.
+    def fetch_content_with_attachments(
+        self, provider_message_id: str,
+    ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:
+        """Body + attachments + inline ``cid_map`` for a single Outlook message.
 
-        Inlines referenced ``cid:…`` images as ``data:`` URLs (D-13
-        strict: only CIDs actually referenced by the HTML body are
-        inlined; the rest surface via :py:meth:`list_message_attachments`
-        as downloadable attachments).
+        Fuses what ``fetch_email_content`` + ``list_message_attachments``
+        did with two body GETs into one: a single ``GET /me/messages/{id}``
+        for the body, then ``_classify_attachments`` (one ``GET .../attachments``)
+        when the body is HTML.
+
+        ``_classify_attachments`` is NOT gated on ``hasAttachments`` (unlike
+        the old ``fetch_email_content``): ``hasAttachments`` is ``false``
+        when a message carries ONLY inline images, so a guard there would
+        skip resolving the referenced ``cid:`` images and break the render
+        (D-13). It is best-effort internally (a failed attachments GET
+        returns ``({}, [])`` and only logs), so classifying always adds no
+        hard failure point. A non-HTML body is NOT classified — it carries
+        no ``cid:`` references and no inline-image semantics — matching the
+        previous behaviour (returns ``text_body`` with empty attachments).
         """
         if self._access_token is None:
-            raise EmailNotAuthenticatedError("Outlook fetch_email_content requires authentication.")
+            raise EmailNotAuthenticatedError(
+                "Outlook fetch_content_with_attachments requires authentication."
+            )
         try:
             escaped_id = urllib.parse.quote(provider_message_id, safe="")
             response = self._graph_request(
@@ -1595,17 +1595,18 @@ class OutlookClient(EmailClient):
             content_type = body.get("contentType", "").lower()
             content = body.get("content")
             if content_type != "html":
-                return EmailContent(html_body=None, text_body=content)
-            if content and response.get("hasAttachments"):
-                cid_map, _ = self._classify_attachments(escaped_id, content)
-                if cid_map:
-                    content = inline_cid_images(content, cid_map)
-            return EmailContent(html_body=content, text_body=None)
+                return EmailContent(html_body=None, text_body=content), [], {}
+            cid_map, downloadable = self._classify_attachments(
+                escaped_id, content, provider_message_id=provider_message_id,
+            )
+            if content and cid_map:
+                content = inline_cid_images(content, cid_map)
+            return EmailContent(html_body=content, text_body=None), downloadable, cid_map
         except EmailExternalAPIError:
             raise
         except Exception as exc:
             raise EmailExternalAPIError(
-                f"Outlook unexpected fetch_email_content error ({type(exc).__name__}): {exc}"
+                f"Outlook unexpected fetch_content_with_attachments error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
@@ -1803,7 +1804,7 @@ class OutlookClient(EmailClient):
         references = self._references_from_internet_headers(
             message.get("internetMessageHeaders"),
         )
-        received_at = self._parse_graph_datetime(message.get("receivedDateTime"))
+        received_at = _parse_graph_datetime(message.get("receivedDateTime"))
 
         return ReplyContext(
             provider_message_id=provider_message_id,

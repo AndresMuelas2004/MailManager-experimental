@@ -2074,21 +2074,40 @@ class TestFetchEmailContentInlineImages:
             },
         ]
         client._graph_request = MagicMock(side_effect=responses)
-        content = client.fetch_email_content("mid")
+        content, _attachments, cid_map = client.fetch_content_with_attachments("mid")
         assert 'src="data:image/png;base64,QUFB"' in content.html_body
         assert client._graph_request.call_count == 2
+        # The referenced inline image surfaces in the cid_map (third tuple element).
+        assert "logo@x" in cid_map
 
-    def test_has_attachments_false_skips_second_call(self):
+    def test_html_classifies_attachments_even_when_has_attachments_false(self):
+        # ``hasAttachments`` is ``false`` when a message carries ONLY inline
+        # images, so the unified read must NOT gate classification on it
+        # (the old fetch_email_content did, and skipped resolving the cid:).
+        # The second GET (the attachments listing) therefore ALWAYS fires for
+        # an HTML body, and the inline image resolves.
         client = self._make_authed_client()
-        client._graph_request = MagicMock(
-            return_value={
-                "body": {"contentType": "html", "content": "<p>hi</p>"},
+        responses = [
+            {
+                "body": {"contentType": "html", "content": '<img src="cid:logo@x">'},
                 "hasAttachments": False,
             },
-        )
-        content = client.fetch_email_content("mid")
-        assert content.html_body == "<p>hi</p>"
-        assert client._graph_request.call_count == 1
+            {
+                "value": [
+                    {
+                        "isInline": True,
+                        "contentId": "logo@x",
+                        "contentType": "image/png",
+                        "contentBytes": "QUFB",
+                    },
+                ],
+            },
+        ]
+        client._graph_request = MagicMock(side_effect=responses)
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("mid")
+        assert 'src="data:image/png;base64,QUFB"' in content.html_body
+        # Classification ran despite hasAttachments=false → second GET fired.
+        assert client._graph_request.call_count == 2
 
     def test_plain_text_skips_cid_resolution(self):
         client = self._make_authed_client()
@@ -2098,10 +2117,14 @@ class TestFetchEmailContentInlineImages:
                 "hasAttachments": True,
             },
         )
-        content = client.fetch_email_content("mid")
+        content, attachments, cid_map = client.fetch_content_with_attachments("mid")
         assert content.html_body is None
         assert content.text_body == "plain"
+        # A non-HTML body is NOT classified (no cid: semantics) → no second GET,
+        # empty attachments + cid_map (preserves the previous behaviour).
         assert client._graph_request.call_count == 1
+        assert attachments == []
+        assert cid_map == {}
 
     def test_attachments_fetch_error_soft_fallback(self):
         client = self._make_authed_client()
@@ -2120,9 +2143,12 @@ class TestFetchEmailContentInlineImages:
             return value
 
         client._graph_request = MagicMock(side_effect=fake)
-        content = client.fetch_email_content("mid")
-        # Soft fallback: cid reference kept intact, no propagation
+        content, attachments, cid_map = client.fetch_content_with_attachments("mid")
+        # Soft fallback: cid reference kept intact, no propagation; the failed
+        # attachments GET collapses to empty classification.
         assert 'src="cid:logo"' in content.html_body
+        assert attachments == []
+        assert cid_map == {}
 
     def test_non_image_inline_attachment_skipped(self):
         client = self._make_authed_client()
@@ -2143,7 +2169,7 @@ class TestFetchEmailContentInlineImages:
             },
         ]
         client._graph_request = MagicMock(side_effect=responses)
-        content = client.fetch_email_content("mid")
+        content, _attachments, _cid_map = client.fetch_content_with_attachments("mid")
         assert 'src="cid:doc"' in content.html_body
 
 

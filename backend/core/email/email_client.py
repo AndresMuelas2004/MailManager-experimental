@@ -509,8 +509,30 @@ class EmailClient(ABC):
         """Restore messages from spam at the provider. Returns results for successfully restored messages."""
 
     @abstractmethod
-    def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        """Fetch the full body content for a single email message."""
+    def fetch_content_with_attachments(
+        self, provider_message_id: str,
+    ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:
+        """Fetch body + attachments + inline ``cid_map`` in a SINGLE provider read.
+
+        Fuses what ``fetch_email_content`` (body) and
+        ``list_message_attachments`` (downloadable list + ``cid_map``)
+        did with two reads into one. Returns
+        ``(EmailContent, downloadable, cid_map)``:
+
+        - ``EmailContent`` — the rendered body (HTML with referenced
+          ``cid:`` images already inlined as ``data:`` URLs, or text-only
+          when the provider body is not HTML).
+        - ``downloadable`` — the attachment metadata list under the strict
+          D-13 rule (same shape ``list_message_attachments`` returns).
+        - ``cid_map`` — inline images whose ``Content-ID`` IS referenced
+          by the HTML body, mapped to ``data:`` URLs.
+
+        Attachments are classified WHENEVER the read succeeds (a text-only
+        body can still carry downloadables; an HTML body with only inline
+        images reports ``hasAttachments=false`` on Outlook yet must still
+        resolve its ``cid:`` images — D-13). Raises a :py:class:`CoreError`
+        subclass on provider failure.
+        """
 
     @abstractmethod
     def get_account_label(self) -> str:

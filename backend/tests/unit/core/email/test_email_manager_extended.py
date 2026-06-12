@@ -264,39 +264,44 @@ def test_restore_from_spam_unexpected_exception_wraps(
 
 
 # ------------------------------------------------------------------
-# fetch_email_content
+# fetch_content_with_attachments
 # ------------------------------------------------------------------
 
 
-def test_fetch_email_content_delegates_to_correct_client(
+def test_fetch_content_with_attachments_delegates_to_correct_client(
     manager: EmailManager, fake_client_factory
 ):
-    """fetch_email_content forwards provider_message_id to the right client."""
+    """fetch_content_with_attachments forwards the id to the right client and
+    returns the (content, attachments, cid_map) triple."""
     from core.email.email_client import EmailContent
 
     content = EmailContent(html_body="<p>hello</p>", text_body="hello")
     client = fake_client_factory("acct1", email_content=content)
     manager.add_client(client)
 
-    result = manager.fetch_email_content("acct1", "m1")
+    result_content, attachments, cid_map = manager.fetch_content_with_attachments("acct1", "m1")
 
-    assert isinstance(result, EmailContent)
-    assert result.html_body == "<p>hello</p>"
-    assert result.text_body == "hello"
-    assert client.fetch_content_calls == 1
+    assert isinstance(result_content, EmailContent)
+    assert result_content.html_body == "<p>hello</p>"
+    assert result_content.text_body == "hello"
+    assert attachments == []
+    assert cid_map == {}
+    # The fake now records ids in a list (replaced the old int counter).
+    assert client.fetch_content_with_attachments_calls == ["m1"]
 
 
-def test_fetch_email_content_account_not_found_raises(
+def test_fetch_content_with_attachments_account_not_found_raises(
     manager: EmailManager,
 ):
-    """Calling fetch_email_content with a non-existent label raises EmailAccountNotFoundError."""
+    """Calling fetch_content_with_attachments with a non-existent label raises
+    EmailAccountNotFoundError."""
     from core.email.errors import EmailAccountNotFoundError
 
     with pytest.raises(EmailAccountNotFoundError):
-        manager.fetch_email_content("nonexistent", "m1")
+        manager.fetch_content_with_attachments("nonexistent", "m1")
 
 
-def test_fetch_email_content_core_error_propagates(
+def test_fetch_content_with_attachments_core_error_propagates(
     manager: EmailManager, fake_client_factory
 ):
     """A CoreError subclass raised by the client propagates unchanged."""
@@ -305,10 +310,10 @@ def test_fetch_email_content_core_error_propagates(
     manager.add_client(client)
 
     with pytest.raises(EmailExternalAPIError, match="content API error"):
-        manager.fetch_email_content("acct1", "m1")
+        manager.fetch_content_with_attachments("acct1", "m1")
 
 
-def test_fetch_email_content_unexpected_exception_wraps(
+def test_fetch_content_with_attachments_unexpected_exception_wraps(
     manager: EmailManager, fake_client_factory
 ):
     """A RuntimeError from the client is wrapped in EmailExternalAPIError."""
@@ -316,4 +321,4 @@ def test_fetch_email_content_unexpected_exception_wraps(
     manager.add_client(client)
 
     with pytest.raises(EmailExternalAPIError, match="boom"):
-        manager.fetch_email_content("acct1", "m1")
+        manager.fetch_content_with_attachments("acct1", "m1")

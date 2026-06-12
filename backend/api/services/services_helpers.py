@@ -760,6 +760,65 @@ def persist_email_content(
         raise fallback("Failed to persist email content.") from exc
 
 
+def touch_email_content_last_accessed(
+    account_id: str, provider_message_id: str,
+) -> None:
+    """Refresh the cached body's ``last_accessed_at`` (sliding TTL).
+
+    Best-effort by design: a failure to bump the TTL must NEVER affect the
+    content response — the body is already served from cache. Swallows and
+    logs every error (does not re-raise). Called on a cache HIT.
+    """
+    try:
+        email_content_store.touch_last_accessed(account_id, provider_message_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to touch email content last_accessed (%s): %s",
+            type(exc).__name__, exc,
+        )
+
+
+def purge_expired_email_content(account_ids: list[str]) -> int:
+    """Evict cached bodies idle for 30+ days for the given accounts (sliding TTL).
+
+    Best-effort: runs in the post-sync background task and must never raise.
+    Returns the number of rows purged, or 0 on any error.
+    """
+    try:
+        return email_content_store.purge_expired_for_accounts(account_ids)
+    except Exception as exc:
+        logger.warning(
+            "Failed to purge expired email content (%s): %s",
+            type(exc).__name__, exc,
+        )
+        return 0
+
+
+def list_unread_recent_uncached(
+    account_id: str,
+    limit: int,
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> list[str]:
+    """List the content-prefetch targets for one account (CAN raise).
+
+    Thin translation wrapper over
+    ``email_metadata_store.list_unread_recent_uncached``. The prefetch
+    caller wraps this in its own best-effort try/except, so this follows
+    the standard translation pattern rather than swallowing.
+    """
+    try:
+        return email_metadata_store.list_unread_recent_uncached(account_id, limit)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected unread recent uncached listing error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise fallback("Failed to list unread recent uncached messages.") from exc
+
+
 _MAX_SEARCH_TOKENS = 10
 
 

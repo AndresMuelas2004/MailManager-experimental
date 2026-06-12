@@ -203,7 +203,7 @@ class FakeEmailClient(EmailClient):
         self.restore_calls = 0
         self.move_to_trash_calls = 0
         self.fetch_messages_metadata_calls = 0
-        self.fetch_content_calls = 0
+        self.fetch_content_with_attachments_calls: list[str] = []
         self.update_read_status_calls: list[tuple[list[str], bool]] = []
         self.move_to_spam_calls: list[list[str]] = []
         self.restore_from_spam_calls: list[list[str]] = []
@@ -358,11 +358,22 @@ class FakeEmailClient(EmailClient):
             is_read=True,
         )
 
-    def fetch_email_content(self, provider_message_id: str) -> EmailContent:
-        self.fetch_content_calls += 1
+    def fetch_content_with_attachments(
+        self, provider_message_id: str,
+    ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:
+        # Unified body+attachments read. Reuses the SAME injection points as
+        # the two methods it replaces: ``fetch_content_exc`` drives the
+        # failure path (so the existing 502 tests keep working), and the
+        # attachments / cid_map come from ``list_message_attachments_return``
+        # (so the cache-miss attachment-discovery tests keep working).
+        self.fetch_content_with_attachments_calls.append(provider_message_id)
         if self._fetch_content_exc:
             raise self._fetch_content_exc
-        return self._email_content
+        if self._list_message_attachments_return is not None:
+            attachments, cid_map = self._list_message_attachments_return
+        else:
+            attachments, cid_map = [], {}
+        return self._email_content, attachments, cid_map
 
     def create_draft(
         self,
