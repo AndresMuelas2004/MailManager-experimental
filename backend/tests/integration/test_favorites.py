@@ -314,7 +314,15 @@ def test_set_favorite_race_zero_rows_returns_404(
 def test_set_favorite_provider_failure_returns_502(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
-    """Provider rejects the toggle → 502 ``favorite_update_error`` (Provider-First)."""
+    """Provider rejects the toggle → 502 ``external_api_error`` (Provider-First).
+
+    The provider failure surfaces as ``EmailExternalAPIError`` and
+    ``translate_core_error`` maps it to ``external_api_error`` (502)
+    *before* the ``FavoriteUpdateError`` fallback — that fallback only
+    fires for internal/DB failures after a provider success. The
+    function name keeps ``_returns_502`` because the HTTP status is
+    correct; only the ``code`` differs from the historical docstring.
+    """
     from api.services import emails_service
     from core.email.email_manager import EmailManager
     from core.email.errors import EmailExternalAPIError
@@ -422,3 +430,244 @@ def test_sync_favorites_unknown_account_returns_404(
         params={"account_id": "cccccccc-cccc-4000-a000-cccccccccccc"},
     )
     assert resp.status_code == 404
+
+
+def test_sync_favorites_aborts_when_account_list_fails_returns_502(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """One account's ``list_favorite_ids`` raises ``EmailExternalAPIError``.
+
+    The per-account error is accumulated in ``manager._last_errors`` and
+    re-raised (non-auth branch) by ``raise_on_silent_auth_errors`` via
+    ``translate_core_error`` → the whole sync aborts with
+    ``external_api_error`` (502), not the ``favorite_sync_error`` fallback.
+    """
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from core.email.errors import EmailExternalAPIError
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id_1 = setup_mailbox_and_account(test_client, "gmail")
+    acc2 = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts",
+        json={"provider": "outlook", "display_label": "test-outlook-fail"},
+    )
+    account_id_2 = acc2.json()["account_id"]
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            aid = str(acc.get("account_id") or "")
+            label = f"{acc.get('mailbox_id')}__{aid}"
+            # The second account fails its listing; the first is healthy.
+            exc = (
+                EmailExternalAPIError("provider list down")
+                if aid == account_id_2
+                else None
+            )
+            manager.add_client(FakeEmailClient(
+                label,
+                list_favorite_ids_exc=exc,
+                list_favorite_ids_return=["x1"] if exc is None else None,
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync")
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["error"]["code"] == "external_api_error"
+
+
+def test_set_favorite_account_not_connected_returns_409(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Silent auth failure on the toggle → 409 ``account_not_connected``.
+
+    ``authenticate_all_silent`` captures the ``EmailAuthError`` into
+    ``_last_errors``; the first ``raise_on_silent_auth_errors`` aggregates
+    it into a single ``AccountNotConnected`` (409).
+    """
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from core.email.errors import EmailAuthError
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box)
+            VALUES ('auth-1', %s, 't', 'a@b.com', 'A', 's', now(), false, 'ALL_MAIL')
+            """,
+            (account_id,),
+        )
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            label = f"{acc.get('mailbox_id')}__{acc.get('account_id')}"
+            manager.add_client(FakeEmailClient(
+                label,
+                auth_silent_exc=EmailAuthError("token revoked"),
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.patch(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/auth-1/favorite",
+        json={"favorite": True},
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "account_not_connected"
+    # Provider-First: the flag must not have flipped.
+    assert _select_is_favorite(isolated_db, account_id, "auth-1") is False
+
+
+def test_sync_favorites_account_not_connected_returns_409(
+    test_client, setup_mailbox_and_account, monkeypatch,
+):
+    """Silent auth failure during sync → 409 ``account_not_connected``."""
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from core.email.errors import EmailAuthError
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            label = f"{acc.get('mailbox_id')}__{acc.get('account_id')}"
+            manager.add_client(FakeEmailClient(
+                label,
+                auth_silent_exc=EmailAuthError("token revoked"),
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
+        params={"account_id": account_id},
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "account_not_connected"
+
+
+def test_set_favorite_missing_email_does_not_call_provider(
+    test_client, setup_mailbox_and_account, monkeypatch,
+):
+    """The existence pre-check 404s WITHOUT spending a provider round trip.
+
+    The pre-check short-circuits *before* the email manager is ever
+    built, so the strongest observable proof is that
+    ``build_manager_for_accounts`` is never invoked (no client, hence no
+    provider call, can exist).
+    """
+    from api.services import emails_service
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    build_calls = {"count": 0}
+
+    def _build_manager(accounts):
+        build_calls["count"] += 1
+        raise AssertionError("provider manager must not be built on a 404 pre-check")
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.patch(
+        f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/ghost-row/favorite",
+        json={"favorite": True},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "email_not_found"
+    # The provider path was never reached (pre-check short-circuit).
+    assert build_calls["count"] == 0
+
+
+def test_sync_favorites_ignores_unknown_provider_id_no_new_row(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Option A: a provider favourite id absent from ``email_metadata`` is
+
+    silently skipped — the sync never imports a new metadata row.
+    """
+    from api.services import emails_service
+    from core.email.email_manager import EmailManager
+    from tests.shared.email_fakes import FakeEmailClient
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, is_favorite)
+            VALUES ('local-1', %s, 't', 'a@b.com', 'A', 's', now(), false, 'ALL_MAIL', false)
+            """,
+            (account_id,),
+        )
+
+    def _count_rows() -> int:
+        with isolated_db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM email_metadata WHERE account_id = %s",
+                (account_id,),
+            )
+            return int(cur.fetchone()[0])
+
+    rows_before = _count_rows()
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            label = f"{acc.get('mailbox_id')}__{acc.get('account_id')}"
+            manager.add_client(FakeEmailClient(
+                label,
+                # 'local-1' exists locally; 'remote-only' does NOT.
+                list_favorite_ids_return=["local-1", "remote-only"],
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+            ))
+        return manager
+
+    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
+        params={"account_id": account_id},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Provider reported 2 favourites, but only 1 row exists locally.
+    assert body["accounts"][0]["favorites_synced"] == 2
+    # No new row was created for the unknown id.
+    assert _count_rows() == rows_before
+    assert _select_is_favorite(isolated_db, account_id, "local-1") is True
+    # The unknown id never materialised.
+    assert _select_is_favorite(isolated_db, account_id, "remote-only") is None
+
+
+def test_listing_with_favorite_and_explicit_spam_box_returns_spam_favorites(
+    seeded_test_client, isolated_db,
+):
+    """``box=SPAM&favorite=true`` honours SPAM literally (sibling of TRASH/SENT)."""
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE email_metadata SET is_favorite = TRUE "
+            "WHERE account_id = %s AND provider_message_id = 'gmail-spam-001'",
+            (_SEEDED_ACCOUNT,),
+        )
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_MAILBOX}/emails",
+        params={"box": "SPAM", "favorite": "true"},
+    )
+    assert resp.status_code == 200
+    rows = resp.json()["items"]
+    ids = [row["provider_message_id"] for row in rows]
+    assert "gmail-spam-001" in ids
+    assert all(row["box"] == "SPAM" for row in rows)

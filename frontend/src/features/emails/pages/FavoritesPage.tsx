@@ -79,6 +79,12 @@ export default function FavoritesPage() {
       .catch(() => {});
   };
 
+  // Per-row anti double-click guard: disable only the star whose toggle is in
+  // flight, not the whole table (a single ``useFavorite`` instance drives every
+  // row, so the global ``toggling`` would disable all stars at once).
+  const isFavoritePending = (email: EmailMetadataOut) =>
+    favorites.isToggling(email.account_id, email.provider_message_id);
+
   const handleSync = () => {
     favorites.sync({ mailboxId: mailboxId! }).catch(() => {});
   };
@@ -139,6 +145,7 @@ export default function FavoritesPage() {
             onToggleAll={() => selection.toggleTopN(emails)}
             onOpen={viewer.open}
             onToggleFavorite={handleToggleFavorite}
+            isFavoritePending={isFavoritePending}
             headerCheckboxState={selection.headerState(emails)}
             bulkBar={bulkBar}
             emptyMessage={emptyMessage}

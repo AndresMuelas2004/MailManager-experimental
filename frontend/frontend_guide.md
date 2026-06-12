@@ -41,6 +41,10 @@ The exception is deliberate: the page runs a multi-step per-account flow with a 
 
 The recipient-autocomplete data hook (`useRecipientSuggestions`) is invoked by `DraftComposerHost`, riding the **same** §1.1 host exception (the composer's `RecipientAutocompleteInput` lives in `components/ui/` and only receives `suggestions` by props). Its **silent-degradation** contract is an invariant whose regression would slip through review: any error (including a 401) collapses to an empty list — the hook never surfaces a blocking error, so the composer keeps accepting manual typing and the send path is never blocked by a suggestions failure. A change that starts propagating that error to the UI breaks the "purely additive, never blocks" guarantee.
 
+### 1.5 Feature pages/hooks consume context-reader hooks from `app/providers/` (features §8 clarification)
+
+`features/<x>/pages/` and `hooks/` import the context-reader hooks `useAuth` (`app/providers/AuthContext`) and `useDraftComposerContext` (`app/providers/DraftComposerContext`). The `features/CLAUDE.md` §8 import table enumerates `own hooks/`, `own components/`, `components/`, `lib/` for `pages/` but neither lists nor forbids `app/`. This is intentional, not a boundary break: the dependency arrow `app/ → features/` (`frontend/CLAUDE.md` §3) governs who imports whose *modules*; a feature **reading a cross-cutting React Context** mounted above it is the idiomatic inverse the provider pattern relies on, and the sanctioned counterpart to the §1.1 host bridge (which exists precisely so `app/providers/` never imports `features/`). Only context-reader hooks cross — nothing forbidden (`api/client/http`, another feature). A reviewer seeing `FavoritesPage` / the inbox pages import `useDraftComposerContext` must not read it as a §8 violation.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The six namespaces in active use:
@@ -52,7 +56,7 @@ All cache keys follow `[<resource>, <scope>, ...<filters>]`. The six namespaces 
 - `['contact-suggestions', q]` — recipient autocomplete results (`useRecipientSuggestions`). The second slot is `null` (not the query) while gating is off (`q` under 2 chars), so the disabled state caches under a stable key instead of churning one entry per keystroke prefix.
 - `['drafts', mailboxId]`, `['accounts', mailboxId]`, `['mailboxes']` — straightforward resource listings.
 
-When a mutation can affect emails across several mailboxes (favourites toggle, bulk move-to-trash, bulk mark-as-spam, favourites sync, metadata sync) the invalidation uses the bare prefix `['emails']` (no `mailboxId` scope) plus `['virtual-mailbox-emails']`. The wider blast radius is the price of correctness: a vmbox can aggregate emails from several real mailboxes, so a scoped invalidation would silently leave stale rows in sibling caches.
+When a mutation can affect emails across several mailboxes (favourites toggle, bulk move-to-trash, bulk mark-as-spam, favourites sync, metadata sync) the invalidation uses the bare prefix `['emails']` (no `mailboxId` scope) plus `['virtual-mailbox-emails']`. The wider blast radius is the price of correctness: a vmbox can aggregate emails from several real mailboxes, so a scoped invalidation would silently leave stale rows in sibling caches. The favourites toggle and favourites sync additionally invalidate `['conversation']` (and optimistically rewrite the open `ConversationOut`) because `is_favorite` is rendered per-message inside the conversation viewer, so an open thread would otherwise show a stale star after a toggle fired from a row; the bulk and metadata-sync mutations do not touch `['conversation']`.
 
 ## 3. Cache-policy overrides
 

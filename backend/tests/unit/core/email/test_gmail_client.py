@@ -2913,3 +2913,131 @@ class TestFetchConversation:
         client.service = mock_service
         with pytest.raises(EmailExternalAPIError, match="RuntimeError"):
             client.fetch_conversation("thread-1")
+
+
+# ── Favourites — set_favorite / list_favorite_ids (Q2) ────────────────
+
+
+def _make_favorite_client() -> GmailClient:
+    """Client with an instant (no-op) sleep for the page retry loop."""
+    return GmailClient(account_label="mb__acct", sleep=lambda _s: None)
+
+
+def _http_error(status: int) -> Exception:
+    from googleapiclient.errors import HttpError
+    resp = MagicMock()
+    type(resp).status = status
+    return HttpError(resp=resp, content=b"err")
+
+
+class TestGmailSetFavorite:
+    def test_flag_delegates_to_batch_modify_add_starred(self):
+        client = _make_favorite_client()
+        client.service = MagicMock()
+        with patch.object(
+            client, "_batch_modify_labels", return_value=["m1"],
+        ) as batch_mock:
+            client.set_favorite("m1", True)
+        batch_mock.assert_called_once_with(["m1"], add_labels=["STARRED"])
+
+    def test_unflag_delegates_to_batch_modify_remove_starred(self):
+        client = _make_favorite_client()
+        client.service = MagicMock()
+        with patch.object(
+            client, "_batch_modify_labels", return_value=["m1"],
+        ) as batch_mock:
+            client.set_favorite("m1", False)
+        batch_mock.assert_called_once_with(["m1"], remove_labels=["STARRED"])
+
+    def test_zero_modifications_raises(self):
+        client = _make_favorite_client()
+        client.service = MagicMock()
+        with patch.object(client, "_batch_modify_labels", return_value=[]):
+            with pytest.raises(EmailExternalAPIError, match="did not affect"):
+                client.set_favorite("m1", True)
+
+    def test_unauthenticated_raises(self):
+        client = _make_favorite_client()
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.set_favorite("m1", True)
+
+    def test_empty_id_is_noop(self):
+        client = _make_favorite_client()
+        client.service = MagicMock()
+        with patch.object(client, "_batch_modify_labels") as batch_mock:
+            client.set_favorite("", True)
+        batch_mock.assert_not_called()
+
+
+class TestGmailListFavoriteIds:
+    def _list_execute(self, mock_service):
+        return mock_service.users().messages().list().execute
+
+    def test_collects_ids_single_page(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        self._list_execute(mock_service).side_effect = [
+            {"messages": [{"id": "a"}, {"id": "b"}]},
+        ]
+        client.service = mock_service
+        assert client.list_favorite_ids() == ["a", "b"]
+
+    def test_paginates_via_next_page_token(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        self._list_execute(mock_service).side_effect = [
+            {"messages": [{"id": "a"}], "nextPageToken": "tok"},
+            {"messages": [{"id": "b"}]},
+        ]
+        client.service = mock_service
+        assert client.list_favorite_ids() == ["a", "b"]
+
+    def test_uses_includespamtrash_and_max_results(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        self._list_execute(mock_service).side_effect = [{"messages": [{"id": "a"}]}]
+        client.service = mock_service
+        client.list_favorite_ids()
+        # The kwargs of the real list call (the one that builds the request).
+        list_method = mock_service.users().messages().list
+        kwargs = list_method.call_args.kwargs
+        assert kwargs["labelIds"] == ["STARRED"]
+        assert kwargs["maxResults"] == 500
+        assert kwargs["includeSpamTrash"] is True
+
+    def test_retries_transient_page_then_succeeds(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        self._list_execute(mock_service).side_effect = [
+            _http_error(503),
+            {"messages": [{"id": "a"}]},
+        ]
+        client.service = mock_service
+        assert client.list_favorite_ids() == ["a"]
+
+    def test_permanent_error_aborts_without_retry(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        execute = self._list_execute(mock_service)
+        execute.side_effect = _http_error(400)
+        client.service = mock_service
+        with pytest.raises(EmailExternalAPIError):
+            client.list_favorite_ids()
+        # A permanent 400 must not be retried — exactly one execute call.
+        assert execute.call_count == 1
+
+    def test_exhausts_retries_on_persistent_transient(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        execute = self._list_execute(mock_service)
+        execute.side_effect = _http_error(503)
+        client.service = mock_service
+        with pytest.raises(EmailExternalAPIError):
+            client.list_favorite_ids()
+        # _BATCH_MAX_RETRIES + 1 == 5 total attempts.
+        assert execute.call_count == 5
+
+    def test_unauthenticated_raises(self):
+        client = _make_favorite_client()
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.list_favorite_ids()

@@ -186,6 +186,48 @@ describe('EmailTable', () => {
     expect(screen.getByRole('button', { name: 'Página siguiente' })).toBeInTheDocument();
   });
 
+  it('disables only the interactive star of the row reported pending by isFavoritePending', () => {
+    // The anti double-click guard: EmailTable forwards isFavoritePending(email)
+    // to the row's FavoriteButton ``disabled``. The page test exercises this
+    // transitively; here we pin the component-level wiring in isolation — the
+    // pending row's star is disabled, a non-pending row's star is not.
+    render(
+      <EmailTable
+        emails={[
+          makeEmail({ provider_message_id: 'm_pending', is_favorite: true }),
+          makeEmail({ provider_message_id: 'm_idle', is_favorite: true }),
+        ]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="unified"
+        isSent={false}
+        onToggleFavorite={() => {}}
+        isFavoritePending={(email) => email.provider_message_id === 'm_pending'}
+      />,
+    );
+    // Both rows are favourites → two "Quitar de favoritos" stars; the pending
+    // one is disabled, the idle one stays clickable.
+    const stars = screen.getAllByRole('button', { name: 'Quitar de favoritos' });
+    expect(stars).toHaveLength(2);
+    const [pendingStar, idleStar] = stars;
+    expect(pendingStar).toBeDisabled();
+    expect(idleStar).not.toBeDisabled();
+  });
+
+  it('keeps the interactive star enabled when no isFavoritePending is provided', () => {
+    render(
+      <EmailTable
+        emails={[makeEmail({ is_favorite: true })]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="unified"
+        isSent={false}
+        onToggleFavorite={() => {}}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Quitar de favoritos' })).not.toBeDisabled();
+  });
+
   describe('conversation mode', () => {
     it('shows the thread message-count chip only when the count is > 1', () => {
       const { rerender } = render(

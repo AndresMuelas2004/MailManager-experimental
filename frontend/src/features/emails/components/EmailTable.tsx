@@ -29,6 +29,11 @@ type Props = {
   onToggleAll?: () => void;
   onOpen?: (email: EmailMetadataOut) => void;
   onToggleFavorite?: (email: EmailMetadataOut, next: boolean) => void;
+  // Per-row anti double-click guard for the favourite star: returns true while
+  // that email's toggle is in flight, so the star is disabled until it
+  // settles. Only the interactive star (the ``onToggleFavorite`` branch)
+  // consults it; the read-only conversation indicator ignores it.
+  isFavoritePending?: (email: EmailMetadataOut) => boolean;
   headerCheckboxState?: HeaderCheckboxState;
   bulkBar?: ReactNode;
   emptyMessage?: string;
@@ -93,6 +98,7 @@ export default function EmailTable({
   onToggleAll,
   onOpen,
   onToggleFavorite,
+  isFavoritePending,
   headerCheckboxState = 'unchecked',
   bulkBar,
   emptyMessage,
@@ -243,6 +249,7 @@ export default function EmailTable({
               {onToggleFavorite ? (
                 <FavoriteButton
                   isFavorite={email.is_favorite}
+                  disabled={isFavoritePending?.(email) ?? false}
                   onToggle={(next) => onToggleFavorite(email, next)}
                   size={18}
                 />
