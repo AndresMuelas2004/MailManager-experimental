@@ -243,6 +243,7 @@ _DDL_STATEMENTS = [
         html_body            TEXT,
         text_body            TEXT,
         fetched_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        last_accessed_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
         PRIMARY KEY (provider_message_id, account_id),
         CONSTRAINT email_content_metadata_fkey
             FOREIGN KEY (provider_message_id, account_id)
@@ -580,6 +581,17 @@ _DDL_STATEMENTS = [
     # upgrades the per-migration TRUNCATE in 0035 still runs via Alembic.
     "TRUNCATE TABLE email_content;",
     "UPDATE alembic_version SET version_num = '0035_invalidate_email_content_cache_background_attr';",
+    # Migration 0036: sliding-TTL eviction for email_content. The column is
+    # also declared in the CREATE TABLE above for fresh bootstraps; the ALTER
+    # covers incremental upgrades of an existing table. The composite index
+    # (account_id, last_accessed_at) backs the per-account purge
+    # (PURGE_EXPIRED_FOR_ACCOUNTS). The TRUNCATE is a one-shot invalidation
+    # after unifying the body+attachments provider read — no-op on a fresh
+    # bootstrap (the table is already empty above).
+    "ALTER TABLE email_content ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT now();",
+    "CREATE INDEX IF NOT EXISTS idx_email_content_last_accessed ON email_content (account_id, last_accessed_at);",
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = '0036_email_content_ttl_and_truncate';",
 ]
 
 

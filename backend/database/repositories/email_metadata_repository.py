@@ -318,6 +318,29 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected email metadata exists check error ({type(exc).__name__}): {exc}"
             ) from exc
 
+    def list_unread_recent_uncached(
+        self, account_id: str, limit: int,
+    ) -> list[str]:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        queries.LIST_UNREAD_RECENT_UNCACHED,
+                        {"account_id": account_id, "limit": limit},
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list unread recent uncached messages.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected unread recent uncached listing error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return [str(row["provider_message_id"]) for row in rows]
+
     def get_metadata(
         self, account_id: str, provider_message_id: str,
     ) -> dict[str, Any] | None:

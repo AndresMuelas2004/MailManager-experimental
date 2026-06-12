@@ -331,6 +331,22 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_unread_recent_uncached(
+        self, account_id: str, limit: int,
+    ) -> list[str]:
+        """Select the content-prefetch targets for one account.
+
+        Returns the ``provider_message_id``s of the account's unread
+        (``is_read = FALSE``), recent (``received_at >= now() - 48h``),
+        inbox (``box = 'ALL_MAIL'``) messages whose body is NOT yet
+        cached in ``email_content`` — most-recent first, capped at
+        ``limit``. Rows already present in ``email_content`` are excluded
+        (served from cache, never re-fetched). Malformed UUIDs collapse
+        to ``[]`` (treated as "no results"), consistent with ``exists``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def update_has_attachments(self, account_id: str, provider_message_id: str) -> None:
         """Recompute and persist ``has_attachments`` from ``email_attachments``.
 
@@ -385,6 +401,28 @@ class EmailContentStore(ABC):
 
     @abstractmethod
     def upsert(self, account_id: str, provider_message_id: str, html_body: str | None, text_body: str | None) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def touch_last_accessed(self, account_id: str, provider_message_id: str) -> None:
+        """Refresh ``last_accessed_at = now()`` for a cached body (sliding TTL).
+
+        Called on a cache HIT so frequently-read mail never expires.
+        Touches ONLY ``last_accessed_at`` — never ``fetched_at`` (the body
+        is immutable; a read is not a re-fetch). Best-effort at the service
+        layer: a failure must never block the content response.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def purge_expired_for_accounts(self, account_ids: list[str]) -> int:
+        """Delete cached bodies idle for 30+ days for the given accounts.
+
+        Scoped to the accounts synced in the current request (auto-cleanup
+        on sync, no scheduler — same 30-day TTL as the attachment-blob
+        purge). Returns the number of rows deleted. Returns ``0`` without
+        touching the database when ``account_ids`` is empty.
+        """
         raise NotImplementedError
 
 

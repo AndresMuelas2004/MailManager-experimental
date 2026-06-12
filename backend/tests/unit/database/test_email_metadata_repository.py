@@ -720,6 +720,66 @@ def test_exists_propagates_connection_pool_error(monkeypatch):
         em_module.email_metadata_store.exists("acc1", "m1")
 
 
+# ===== list_unread_recent_uncached =====
+# Content-prefetch target selection. Returns the provider_message_ids of an
+# account's unread / recent (<=48h) / ALL_MAIL / not-yet-cached messages,
+# most-recent first. Error capture clones the list-returning
+# ``get_trash_emails_by_ids`` shape (RealDictCursor + InvalidTextRepresentation
+# → [] soft fallback).
+
+
+def test_list_unread_recent_uncached_returns_message_ids(monkeypatch):
+    rows = [{"provider_message_id": "m3"}, {"provider_message_id": "m1"}]
+    cursor = FakeCursor(fetchall_results=[rows])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.list_unread_recent_uncached("acc1", 50)
+    # Order is preserved from the query (most-recent first); ids are projected
+    # as plain strings.
+    assert result == ["m3", "m1"]
+    _sql, params = cursor.executed[0]
+    assert params == {"account_id": "acc1", "limit": 50}
+
+
+def test_list_unread_recent_uncached_empty_when_no_rows(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.list_unread_recent_uncached("acc1", 50) == []
+
+
+def test_list_unread_recent_uncached_invalid_uuid_returns_empty(monkeypatch):
+    # A malformed account UUID collapses to "no results" (treated as ``exists``
+    # does), never a 500 that would abort the prefetch.
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.list_unread_recent_uncached("not-a-uuid", 50) == []
+
+
+def test_list_unread_recent_uncached_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to list unread recent uncached messages"):
+        em_module.email_metadata_store.list_unread_recent_uncached("acc1", 50)
+
+
+def test_list_unread_recent_uncached_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.list_unread_recent_uncached("acc1", 50)
+
+
+def test_list_unread_recent_uncached_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.list_unread_recent_uncached("acc1", 50)
+
+
 # ===== get_metadata =====
 # Single-row read of a message's full metadata (incl. thread_id), backing
 # the conversation endpoint's base-message lookup. The error-capture

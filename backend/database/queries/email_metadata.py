@@ -532,3 +532,26 @@ UPDATE_HAS_ATTACHMENTS = """
     WHERE em.account_id          = %(account_id)s
       AND em.provider_message_id = %(provider_message_id)s
 """
+
+# Content-prefetch target selection. Picks the unread, recent (<=48h),
+# inbox (``box='ALL_MAIL'`` — ``_resolve_labels`` maps INBOX -> ALL_MAIL)
+# messages whose body is NOT yet cached, most-recent first, capped at
+# ``limit``. The LEFT JOIN + ``ec.provider_message_id IS NULL`` excludes
+# rows already present in ``email_content`` (those are served from cache,
+# never re-fetched here). Existing indexes
+# (``idx_email_metadata_received_at`` / ``idx_email_metadata_account_id``)
+# cover the predicate for the MVP volume — no new index.
+LIST_UNREAD_RECENT_UNCACHED = """
+    SELECT em.provider_message_id
+    FROM email_metadata em
+    LEFT JOIN email_content ec
+      ON ec.account_id = em.account_id
+     AND ec.provider_message_id = em.provider_message_id
+    WHERE em.account_id = %(account_id)s
+      AND em.is_read = FALSE
+      AND em.box = 'ALL_MAIL'
+      AND em.received_at >= (now() - INTERVAL '48 hours')
+      AND ec.provider_message_id IS NULL
+    ORDER BY em.received_at DESC
+    LIMIT %(limit)s
+"""
