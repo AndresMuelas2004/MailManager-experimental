@@ -14,7 +14,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import useConnectedAccounts from './useConnectedAccounts';
 import { server } from '../../../test/msw/server';
@@ -55,7 +55,7 @@ function emitOAuthResultWhenStarted(popup: FakePopup, data: Record<string, unkno
 }
 
 let popup: FakePopup;
-let openSpy: ReturnType<typeof vi.spyOn>;
+let openSpy: MockInstance<typeof window.open>;
 
 beforeEach(() => {
   popup = createFakePopup();
