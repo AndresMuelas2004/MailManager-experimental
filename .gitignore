@@ -52,7 +52,6 @@ credentials/
 
 # Personal notes
 PersonalNotes.md
-COMANDOS-TESTS.md
 
 
 # Local scripts / experimental code
@@ -71,6 +70,7 @@ frontend/dist/
 #Personal things
 Ignore/
 TldrawDiagrams/
+UtilidadesDelProgramador/
 
 # Browser automation sessions
 .browser-sessions/
