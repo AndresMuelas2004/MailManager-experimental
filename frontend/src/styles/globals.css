@@ -6,6 +6,19 @@ body {
   min-height: 100vh;
 }
 
+/* Tailwind v4 removed the Preflight rule that gave buttons a pointer cursor
+   (v3 shipped it), so a ``<button>`` without an explicit ``cursor-*`` utility
+   now inherits the OS default arrow. Restore the familiar hand cursor on every
+   enabled interactive button app-wide. ``:not(:disabled)`` leaves disabled
+   controls on the default cursor, and living in ``@layer base`` lets utilities
+   such as ``cursor-not-allowed`` still override it wherever they are set. */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* RichTextEditor (TipTap) empty-state placeholder. ProseMirror's Placeholder
    extension injects ``is-editor-empty`` + ``data-placeholder`` on the empty
    document's first node; the ghost text is a pseudo-element keyed off that
