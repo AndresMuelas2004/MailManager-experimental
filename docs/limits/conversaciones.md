@@ -72,19 +72,19 @@ El parámetro de API es `group_by_thread` (`GET /mailboxes/{id}/emails`), por de
 
 ---
 
-## 5. Interacción de la fila (lo que se quitó respecto al listado clásico)
+## 5. Interacción de la fila
 
-En las bandejas que agrupan, la fila-conversación es de **solo lectura + abrir**. Respecto a la fila clásica de un mensaje, **desaparecen** estos controles (que se trasladan al visor, por mensaje):
+En las bandejas que agrupan, la fila-conversación informa y **abre** el visor, pero **conserva la selección** en las bandejas estándar (cuenta y unificada). Resumen de controles:
 
-| Control | En fila-conversación | Dónde está ahora |
-|---|---|---|
-| Casilla de selección por fila | **No existe** | — (no hay selección en estas bandejas) |
-| Casilla "seleccionar página" en la cabecera | **No existe** | — |
-| Barra de acciones masivas (papelera / spam / leído en bloque) | **No existe** | Acciones por mensaje en el visor ([acciones-sobre-correos.md](acciones-sobre-correos.md)) |
-| Estrella clicable | **No** (la estrella es indicador agregado de solo lectura) | Botón "Favorito" por mensaje en el visor ([favoritos.md](favoritos.md)) |
-| Abrir la fila | **Sí** (única acción) | Abre el visor de la conversación |
+| Control | Bandeja de cuenta / unificada | Bandeja ficticia (virtual) | Dónde actúa |
+|---|---|---|---|
+| Casilla de selección por fila | **Sí** | **No** | Selecciona el hilo por su mensaje más reciente (representante) |
+| Casilla "seleccionar página" en la cabecera | **Sí** (hasta 50, la página) | **No** | — |
+| Barra de acciones masivas (papelera / spam / leído en bloque) | **Sí** | **No** | Opera sobre el mensaje representante de cada fila seleccionada ([acciones-sobre-correos.md](acciones-sobre-correos.md)) |
+| Estrella clicable | **No** (indicador agregado de solo lectura) | **No** | Botón "Favorito" por mensaje en el visor ([favoritos.md](favoritos.md)) |
+| Abrir la fila | **Sí** | **Sí** | Abre el visor de la conversación |
 
-> Estos controles **siguen existiendo en la pestaña de Favoritos**, que no agrupa. La eliminación es exclusiva de las bandejas en modo conversación.
+> La bandeja ficticia es **totalmente de solo lectura** (reúne cuentas de varios buzones sin una caja única a la que dirigir el lote — ver [bandejas-ficticias.md](bandejas-ficticias.md)). La pestaña de **Favoritos** no agrupa y conserva además la **estrella clicable**.
 
 Acciones disponibles **dentro** del visor de la conversación: en la cabecera, **Responder / Responder a todos / Reenviar** (sobre el mensaje más reciente); por cada mensaje expandido, **Favorito**, **No leído**, **Spam**, **Papelera** y la **descarga de sus adjuntos**. No hay botón "marcar leído" (abrir ya marca todo el hilo como leído).
 
@@ -116,7 +116,7 @@ Endpoint del visor: `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{p
 | **Apagar la vista de conversación** | No hay interruptor de usuario: está siempre activa en las bandejas que agrupan. Quitarla del MVP simplifica la superficie. |
 | **Fusionar cuentas distintas en un mismo hilo** | Cada proveedor identifica el hilo por cuenta (`threadId` / `conversationId` son por espacio de nombres de cuenta); fusionar arriesgaría mezclar hilos que el proveedor considera separados. Dos cuentas que participan en el mismo intercambio se ven como dos conversaciones. |
 | **Que el contador de la fila coincida con lo que muestra el visor** | El contador cuenta el hilo **en esa bandeja** y **sincronizado**; el visor trae el hilo **completo** del proveedor (otras bandejas, mensajes no sincronizados). La diferencia es esperada (ver [../features/conversaciones.md](../features/conversaciones.md) § 5). |
-| **Selección múltiple / acciones masivas en las bandejas que agrupan** | La fila representa varios mensajes; las acciones por lote no tienen una respuesta única a nivel de hilo. Se trasladan al visor, por mensaje. (Favoritos, que no agrupa, sí las conserva.) |
+| **Acciones masivas sobre el hilo entero** | La selección de una fila agrupada toca su **mensaje más reciente** (representante), no todos los mensajes del hilo; el resto se gestiona por mensaje en el visor. La bandeja de cuenta y la unificada sí tienen selección; la **bandeja ficticia no** (no hay una caja única a la que dirigir el lote). |
 | **Re-sincronización masiva del histórico para completar hilos** | El hilo completo se trae **bajo demanda** al abrir cada conversación, no de golpe para todo el buzón: descargar todos los hilos completos de antemano gastaría cuota del proveedor sin que el usuario lo pida. |
 | **Indicador "este correo fue reenviado" en la fila** | Gmail no expone el estado "Forwarded" por API y Outlook no ofrece un equivalente fiable; queda fuera (ver también [responder-y-reenviar.md](responder-y-reenviar.md)). |
 | **Clip por mensaje dentro del visor (cabecera colapsada)** | Dentro de la cadena, el adjunto de cada mensaje se descubre al expandir su cuerpo (estrategia "lazy" de [adjuntos.md](adjuntos.md)); mostrar el clip antes sería un indicador muerto. El clip **agregado** sí aparece en la fila del listado. |

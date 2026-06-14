@@ -448,3 +448,82 @@ describe('AccountInboxPage — in: column sync', () => {
     expect(screen.getByText('sender@example.com')).toBeInTheDocument();
   });
 });
+
+// Selection regression guard. Commit #6 (conversation view) silently dropped
+// the checkbox / bulk-bar wiring from this page, leaving inert placeholder
+// boxes that looked like checkboxes but did nothing. These tests pin the
+// header "select all" and the per-row selection back in place: clicking a
+// checkbox must toggle real selection and reveal the bulk-actions bar. While
+// they pass, the wiring cannot disappear unnoticed again.
+describe('AccountInboxPage — selection', () => {
+  function stubTwoThreads() {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: [
+            makeMessage('rep1', { subject: 'First thread' }),
+            makeMessage('rep2', { subject: 'Second thread' }),
+          ],
+          total: 2,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+  }
+
+  it('the header checkbox selects every visible row and reveals the bulk bar', async () => {
+    stubTwoThreads();
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('First thread')).toBeInTheDocument());
+
+    // Nothing selected yet → the bulk bar is absent.
+    expect(screen.queryByRole('button', { name: 'Limpiar selección' })).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar los 50 correos más recientes' }),
+    );
+
+    // The bulk bar appears and every row checkbox is checked.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Limpiar selección' })).toBeInTheDocument(),
+    );
+    const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
+    expect(rowChecks).toHaveLength(2);
+    rowChecks.forEach((cb) => expect(cb).toBeChecked());
+  });
+
+  it('a row checkbox selects only that row without opening the conversation viewer', async () => {
+    const conversationCalls: string[] = [];
+    stubTwoThreads();
+    server.use(
+      http.get(
+        `${API_BASE}/mailboxes/mb_1/accounts/a_1/emails/:pmid/conversation`,
+        ({ params }) => {
+          conversationCalls.push(String(params.pmid));
+          return HttpResponse.json({ thread_id: 't_1', messages: [makeMessage('rep1')] });
+        },
+      ),
+    );
+
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('First thread')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole('checkbox', { name: 'Seleccionar correo' })[0]);
+
+    // Only the clicked row is selected and the bulk bar shows up.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Limpiar selección' })).toBeInTheDocument(),
+    );
+    const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
+    expect(rowChecks[0]).toBeChecked();
+    expect(rowChecks[1]).not.toBeChecked();
+
+    // The checkbox stops click propagation, so the row's open handler — and
+    // therefore the conversation fetch — never fires.
+    expect(conversationCalls).toHaveLength(0);
+  });
+});

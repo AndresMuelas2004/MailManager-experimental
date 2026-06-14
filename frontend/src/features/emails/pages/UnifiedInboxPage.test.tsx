@@ -479,3 +479,58 @@ describe('UnifiedInboxPage', () => {
     });
   });
 });
+
+// Selection regression guard. Commit #6 (conversation view) dropped the
+// checkbox / bulk-bar wiring from the unified inbox too, leaving inert
+// placeholder boxes. These pin selection back so it cannot silently regress.
+describe('UnifiedInboxPage — selection', () => {
+  function stubTwoEmails() {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+  }
+
+  it('the header checkbox selects every visible row and reveals the bulk bar', async () => {
+    stubTwoEmails();
+    renderInboxAtMailbox();
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+
+    expect(screen.queryByRole('button', { name: 'Limpiar selección' })).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar los 50 correos más recientes' }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Limpiar selección' })).toBeInTheDocument(),
+    );
+    const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
+    expect(rowChecks).toHaveLength(2);
+    rowChecks.forEach((cb) => expect(cb).toBeChecked());
+  });
+
+  it('a row checkbox selects only that row', async () => {
+    stubTwoEmails();
+    renderInboxAtMailbox();
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole('checkbox', { name: 'Seleccionar correo' })[0]);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Limpiar selección' })).toBeInTheDocument(),
+    );
+    const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
+    expect(rowChecks[0]).toBeChecked();
+    expect(rowChecks[1]).not.toBeChecked();
+  });
+});

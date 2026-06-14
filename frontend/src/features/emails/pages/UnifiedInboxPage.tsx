@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
+import useBulkBar from '../hooks/useBulkBar';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
@@ -30,12 +31,20 @@ export default function UnifiedInboxPage({ box }: Props) {
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
   const page = parsePageParam(searchParams);
 
-  // Conversation mode: ``groupByThread=true`` (7th positional arg) collapses
-  // each thread into one read-only + open row; no selection / favourite
-  // wiring on this page.
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error } =
+  // Conversation mode groups the listing by thread (``groupByThread=true``,
+  // 7th positional arg): one row per thread, collapsed to its most-recent
+  // message. Selection + bulk actions are wired below and act on that
+  // representative message; the favourite star stays the read-only aggregated
+  // thread indicator (not re-wired here).
+  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
     useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page, true);
   const config = EMAIL_BOX_CONFIG[box];
+
+  const { selection, bulkError, bulkBar } = useBulkBar({
+    box,
+    refresh,
+    searchKey: debouncedQ,
+  });
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -69,7 +78,7 @@ export default function UnifiedInboxPage({ box }: Props) {
     void composer.openForForward(email);
   };
 
-  const combinedError = error || viewer.error;
+  const combinedError = error || bulkError || viewer.error;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -113,6 +122,12 @@ export default function UnifiedInboxPage({ box }: Props) {
             view="unified"
             isSent={isSent}
             conversationMode
+            hasSelection={selection.size > 0}
+            isSelected={selection.isSelected}
+            onToggle={selection.toggle}
+            onToggleAll={() => selection.toggleTopN(emails)}
+            headerCheckboxState={selection.headerState(emails)}
+            bulkBar={bulkBar}
             onOpen={viewer.open}
             emptyMessage={emptyMessage}
             page={page}

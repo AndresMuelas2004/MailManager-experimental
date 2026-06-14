@@ -33,23 +33,24 @@ En las bandejas que agrupan (§ 4), cada conversación se representa con **una s
 - **Estado no leído agregado**: si **cualquiera** de los mensajes del hilo (en esa bandeja) está sin leer, la fila se muestra en **negrita** (y con el fondo gris de "no leído"), igual que hace Gmail.
 - **Indicadores agregados**: el **clip** de adjunto aparece si **algún** mensaje del hilo lleva adjunto descargable; la **estrella** de favorito aparece rellena si **algún** mensaje del hilo está marcado como favorito.
 
-### 2.1 La fila es de solo lectura: solo informa y abre
+### 2.1 La fila: selección + abrir, pero estrella de solo lectura
 
-Este es el cambio de interacción más importante y conviene fijarlo bien. En modo conversación, los indicadores de la fila (negrita, clip, estrella, contador) son **informativos / de solo lectura**, y la fila tiene **una única acción: abrir** la conversación.
+En modo conversación, los indicadores de la fila (negrita, clip, estrella, contador) son **informativos / de solo lectura**, y pulsar sobre la fila **abre** la conversación. Pero la fila **conserva la selección** en las bandejas estándar que agrupan (la de una cuenta y la unificada): sigue habiendo **casilla de selección por fila** y **casilla de "seleccionar toda la página"** en la cabecera, y al marcar una o más aparece la **barra de acciones masivas** (mover a papelera, marcar spam, marcar leído/no leído). La casilla **detiene la propagación**, así que marcarla no abre la conversación.
 
-En concreto, respecto al listado clásico de un mensaje por fila, la fila-conversación **ya no tiene**:
+Como la fila representa el hilo por su **mensaje más reciente** (el mismo que usan Responder / Reenviar, § 7), las acciones masivas operan sobre **ese mensaje representante**, no sobre el hilo entero. Para un hilo de un solo mensaje —la inmensa mayoría del listado— es exactamente el mensaje esperado; en hilos largos, el resto de mensajes se gestiona **por mensaje** desde el visor.
 
-- **Casilla de selección múltiple** ni casilla de "seleccionar toda la página": no hay selección en estas bandejas.
-- **Barra de acciones masivas**: no se puede mover a papelera / marcar spam / marcar leído "en bloque" desde el listado.
-- **Estrella clicable**: la estrella es un indicador agregado, no un botón. Pulsar en la fila **abre la conversación**, nunca alterna el favorito.
+Lo que la fila **no** recupera respecto al listado clásico de un mensaje por fila:
 
-Todas esas acciones se han **movido al visor**, y operan **por mensaje** (§ 3.2 y § 7). La razón de fondo: una fila que representa **varios** mensajes no tiene una respuesta única a "¿marco como favorito?" o "¿muevo a la papelera?" — esas decisiones son por mensaje, así que su sitio natural es la cadena del visor, donde cada mensaje es manipulable por separado.
+- **Estrella clicable**: la estrella es un indicador agregado de solo lectura, no un botón. El favorito se alterna **por mensaje** desde el visor (§ 7).
+- **Acción sobre el hilo completo de un clic**: no existe; las acciones masivas tocan el mensaje representante, y el resto del hilo se maneja en el visor.
 
-> **Excepción — Favoritos conserva la fila clásica.** La pestaña de Favoritos **no** agrupa por conversación (§ 4) y mantiene su tabla de siempre: un mensaje por fila, con su casilla de selección, su barra de acciones masivas y su estrella clicable. Lo que se describe en esta sección aplica a las bandejas que **sí** agrupan.
+> **Bandejas ficticias (virtuales): fila totalmente de solo lectura.** A diferencia de la bandeja de cuenta y de la unificada, la bandeja ficticia **no** ofrece selección ni acciones masivas: su fila solo informa y abre. Reúne cuentas de varios buzones reales sin una "caja" única, así que una barra de acciones masivas no tendría un buzón al que dirigirse de forma coherente (ver [bandejas-ficticias.md](bandejas-ficticias.md)). Allí las acciones se hacen **por mensaje** en el visor.
+
+> **Favoritos conserva la fila clásica.** La pestaña de Favoritos **no** agrupa por conversación (§ 4): un mensaje por fila, con su casilla de selección, su barra de acciones masivas y su **estrella clicable**.
 
 #### Ejemplo
 
-> En la bandeja unificada, una conversación de 4 mensajes (3 leídos, 1 sin leer, uno con un PDF adjunto) se ve como **una fila** en negrita, con un "4" junto al asunto base y el clip. No hay casilla a su izquierda ni estrella pulsable. El usuario hace clic en cualquier parte de la fila y se abre el visor de la conversación.
+> En la bandeja unificada, una conversación de 4 mensajes (3 leídos, 1 sin leer, uno con un PDF adjunto) se ve como **una fila** en negrita, con un "4" junto al asunto base y el clip. A su izquierda **sí** hay una casilla de selección (la estrella, en cambio, es solo indicador). Si el usuario la marca y pulsa "Mover a papelera", se mueve el **mensaje más reciente** del hilo; el resto se gestiona abriendo la conversación. Pulsar en cualquier otra parte de la fila abre el visor.
 
 ---
 
