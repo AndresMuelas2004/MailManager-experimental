@@ -69,7 +69,7 @@ Si un mailbox no tiene ninguna cuenta conectada, la vista unificada devuelve una
 
 ## 4. Cómo se ve cada fila
 
-> Esta sección describe la fila **clásica** (un mensaje por fila), que hoy aplica tal cual a la pestaña de **Favoritos**. En las cuatro bandejas reales y en la unificada, las filas se agrupan por conversación y son de solo lectura (sin casilla ni estrella clicable) — ver [conversaciones.md](conversaciones.md). El resto de lo que aquí se cuenta (proveedor, columnas "Para"/"De", clip de adjunto, fecha, los tres indicadores de estado) **sí** sigue aplicando a la fila-conversación, solo que con los indicadores **agregados** sobre el hilo en lugar de un único mensaje.
+> Esta sección describe la fila **clásica** (un mensaje por fila), que hoy aplica tal cual a la pestaña de **Favoritos**. En las cuatro bandejas reales y en la unificada, las filas se agrupan por conversación: **conservan la casilla de selección** (que actúa sobre el mensaje más reciente del hilo) pero la **estrella** pasa a ser un indicador agregado de solo lectura — ver [conversaciones.md](conversaciones.md). El resto de lo que aquí se cuenta (proveedor, columnas "Para"/"De", clip de adjunto, fecha, los tres indicadores de estado) **sí** sigue aplicando a la fila-conversación, solo que con los indicadores **agregados** sobre el hilo en lugar de un único mensaje.
 
 Cada correo es una fila. De izquierda a derecha el usuario ve: una casilla de selección, una estrella de favorito, el **proveedor** del que viene (un nombre amigable tipo "Gmail" / "Outlook"), una o dos columnas de personas ("Para" / "De"), el **asunto** (con un clip delante si trae adjuntos) y la **fecha**.
 

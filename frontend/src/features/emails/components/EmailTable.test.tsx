@@ -359,5 +359,46 @@ describe('EmailTable', () => {
       );
       expect(screen.queryByLabelText('Tiene adjuntos')).not.toBeInTheDocument();
     });
+
+    it('renders interactive selection checkboxes when selection props are provided', async () => {
+      // Positive counterpart of the read-only case above: conversationMode does
+      // NOT forbid selection. When the page wires isSelected / onToggle /
+      // onToggleAll, the header "select all" and per-row checkboxes must render
+      // and fire. This is the component-level guard for the inbox regression
+      // where the pages stopped passing these props and the checkboxes silently
+      // went inert (the rendered table still "looked" right, so it slipped past
+      // every test that did not click them).
+      const onToggle = vi.fn();
+      const onToggleAll = vi.fn();
+      render(
+        <EmailTable
+          emails={[
+            makeEmail({ provider_message_id: 'rep_1', subject: 'Row one' }),
+            makeEmail({ provider_message_id: 'rep_2', subject: 'Row two' }),
+          ]}
+          accounts={[accountFixture]}
+          loading={false}
+          view="individual"
+          isSent={false}
+          conversationMode
+          onOpen={() => {}}
+          isSelected={() => false}
+          onToggle={onToggle}
+          onToggleAll={onToggleAll}
+          headerCheckboxState="unchecked"
+        />,
+      );
+
+      const user = userEvent.setup();
+      await user.click(
+        screen.getByRole('checkbox', { name: 'Seleccionar los 50 correos más recientes' }),
+      );
+      expect(onToggleAll).toHaveBeenCalledTimes(1);
+
+      const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
+      expect(rowChecks).toHaveLength(2);
+      await user.click(rowChecks[0]);
+      expect(onToggle).toHaveBeenCalledTimes(1);
+    });
   });
 });

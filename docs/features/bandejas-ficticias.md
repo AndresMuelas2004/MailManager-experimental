@@ -149,7 +149,7 @@ La diferencia clave es el **alcance**: aquí la lupa busca dentro del **resultad
 
 ## 6. La vista de correos: igual que un buzón, con un matiz multi-cuenta
 
-La tabla de correos de una bandeja ficticia es la misma que la de cualquier buzón **en modo conversación**: las filas se agrupan por hilo y son de **solo lectura** (asunto base del hilo, remitente y fecha del más reciente, contador del hilo, e indicadores agregados de no leído, favorito y adjunto). La bandeja ficticia agrupa por conversación **siempre**. La fila **no** tiene casilla de selección ni estrella clicable: su única acción es **abrir** la conversación, y las acciones por mensaje (favorito, papelera, spam, no leído) viven dentro del visor de la cadena. El detalle de la agrupación está en [conversaciones.md](conversaciones.md).
+La tabla de correos de una bandeja ficticia comparte el **modo conversación** con los buzones (filas agrupadas por hilo: asunto base del hilo, remitente y fecha del más reciente, contador del hilo, e indicadores agregados de no leído, favorito y adjunto), y agrupa **siempre**. Pero, a diferencia de la bandeja de cuenta y la unificada —que conservan la selección al agrupar—, aquí la fila es de **solo lectura**: **no** tiene casilla de selección ni estrella clicable, su única acción es **abrir** la conversación, y las acciones por mensaje (favorito, papelera, spam, no leído) viven dentro del visor de la cadena. El detalle de la agrupación está en [conversaciones.md](conversaciones.md).
 
 ### 6.1 Por qué la columna muestra la cuenta de cada correo
 
@@ -220,7 +220,7 @@ Para fijar expectativas (la lista completa con el porqué de cada límite está 
 - **Nunca muestra correos borrados** (estado "DELETED"): un correo eliminado de forma definitiva no aparece bajo ningún filtro, ni siquiera con "no excluir nada", porque no es una carpeta solicitable (§ 4.1).
 - **No es una carpeta real**: no existe en Gmail/Outlook, no se puede mover un correo "a" una bandeja ficticia.
 - **No autoexpande** la lista de cuentas al conectar cuentas nuevas (§ 3.1).
-- **No ofrece selección múltiple ni acciones en bloque** (la vista agrupa por conversación, donde la fila es de solo lectura): la bandeja es de **solo lectura** respecto a su definición, y las acciones operan **por mensaje** sobre los correos reales subyacentes, desde el visor de la conversación.
+- **No ofrece selección múltiple ni acciones en bloque** (a diferencia de la bandeja de cuenta y la unificada, que sí conservan la selección al agrupar): reúne cuentas de varios buzones reales sin una "caja" única a la que dirigir una acción masiva de forma coherente, así que su fila es de **solo lectura** y las acciones operan **por mensaje** sobre los correos reales subyacentes, desde el visor de la conversación.
 - **No ordena por relevancia** ni soporta scroll infinito: hereda el comportamiento de la lista de correos (orden por fecha descendente, navegación por páginas numeradas).
 
 ---

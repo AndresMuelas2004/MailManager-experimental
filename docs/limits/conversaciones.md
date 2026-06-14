@@ -1,6 +1,6 @@
 # Vista de conversaciones — límites y alcance
 
-Catálogo de **hasta dónde llega** la vista de conversación: cómo se agregan los campos de la fila-conversación, qué trae cada llamada al proveedor al reconstruir el hilo, las asimetrías Gmail/Outlook, los códigos de error y la lista de "qué NO soporta" con su porqué breve. El comportamiento narrado (la fila de solo lectura, la cadena del visor, la carga perezosa, el marcado al abrir) vive en **[../features/conversaciones.md](../features/conversaciones.md)**.
+Catálogo de **hasta dónde llega** la vista de conversación: cómo se agregan los campos de la fila-conversación, qué trae cada llamada al proveedor al reconstruir el hilo, las asimetrías Gmail/Outlook, los códigos de error y la lista de "qué NO soporta" con su porqué breve. El comportamiento narrado (la fila agrupada y su selección, la cadena del visor, la carga perezosa, el marcado al abrir) vive en **[../features/conversaciones.md](../features/conversaciones.md)**.
 
 Las cifras de **paginación y tamaño de página** (50 conversaciones por página, el total exacto, la ventana de números) son las del listado y no se repiten aquí: están en **[listado-de-correos.md](listado-de-correos.md)**. La paginación es la misma; lo único que cambia es que el total cuenta **hilos**.
 

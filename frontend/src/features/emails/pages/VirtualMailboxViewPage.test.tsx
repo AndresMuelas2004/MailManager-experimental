@@ -221,4 +221,40 @@ describe('VirtualMailboxViewPage', () => {
     // The banner replaces the table: the listing row never renders alongside it.
     expect(screen.queryByText('A vmbox sent message')).not.toBeInTheDocument();
   });
+
+  it('is read-only: the listing renders no selection checkboxes', async () => {
+    // A virtual mailbox aggregates accounts from possibly several real
+    // mailboxes, so it has no single box to target a bulk action and stays
+    // read-only — unlike the account and unified inboxes, which DID restore
+    // selection. This guard pins that deliberate exclusion: if a future change
+    // wires selection here, it must be a conscious decision that updates this
+    // test, not a silent drift.
+    useAccountFanout();
+    server.use(
+      http.get(`${API_BASE}/virtual-mailboxes/vmb_1`, () =>
+        HttpResponse.json({
+          virtual_mailbox_id: 'vmb_1',
+          owner_user_id: 'u_test',
+          display_name: 'My vmbox',
+          account_ids: ['a_1'],
+          filter_payload: {},
+          created_at: new Date('2024-01-01T00:00:00Z').toISOString(),
+          updated_at: new Date('2024-01-01T00:00:00Z').toISOString(),
+        }),
+      ),
+      http.get(`${API_BASE}/virtual-mailboxes/vmb_1/emails`, () =>
+        HttpResponse.json({ items: [sentEmail], total: 1, limit: 50, offset: 0 }),
+      ),
+    );
+
+    renderVmbox('/m/mb_1/virtual-mailboxes/vmb_1');
+
+    await waitFor(() => {
+      expect(screen.getByText('A vmbox sent message')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('checkbox', { name: 'Seleccionar correo' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: 'Seleccionar los 50 correos más recientes' }),
+    ).not.toBeInTheDocument();
+  });
 });
