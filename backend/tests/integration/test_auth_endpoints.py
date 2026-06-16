@@ -28,6 +28,7 @@ def test_google_login_success(test_client_base, isolated_db, monkeypatch, app):
         "email": "login@example.com",
         "name": "Login User",
         "picture": "https://example.com/avatar.png",
+        "email_verified": True,
     }
     monkeypatch.setattr(
         auth_service, "verify_google_token",
@@ -197,6 +198,7 @@ def test_logout(test_client_base, isolated_db, monkeypatch, app):
         "sub": "google-sub-logout-test",
         "email": "logout@example.com",
         "name": "Logout User",
+        "email_verified": True,
     }
     monkeypatch.setattr(
         auth_service, "verify_google_token",
@@ -219,6 +221,7 @@ def test_logout_database_error(test_client_base, isolated_db, monkeypatch, app):
         "sub": "google-sub-logout-db-error",
         "email": "logoutdberr@example.com",
         "name": "Logout DB Error",
+        "email_verified": True,
     }
     monkeypatch.setattr(
         auth_service, "verify_google_token",
