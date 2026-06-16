@@ -1,0 +1,83 @@
+name: mailmanager
+
+# Standalone PRODUCTION stack — run WITHOUT the dev compose.yml:
+#   docker compose --env-file .env.production -f compose.prod.yml up -d --build
+#
+# It is self-contained on purpose (it does NOT overlay compose.yml): an overlay
+# concatenates `ports`, so the dev-only published ports could not be removed.
+# Defining prod from scratch lets it omit the dev-only ports, bind mounts,
+# --reload command and pinned subnet outright. Variables are interpolated from
+# --env-file .env.production; ${VAR:?msg} fails fast if a required one is unset.
+# compose.override.yml is intentionally NOT involved here (it is reserved by the
+# /creacion-worktree skill for per-worktree dev overrides).
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailmanager
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env.production}
+      POSTGRES_DB: mailmanager
+    volumes:
+      - mailmanager_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailmanager -d mailmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # No published `ports`: Postgres is reachable only on the internal network (#2).
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    env_file:
+      - ./.env.production
+    volumes:
+      # Clean directory with ONLY the 2 credential JSON files (#10).
+      - "${SECRETS_DIR:?SECRETS_DIR is required in .env.production}:/secrets:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No `command` and no source binds: the prod image CMD runs `python main.py`
+    # (uvicorn, single process, no reload — #7/#9). No published port either;
+    # Caddy reaches it on the internal network as backend:8000.
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        # Build-time constants baked into the bundle by `vite build`.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?VITE_API_BASE_URL is required in .env.production}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:?VITE_GOOGLE_CLIENT_ID is required in .env.production}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Served internally on :80 by nginx; Caddy proxies `/` to it.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required in .env.production}
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  mailmanager_pgdata:
+  caddy_data:
+  caddy_config:

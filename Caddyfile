@@ -1,0 +1,24 @@
+# Caddy reverse proxy for the production stack (same domain behind proxy).
+# Terminates TLS (Let's Encrypt, automatic) and routes:
+#   /api/*  -> backend:8000   (handle_path strips the /api prefix, so the
+#                              backend keeps its routes at the root, unchanged)
+#   /*      -> frontend:80    (nginx serving the SPA build, with SPA fallback)
+#
+# DOMAIN and ACME_EMAIL are injected as environment variables by
+# compose.prod.yml (interpolated from .env.production).
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}
