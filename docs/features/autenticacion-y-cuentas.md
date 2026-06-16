@@ -33,6 +33,7 @@ No basta con que Google diga "esta credencial es mía". El servidor exige que la
 
 - Sea **criptográficamente válida** y esté **emitida para esta aplicación** concreta (se comprueba el destinatario del token). Una credencial generada para otra app distinta se rechaza aunque sea legítima.
 - Traiga un **identificador estable de Google** y un **email**. Si falta cualquiera de los dos, el login se rechaza.
+- Tenga el **email verificado** por Google (la credencial trae una marca `email_verified`). Una cuenta de Google cuyo email primario no está verificado se rechaza, aunque la credencial sea criptográficamente válida: la identidad se ancla al identificador de Google, pero un email sin verificar no es fiable para mostrarlo ni para futuras notificaciones.
 
 Se tolera un pequeño desfase de reloj entre el cliente y el servidor para que un reloj ligeramente adelantado o atrasado no tumbe logins legítimos (el margen exacto está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)).
 

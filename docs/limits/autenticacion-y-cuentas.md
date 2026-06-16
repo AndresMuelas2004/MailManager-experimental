@@ -128,6 +128,7 @@ Correspondencia exacta entre cada situación y la respuesta de la API. El compor
 | Situación | Código | Estado HTTP |
 |-----------|--------|-------------|
 | Credencial de Google inválida / sin `sub` o `email` | `unauthorized` | 401 |
+| Email de Google **no verificado** (`email_verified` ausente o falso) | `unauthorized` | 401 |
 | Token de Google malformado o rechazado por el proveedor | `unauthorized` | 401 |
 | Google inalcanzable al verificar (fallo de red) | `external_api_error` | 502 |
 | Fallo de autorización al **conectar** una cuenta | `account_connect_auth_error` | **401** (no 409 — evita el bucle de reintentos sobre el mismo paso) |

@@ -213,7 +213,8 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `AUTH_COOKIE_SAMESITE` | No | Session cookie `SameSite` policy: `lax` / `strict` / `none`. `none` requires `AUTH_COOKIE_SECURE=true`. Default: `lax`. |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. A `*` wildcard is rejected at startup (incompatible with credentialed CORS). |
+| `LOG_LEVEL` | No | Root/uvicorn log level applied by the production entrypoint (`python main.py`): `DEBUG` / `INFO` / `WARNING` / `ERROR`. Default: `INFO`. The dev server keeps uvicorn's own defaults. |
 | `ATTACHMENTS_PURGE_TOKEN` | No | Bearer token for the `POST /admin/attachments/purge` maintenance endpoint. When unset, the endpoint replies 503 `purge_disabled` instead of 401 (deploy is intentionally not configured for this operation). |
 | `DEV_LOGIN_ENABLED` | No | When truthy, enables the `POST /auth/dev-login` backdoor. Unset/falsy → the endpoint replies 503 `dev_login_disabled`. Never enable in production. |
 | `DEV_LOGIN_EMAIL` | No | Email of the existing user the dev-login mints a session for. Required when `DEV_LOGIN_ENABLED` is truthy (500 `env_var_error` if missing). |
