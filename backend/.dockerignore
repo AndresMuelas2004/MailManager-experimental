@@ -7,8 +7,8 @@ __pycache__/
 .ruff_cache/
 htmlcov/
 .coverage
-Scripts/ejecucion_unica/
-Scripts/EXECUTION_MDs/
+tests/
+Scripts/
 .env
 .env.*
 !.env.docker.example
