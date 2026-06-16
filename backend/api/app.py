@@ -86,9 +86,18 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(title="MailApp API", lifespan=lifespan)
     allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
+    origins = [o.strip() for o in allowed_origins.split(",") if o.strip()]
+    # Fail-closed: a wildcard origin is invalid with credentialed CORS (browsers
+    # reject '*' + credentials), so refuse to boot rather than silently break
+    # every cross-origin request in production.
+    if "*" in origins:
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS must list explicit origins, not '*': a wildcard "
+            "origin is incompatible with allow_credentials=True."
+        )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[o.strip() for o in allowed_origins.split(",")],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
