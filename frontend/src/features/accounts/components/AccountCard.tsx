@@ -11,10 +11,18 @@ type Props = {
   emails: EmailMetadataOut[];
   status: 'syncing' | 'ready' | 'error';
   onClick?: () => void;
+  onReconnect?: () => void;
   onDelete?: () => void;
 };
 
-export default function AccountCard({ account, emails, status, onClick, onDelete }: Props) {
+export default function AccountCard({
+  account,
+  emails,
+  status,
+  onClick,
+  onReconnect,
+  onDelete,
+}: Props) {
   const meta = getProviderMeta(account.provider);
   const headerBg = meta.headerBgClass;
   const headerColor = meta.headerTextClass;
@@ -26,7 +34,7 @@ export default function AccountCard({ account, emails, status, onClick, onDelete
       ? `${account.display_label} - ${email}`
       : (email ?? account.display_label);
 
-  const hasActions = !!onDelete;
+  const hasActions = !!onDelete || !!onReconnect;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -81,10 +89,22 @@ export default function AccountCard({ account, emails, status, onClick, onDelete
             </button>
             {menuOpen && (
               <AccountCardDropdown
-                onDelete={() => {
-                  setMenuOpen(false);
-                  onDelete?.();
-                }}
+                onReconnect={
+                  onReconnect
+                    ? () => {
+                        setMenuOpen(false);
+                        onReconnect();
+                      }
+                    : undefined
+                }
+                onDelete={
+                  onDelete
+                    ? () => {
+                        setMenuOpen(false);
+                        onDelete();
+                      }
+                    : undefined
+                }
               />
             )}
           </div>

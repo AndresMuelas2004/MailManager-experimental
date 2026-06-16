@@ -20,6 +20,7 @@ export default function ConnectedAccountsPage() {
     addingAccount,
     addAccount,
     removeAccount,
+    reconnectAccount,
     error,
   } = useConnectedAccounts(mailboxId!);
 
@@ -60,6 +61,7 @@ export default function ConnectedAccountsPage() {
               emails={entry.emails}
               status={entry.status}
               onClick={() => navigate(`/m/${mailboxId}/account/${entry.account.account_id}`)}
+              onReconnect={() => reconnectAccount(entry.account.account_id)}
               onDelete={() => removeAccount(entry.account.account_id)}
             />
           </div>

@@ -74,6 +74,7 @@ type UseConnectedAccountsReturn = {
   addingAccount: boolean;
   addAccount: () => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
+  reconnectAccount: (accountId: string) => Promise<void>;
   error: UiError | null;
 };
 
@@ -259,6 +260,101 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     [mailboxId],
   );
 
+  const reconnectAccount = useCallback(
+    async (accountId: string) => {
+      setError(null);
+
+      // The popup must open synchronously inside the click gesture or the
+      // browser blocks it; the authorization URL is assigned once known.
+      const popup = window.open('about:blank', 'mailmanager-oauth-connect', OAUTH_POPUP_FEATURES);
+      if (!popup) {
+        setError({
+          message:
+            'El navegador ha bloqueado la ventana de autenticación. Permite ventanas emergentes para este sitio e inténtalo de nuevo.',
+        });
+        return;
+      }
+
+      // Show the syncing state on the card while the reconnect runs.
+      setEntries((prev) =>
+        prev.map((e) =>
+          e.account.account_id === accountId ? { ...e, status: 'syncing' as const } : e,
+        ),
+      );
+
+      // Re-run the interactive OAuth on the EXISTING account. Unlike addAccount
+      // there is no createAccount and no rollback: a previously-connected
+      // account is never deleted if the reconnect fails — the user retries.
+      try {
+        const start = await connectAccount(mailboxId, accountId);
+        popup.location.href = start.authorization_url;
+
+        const outcome = await waitForOAuthOutcome(popup, getApiOrigin());
+        if (!popup.closed) popup.close();
+
+        if (outcome?.ok === false) {
+          // The provider/connect step explicitly failed. Keep the account.
+          setError({
+            message: outcome.message ?? 'No se pudo reconectar la cuenta. Inténtalo de nuevo.',
+          });
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.account.account_id === accountId ? { ...e, status: 'ready' as const } : e,
+            ),
+          );
+          return;
+        }
+        // outcome.ok === true (reported success) OR outcome === null (popup
+        // closed/timed out without reporting). The email_address silent-close
+        // proof used by addAccount does not apply here (the account already has
+        // an email), so the re-sync below is what confirms the new token.
+      } catch (err) {
+        if (!popup.closed) popup.close();
+        setError(toUiError(err));
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.account.account_id === accountId ? { ...e, status: 'ready' as const } : e,
+          ),
+        );
+        return;
+      }
+
+      // Re-sync with the refreshed credentials. A still-dead token surfaces as
+      // a sync failure here (status 'error'), prompting another retry.
+      try {
+        const [syncResult] = await Promise.all([
+          syncEmailMetadata(mailboxId, accountId),
+          syncDrafts(mailboxId, accountId).catch(() => {}),
+        ]);
+
+        if (syncResult.total_synced > 0) {
+          const { items } = await listEmails(mailboxId, 'ALL_MAIL', accountId);
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.account.account_id === accountId
+                ? { ...e, emails: items.slice(0, 3), status: 'ready' as const }
+                : e,
+            ),
+          );
+        } else {
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.account.account_id === accountId ? { ...e, status: 'ready' as const } : e,
+            ),
+          );
+        }
+      } catch (err) {
+        setError(toUiError(err));
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.account.account_id === accountId ? { ...e, status: 'error' as const } : e,
+          ),
+        );
+      }
+    },
+    [mailboxId],
+  );
+
   return {
     entries,
     loading,
@@ -270,6 +366,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     addingAccount,
     addAccount,
     removeAccount,
+    reconnectAccount,
     error,
   };
 }

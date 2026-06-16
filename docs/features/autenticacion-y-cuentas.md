@@ -77,7 +77,7 @@ Vincular una cuenta no es una sola acción, sino dos encadenadas que la app ejec
 
 Mientras la ventana está abierta, la página de cuentas queda a la espera (el botón muestra "Conectando…"). Al completarse la autorización, aparece la tarjeta de la cuenta nueva y la app **sincroniza automáticamente** sus correos y borradores: la tarjeta pasa de "Sincronizando correos…" a mostrar sus mensajes recientes. Si la sincronización inicial no encuentra correos, la tarjeta queda en "Sin correos todavía".
 
-**Si la conexión no se completa, la cuenta no se queda a medias.** Cuando el flujo falla antes de empezar (p. ej. el servidor no puede preparar la autorización), el usuario cancela el consentimiento, cierra la ventana emergente sin terminar, o se agota el tiempo de espera (la cifra exacta está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)), la app **deshace el registro del paso 1**: la cuenta se elimina y **no aparece ninguna tarjeta vacía**. Se muestra el motivo del error y el usuario puede volver a intentarlo desde el formulario. La razón de este rollback: una cuenta registrada pero sin credenciales no sirve para nada y no existe ninguna acción de "reconectar" en la tarjeta — dejarla viva solo acumularía tarjetas muertas.
+**Si la conexión no se completa, la cuenta no se queda a medias.** Cuando el flujo falla antes de empezar (p. ej. el servidor no puede preparar la autorización), el usuario cancela el consentimiento, cierra la ventana emergente sin terminar, o se agota el tiempo de espera (la cifra exacta está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)), la app **deshace el registro del paso 1**: la cuenta se elimina y **no aparece ninguna tarjeta vacía**. Se muestra el motivo del error y el usuario puede volver a intentarlo desde el formulario. La razón de este rollback: una cuenta recién registrada que **nunca llegó a conectarse** no sirve para nada — dejarla viva solo acumularía tarjetas muertas. Distinto es el caso de una cuenta que **sí estuvo conectada** y cuyo token muere más tarde: esa **conserva** su tarjeta y se recupera con el botón **"Reconectar cuenta"** (ver § 2.7).
 
 Dos detalles de la ventana emergente que conviene conocer:
 
@@ -120,6 +120,20 @@ La asimetría tiene una consecuencia operativa importante en Outlook: como **env
 ### 2.6 Dónde quedan las credenciales
 
 Las credenciales que devuelve el proveedor (los tokens que permiten a la app actuar en nombre del usuario) se guardan **cifradas en reposo** en la base de datos. No viajan al navegador ni se exponen en ninguna respuesta de la API: el frontend nunca ve un token de proveedor. La app las usa internamente y las **refresca de forma silenciosa** cuando caducan, sin que el usuario tenga que reconectar (salvo que el proveedor revoque el acceso). Las garantías de cifrado se detallan en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
+
+### 2.7 Reconectar una cuenta cuyo acceso ha caducado o sido revocado
+
+Una cuenta ya conectada puede dejar de funcionar sin que el usuario haga nada: si **revoca el acceso** desde el proveedor, o —caso típico durante las pruebas— el token de Gmail **caduca** en modo *Testing* (ver [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)). A partir de ahí la sincronización falla y la cuenta no trae correo nuevo.
+
+Para recuperarla sin perder nada, el menú (⋮) de cada tarjeta ofrece **"Reconectar cuenta"**. Es el **mismo** consentimiento OAuth en ventana emergente que el alta (sección 2.2), pero sobre la cuenta que **ya existe**: al completarse, la app **sobrescribe** las credenciales y vuelve a sincronizar. La cuenta, su etiqueta y sus correos ya sincronizados **se conservan** — reconectar no es borrar y volver a crear.
+
+Diferencias con el alta que conviene conocer:
+
+- **No pide confirmación** (no es una acción destructiva) y está **siempre disponible** en el menú: reconectar una cuenta que en realidad seguía sana es inofensivo, simplemente renueva el acceso.
+- **Si la reconexión no se completa, la cuenta NO se elimina** (al contrario que el rollback del alta inicial, sección 2.2): la tarjeta sigue ahí y el usuario puede reintentar.
+- Funciona igual para **Gmail y Outlook** (es el mismo flujo para ambos proveedores).
+
+> No hay reconexión *automática*: la app refresca el token de forma silenciosa mientras el proveedor lo permita (sección 2.6), pero un acceso revocado o caducado solo se recupera con esta acción **manual**.
 
 ---
 

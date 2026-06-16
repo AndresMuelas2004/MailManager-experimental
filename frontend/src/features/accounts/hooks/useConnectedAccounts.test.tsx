@@ -22,6 +22,15 @@ import { server } from '../../../test/msw/server';
 const API_BASE = 'http://localhost:8000';
 const MAILBOX_ID = 'mb_test';
 
+const EXISTING_ACCOUNT = {
+  account_id: 'acc_existing',
+  mailbox_id: MAILBOX_ID,
+  provider: 'gmail',
+  display_label: 'Gmail',
+  config: {},
+  email_address: 'old@example.com',
+};
+
 type FakePopup = {
   closed: boolean;
   close: () => void;
@@ -73,6 +82,22 @@ async function setupHook() {
   act(() => {
     rendered.result.current.setSelectedProvider('gmail');
   });
+  return rendered;
+}
+
+/**
+ * Render the hook with one already-connected account in the listing, so the
+ * reconnect tests start from an existing card (reconnect operates on a row
+ * that already exists — unlike addAccount, which creates it).
+ */
+async function setupHookWithAccount() {
+  server.use(
+    http.get(`${API_BASE}/mailboxes/:mailboxId/accounts`, () =>
+      HttpResponse.json([EXISTING_ACCOUNT]),
+    ),
+  );
+  const rendered = renderHook(() => useConnectedAccounts(MAILBOX_ID));
+  await waitFor(() => expect(rendered.result.current.entries).toHaveLength(1));
   return rendered;
 }
 
@@ -195,5 +220,90 @@ describe('useConnectedAccounts.addAccount — interactive OAuth flow', () => {
     expect(created).toBe(false);
     expect(result.current.entries).toHaveLength(0);
     expect(result.current.error?.message).toContain('ventanas emergentes');
+  });
+});
+
+describe('useConnectedAccounts.reconnectAccount — interactive OAuth re-auth', () => {
+  it('reconnects an existing account without recreating or deleting it', async () => {
+    let created = false;
+    let deleted = false;
+    let connectedId: string | null = null;
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/accounts`, () => {
+        created = true;
+        return HttpResponse.json(EXISTING_ACCOUNT);
+      }),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/connect`, ({ params }) => {
+        connectedId = String(params.accountId);
+        return HttpResponse.json({
+          provider: 'gmail',
+          account_id: params.accountId,
+          account_label: `${params.mailboxId}__${params.accountId}`,
+          authorization_url: 'https://accounts.google.com/o/oauth2/auth?mock=1',
+          state: 'state-test',
+        });
+      }),
+      http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () => {
+        deleted = true;
+        return HttpResponse.json({ status: 'deleted' });
+      }),
+    );
+
+    emitOAuthResultWhenStarted(popup, {
+      source: 'mailmanager-oauth',
+      ok: true,
+      provider: 'gmail',
+      message: 'Account connected successfully.',
+    });
+
+    await act(async () => {
+      await result.current.reconnectAccount('acc_existing');
+    });
+
+    // The connect ran against the EXISTING account; nothing was created or deleted.
+    expect(result.current.error).toBeNull();
+    expect(created).toBe(false);
+    expect(deleted).toBe(false);
+    expect(connectedId).toBe('acc_existing');
+    expect(result.current.entries).toHaveLength(1);
+    expect(result.current.entries[0].account.account_id).toBe('acc_existing');
+    expect(result.current.entries[0].status).toBe('ready');
+    expect(popup.location.href).toContain('https://accounts.google.com/');
+  });
+
+  it('keeps the account (no rollback) and shows the error when the reconnect fails', async () => {
+    let deleted = false;
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/connect`, () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: 'account_connect_auth_error',
+              message: 'Failed to start the account connect flow.',
+              detail: {},
+            },
+          },
+          { status: 502 },
+        ),
+      ),
+      http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () => {
+        deleted = true;
+        return HttpResponse.json({ status: 'deleted' });
+      }),
+    );
+
+    await act(async () => {
+      await result.current.reconnectAccount('acc_existing');
+    });
+
+    // Contract difference vs addAccount: a previously-connected account is
+    // never deleted when its reconnect fails — the user simply retries.
+    expect(deleted).toBe(false);
+    expect(result.current.entries).toHaveLength(1);
+    expect(result.current.entries[0].account.account_id).toBe('acc_existing');
+    expect(result.current.error?.message).toContain('Failed to start the account connect flow.');
+    expect(popup.closed).toBe(true);
   });
 });

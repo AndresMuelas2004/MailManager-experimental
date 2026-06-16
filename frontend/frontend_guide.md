@@ -27,7 +27,7 @@ The host preserves both invariants by absorbing the rule break in a single file 
 
 ### 1.2 `useConnectedAccounts` fetches with `useEffect` + `useState` (features §4.1 exception)
 
-`frontend/src/features/accounts/hooks/useConnectedAccounts.ts` drives the account list, the per-account email previews, and the create→connect→sync→preview sequence with a hand-rolled `useEffect` + `useState` machine instead of `useQuery` / `useMutation`, which `features/CLAUDE.md` §4.1 otherwise requires.
+`frontend/src/features/accounts/hooks/useConnectedAccounts.ts` drives the account list, the per-account email previews, the create→connect→sync→preview sequence, and the reconnect re-auth of a previously-connected account whose token died, with a hand-rolled `useEffect` + `useState` machine instead of `useQuery` / `useMutation`, which `features/CLAUDE.md` §4.1 otherwise requires.
 
 The exception is deliberate: the page runs a multi-step per-account flow with a `syncing` / `ready` / `error` tri-state per row that does not map onto a single query/mutation. The accepted trade-off is that this hook holds its data OUTSIDE the TanStack Query cache — it does NOT share the `['accounts', mailboxId]` cache `useEmailList` populates, so adding or removing an account here does not auto-invalidate the email listings (and vice versa). The trigger to migrate it to `useQuery` / `useQueries` is the first time that cross-hook cache coherence actually matters.
 
