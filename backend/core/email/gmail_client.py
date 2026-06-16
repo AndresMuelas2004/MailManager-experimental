@@ -669,7 +669,7 @@ class GmailClient(EmailClient):
 
         try:
             thread_http = google_auth_httplib2.AuthorizedHttp(
-                credentials, http=httplib2.Http(),
+                credentials, http=httplib2.Http(timeout=30),
             )
             thread_service = build("gmail", "v1", http=thread_http)
 
@@ -2805,7 +2805,7 @@ class GmailClient(EmailClient):
                 "Gmail _http_request requires refreshed credentials."
             )
         http = google_auth_httplib2.AuthorizedHttp(
-            self._credentials, http=httplib2.Http()
+            self._credentials, http=httplib2.Http(timeout=60)  # 60s socket timeout: resumable upload chunks are larger than normal calls
         )
         outbound_headers = dict(headers or {})
         if body is not None and body_bytes is None:
