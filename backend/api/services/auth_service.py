@@ -99,6 +99,9 @@ def google_login(raw_id_token: str, response: Response) -> AuthResponse:
     if not email:
         raise Unauthorized("Token missing 'email' claim.")
 
+    if id_info.get("email_verified") is not True:
+        raise Unauthorized("Google login rejected: the account email is not verified.")
+
     # Only used for new users; the UPSERT returns the existing user_id for returning users.
     user_id = str(uuid4())
     try:

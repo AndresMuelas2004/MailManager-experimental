@@ -156,8 +156,32 @@ def test_google_login_missing_email(monkeypatch, mock_response):
         auth_service.google_login("valid-token", mock_response)
 
 
+def test_google_login_rejects_unverified_email(monkeypatch, mock_response):
+    """email_verified=False → Unauthorized (the account email is not verified)."""
+    fake_id_info = {"sub": "unv", "email": "unverified@example.com", "name": "Unv", "email_verified": False}
+    monkeypatch.setattr(
+        auth_service, "verify_google_token", lambda *_a, **_kw: fake_id_info,
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+
+    with pytest.raises(Unauthorized, match="email is not verified"):
+        auth_service.google_login("valid-token", mock_response)
+
+
+def test_google_login_rejects_when_email_verified_absent(monkeypatch, mock_response):
+    """Missing email_verified claim → Unauthorized (treated as not verified)."""
+    fake_id_info = {"sub": "abs", "email": "absent@example.com", "name": "Absent"}
+    monkeypatch.setattr(
+        auth_service, "verify_google_token", lambda *_a, **_kw: fake_id_info,
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+
+    with pytest.raises(Unauthorized, match="email is not verified"):
+        auth_service.google_login("valid-token", mock_response)
+
+
 def test_google_login_new_user(monkeypatch, mock_response):
-    fake_id_info = {"sub": "new-sub", "email": "new@example.com", "name": "New"}
+    fake_id_info = {"sub": "new-sub", "email": "new@example.com", "name": "New", "email_verified": True}
     monkeypatch.setattr(
         auth_service, "verify_google_token",
         lambda *_a, **_kw: fake_id_info,
@@ -173,7 +197,7 @@ def test_google_login_new_user(monkeypatch, mock_response):
 
 
 def test_google_login_existing_user(monkeypatch, mock_response):
-    fake_id_info = {"sub": _FAKE_USER["google_sub"], "email": "updated@example.com", "name": "Updated"}
+    fake_id_info = {"sub": _FAKE_USER["google_sub"], "email": "updated@example.com", "name": "Updated", "email_verified": True}
     monkeypatch.setattr(
         auth_service, "verify_google_token",
         lambda *_a, **_kw: fake_id_info,
@@ -188,7 +212,7 @@ def test_google_login_existing_user(monkeypatch, mock_response):
 
 
 def test_google_login_cookie_honours_secure_and_samesite_settings(monkeypatch, mock_response):
-    fake_id_info = {"sub": "s", "email": "a@b.com", "name": "X"}
+    fake_id_info = {"sub": "s", "email": "a@b.com", "name": "X", "email_verified": True}
     monkeypatch.setattr(
         auth_service, "verify_google_token", lambda *_a, **_kw: fake_id_info,
     )
@@ -300,7 +324,7 @@ def test_google_login_succeeds_when_cleanup_fails(monkeypatch, mock_response):
         def delete_expired(self):
             raise RuntimeError("cleanup boom")
 
-    fake_id_info = {"sub": "cleanup-sub", "email": "cleanup@example.com", "name": "Cleanup"}
+    fake_id_info = {"sub": "cleanup-sub", "email": "cleanup@example.com", "name": "Cleanup", "email_verified": True}
     monkeypatch.setattr(
         auth_service, "verify_google_token",
         lambda *_a, **_kw: fake_id_info,
