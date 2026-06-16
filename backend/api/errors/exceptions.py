@@ -416,3 +416,15 @@ class VirtualMailboxListError(ApiError):
 class RecipientSuggestionsError(ApiError):
     """Unexpected failure while building recipient autocomplete suggestions."""
     code = "recipient_suggestions_error"
+
+
+# ---------------------------------------------------------------------------
+# Health / readiness.
+# ---------------------------------------------------------------------------
+
+
+class ServiceUnavailableError(ApiError):
+    """The service is not ready to serve traffic — e.g. the database readiness
+    probe behind ``/health`` failed. Mapped to HTTP 503 so an orchestrator or
+    uptime monitor stops routing traffic to this instance."""
+    code = "service_unavailable"

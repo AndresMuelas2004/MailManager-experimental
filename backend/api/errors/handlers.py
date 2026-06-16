@@ -74,6 +74,7 @@ from api.errors.exceptions import (
     ReadStatusUpdateError,
     EmailListError,
     RequestTooLarge,
+    ServiceUnavailableError,
     SessionOperationError,
     SpamMoveError,
     SpamRestoreError,
@@ -168,6 +169,8 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Contacts (recipient autocomplete)
     RecipientSuggestionsError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # Health / readiness
+    ServiceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 
