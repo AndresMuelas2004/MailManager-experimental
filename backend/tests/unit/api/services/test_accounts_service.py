@@ -422,6 +422,23 @@ class TestConnectAccountFlow:
         assert "access_denied" in result["message"]
         assert store.upserted_tokens == []
 
+    def test_complete_malicious_provider_error_is_sanitised(self, monkeypatch):
+        store = self._patch_connect_deps(monkeypatch)
+        start = self._start()
+        result = accounts_service.complete_account_connect(
+            start.state,
+            None,
+            "</script><script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+        )
+        assert result["ok"] is False
+        # Raw attacker-controlled error/description never reach the page message.
+        assert "<script>" not in result["message"]
+        assert "</script>" not in result["message"]
+        assert "onerror" not in result["message"]
+        assert "unknown_error" in result["message"]
+        assert store.upserted_tokens == []
+
     def test_complete_missing_code_reports_error(self, monkeypatch):
         self._patch_connect_deps(monkeypatch)
         start = self._start()

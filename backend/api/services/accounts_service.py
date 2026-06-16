@@ -5,6 +5,7 @@ Service layer for account operations.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -238,11 +239,22 @@ def complete_account_connect(
     result_base["provider"] = pending.provider
 
     if error:
-        description = str(error_description or "").strip()
-        message = f"The provider did not authorize the connection: {error}."
-        if description:
-            message = f"{message} {description}"
-        return {**result_base, "ok": False, "message": message}
+        # The provider error/description arrive as attacker-influenceable query
+        # params on the unauthenticated callback. Never reflect them verbatim:
+        # log the real values for diagnosis and surface only a fixed-vocabulary,
+        # sanitised error code (defence in depth behind the router's script-
+        # context escaping).
+        logger.warning(
+            "OAuth connect callback returned an error (error=%r, error_description=%r).",
+            error,
+            error_description,
+        )
+        safe_error = error if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", error) else "unknown_error"
+        return {
+            **result_base,
+            "ok": False,
+            "message": f"The provider did not authorize the connection ({safe_error}).",
+        }
     if not str(code or "").strip():
         return {**result_base, "ok": False, "message": "The authorization callback did not include a code."}
 
