@@ -161,6 +161,36 @@ The automated suites run from a host Python environment against a reachable Post
    cd frontend; npm install; npm run dev
    ```
 
+### Production stack
+
+Production runs a separate, self-contained `compose.prod.yml` (nginx-built frontend + backend without `--reload` + Postgres with no published port + a Caddy reverse proxy that terminates TLS and routes `/api/*` to the backend). It is **not** an overlay of `compose.yml` — see `repository_guide.md`.
+
+1. Copy the template, fill in real values, and lock it down (on the VPS: `chmod 600 .env.production`):
+
+   ```powershell
+   Copy-Item .env.production.example .env.production
+   ```
+
+   Generate a **fresh** Fernet key for production (never reuse the dev one):
+
+   ```powershell
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+2. Put ONLY the two credential JSON files in the directory referenced by `SECRETS_DIR`.
+
+3. Register the production OAuth redirect URIs: Google Cloud → `https://DOMAIN/api/auth/google/callback`; Azure (and `outlook_credentials.json`) → `https://DOMAIN/api/auth/outlook/callback`.
+
+4. Bring the stack up and verify:
+
+   ```powershell
+   docker compose --env-file .env.production -f compose.prod.yml up -d --build
+   ```
+
+   Then `curl https://DOMAIN/health` should return `{"status":"ok"}`.
+
+> `VITE_API_BASE_URL` / `VITE_GOOGLE_CLIENT_ID` are baked into the frontend bundle at build time, so changing the domain requires rebuilding the image (`--build`).
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -178,7 +208,7 @@ The automated suites run from a host Python environment against a reachable Post
 | `MIA_GMAIL_CREDENTIALS_PATH` | Yes | Path to Gmail OAuth credentials JSON file. |
 | `MIA_OUTLOOK_CREDENTIALS_PATH` | Yes | Path to Outlook app credentials JSON file. |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID for OIDC authentication. |
-| `GOOGLE_OAUTH_REDIRECT_URI` | No | Redirect URI for the interactive Gmail connect flow. Default: `http://localhost:8000/auth/google/callback` (Google "Desktop app" clients accept any localhost redirect without registration). |
+| `GOOGLE_OAUTH_REDIRECT_URI` | No | Redirect URI for the interactive Gmail connect flow. Default: `http://localhost:8000/auth/google/callback` (Google "Desktop app" clients accept any localhost redirect without registration). In production set it to `https://DOMAIN/api/auth/google/callback` and register it in Google Cloud. |
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
@@ -195,10 +225,21 @@ The following variable is consumed only by the Vite dev server / frontend bundle
 
 | Variable | Required | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | No | Frontend override for the backend URL. Defaults to `http://localhost:8000`. |
+| `VITE_API_BASE_URL` | No | Frontend override for the backend URL. Defaults to `http://localhost:8000`. **Build-time** (baked into the bundle); in production set it to `https://DOMAIN/api` and rebuild the image. |
 | `VITE_DEV_AUTO_LOGIN` | No | When `"true"`, the dev server auto-logs-in through the backend dev-login backdoor on boot, skipping the login screen. Set in `frontend/.env.development` (not in compose env — see `repository_guide.md`). Requires `DEV_LOGIN_ENABLED` + `DEV_LOGIN_EMAIL` in the backend. Gated by `import.meta.env.DEV`, so production builds ignore it. |
 
 Outlook credential file keys: `client_id`, `client_secret`, `tenant`, `redirect_uri`, `scopes`.
+
+### Deployment variables (production, interpolated by compose)
+
+Set these in `.env.production` (template: `.env.production.example`). They are consumed by `compose.prod.yml` / Caddy at deploy time, not by the backend runtime:
+
+| Variable | Description |
+|---|---|
+| `DOMAIN` | Public domain Caddy serves and obtains a TLS certificate for. |
+| `ACME_EMAIL` | Email used for Let's Encrypt registration. |
+| `SECRETS_DIR` | Host directory holding ONLY the 2 credential JSONs, mounted read-only at `/secrets`. |
+| `POSTGRES_PASSWORD` | Strong DB password; must match the one embedded in `DATABASE_URL`. |
 
 ## API Summary
 
