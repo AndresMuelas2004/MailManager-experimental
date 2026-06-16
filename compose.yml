@@ -6,7 +6,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: mailmanager
-      POSTGRES_PASSWORD: mailmanager
+      # Parametrised so production injects a strong password via the environment
+      # (.env.production) while dev keeps the existing value. The hardening that
+      # removes the published `ports` below + a strong password lands in
+      # compose.prod.yml (Fase 2); doing it here would break the host test suite,
+      # which reaches Postgres at localhost:5432.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mailmanager}
       POSTGRES_DB: mailmanager
     ports:
       - "5432:5432"
