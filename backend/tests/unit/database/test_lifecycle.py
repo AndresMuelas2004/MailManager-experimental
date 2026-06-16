@@ -7,7 +7,7 @@ import psycopg2
 import pytest
 
 from database import lifecycle as lifecycle_module
-from database.errors.exceptions import ConnectionPoolError, MigrationError
+from database.errors.exceptions import ConnectionPoolError, MigrationError, SettingsError
 from tests.shared.database_fakes import FakeCursor
 
 
@@ -79,3 +79,31 @@ def test_migration_failure_raises_migration_error(monkeypatch):
 
     with pytest.raises(MigrationError, match="Failed to run startup database migrations"):
         lifecycle_module.run_startup_migrations_if_enabled()
+
+
+# ===== validate_token_encryption_config (fail-closed startup guard) =====
+
+
+def test_validate_token_encryption_config_raises_without_key_and_without_fallback(monkeypatch):
+    """A deploy with no key and the plaintext fallback disabled must not boot."""
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("TOKEN_PLAINTEXT_FALLBACK_ENABLED", "false")
+
+    with pytest.raises(SettingsError, match="TOKEN_ENCRYPTION_KEY is required"):
+        lifecycle_module.validate_token_encryption_config()
+
+
+def test_validate_token_encryption_config_allows_plaintext_fallback_without_key(monkeypatch):
+    """Legacy/dev mode: no key but fallback explicitly enabled is allowed (warns, no raise)."""
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("TOKEN_PLAINTEXT_FALLBACK_ENABLED", "true")
+
+    lifecycle_module.validate_token_encryption_config()  # must not raise
+
+
+def test_validate_token_encryption_config_allows_configured_key(monkeypatch):
+    """A configured key satisfies the guard regardless of the fallback flag."""
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "any-non-empty-key")
+    monkeypatch.setenv("TOKEN_PLAINTEXT_FALLBACK_ENABLED", "false")
+
+    lifecycle_module.validate_token_encryption_config()  # must not raise

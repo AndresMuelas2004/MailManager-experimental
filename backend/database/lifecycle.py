@@ -4,6 +4,8 @@ Database lifecycle helpers used during app startup.
 
 from __future__ import annotations
 
+import logging
+
 import psycopg2
 
 from database.connection import get_connection
@@ -11,9 +13,12 @@ from database.migrations.runner import ensure_schema_at_head
 from database.settings import (
     get_database_url,
     get_alembic_ini_path,
+    get_token_settings,
     is_startup_auto_migrate_enabled,
 )
-from database.errors import ConnectionPoolError, DatabaseError, MigrationError
+from database.errors import ConnectionPoolError, DatabaseError, MigrationError, SettingsError
+
+logger = logging.getLogger(__name__)
 
 
 def run_startup_migrations_if_enabled() -> bool:
@@ -60,3 +65,25 @@ def warmup_connection() -> None:
         raise ConnectionPoolError(
             f"Unexpected warmup error ({type(exc).__name__}): {exc}"
         ) from exc
+
+
+def validate_token_encryption_config() -> None:
+    """
+    Fail fast at startup on an incoherent token-encryption configuration.
+
+    Raises SettingsError when the plaintext fallback is disabled but no
+    TOKEN_ENCRYPTION_KEY is configured: such a deployment would refuse every
+    token write at the first account connect, so it must not boot. Logs a
+    warning (instead of raising) when the legacy plaintext fallback is active
+    without a key — the accepted dev/test mode, never for production.
+    """
+    token_settings = get_token_settings()
+    if token_settings.encryption_key is None and not token_settings.plaintext_fallback_enabled:
+        raise SettingsError(
+            "TOKEN_ENCRYPTION_KEY is required when TOKEN_PLAINTEXT_FALLBACK_ENABLED is false."
+        )
+    if token_settings.encryption_key is None and token_settings.plaintext_fallback_enabled:
+        logger.warning(
+            "Token plaintext fallback is enabled without TOKEN_ENCRYPTION_KEY; "
+            "OAuth tokens will be stored in plaintext (legacy/dev mode only)."
+        )

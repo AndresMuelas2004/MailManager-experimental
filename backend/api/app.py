@@ -39,7 +39,12 @@ except ModuleNotFoundError:  # pragma: no cover - optional local dependency
                 loaded = True
         return loaded
 
-from database import close_pool, run_startup_migrations_if_enabled, warmup_connection
+from database import (
+    close_pool,
+    run_startup_migrations_if_enabled,
+    validate_token_encryption_config,
+    warmup_connection,
+)
 from api.errors.handlers import register_error_handlers
 from api.routers.accounts_routers import router as accounts_router
 from api.routers.attachments_routers import (
@@ -65,6 +70,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 async def lifespan(app: FastAPI):
     """Initialise the database connection on startup and close pool on shutdown."""
     try:
+        validate_token_encryption_config()
         run_startup_migrations_if_enabled()
         warmup_connection()
     except Exception as exc:

@@ -104,7 +104,7 @@ class TestGetTokenSettings:
         ts = settings.get_token_settings()
         assert ts.encryption_key is None
         assert ts.encryption_key_id == "v1"
-        assert ts.plaintext_fallback_enabled is True
+        assert ts.plaintext_fallback_enabled is False
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "my-key")

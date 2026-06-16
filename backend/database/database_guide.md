@@ -19,8 +19,9 @@
 ## Token security model
 
 - Token columns (`access_token_encrypted`, `refresh_token_encrypted`, …) live directly on the `accounts` table (merged from a separate `tokens` table in migration 0005).
-- **All new writes are encrypted** via Fernet (`TOKEN_ENCRYPTION_KEY` + `TOKEN_ENCRYPTION_KEY_ID`).
+- **New writes are encrypted** via Fernet (`TOKEN_ENCRYPTION_KEY` + `TOKEN_ENCRYPTION_KEY_ID`) whenever a key is configured.
 - A malformed `TOKEN_ENCRYPTION_KEY` raises `SettingsError` **immediately** from `get_fernet()` — never silently treated as "key absent". Do not add a fallback here.
+- **Fail-closed startup**: the app lifespan calls `validate_token_encryption_config()`, which refuses to boot when there is **no** `TOKEN_ENCRYPTION_KEY` **and** `TOKEN_PLAINTEXT_FALLBACK_ENABLED` is false (the default). A misconfigured deploy fails fast instead of silently writing plaintext tokens at the first account connect; dev/test opt into the plaintext fallback explicitly.
 - `TOKEN_PLAINTEXT_FALLBACK_ENABLED` toggles whether legacy plaintext columns are still read. On a plaintext hit, `AccountStore` attempts a best-effort lazy backfill to the encrypted columns. The backfill **never propagates failures** — it logs a warning and retries on the next read.
 - The plaintext columns (`access_token`, `refresh_token`) are **deprecated** and remain only for migration compatibility. A future migration will remove them once legacy data is fully backfilled.
 

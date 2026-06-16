@@ -18,7 +18,11 @@ from database.errors import (
     TokenValidationError,
     UnknownProviderError,
 )
-from database.lifecycle import run_startup_migrations_if_enabled, warmup_connection
+from database.lifecycle import (
+    run_startup_migrations_if_enabled,
+    validate_token_encryption_config,
+    warmup_connection,
+)
 from database.repositories import (
     account_store,
     draft_attachment_store,
@@ -60,6 +64,7 @@ __all__ = [
     "TokenValidationError",
     "UnknownProviderError",
     "user_store",
+    "validate_token_encryption_config",
     "virtual_mailbox_store",
     "warmup_connection",
 ]

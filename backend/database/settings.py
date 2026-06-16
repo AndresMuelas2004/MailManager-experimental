@@ -20,7 +20,10 @@ _DEFAULT_DB_CONNECT_TIMEOUT_SECONDS = 10
 _DEFAULT_DB_APPLICATION_NAME = "mailmanager-api"
 
 _DEFAULT_TOKEN_KEY_ID = "v1"
-_DEFAULT_TOKEN_PLAINTEXT_FALLBACK = True
+# Fail-closed by default: a deployment without TOKEN_ENCRYPTION_KEY must not
+# silently fall back to storing OAuth tokens in plaintext. Dev/test opt into the
+# legacy fallback explicitly via TOKEN_PLAINTEXT_FALLBACK_ENABLED=true.
+_DEFAULT_TOKEN_PLAINTEXT_FALLBACK = False
 _DEFAULT_DB_AUTO_MIGRATE = False
 
 
