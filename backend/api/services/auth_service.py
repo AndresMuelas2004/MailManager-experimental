@@ -59,7 +59,7 @@ def _set_session_cookie(response: Response, session_id: str, settings: AuthSetti
         value=session_id,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         max_age=settings.session_lifetime_days * 86400,
     )
 
@@ -70,7 +70,7 @@ def _clear_session_cookie(response: Response, settings: AuthSettings) -> None:
         key="session_id",
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
     )
 
 
@@ -231,7 +231,7 @@ def dev_login(response: Response, client_host: str | None) -> AuthResponse:
        config bug, not a security guard.
 
     On success: emits the SAME opaque session cookie as ``google_login``
-    (``session_id``, HttpOnly, ``SameSite=lax``, ``secure`` per
+    (``session_id``, HttpOnly, ``SameSite`` and ``secure`` per
     settings) and returns ``AuthResponse``.
     """
     if not _is_dev_login_enabled():

@@ -15,6 +15,8 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 
 _DEFAULT_SESSION_LIFETIME_DAYS = 7
 _DEFAULT_COOKIE_SECURE = False
+_DEFAULT_COOKIE_SAMESITE = "lax"
+_VALID_COOKIE_SAMESITE = {"lax", "strict", "none"}
 
 
 def _read_bool(name: str, default: bool) -> bool:
@@ -45,11 +47,25 @@ def _read_int(name: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _read_cookie_samesite(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    normalized = raw.strip().lower()
+    if normalized in _VALID_COOKIE_SAMESITE:
+        return normalized
+    raise AuthSettingsError(
+        f"{name} has an invalid value: {raw!r} "
+        f"(accepted: {sorted(_VALID_COOKIE_SAMESITE)})"
+    )
+
+
 @dataclass(frozen=True)
 class AuthSettings:
     google_client_id: str
     session_lifetime_days: int
     cookie_secure: bool
+    cookie_samesite: str
 
 
 def get_auth_settings() -> AuthSettings:
@@ -59,6 +75,13 @@ def get_auth_settings() -> AuthSettings:
     client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
     if not client_id:
         raise AuthSettingsError("GOOGLE_CLIENT_ID is not set.")
+    cookie_secure = _read_bool("AUTH_COOKIE_SECURE", _DEFAULT_COOKIE_SECURE)
+    cookie_samesite = _read_cookie_samesite("AUTH_COOKIE_SAMESITE", _DEFAULT_COOKIE_SAMESITE)
+    if cookie_samesite == "none" and not cookie_secure:
+        raise AuthSettingsError(
+            "AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true "
+            "(browsers reject a SameSite=None cookie without the Secure attribute)."
+        )
     return AuthSettings(
         google_client_id=client_id,
         session_lifetime_days=_read_int(
@@ -66,5 +89,6 @@ def get_auth_settings() -> AuthSettings:
             _DEFAULT_SESSION_LIFETIME_DAYS,
             minimum=1,
         ),
-        cookie_secure=_read_bool("AUTH_COOKIE_SECURE", _DEFAULT_COOKIE_SECURE),
+        cookie_secure=cookie_secure,
+        cookie_samesite=cookie_samesite,
     )

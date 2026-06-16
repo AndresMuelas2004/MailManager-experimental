@@ -172,9 +172,9 @@ The automated suites run from a host Python environment against a reachable Post
 | `DB_APPLICATION_NAME` | No | PostgreSQL `application_name`. Default: `mailmanager-api`. |
 | `DB_AUTO_MIGRATE` | No | If `true`, API startup runs `alembic upgrade head`. Default: `false`. |
 | `DB_ALEMBIC_INI_PATH` | No | Custom Alembic config path. |
-| `TOKEN_ENCRYPTION_KEY` | Yes | Fernet key for encrypted account tokens in DB. |
+| `TOKEN_ENCRYPTION_KEY` | Yes* | Fernet key for encrypting account tokens at rest. *Required unless `TOKEN_PLAINTEXT_FALLBACK_ENABLED=true`; with the fallback disabled (default) and no key, startup fails fast. |
 | `TOKEN_ENCRYPTION_KEY_ID` | No | Identifier for active encryption key. Default: `v1`. |
-| `TOKEN_PLAINTEXT_FALLBACK_ENABLED` | No | Enables temporary legacy plaintext token reads. Default: `true`. |
+| `TOKEN_PLAINTEXT_FALLBACK_ENABLED` | No | Allows legacy plaintext token reads/writes when no `TOKEN_ENCRYPTION_KEY` is set. When `false` (default), a keyless deploy fails to boot instead of storing plaintext. Enable only for dev/test. Default: `false`. |
 | `MIA_GMAIL_CREDENTIALS_PATH` | Yes | Path to Gmail OAuth credentials JSON file. |
 | `MIA_OUTLOOK_CREDENTIALS_PATH` | Yes | Path to Outlook app credentials JSON file. |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID for OIDC authentication. |
@@ -182,6 +182,7 @@ The automated suites run from a host Python environment against a reachable Post
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
+| `AUTH_COOKIE_SAMESITE` | No | Session cookie `SameSite` policy: `lax` / `strict` / `none`. `none` requires `AUTH_COOKIE_SECURE=true`. Default: `lax`. |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. |
 | `ATTACHMENTS_PURGE_TOKEN` | No | Bearer token for the `POST /admin/attachments/purge` maintenance endpoint. When unset, the endpoint replies 503 `purge_disabled` instead of 401 (deploy is intentionally not configured for this operation). |
 | `DEV_LOGIN_ENABLED` | No | When truthy, enables the `POST /auth/dev-login` backdoor. Unset/falsy → the endpoint replies 503 `dev_login_disabled`. Never enable in production. |

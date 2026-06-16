@@ -187,6 +187,25 @@ def test_google_login_existing_user(monkeypatch, mock_response):
     assert result.user.email == "updated@example.com"
 
 
+def test_google_login_cookie_honours_secure_and_samesite_settings(monkeypatch, mock_response):
+    fake_id_info = {"sub": "s", "email": "a@b.com", "name": "X"}
+    monkeypatch.setattr(
+        auth_service, "verify_google_token", lambda *_a, **_kw: fake_id_info,
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "strict")
+
+    auth_service.google_login("valid-token", mock_response)
+
+    kwargs = mock_response.set_cookie.call_args.kwargs
+    assert kwargs["secure"] is True
+    assert kwargs["samesite"] == "strict"
+    assert kwargs["httponly"] is True
+
+
 # ------------------------------------------------------------------
 # logout
 # ------------------------------------------------------------------
