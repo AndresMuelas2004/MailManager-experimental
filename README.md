@@ -201,6 +201,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `DB_CONNECT_TIMEOUT_SECONDS` | No | Connection timeout for PostgreSQL. Default: `10`. |
 | `DB_APPLICATION_NAME` | No | PostgreSQL `application_name`. Default: `mailmanager-api`. |
 | `DB_AUTO_MIGRATE` | No | If `true`, API startup runs `alembic upgrade head`. Default: `false`. |
+| `DB_SEED_TEST_DATA` | No | If `true` (default), migrations seed a phantom test user + ~100 sample emails (migration 0010). Set to `false` in production to boot against a clean DB; the schema is still built either way. Invalid value → fail-fast. Default: `true`. |
 | `DB_ALEMBIC_INI_PATH` | No | Custom Alembic config path. |
 | `TOKEN_ENCRYPTION_KEY` | Yes* | Fernet key for encrypting account tokens at rest. *Required unless `TOKEN_PLAINTEXT_FALLBACK_ENABLED=true`; with the fallback disabled (default) and no key, startup fails fast. |
 | `TOKEN_ENCRYPTION_KEY_ID` | No | Identifier for active encryption key. Default: `v1`. |

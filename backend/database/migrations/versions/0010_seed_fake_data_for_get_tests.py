@@ -25,6 +25,15 @@ _OUTLOOK_ACCOUNT_ID = "bbbbbbbb-bbbb-4000-a000-bbbbbbbbb002"
 
 
 def upgrade() -> None:
+    # Deferred import (env.py inserts the backend in sys.path before migrations
+    # run; settings is the only module allowed to read os.environ).
+    from database.settings import is_test_data_seed_enabled
+
+    if not is_test_data_seed_enabled():
+        # DB_SEED_TEST_DATA=false (production): the schema is still built and
+        # Alembic seals this revision so 0011+ run; only the seed is skipped.
+        return
+
     # -- User --
     op.execute(
         f"""

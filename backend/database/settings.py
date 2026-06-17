@@ -25,6 +25,9 @@ _DEFAULT_TOKEN_KEY_ID = "v1"
 # legacy fallback explicitly via TOKEN_PLAINTEXT_FALLBACK_ENABLED=true.
 _DEFAULT_TOKEN_PLAINTEXT_FALLBACK = False
 _DEFAULT_DB_AUTO_MIGRATE = False
+# Opt-out: development and the unit/integration/E2E suites keep their seed data
+# with zero configuration; production sets DB_SEED_TEST_DATA=false explicitly.
+_DEFAULT_DB_SEED_TEST_DATA = True
 
 
 @dataclass(frozen=True)
@@ -210,6 +213,18 @@ def is_startup_auto_migrate_enabled() -> bool:
     Return whether startup should attempt migrations automatically.
     """
     return _read_bool("DB_AUTO_MIGRATE", _DEFAULT_DB_AUTO_MIGRATE)
+
+
+def is_test_data_seed_enabled() -> bool:
+    """
+    Return whether the migration seed (phantom user + sample emails) runs.
+
+    Defaults to True so development and the unit/integration/E2E suites keep
+    their seed data with zero configuration. Production sets
+    DB_SEED_TEST_DATA=false in .env.production to boot against a clean DB.
+    An invalid value raises SettingsError (fail-fast, like every other flag).
+    """
+    return _read_bool("DB_SEED_TEST_DATA", _DEFAULT_DB_SEED_TEST_DATA)
 
 
 def get_alembic_ini_path() -> Path:
