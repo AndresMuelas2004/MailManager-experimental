@@ -163,7 +163,7 @@ The automated suites run from a host Python environment against a reachable Post
 
 ### Production stack
 
-Production runs a separate, self-contained `compose.prod.yml` (nginx-built frontend + backend without `--reload` + Postgres with no published port + a Caddy reverse proxy that terminates TLS and routes `/api/*` to the backend). It is **not** an overlay of `compose.yml` — see `repository_guide.md`.
+Production runs a separate, self-contained `compose.prod.yml` (nginx-built frontend + backend without `--reload` + Postgres with no published port + a Caddy reverse proxy that terminates TLS and routes `/api/*` to the backend). It is **not** an overlay of `compose.yml` — see `repository_guide.md`. The backend and frontend containers run as non-root users (least privilege); every external image (python, node, nginx-unprivileged, postgres, caddy) is pinned by exact tag + digest for reproducible builds.
 
 1. Copy the template, fill in real values, and lock it down (on the VPS: `chmod 600 .env.production`):
 
@@ -177,7 +177,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
 
-2. Put ONLY the two credential JSON files in the directory referenced by `SECRETS_DIR`.
+2. Put ONLY the two credential JSON files in the directory referenced by `SECRETS_DIR`, and make them readable by the non-root backend container — `chmod 644` the two files, and make the directory traversable by the non-root backend — `chmod 711` the directory (a `700` directory blocks UID 10001 from reaching the files even when they are `644`). The backend runs as an unprivileged user (UID 10001), unlike a root container which would read them regardless of mode/owner. Skipping this does **not** stop the stack from booting: `/health` (verified in step 4) still returns 200 because the credentials are read lazily; the failure surfaces only on the first account connect / sync as `CredentialReadError` / `AppCredentialsLoadError` with `path=/secrets/…`.
 
 3. Register the production OAuth redirect URIs: Google Cloud → `https://DOMAIN/api/auth/google/callback`; Azure (and `outlook_credentials.json`) → `https://DOMAIN/api/auth/outlook/callback`.
 

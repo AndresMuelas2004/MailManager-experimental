@@ -13,7 +13,11 @@ name: mailmanager
 
 services:
   postgres:
-    image: postgres:16
+    # H4: pinned by exact tag + multi-arch index digest (same value as dev).
+    # Same major (16.x) keeps the data volume compatible; the official Postgres
+    # image already runs as an unprivileged user, so it is only pinned, not
+    # given a USER. Tag and digest move together (digest is authoritative).
+    image: postgres:16.14@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
     restart: unless-stopped
     environment:
       POSTGRES_USER: mailmanager
@@ -58,10 +62,13 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-    # Served internally on :80 by nginx; Caddy proxies `/` to it.
+    # Served internally on :8080 by nginx; Caddy proxies `/` to it.
 
   caddy:
-    image: caddy:2-alpine
+    # H4: pinned by exact tag + multi-arch index digest. Caddy stays root (no
+    # USER): it is the edge proxy and must bind 80/443. Only the image is fixed.
+    # Tag and digest move together (digest is authoritative).
+    image: caddy:2.11.4-alpine@sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2
     restart: unless-stopped
     ports:
       - "80:80"
