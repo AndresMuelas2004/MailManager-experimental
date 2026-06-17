@@ -23,3 +23,11 @@ def test_build_logging_config_has_timestamped_formatter():
     assert "%(asctime)s" in fmt["format"]
     assert "%(levelname)s" in fmt["format"]
     assert "%(name)s" in fmt["format"]
+
+
+def test_build_logging_config_keeps_existing_loggers_and_disables_propagation():
+    """Both flags are deliberately non-default; flipping them silently breaks prod logs."""
+    cfg = build_logging_config("INFO")
+    assert cfg["disable_existing_loggers"] is False
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        assert cfg["loggers"][name]["propagate"] is False

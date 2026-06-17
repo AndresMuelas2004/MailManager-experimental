@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Iterator
 
 import psycopg2
@@ -81,6 +82,31 @@ def test_migration_failure_raises_migration_error(monkeypatch):
         lifecycle_module.run_startup_migrations_if_enabled()
 
 
+def test_run_startup_migrations_returns_false_when_disabled(monkeypatch):
+    """DB_AUTO_MIGRATE off is the default prod boot path: a no-op returning False."""
+    monkeypatch.setenv("DB_AUTO_MIGRATE", "false")
+    assert lifecycle_module.run_startup_migrations_if_enabled() is False
+
+
+def test_run_startup_migrations_propagates_database_error_unwrapped(monkeypatch):
+    """A DatabaseError must propagate as-is, never re-wrapped as a generic MigrationError."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("DB_AUTO_MIGRATE", "true")
+    monkeypatch.setattr(
+        lifecycle_module,
+        "ensure_schema_at_head",
+        lambda dsn: (_ for _ in ()).throw(ConnectionPoolError("pool down during migration")),
+    )
+
+    import sys
+    monkeypatch.setitem(sys.modules, "alembic", None)
+    monkeypatch.setitem(sys.modules, "alembic.command", None)
+    monkeypatch.setitem(sys.modules, "alembic.config", None)
+
+    with pytest.raises(ConnectionPoolError, match="pool down during migration"):
+        lifecycle_module.run_startup_migrations_if_enabled()
+
+
 # ===== validate_token_encryption_config (fail-closed startup guard) =====
 
 
@@ -93,12 +119,20 @@ def test_validate_token_encryption_config_raises_without_key_and_without_fallbac
         lifecycle_module.validate_token_encryption_config()
 
 
-def test_validate_token_encryption_config_allows_plaintext_fallback_without_key(monkeypatch):
+def test_validate_token_encryption_config_allows_plaintext_fallback_without_key(monkeypatch, caplog):
     """Legacy/dev mode: no key but fallback explicitly enabled is allowed (warns, no raise)."""
     monkeypatch.delenv("TOKEN_ENCRYPTION_KEY", raising=False)
     monkeypatch.setenv("TOKEN_PLAINTEXT_FALLBACK_ENABLED", "true")
 
-    lifecycle_module.validate_token_encryption_config()  # must not raise
+    with caplog.at_level(logging.WARNING, logger="database.lifecycle"):
+        lifecycle_module.validate_token_encryption_config()  # must not raise
+
+    # The emitted warning is the only observable signal of the fail-open dev mode;
+    # a regression that silences it must turn this test red.
+    assert any(
+        r.levelno == logging.WARNING and "plaintext" in r.getMessage()
+        for r in caplog.records
+    ), "expected a WARNING that the plaintext fallback is active without a key"
 
 
 def test_validate_token_encryption_config_allows_configured_key(monkeypatch):

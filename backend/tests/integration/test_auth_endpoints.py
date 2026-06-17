@@ -128,6 +128,25 @@ def test_google_login_missing_email_claim(test_client_base, isolated_db, monkeyp
     assert resp.json()["error"]["code"] == "unauthorized"
 
 
+def test_google_login_unverified_email(test_client_base, isolated_db, monkeypatch, app):
+    """Token with email_verified=False -> 401 (H2 verified-email guard, end-to-end)."""
+    fake_id_info = {
+        "sub": "sub-unverified",
+        "email": "unverified@example.com",
+        "name": "Unverified User",
+        "email_verified": False,
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_google_token",
+        lambda *_a, **_kw: fake_id_info,
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    resp = test_client_base.post("/auth/google", json={"id_token": "valid-token"})
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
 # ------------------------------------------------------------------
 # GET /auth/me
 # ------------------------------------------------------------------
