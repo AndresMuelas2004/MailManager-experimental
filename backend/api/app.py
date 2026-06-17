@@ -14,7 +14,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 try:
     from dotenv import load_dotenv
@@ -61,6 +61,7 @@ from api.routers.emails_routers import (
 from api.routers.health_routers import router as health_router
 from api.routers.mailboxes_routers import router as mailboxes_router
 from api.routers.oauth_callback_routers import router as oauth_callback_router
+from api.routers.routers_helpers import rate_limit_by_ip
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
@@ -110,18 +111,25 @@ def create_app() -> FastAPI:
         expose_headers=["Content-Disposition", "Content-Length"],
     )
     register_error_handlers(app)
-    app.include_router(health_router)
-    app.include_router(auth_router)
-    app.include_router(oauth_callback_router)
-    app.include_router(mailboxes_router)
-    app.include_router(accounts_router)
-    app.include_router(emails_router)
-    app.include_router(favorites_router)
-    app.include_router(virtual_mailboxes_router)
-    app.include_router(contacts_router)
-    app.include_router(drafts_router)
-    app.include_router(email_attachments_router)
-    app.include_router(attachments_admin_router)
+
+    # Global per-IP safety net applied at router level (one shared Depends, so
+    # it counts once per request — each request matches exactly one route).
+    # Exempt: health probes and the OAuth callbacks (the provider redirects the
+    # user's browser there; a 429 would break a legitimate account connection).
+    global_rate_limit = [Depends(rate_limit_by_ip("global"))]
+
+    app.include_router(health_router)  # exempt
+    app.include_router(auth_router, dependencies=global_rate_limit)
+    app.include_router(oauth_callback_router)  # exempt
+    app.include_router(mailboxes_router, dependencies=global_rate_limit)
+    app.include_router(accounts_router, dependencies=global_rate_limit)
+    app.include_router(emails_router, dependencies=global_rate_limit)
+    app.include_router(favorites_router, dependencies=global_rate_limit)
+    app.include_router(virtual_mailboxes_router, dependencies=global_rate_limit)
+    app.include_router(contacts_router, dependencies=global_rate_limit)
+    app.include_router(drafts_router, dependencies=global_rate_limit)
+    app.include_router(email_attachments_router, dependencies=global_rate_limit)
+    app.include_router(attachments_admin_router, dependencies=global_rate_limit)
     return app
 
 

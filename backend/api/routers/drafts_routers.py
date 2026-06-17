@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
-from api.routers.routers_helpers import enforce_multipart_size_limit, require_session
+from api.routers.routers_helpers import (
+    enforce_multipart_size_limit,
+    rate_limit_by_user,
+    require_session,
+)
 from api.schemas.attachment import (
     CopyAttachmentsFromEmailRequest,
     CopyAttachmentsFromEmailResponse,
@@ -59,6 +63,7 @@ def update_draft(
 @router.post(
     "/accounts/{account_id}/drafts/{provider_draft_id}/send",
     response_model=DraftSendOut,
+    dependencies=[Depends(rate_limit_by_user("email_send"))],
 )
 def send_draft(
     mailbox_id: str,
@@ -90,7 +95,11 @@ def list_drafts(
     return drafts_service.list_drafts(mailbox_id, user_id, account_id)
 
 
-@router.post("/drafts/sync", response_model=DraftsSyncResultOut)
+@router.post(
+    "/drafts/sync",
+    response_model=DraftsSyncResultOut,
+    dependencies=[Depends(rate_limit_by_user("provider_sync"))],
+)
 def sync_drafts(
     mailbox_id: str,
     account_id: str | None = Query(default=None),

@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
-from api.routers.routers_helpers import require_session
+from api.routers.routers_helpers import rate_limit_by_user, require_session
 from api.schemas.email import (
     ConversationOut,
     EmailContentOut,
@@ -92,7 +92,11 @@ def list_emails(
     )
 
 
-@router.post("/sync-metadata", response_model=SyncResultOut)
+@router.post(
+    "/sync-metadata",
+    response_model=SyncResultOut,
+    dependencies=[Depends(rate_limit_by_user("provider_sync"))],
+)
 def sync_email_metadata(
     mailbox_id: str,
     background_tasks: BackgroundTasks,
@@ -112,7 +116,10 @@ def sync_email_metadata(
     )
 
 
-@router.post("/send")
+@router.post(
+    "/send",
+    dependencies=[Depends(rate_limit_by_user("email_send"))],
+)
 def send_email(
     mailbox_id: str,
     payload: EmailSendRequest,
@@ -230,7 +237,11 @@ def set_favorite(
     )
 
 
-@favorites_router.post("/favorites/sync", response_model=FavoriteSyncResponse)
+@favorites_router.post(
+    "/favorites/sync",
+    response_model=FavoriteSyncResponse,
+    dependencies=[Depends(rate_limit_by_user("provider_sync"))],
+)
 def sync_favorites(
     mailbox_id: str,
     account_id: str | None = Query(default=None),
