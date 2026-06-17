@@ -196,7 +196,47 @@ Una característica clave: el dev login **solo puede iniciar sesión como un usu
 
 ---
 
-## 6. Resumen del modelo de errores (lo que el usuario percibe)
+## 6. Protección frente a abuso (límite de frecuencia)
+
+Para poder abrir la app a usuarios de prueba desconocidos sin que nadie pueda abusar de ella, MailManager aplica un **límite de frecuencia de peticiones por cliente** sobre las operaciones más sensibles. Es una medida de **endurecimiento** previa al despliegue y, para la inmensa mayoría de usuarios, es **invisible**.
+
+### 6.1 Qué ve el usuario
+
+- **En uso normal, nada.** Los topes están calibrados muy por encima de lo que hace una persona de verdad usando la app a mano; un usuario corriente no los toca nunca.
+- **Si se superan**, la operación afectada se rechaza y el usuario ve un mensaje claro del tipo **"Demasiadas peticiones. Espera N segundos e inténtalo de nuevo."** (la app rellena los segundos concretos cuando el servidor los indica). Pasados unos segundos vuelve a funcionar con normalidad: **no se pierde nada ni se rompe la sesión**.
+- **No cambia ningún flujo, pantalla ni paso** de la aplicación. No hay nada nuevo que el usuario tenga que hacer.
+
+Además, la app **no reintenta automáticamente** una petición rechazada por este motivo: un reintento solo consumiría el límite más deprisa y alejaría el momento de recuperación.
+
+### 6.2 Qué operaciones tienen tope (y cuáles no)
+
+Tienen un tope pensado para frenar el abuso sin estorbar el uso legítimo:
+
+- **Iniciar sesión** — tanto el login con Google como el dev login (sección 5).
+- **Enviar correo** — el envío directo y el envío de un borrador.
+- **Sincronizar con el proveedor** — sincronizar correos, borradores y favoritos.
+
+Por encima de todo eso, **toda la aplicación** tiene un **tope global por cliente** muy holgado como red de seguridad, para que nadie pueda saturar el servidor (que en esta fase corre como un solo proceso). El resto de acciones cotidianas (abrir un correo, navegar por las bandejas, marcar como leído, mover a papelera, descargar adjuntos…) funcionan igual que siempre, solo bajo ese tope global. Quedan **fuera** de todo límite la sonda de salud y los retornos del consentimiento OAuth, para no romper ni la monitorización ni una conexión de cuenta legítima.
+
+> Las cifras exactas de cada tope —cuántas peticiones por minuto/hora y a qué se aplican—, las rutas exentas y la semántica de la espera están en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md) § 5.
+
+### 6.3 Cómo se identifica al "cliente"
+
+El "cliente" al que se le cuenta el límite cambia según la operación, y la elección tiene su lógica:
+
+- En el **login** se cuenta **por dirección de origen (IP)**: todavía no hay un usuario identificado, así que esto es lo que frena el martilleo desde un mismo origen.
+- En las operaciones donde **ya hay sesión** (enviar, sincronizar) se cuenta **por usuario**, que es la unidad real de consumo de la cuota del proveedor.
+- El **tope global** de seguridad se cuenta **por IP**.
+
+### 6.4 Por qué se añade y por qué es opt-in
+
+El motivo de fondo es doble: frenar la **fuerza bruta del login** y —lo más importante— evitar el **abuso de la cuota compartida de los proveedores**. La app usa credenciales de Gmail/Outlook **compartidas**; un usuario abusivo que dispare miles de envíos o sincronizaciones podría agotar esa cuota y dejar la app inservible para todos, o provocar que el proveedor suspenda las credenciales.
+
+La protección se **activa en producción** y está **desactivada por defecto en desarrollo y en los tests**, para no estorbar el trabajo diario ni alterar las pruebas automáticas. Es una protección **básica y suficiente para el MVP** (un solo servidor): no pretende ser un sistema de cuotas sofisticado, sino la protección mínima sensata antes de exponer la app a usuarios desconocidos. Una limitación consciente de esta simplicidad —el conteo no se comparte si algún día hubiera varios procesos de servidor— está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md) § 7.
+
+---
+
+## 7. Resumen del modelo de errores (lo que el usuario percibe)
 
 Sin entrar en códigos, conviene tener clara la intención detrás de los errores más habituales de esta área, porque están elegidos para que el usuario o el equipo entiendan qué hacer:
 
@@ -205,11 +245,12 @@ Sin entrar en códigos, conviene tener clara la intención detrás de los errore
 - **Fallo de autorización al conectar una cuenta** → se trata como "credenciales incorrectas" (no como "vuelve a conectar"), para no meter al usuario en un bucle de reintentos sobre el mismo paso.
 - **Acceder a un buzón que no es tuyo** → se distingue entre "no existe" y "no tienes acceso", de forma que la app nunca confirme la existencia de buzones ajenos a quien no debe.
 - **Operar sobre un usuario o cuenta que ya no existe** → "no encontrado", nunca un éxito silencioso.
+- **Superar el límite de frecuencia** (sección 6) → "demasiadas peticiones": esperar unos segundos y reintentar; la sesión y los datos quedan intactos.
 
 La correspondencia exacta de cada situación con su código y estado HTTP está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
 
 ---
 
-## 7. Resumen en una frase
+## 8. Resumen en una frase
 
-> MailManager separa dos autorizaciones: el **login con Google** —que solo identifica al usuario de la app, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que registra la cuenta y lanza la autorización OAuth en una **ventana emergente** cuyo callback recibe el propio servidor; si la autorización no se completa, el registro **se deshace** y no queda ninguna tarjeta vacía, y si se completa la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor, y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
+> MailManager separa dos autorizaciones: el **login con Google** —que solo identifica al usuario de la app, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que registra la cuenta y lanza la autorización OAuth en una **ventana emergente** cuyo callback recibe el propio servidor; si la autorización no se completa, el registro **se deshace** y no queda ninguna tarjeta vacía, y si se completa la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor; como endurecimiento previo al despliegue, un **límite de frecuencia opt-in (apagado por defecto)** protege el login, el envío y las sincronizaciones —más una red global por IP— mostrando un aviso de "demasiadas peticiones" cuando alguien se pasa, invisible en uso normal; y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).

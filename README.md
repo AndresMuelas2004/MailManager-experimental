@@ -215,6 +215,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `AUTH_COOKIE_SAMESITE` | No | Session cookie `SameSite` policy: `lax` / `strict` / `none`. `none` requires `AUTH_COOKIE_SECURE=true`. Default: `lax`. |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins. Default: `http://localhost:5173`. A `*` wildcard is rejected at startup (incompatible with credentialed CORS). |
+| `RATE_LIMIT_ENABLED` | No | Opt-in per-client request throttling (login + send + provider syncs, plus a global per-IP safety net). Enabled only when truthy (`1`/`true`/`yes`/`on`); unset/falsy (default) disables it entirely. Enable it in production. State is in-process memory (single worker), lost on restart. Returns 429 `rate_limit_exceeded` with a `Retry-After` header when a bucket is exceeded. |
 | `LOG_LEVEL` | No | Root/uvicorn log level applied by the production entrypoint (`python main.py`): `DEBUG` / `INFO` / `WARNING` / `ERROR`. Default: `INFO`. The dev server keeps uvicorn's own defaults. |
 | `ATTACHMENTS_PURGE_TOKEN` | No | Bearer token for the `POST /admin/attachments/purge` maintenance endpoint. When unset, the endpoint replies 503 `purge_disabled` instead of 401 (deploy is intentionally not configured for this operation). |
 | `DEV_LOGIN_ENABLED` | No | When truthy, enables the `POST /auth/dev-login` backdoor. Unset/falsy → the endpoint replies 503 `dev_login_disabled`. Never enable in production. |

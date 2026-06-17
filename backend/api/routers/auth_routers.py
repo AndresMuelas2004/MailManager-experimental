@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 
-from api.routers.routers_helpers import require_session
+from api.routers.routers_helpers import rate_limit_by_ip, require_session
 from api.schemas.auth import AuthResponse, GoogleLoginRequest, UserOut
 from api.services import auth_service
 
@@ -14,7 +14,11 @@ from api.services import auth_service
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/google", response_model=AuthResponse)
+@router.post(
+    "/google",
+    response_model=AuthResponse,
+    dependencies=[Depends(rate_limit_by_ip("auth_login"))],
+)
 def google_login(payload: GoogleLoginRequest, response: Response) -> AuthResponse:
     """
     Verify a Google id_token and create a server-side session.
@@ -22,7 +26,11 @@ def google_login(payload: GoogleLoginRequest, response: Response) -> AuthRespons
     return auth_service.google_login(payload.id_token, response)
 
 
-@router.post("/dev-login", response_model=AuthResponse)
+@router.post(
+    "/dev-login",
+    response_model=AuthResponse,
+    dependencies=[Depends(rate_limit_by_ip("auth_login"))],
+)
 def dev_login(request: Request, response: Response) -> AuthResponse:
     """
     Dev-only backdoor that mints a session for ``DEV_LOGIN_EMAIL``.

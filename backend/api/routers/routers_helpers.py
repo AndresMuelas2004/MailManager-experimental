@@ -4,9 +4,10 @@ Shared helpers used across all routers.
 
 from __future__ import annotations
 
-from fastapi import Cookie, Request
+from fastapi import Cookie, Depends, Request
 
-from api.errors.exceptions import RequestTooLarge
+from api import rate_limit
+from api.errors.exceptions import RequestTooLarge, TooManyRequests
 from api.services import auth_service
 
 
@@ -45,3 +46,51 @@ def enforce_multipart_size_limit(request: Request) -> None:
         raise RequestTooLarge(
             "Multipart upload exceeds the 30 MB global cap before request body read."
         )
+
+
+def _enforce_rate_limit(bucket: str, identity: str) -> None:
+    retry_after = rate_limit.check(bucket, identity)
+    if retry_after is not None:
+        raise TooManyRequests(
+            f"Rate limit exceeded for the '{bucket}' bucket.",
+            {"scope": bucket, "retry_after": retry_after},
+        )
+
+
+def rate_limit_by_ip(bucket: str):
+    """``Depends`` factory: throttle by client IP (login + global safety net).
+
+    The flag is read per request (cheap ``os.getenv``) so tests can toggle it
+    via ``monkeypatch.setenv`` without rebuilding the session-scoped app.
+    """
+
+    def _dep(request: Request) -> None:
+        if not rate_limit.rate_limiting_enabled():
+            return
+        identity = rate_limit.client_ip(
+            request.headers.get("x-forwarded-for"),
+            request.client.host if request.client else None,
+        )
+        _enforce_rate_limit(bucket, identity)
+
+    return _dep
+
+
+def rate_limit_by_user(bucket: str):
+    """``Depends`` factory: throttle by the authenticated user.
+
+    Depends on ``require_session``; FastAPI caches it per request by the
+    original callable, so it runs once even when the route also depends on it,
+    and the integration override (``require_session`` → ``TEST_USER_ID``) is
+    shared with this dependency.
+    """
+
+    def _dep(
+        request: Request,
+        user_id: str = Depends(require_session),
+    ) -> None:
+        if not rate_limit.rate_limiting_enabled():
+            return
+        _enforce_rate_limit(bucket, user_id)
+
+    return _dep

@@ -428,3 +428,18 @@ class ServiceUnavailableError(ApiError):
     probe behind ``/health`` failed. Mapped to HTTP 503 so an orchestrator or
     uptime monitor stops routing traffic to this instance."""
     code = "service_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (#11e — per-client request throttling).
+# ---------------------------------------------------------------------------
+
+
+class TooManyRequests(ApiError):
+    """Client exceeded the allowed request rate for a throttled bucket.
+
+    Carries ``detail = {"scope": <bucket>, "retry_after": <int seconds>}``.
+    The exception handler turns ``retry_after`` into a ``Retry-After`` header.
+    Mapped to HTTP 429.
+    """
+    code = "rate_limit_exceeded"
