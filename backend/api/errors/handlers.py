@@ -81,6 +81,7 @@ from api.errors.exceptions import (
     TokenDecryptionError,
     TokenEncryptionError,
     TokenIntegrityError,
+    TooManyRequests,
     TrashOperationError,
     Unauthorized,
     UserNotFound,
@@ -171,6 +172,8 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     RecipientSuggestionsError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Health / readiness
     ServiceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # Rate limiting
+    TooManyRequests: status.HTTP_429_TOO_MANY_REQUESTS,
 }
 
 
@@ -192,7 +195,17 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         status_code = _STATUS_MAP.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
-        return JSONResponse(status_code=status_code, content=_error_payload(exc))
+        # Emit a ``Retry-After`` header whenever the error carries one in its
+        # detail (generic: any ApiError may opt in; today only TooManyRequests
+        # does). The value also rides in the JSON body via ``_error_payload``,
+        # which the cross-origin SPA reads (the header is not CORS-exposed).
+        headers: dict[str, str] | None = None
+        retry_after = exc.detail.get("retry_after") if isinstance(exc.detail, dict) else None
+        if retry_after is not None:
+            headers = {"Retry-After": str(int(retry_after))}
+        return JSONResponse(
+            status_code=status_code, content=_error_payload(exc), headers=headers,
+        )
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
