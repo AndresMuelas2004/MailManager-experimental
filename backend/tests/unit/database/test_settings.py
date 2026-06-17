@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from database import settings
@@ -136,6 +138,28 @@ class TestIsStartupAutoMigrateEnabled:
         assert settings.is_startup_auto_migrate_enabled() is True
 
 
+# ===== is_test_data_seed_enabled =====
+
+
+class TestIsTestDataSeedEnabled:
+    def test_default_true_when_unset(self, monkeypatch):
+        monkeypatch.delenv("DB_SEED_TEST_DATA", raising=False)
+        assert settings.is_test_data_seed_enabled() is True
+
+    def test_disabled(self, monkeypatch):
+        monkeypatch.setenv("DB_SEED_TEST_DATA", "false")
+        assert settings.is_test_data_seed_enabled() is False
+
+    def test_enabled(self, monkeypatch):
+        monkeypatch.setenv("DB_SEED_TEST_DATA", "true")
+        assert settings.is_test_data_seed_enabled() is True
+
+    def test_invalid_value_raises(self, monkeypatch):
+        monkeypatch.setenv("DB_SEED_TEST_DATA", "quizas")
+        with pytest.raises(SettingsError):
+            settings.is_test_data_seed_enabled()
+
+
 # ===== get_alembic_ini_path =====
 
 
@@ -147,5 +171,25 @@ class TestGetAlembicIniPath:
 
     def test_custom_path(self, monkeypatch):
         monkeypatch.setenv("DB_ALEMBIC_INI_PATH", "/custom/alembic.ini")
-        from pathlib import Path
         assert settings.get_alembic_ini_path() == Path("/custom/alembic.ini")
+
+
+# ===== get_frontend_origin =====
+
+
+class TestGetFrontendOrigin:
+    def test_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+        assert settings.get_frontend_origin() == "http://localhost:5173"
+
+    def test_uses_first_origin(self, monkeypatch):
+        monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://a.example,https://b.example")
+        assert settings.get_frontend_origin() == "https://a.example"
+
+    def test_strips_whitespace(self, monkeypatch):
+        monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "  https://a.example , https://b.example  ")
+        assert settings.get_frontend_origin() == "https://a.example"
+
+    def test_empty_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "")
+        assert settings.get_frontend_origin() == "http://localhost:5173"
