@@ -2,7 +2,10 @@ name: mailmanager
 
 services:
   postgres:
-    image: postgres:16
+    # H4: pinned by exact tag + multi-arch index digest. Same major (16.x) as
+    # before, so the existing mailmanager_pgdata volume stays compatible with no
+    # migration. Tag and digest move together (digest is authoritative).
+    image: postgres:16.14@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
     restart: unless-stopped
     environment:
       POSTGRES_USER: mailmanager
