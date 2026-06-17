@@ -187,7 +187,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
    docker compose --env-file .env.production -f compose.prod.yml up -d --build
    ```
 
-   Then `curl https://DOMAIN/health` should return `{"status":"ok"}`.
+   Then `curl https://DOMAIN/api/health` should return `{"status":"ok"}` (Caddy strips `/api`; `/health` alone hits the SPA, not the backend).
 
 > `VITE_API_BASE_URL` / `VITE_GOOGLE_CLIENT_ID` are baked into the frontend bundle at build time, so changing the domain requires rebuilding the image (`--build`).
 
