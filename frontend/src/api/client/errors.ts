@@ -62,6 +62,16 @@ export function toNetworkError(message: string): ApiError {
 
 export function toUiError(error: unknown): UiError {
   if (error instanceof ApiError) {
+    if (error.code === 'rate_limit_exceeded') {
+      const secs =
+        typeof error.detail?.retry_after === 'number' ? error.detail.retry_after : undefined;
+      return {
+        code: error.code,
+        message: secs
+          ? `Demasiadas peticiones. Espera ${secs} segundos e inténtalo de nuevo.`
+          : 'Demasiadas peticiones. Espera un momento e inténtalo de nuevo.',
+      };
+    }
     return { message: error.message, code: error.code };
   }
   if (error instanceof Error) {

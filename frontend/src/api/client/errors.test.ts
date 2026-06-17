@@ -95,4 +95,35 @@ describe('toUiError', () => {
     expect(toUiError({ weird: true })).toEqual({ message: 'Unexpected error' });
     expect(toUiError(null)).toEqual({ message: 'Unexpected error' });
   });
+
+  it('builds a countdown message for a rate-limit error with retry_after', () => {
+    const ui = toUiError(
+      new ApiError('whatever', 'rate_limit_exceeded', 429, {
+        scope: 'email_send',
+        retry_after: 42,
+      }),
+    );
+    expect(ui).toEqual({
+      code: 'rate_limit_exceeded',
+      message: 'Demasiadas peticiones. Espera 42 segundos e inténtalo de nuevo.',
+    });
+  });
+
+  it('falls back to a generic rate-limit message without retry_after', () => {
+    const ui = toUiError(new ApiError('whatever', 'rate_limit_exceeded', 429, { scope: 'global' }));
+    expect(ui).toEqual({
+      code: 'rate_limit_exceeded',
+      message: 'Demasiadas peticiones. Espera un momento e inténtalo de nuevo.',
+    });
+  });
+
+  it('ignores a non-numeric retry_after and uses the generic message', () => {
+    const ui = toUiError(
+      new ApiError('whatever', 'rate_limit_exceeded', 429, { retry_after: '42' }),
+    );
+    expect(ui).toEqual({
+      code: 'rate_limit_exceeded',
+      message: 'Demasiadas peticiones. Espera un momento e inténtalo de nuevo.',
+    });
+  });
 });
