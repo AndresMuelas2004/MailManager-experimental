@@ -120,3 +120,9 @@ Non-obvious guards verified by `test_draft_repository.py`:
 ### `translate_*_error` fallback messages — never leak `str(exc)`
 
 When the input exception is not of the expected layer base class (e.g. a stray `RuntimeError` reaches `translate_database_error`), the fallback `ApiError` message is a literal — `"Unexpected database error."`, `"Unexpected core error."`, etc. The original exception goes to `logger.warning` instead. Per `api/CLAUDE.md` §9 rule 4 the API surface MUST NOT carry raw library messages; tests that assert `"boom" in result.message` against a `RuntimeError("boom")` injection are stale and need to flip to asserting the literal.
+
+### Rate-limit tests — counter isolation and the monkeypatch axis
+
+`api.rate_limit` keeps its counters in module-level `TTLCache`s, so they bleed across tests unless cleared: both rate-limit test files run an `autouse` `rate_limit.reset()` BEFORE and AFTER each case (the `after` covers a case that fails mid-way). A new test file that exercises the engine must replicate it — without the reset a case goes green or red by test order, not by behaviour.
+
+Drive the limits by monkeypatching `RATE_LIMITS` (a tiny readable profile), never by mocking `check`: the engine re-reads `RATE_LIMITS` on every call, so mocking `check` would erase all engine coverage. The dependency-factory tests (`test_rate_limit_dependencies.py`) call the returned `_dep` directly with a `SimpleNamespace` stub `Request` and inject `user_id` by hand — outside FastAPI the `Depends(require_session)` default is an unresolved `Depends` object, not a value.

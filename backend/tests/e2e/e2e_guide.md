@@ -84,6 +84,10 @@ When drafts are **synced** from the provider (Section 5c), the draft is intentio
 - **`copy-from-email` asymmetry.** The forward flow asserts `copied_count >= 1` for Gmail (download + re-upload) but `copied_count == 0` for Outlook (`createForward` already inherited the attachments server-side — the endpoint is a no-op).
 - Endpoints first exercised end-to-end here: `GET .../reply-context` and `POST .../drafts/{pdid}/attachments/copy-from-email`.
 
+### Rate limiting stays OFF in E2E (deliberate, #11e)
+
+The suite never sets `RATE_LIMIT_ENABLED`, so per-client throttling is inert here. This is a decision, not an oversight: the limiter short-circuits **before** any provider call, so a real Gmail/Outlook round trip adds nothing the integration suite (real app + real DB + `TestClient`) does not already cover for it — and turning it on would actively harm E2E, since the suite's repeated real sends/syncs against the seeded accounts could trip a 429 mid-flow. Deterministic rate-limit coverage lives entirely in the unit + integration tiers.
+
 ### Safety-net cleanup in fixture teardown
 
 The `created_resources` fixture tracks temp mailbox IDs and session IDs. On teardown, `e2e_session` deletes them via direct SQL, ensuring no orphan data remains even if a test fails mid-flow.

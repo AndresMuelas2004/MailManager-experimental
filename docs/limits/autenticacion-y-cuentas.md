@@ -50,7 +50,7 @@ Los dos proveedores piden conjuntos de permisos distintos. Esta diferencia es la
 
 | Proveedor | Permisos solicitados | Qué cubre |
 |-----------|----------------------|-----------|
-| **Gmail** | **Un único permiso**: modificación de Gmail (`gmail.modify`) | Cubre de una sola vez leer, enviar, gestionar borradores y mover mensajes entre etiquetas. No incluye borrado permanente de mensajes (ver sección 6). |
+| **Gmail** | **Un único permiso**: modificación de Gmail (`gmail.modify`) | Cubre de una sola vez leer, enviar, gestionar borradores y mover mensajes entre etiquetas. No incluye borrado permanente de mensajes (ver sección 7). |
 | **Outlook** | **Cuatro permisos separados**: leer/escribir correo (`Mail.ReadWrite`), enviar correo (`Mail.Send`), leer perfil básico (`User.Read`) y acceso prolongado (`offline_access`) | `Mail.ReadWrite` permite crear/editar borradores; `Mail.Send` es **independiente** y se necesita para enviar; `User.Read` permite descubrir el email de la cuenta; `offline_access` permite refrescar la sesión sin reconsentimiento. |
 
 ### Consecuencias de la asimetría de permisos
@@ -74,7 +74,53 @@ Los dos proveedores piden conjuntos de permisos distintos. Esta diferencia es la
 
 ---
 
-## 5. "Sin límite" — qué significa exactamente
+## 5. Rate limiting (límite de frecuencia por cliente)
+
+Tope de frecuencia de peticiones por cliente sobre ciertas operaciones, más una red de seguridad global. Es un control de **endurecimiento** previo al despliegue (protege la cuota compartida de Gmail/Outlook y frena el martilleo del login). El comportamiento observable está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 6.
+
+### 5.1 Activación
+
+| Aspecto | Valor | Detalle |
+|---------|-------|---------|
+| Activación global | **Opt-in, desactivado por defecto** | Variable de entorno `RATE_LIMIT_ENABLED`. Solo se considera activo si vale uno de `1` / `true` / `yes` / `on` (sin distinguir mayúsculas, recortando espacios); **cualquier otro valor —incluido vacío o ausente— deja el rate limiting apagado**. Se pone a `true` en producción y se deja vacío en desarrollo y en los tests para no estorbar. |
+| Lectura del flag | **Por petición** | El flag se consulta en cada petición; activarlo/desactivarlo no exige reiniciar la app. |
+
+### 5.2 Buckets y sus topes exactos
+
+Cada operación protegida pertenece a un **bucket**. Un bucket puede tener **una o más ventanas** `(máximo de peticiones, segundos)`; la petición se bloquea si **cualquiera** de sus ventanas se supera.
+
+| Bucket | Tope(s) | Identidad (cómo se cuenta el "cliente") | Operaciones que cubre |
+|--------|---------|------------------------------------------|------------------------|
+| `auth_login` | **10 por 60 s** | Por **IP** de origen (aún no hay sesión) | Login con Google (`POST /auth/google`) y dev login (`POST /auth/dev-login`). |
+| `email_send` | **20 por 60 s** **y** **200 por 3600 s** (ambas a la vez) | Por **usuario** autenticado | Envío directo (`POST .../emails/send`) y envío de un borrador (`POST .../drafts/{id}/send`). |
+| `provider_sync` | **30 por 60 s** | Por **usuario** autenticado | Sincronizar correos (`.../sync-metadata`), borradores (`.../drafts/sync`) y favoritos (`.../favorites/sync`). |
+| `global` | **300 por 60 s** | Por **IP** de origen | Red de seguridad sobre **toda** la API (todas las rutas salvo las exentas, ver 5.3). |
+
+> Estas son las **únicas** cifras vigentes: viven en el diccionario `RATE_LIMITS` de `backend/api/rate_limit.py`, fuente única de verdad. Están calibradas muy por encima del uso humano real; en la práctica solo cortan a un script o a un abuso evidente.
+
+### 5.3 Exenciones (rutas sin tope global)
+
+| Exenta | Por qué |
+|--------|---------|
+| `GET /health` | Sonda de salud/readiness; un 429 la rompería y un orquestador dejaría de enrutar tráfico a la instancia. |
+| `GET /auth/google/callback` y `GET /auth/outlook/callback` | Son la redirección del navegador del usuario desde el proveedor al terminar el consentimiento OAuth; un 429 aquí rompería una conexión de cuenta legítima. |
+
+### 5.4 Conteo, espera y semántica
+
+| Aspecto | Valor | Detalle |
+|---------|-------|---------|
+| Algoritmo | **Ventana fija** (*fixed-window*) | Contador por `(bucket, identidad, ventana)`; al cambiar de ventana el contador se reinicia (los contadores caducan solos al expirar la ventana). |
+| Bucket específico vs. global | **Cuentan por separado** | Una petición a una operación protegida incrementa **a la vez** su bucket específico y el `global`, pero son contadores **independientes**: no hay doble penalización contra un mismo tope (cada uno tiene su propio máximo). |
+| Resolución de la IP | **Primer salto de `X-Forwarded-For`**, con respaldo en el peer directo, y `"unknown"` si no hay ninguno | Detrás de Caddy en producción `X-Forwarded-For` es de confianza (Caddy descarta cualquier valor entrante). En desarrollo/tests, donde no hay proxy, se usa la IP del cliente directo. |
+| Espera al bloquear (`Retry-After`) | **Segundos hasta que se reinicie la ventana más restrictiva superada** | Se devuelve **dos veces**: en la cabecera HTTP `Retry-After` y en el cuerpo del error (`detail.retry_after`). La cabecera no está en la lista CORS expuesta, por eso el valor viaja también en el cuerpo para que la SPA cross-origin pueda leerlo. |
+| Tope de claves vivas por longitud de ventana | **100 000** | Límite de memoria por cada longitud de ventana; superado, se expulsan las entradas más antiguas (LRU). El peor caso es reiniciar el contador de un atacante muy disperso. |
+| Estado | **En memoria del proceso, se pierde al reiniciar** | No hay almacén compartido. Ver la fila correspondiente en "Qué NO soporta" (§ 7). |
+
+El código y el estado HTTP del rechazo (`429 rate_limit_exceeded`) están en § 9.
+
+---
+
+## 6. "Sin límite" — qué significa exactamente
 
 No existe ningún tope codificado para:
 
@@ -88,7 +134,7 @@ Es una decisión del MVP: no se ha implementado ninguna cuota porque el producto
 
 ---
 
-## 6. Qué NO soporta (limitaciones aceptadas para el MVP)
+## 7. Qué NO soporta (limitaciones aceptadas para el MVP)
 
 | No soporta | Detalle | Por qué |
 |------------|---------|---------|
@@ -99,15 +145,16 @@ Es una decisión del MVP: no se ha implementado ninguna cuota porque el producto
 | **Reconexión automática tras revocación** | Si el usuario revoca el acceso (o el token caduca), hay que reconectar **manualmente** con el botón "Reconectar cuenta" (ver [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 2.7) | La app refresca tokens silenciosamente mientras el proveedor lo permita, pero no puede recuperar un acceso revocado/caducado por sí sola: hace falta un nuevo consentimiento del usuario. |
 | **Cuentas registradas sin conectar ("tarjetas vacías")** | Si la autorización OAuth no se completa, el registro de la cuenta se deshace y no queda tarjeta | Una cuenta recién registrada que **nunca llegó a conectarse** no puede hacer nada; conservarla solo acumularía tarjetas muertas. El botón "Reconectar cuenta" (§ 2.7) aplica a cuentas que **sí** estuvieron conectadas y cuyo token murió, no a este caso. Ver [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 2.2. |
 | **Conexión de cuentas con varios workers de backend** | El flujo pendiente entre inicio y callback vive en memoria de un único proceso | Sería necesario un almacén compartido y un estado serializable; el despliegue del MVP usa un solo worker. |
+| **Rate limiting compartido entre varios workers de backend** | Los contadores de frecuencia viven en memoria de cada proceso y se pierden al reiniciar | Con N workers, cada uno cuenta por su cuenta: el tope efectivo de cada bucket se **multiplica por N** (un cliente repartido entre procesos podría hacer hasta N veces el límite). Es la gemela conceptual de la fila anterior; el despliegue del MVP usa un solo worker, así que el tope es exacto. Escalar a varios workers exige mover el contador a un almacén compartido (p. ej. Redis) — la frontera de esa migración es el módulo `rate_limit.py`. |
 | **Navegadores con ventanas emergentes bloqueadas** | La conexión avisa pidiendo permitir popups y no registra nada | El consentimiento OAuth ocurre en una ventana emergente; sin ella el flujo no puede arrancar. |
 | **Recuperar el email de la cuenta si el proveedor no lo da** | La cuenta queda conectada con `email_address = null` | El email es best-effort; bloquear la conexión por un dato cosmético sería desproporcionado. |
 | **Borrado permanente de mensajes en Gmail** | El permiso `gmail.modify` no incluye `messages.delete` | El borrado se realiza solo en la base de datos local (decisión documentada en la capa core); el permiso amplio de Gmail aun así no cubre el borrado definitivo en el proveedor. |
 | **Cambiar la cuenta de origen de un borrador con adjuntos** | Tras adjuntar el primer archivo, el selector de cuenta se bloquea | Pertenece a la feature de adjuntos, pero afecta a la cuenta usada: mover adjuntos entre cuentas no está soportado. |
-| **Dev login en producción / como vía de alta** | El atajo no aparece fuera de modo desarrollo y no crea usuarios | Es una puerta trasera de desarrollo fuertemente acotada (ver sección 7), no un mecanismo de producción. |
+| **Dev login en producción / como vía de alta** | El atajo no aparece fuera de modo desarrollo y no crea usuarios | Es una puerta trasera de desarrollo fuertemente acotada (ver sección 8), no un mecanismo de producción. |
 
 ---
 
-## 7. Atajo de desarrollo (dev login) — barreras exactas
+## 8. Atajo de desarrollo (dev login) — barreras exactas
 
 El endpoint de dev login está acotado por **tres barreras encadenadas**, cada una con su propia respuesta para distinguir el motivo del rechazo:
 
@@ -121,9 +168,9 @@ Además, el usuario nombrado por `DEV_LOGIN_EMAIL` **debe existir previamente** 
 
 ---
 
-## 8. Errores de esta área: código y estado HTTP
+## 9. Errores de esta área: código y estado HTTP
 
-Correspondencia exacta entre cada situación y la respuesta de la API. El comportamiento percibido se explica en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 6.
+Correspondencia exacta entre cada situación y la respuesta de la API. El comportamiento percibido se explica en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 7.
 
 | Situación | Código | Estado HTTP |
 |-----------|--------|-------------|
@@ -141,12 +188,13 @@ Correspondencia exacta entre cada situación y la respuesta de la API. El compor
 | Credenciales de aplicación ausentes / inválidas | `app_credentials_missing` / `app_credentials_invalid` | 500 |
 | Dev login deshabilitado | `dev_login_disabled` | 503 |
 | Dev login desde host no confiable | `dev_login_not_localhost` | 403 |
+| Frecuencia de peticiones superada (cualquier bucket; ver § 5) | `rate_limit_exceeded` | 429 |
 
 > Nota sobre la distinción **404 vs 403**: el acceso a un **buzón** ajeno devuelve 403 (existe pero no es tuyo), mientras que una **cuenta** ajena o inexistente colapsa uniformemente a 404 `account_not_found`, para no filtrar la existencia de cuentas de otros usuarios mediante adivinación de identificadores.
 
 ---
 
-## 9. Infraestructura de despliegue (no son límites de producto)
+## 10. Infraestructura de despliegue (no son límites de producto)
 
 Estos valores son **configuración de despliegue/operación**, no topes que perciba el usuario; se documentan aquí por completitud porque se **validan al arrancar** (un valor inválido aborta el arranque).
 
@@ -158,4 +206,4 @@ Estos valores son **configuración de despliegue/operación**, no topes que perc
 
 ---
 
-> La autenticación y las cuentas llegan hasta: **login solo con Google OIDC** (única vía de alta de usuario), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** sin tope de cuentas ni de buzones, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).
+> La autenticación y las cuentas llegan hasta: **login solo con Google OIDC** (única vía de alta de usuario), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** sin tope de cuentas ni de buzones, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). Como endurecimiento previo al despliegue, un **rate limiting opt-in (apagado por defecto)** pone topes de frecuencia por cliente sobre login, envío y sincronizaciones más una red global por IP, devolviendo `429 rate_limit_exceeded` con `Retry-After` cuando se superan. El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).
