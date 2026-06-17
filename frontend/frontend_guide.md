@@ -45,6 +45,10 @@ The recipient-autocomplete data hook (`useRecipientSuggestions`) is invoked by `
 
 `features/<x>/pages/` and `hooks/` import the context-reader hooks `useAuth` (`app/providers/AuthContext`) and `useDraftComposerContext` (`app/providers/DraftComposerContext`). The `features/CLAUDE.md` §8 import table enumerates `own hooks/`, `own components/`, `components/`, `lib/` for `pages/` but neither lists nor forbids `app/`. This is intentional, not a boundary break: the dependency arrow `app/ → features/` (`frontend/CLAUDE.md` §3) governs who imports whose *modules*; a feature **reading a cross-cutting React Context** mounted above it is the idiomatic inverse the provider pattern relies on, and the sanctioned counterpart to the §1.1 host bridge (which exists precisely so `app/providers/` never imports `features/`). Only context-reader hooks cross — nothing forbidden (`api/client/http`, another feature). A reviewer seeing `FavoritesPage` / the inbox pages import `useDraftComposerContext` must not read it as a §8 violation.
 
+### 1.6 `useComposerAttachments` writes without `useMutation` (features §4.1 exception)
+
+`frontend/src/features/drafts/hooks/useComposerAttachments.ts` calls the attachment endpoints directly inside `useCallback`s instead of `useMutation` — the same §4.1 deviation as §1.2, deliberate for the same reason: per-chip upload progress, `AbortController` cancellation, and the D-07 lazy-push lifecycle do not map onto a single `useMutation`. The architecture-compliance reviewer flags this on every run; it is an accepted exception, not a regression.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The seven namespaces in active use:
