@@ -143,6 +143,7 @@ Other non-obvious prod rules:
 - **Caddy strips `/api` via `handle_path`**, so the backend keeps its routes at the root and never sees the prefix. The prod OAuth redirect URIs registered at Google/Azure must still include it (`https://DOMAIN/api/auth/{google,outlook}/callback`).
 - **`.env.production` serves two roles**: compose interpolation (`--env-file`: `DOMAIN`, `ACME_EMAIL`, `SECRETS_DIR`, `POSTGRES_PASSWORD`, `VITE_*`) AND the backend service's `env_file` (runtime config). `POSTGRES_PASSWORD` therefore appears both standalone (interpolation) and inside `DATABASE_URL` — they must match. Template: `.env.production.example`; the real file is gitignored.
 - **`SECRETS_DIR`** points the credentials mount at a directory holding ONLY the 2 JSON files (#10), read-only — never the dev folder that also carries the SQL dump.
+- **CORS wildcard fails at boot, not at runtime.** `create_app()` raises `RuntimeError` when `CORS_ALLOWED_ORIGINS` contains `*` (incompatible with `allow_credentials=True`), so a deploy that sets `*` reflexively gets an opaque startup crash, not a runtime 4xx. List explicit origins.
 
 ## Claude Code Configuration
 

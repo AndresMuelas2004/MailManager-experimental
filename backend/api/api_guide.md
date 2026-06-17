@@ -248,6 +248,11 @@ All `ApiError` subclasses live in `api/errors/exceptions.py` and must be registe
 - **Dev-login endpoint:** same shape as the purge split — `DevLoginDisabled` is **503** (deploy not configured, `DEV_LOGIN_ENABLED` not truthy) while `DevLoginNotLocalhost` is **403** (host outside `DEV_LOGIN_TRUSTED_HOSTS`). Collapsing both into 403 would mask the deploy-config error behind a security rejection. The third state of the guard, missing `DEV_LOGIN_EMAIL`, surfaces as `EnvVarError` (500) because at that point the operator has already opted in — a missing email is a config bug, not a security boundary.
 - **Health / readiness endpoint:** `ServiceUnavailableError` is **503** and is what `/health` raises when the database readiness probe (`SELECT 1` via `warmup_connection`, in `health_service.check_readiness`) fails. It is a **dedicated class** rather than a reuse of `DatabaseConnectionError` (also 503) on purpose: the readiness signal stays generic — `/health` reports "not ready" without leaking which subsystem failed — and the health path is decoupled from the request-time DB-error translation, so a future change to that translation cannot silently alter the health contract.
 
+## Application Factory & Entrypoint
+
+- **CORS wildcard is rejected at boot, not at runtime.** `create_app()` raises `RuntimeError` if `CORS_ALLOWED_ORIGINS` contains `*`: a wildcard is incompatible with `allow_credentials=True`, so a misconfigured deploy crashes at startup rather than returning a runtime 4xx.
+- **Logging is a dev/prod asymmetry.** `configure_logging()` runs **only from `main.py`** (the prod entrypoint); the dev server (`uvicorn --reload`) never imports `main.py`, so dev keeps uvicorn's own defaults. `main.py` passes `uvicorn.run(..., log_config=None)` — dropping it lets uvicorn reinstall its own dictConfig and silently override ours. `build_logging_config` enumerates `uvicorn`, `uvicorn.error` and `uvicorn.access` explicitly because `uvicorn.access` is a sibling logger, not a child of `uvicorn`: any new `uvicorn.*` logger must be added by hand or it won't inherit the config.
+
 ## Extension
 
 ### New identity provider
