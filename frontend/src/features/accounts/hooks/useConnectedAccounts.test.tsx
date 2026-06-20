@@ -12,15 +12,24 @@
  * account created at the start of the flow.
  */
 
+import type { ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import useConnectedAccounts from './useConnectedAccounts';
+import { I18nProvider } from '../../../lib/i18n';
 import { server } from '../../../test/msw/server';
 
 const API_BASE = 'http://localhost:8000';
 const MAILBOX_ID = 'mb_test';
+
+// The hook now reads error copy through ``useTranslation``, so every
+// ``renderHook`` must run inside the real I18nProvider. The language is pinned
+// to Spanish (seeded below) so the existing Spanish error-copy assertions hold.
+function I18nWrapper({ children }: { children: ReactNode }) {
+  return <I18nProvider>{children}</I18nProvider>;
+}
 
 const EXISTING_ACCOUNT = {
   account_id: 'acc_existing',
@@ -67,6 +76,7 @@ let popup: FakePopup;
 let openSpy: MockInstance<typeof window.open>;
 
 beforeEach(() => {
+  window.localStorage.setItem('lang', 'es');
   popup = createFakePopup();
   openSpy = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
 });
@@ -74,10 +84,11 @@ beforeEach(() => {
 afterEach(() => {
   openSpy.mockRestore();
   server.resetHandlers();
+  window.localStorage.clear();
 });
 
 async function setupHook() {
-  const rendered = renderHook(() => useConnectedAccounts(MAILBOX_ID));
+  const rendered = renderHook(() => useConnectedAccounts(MAILBOX_ID), { wrapper: I18nWrapper });
   await waitFor(() => expect(rendered.result.current.loading).toBe(false));
   act(() => {
     rendered.result.current.setSelectedProvider('gmail');
@@ -96,7 +107,7 @@ async function setupHookWithAccount() {
       HttpResponse.json([EXISTING_ACCOUNT]),
     ),
   );
-  const rendered = renderHook(() => useConnectedAccounts(MAILBOX_ID));
+  const rendered = renderHook(() => useConnectedAccounts(MAILBOX_ID), { wrapper: I18nWrapper });
   await waitFor(() => expect(rendered.result.current.entries).toHaveLength(1));
   return rendered;
 }
@@ -305,5 +316,79 @@ describe('useConnectedAccounts.reconnectAccount — interactive OAuth re-auth', 
     expect(result.current.entries[0].account.account_id).toBe('acc_existing');
     expect(result.current.error?.message).toContain('Failed to start the account connect flow.');
     expect(popup.closed).toBe(true);
+  });
+});
+
+describe('useConnectedAccounts.editAccountLabel — inline rename', () => {
+  it('PATCHes the new label and replaces the entry in place (no query invalidation)', async () => {
+    let patchedBody: Record<string, unknown> | null = null;
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.patch(
+        `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`,
+        async ({ params, request }) => {
+          patchedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({
+            ...EXISTING_ACCOUNT,
+            account_id: String(params.accountId),
+            display_label: String(patchedBody.display_label),
+          });
+        },
+      ),
+    );
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.editAccountLabel('acc_existing', '  Personal Gmail  ');
+    });
+
+    expect(ok).toBe(true);
+    // The label is trimmed before it reaches the wire.
+    expect(patchedBody).toEqual({ display_label: 'Personal Gmail' });
+    // The hook holds its accounts in useState, so the updated AccountOut
+    // replaces the entry's account in place (the card re-renders).
+    expect(result.current.entries[0].account.display_label).toBe('Personal Gmail');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('does nothing and returns false for a blank label', async () => {
+    let called = false;
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.patch(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () => {
+        called = true;
+        return HttpResponse.json(EXISTING_ACCOUNT);
+      }),
+    );
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.editAccountLabel('acc_existing', '   ');
+    });
+
+    expect(ok).toBe(false);
+    expect(called).toBe(false);
+    expect(result.current.entries[0].account.display_label).toBe('Gmail');
+  });
+
+  it('surfaces the error and keeps the old label when the PATCH fails', async () => {
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.patch(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () =>
+        HttpResponse.json(
+          { error: { code: 'account_operation_error', message: 'Failed to update account.' } },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.editAccountLabel('acc_existing', 'New Label');
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.entries[0].account.display_label).toBe('Gmail');
+    expect(result.current.error?.message).toContain('Failed to update account.');
   });
 });

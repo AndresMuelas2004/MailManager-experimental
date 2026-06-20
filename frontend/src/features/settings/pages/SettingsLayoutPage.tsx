@@ -1,0 +1,58 @@
+import { NavLink, Outlet, useParams } from 'react-router-dom';
+import { Database, Info, Inbox, Languages, Link as LinkIcon, User } from 'lucide-react';
+import type { ComponentType } from 'react';
+
+import { useTranslation } from '../../../lib/i18n';
+
+type SectionDef = {
+  to: string;
+  labelKey: string;
+  icon: ComponentType<{ className?: string }>;
+  // The "Tu cuenta" index route must match exactly, otherwise it stays active
+  // for every nested settings path.
+  end?: boolean;
+};
+
+const SECTIONS: SectionDef[] = [
+  { to: '', labelKey: 'settings.navAccount', icon: User, end: true },
+  { to: 'accounts', labelKey: 'settings.navConnectedAccounts', icon: LinkIcon },
+  { to: 'mailboxes', labelKey: 'settings.navMailboxes', icon: Inbox },
+  { to: 'preferences', labelKey: 'settings.navLanguage', icon: Languages },
+  { to: 'data', labelKey: 'settings.navData', icon: Database },
+  { to: 'about', labelKey: 'settings.navAbout', icon: Info },
+];
+
+export default function SettingsLayoutPage() {
+  const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { t } = useTranslation();
+  const base = `/m/${mailboxId}/settings`;
+
+  return (
+    <div className="flex h-full min-h-0">
+      <nav className="flex w-[240px] shrink-0 flex-col gap-1 border-r border-zinc-200 bg-white px-3 py-6">
+        <h2 className="px-3 pb-3 text-lg font-bold tracking-tight text-zinc-900">
+          {t('settings.title')}
+        </h2>
+        {SECTIONS.map(({ to, labelKey, icon: Icon, end }) => (
+          <NavLink
+            key={to || 'index'}
+            to={to ? `${base}/${to}` : base}
+            end={end}
+            className={({ isActive }) =>
+              `flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
+                isActive ? 'bg-blue-50 text-blue-600' : 'text-zinc-600 hover:bg-zinc-50'
+              }`
+            }
+          >
+            <Icon className="h-[18px] w-[18px]" />
+            {t(labelKey)}
+          </NavLink>
+        ))}
+      </nav>
+
+      <div className="min-w-0 flex-1 overflow-auto">
+        <Outlet />
+      </div>
+    </div>
+  );
+}

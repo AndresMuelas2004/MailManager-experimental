@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Mail } from 'lucide-react';
 
 import { PROVIDER_OPTIONS, getProviderMeta } from '../../../lib/providers';
+import { useTranslation } from '../../../lib/i18n';
 
 type Props = {
   value: string;
@@ -9,6 +10,7 @@ type Props = {
 };
 
 export default function ProviderSelect({ value, onChange }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const selected = value ? getProviderMeta(value) : null;
@@ -38,7 +40,7 @@ export default function ProviderSelect({ value, onChange }: Props) {
 
   return (
     <div ref={containerRef} className="relative flex flex-col gap-2">
-      <label className="text-sm font-medium text-zinc-900">Proveedor</label>
+      <label className="text-sm font-medium text-zinc-900">{t('accounts.providerLabel')}</label>
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -50,7 +52,7 @@ export default function ProviderSelect({ value, onChange }: Props) {
             <span className="text-zinc-900">{selected.label}</span>
           </span>
         ) : (
-          <span className="text-zinc-400">Selecciona un proveedor...</span>
+          <span className="text-zinc-400">{t('accounts.providerPlaceholder')}</span>
         )}
         <ChevronDown className="h-4 w-4 text-zinc-500" />
       </button>

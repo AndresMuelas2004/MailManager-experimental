@@ -6,12 +6,14 @@ import {
   connectAccount,
   getAccount,
   deleteAccount,
+  updateAccount,
   getApiOrigin,
 } from '../../../api/endpoints/accounts';
 import { syncEmailMetadata, listEmails } from '../../../api/endpoints/emails';
 import { syncDrafts } from '../../../api/endpoints/drafts';
 import { toUiError } from '../../../api/client/errors';
 import { getProviderMeta } from '../../../lib/providers';
+import { useTranslation } from '../../../lib/i18n';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
@@ -75,10 +77,12 @@ type UseConnectedAccountsReturn = {
   addAccount: () => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
+  editAccountLabel: (accountId: string, label: string) => Promise<boolean>;
   error: UiError | null;
 };
 
 export default function useConnectedAccounts(mailboxId: string): UseConnectedAccountsReturn {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<AccountEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [displayLabel, setDisplayLabel] = useState('');
@@ -150,10 +154,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     // browser blocks it; the authorization URL is assigned once known.
     const popup = window.open('about:blank', 'mailmanager-oauth-connect', OAUTH_POPUP_FEATURES);
     if (!popup) {
-      setError({
-        message:
-          'El navegador ha bloqueado la ventana de autenticación. Permite ventanas emergentes para este sitio e inténtalo de nuevo.',
-      });
+      setError({ message: t('errors.popupBlocked') });
       return;
     }
     setAddingAccount(true);
@@ -192,9 +193,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         await deleteAccount(mailboxId, account.account_id).catch(() => {});
         createdAccountId = null;
         setError({
-          message:
-            outcome?.message ??
-            'No se completó la autenticación de la cuenta, así que no se ha añadido. Inténtalo de nuevo.',
+          message: outcome?.message ?? t('errors.connectFailed'),
         });
         return;
       }
@@ -245,7 +244,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         ),
       );
     }
-  }, [canAdd, mailboxId, selectedProvider, displayLabel]);
+  }, [canAdd, mailboxId, selectedProvider, displayLabel, t]);
 
   const removeAccount = useCallback(
     async (accountId: string) => {
@@ -260,6 +259,29 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     [mailboxId],
   );
 
+  // Rename an already-connected account's label. The hook holds its accounts in
+  // ``entries`` (useState, NOT TanStack Query — §1.2), so there is no query to
+  // invalidate: the updated AccountOut from the backend replaces the entry's
+  // ``account`` in place so the card re-renders with the new label.
+  const editAccountLabel = useCallback(
+    async (accountId: string, label: string): Promise<boolean> => {
+      const trimmed = label.trim();
+      if (trimmed.length === 0) return false;
+      setError(null);
+      try {
+        const updated = await updateAccount(mailboxId, accountId, { display_label: trimmed });
+        setEntries((prev) =>
+          prev.map((e) => (e.account.account_id === accountId ? { ...e, account: updated } : e)),
+        );
+        return true;
+      } catch (err) {
+        setError(toUiError(err));
+        return false;
+      }
+    },
+    [mailboxId],
+  );
+
   const reconnectAccount = useCallback(
     async (accountId: string) => {
       setError(null);
@@ -268,10 +290,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
       // browser blocks it; the authorization URL is assigned once known.
       const popup = window.open('about:blank', 'mailmanager-oauth-connect', OAUTH_POPUP_FEATURES);
       if (!popup) {
-        setError({
-          message:
-            'El navegador ha bloqueado la ventana de autenticación. Permite ventanas emergentes para este sitio e inténtalo de nuevo.',
-        });
+        setError({ message: t('errors.popupBlocked') });
         return;
       }
 
@@ -295,7 +314,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         if (outcome?.ok === false) {
           // The provider/connect step explicitly failed. Keep the account.
           setError({
-            message: outcome.message ?? 'No se pudo reconectar la cuenta. Inténtalo de nuevo.',
+            message: outcome.message ?? t('errors.reconnectFailed'),
           });
           setEntries((prev) =>
             prev.map((e) =>
@@ -352,7 +371,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         );
       }
     },
-    [mailboxId],
+    [mailboxId, t],
   );
 
   return {
@@ -367,6 +386,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     addAccount,
     removeAccount,
     reconnectAccount,
+    editAccountLabel,
     error,
   };
 }

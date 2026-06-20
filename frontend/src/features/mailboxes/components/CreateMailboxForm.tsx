@@ -1,5 +1,6 @@
 import { Lightbulb } from 'lucide-react';
 import type { UiError } from '../../../api/client/errors';
+import { useTranslation } from '../../../lib/i18n';
 
 type Props = {
   displayName: string;
@@ -18,25 +19,24 @@ export default function CreateMailboxForm({
   loading,
   error,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-20">
       <div className="flex w-full max-w-[420px] flex-col gap-8">
         <span className="w-fit rounded-full bg-blue-50 px-4 py-1.5 text-[13px] font-medium text-blue-600">
-          Paso 1 — Configuración inicial
+          {t('createMailbox.step')}
         </span>
 
         <div className="flex flex-col gap-2.5">
           <h2 className="text-[32px] font-bold tracking-tight text-slate-950">
-            Crea tu primera bandeja
+            {t('createMailbox.title')}
           </h2>
-          <p className="text-base leading-[1.5] text-slate-500">
-            Dale un nombre a tu bandeja de correo unificada. Podrás cambiarlo más tarde.
-          </p>
+          <p className="text-base leading-[1.5] text-slate-500">{t('createMailbox.subtitle')}</p>
         </div>
 
         <div className="flex flex-col gap-2">
           <label htmlFor="mailbox-name" className="text-sm font-medium text-zinc-900">
-            Nombre de la bandeja
+            {t('createMailbox.nameLabel')}
           </label>
           <input
             id="mailbox-name"
@@ -46,7 +46,7 @@ export default function CreateMailboxForm({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && canSubmit) onSubmit();
             }}
-            placeholder="Ej: Trabajo, Personal, Universidad..."
+            placeholder={t('createMailbox.namePlaceholder')}
             maxLength={120}
             className="h-12 w-full rounded-xl border-[1.5px] border-zinc-200 bg-white px-4 text-[15px] text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
           />
@@ -65,7 +65,7 @@ export default function CreateMailboxForm({
           {loading ? (
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
           ) : (
-            'Crear bandeja'
+            t('createMailbox.submit')
           )}
         </button>
 
@@ -73,7 +73,7 @@ export default function CreateMailboxForm({
 
         <div className="flex items-center justify-center gap-2">
           <Lightbulb className="h-4 w-4 text-slate-400" />
-          <span className="text-[13px] text-slate-400">Puedes crear más bandejas después</span>
+          <span className="text-[13px] text-slate-400">{t('createMailbox.hint')}</span>
         </div>
       </div>
     </div>

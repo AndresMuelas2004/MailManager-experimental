@@ -32,6 +32,15 @@ export const mailboxCreateSchema = z.object({
 });
 export type MailboxCreate = z.infer<typeof mailboxCreateSchema>;
 
+// Rename payload. Like ``mailboxCreateSchema`` it carries NO ``.min/.max``:
+// request schemas are not validated at runtime (``request<T>()`` validates
+// responses only). The 1..120 bound is enforced client-side in the rename
+// form/hook and authoritatively by the backend's Pydantic ``MailboxUpdate``.
+export const mailboxUpdateSchema = z.object({
+  display_name: z.string(),
+});
+export type MailboxUpdate = z.infer<typeof mailboxUpdateSchema>;
+
 export const mailboxOutSchema = z.object({
   mailbox_id: z.string(),
   display_name: z.string().nullable(),

@@ -1,4 +1,5 @@
 import ProviderSelect from './ProviderSelect';
+import { useTranslation } from '../../../lib/i18n';
 
 type Props = {
   displayLabel: string;
@@ -19,17 +20,18 @@ export default function AddAccountCard({
   canAdd,
   adding,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <div className="flex w-full flex-col items-center gap-4 rounded-2xl border-[1.5px] border-zinc-200 bg-white px-6 pb-4 pt-8">
-      <h3 className="text-base font-semibold text-zinc-900">Añadir cuenta</h3>
+      <h3 className="text-base font-semibold text-zinc-900">{t('accounts.addTitle')}</h3>
 
       <div className="flex w-full flex-col gap-2">
-        <label className="text-sm font-medium text-zinc-900">Nombre personalizado</label>
+        <label className="text-sm font-medium text-zinc-900">{t('accounts.customNameLabel')}</label>
         <input
           type="text"
           value={displayLabel}
           onChange={(e) => onDisplayLabelChange(e.target.value)}
-          placeholder="Ej: Cuenta principal (opcional)"
+          placeholder={t('accounts.customNamePlaceholder')}
           maxLength={120}
           className="h-11 w-full rounded-[10px] border-[1.5px] border-zinc-200 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
         />
@@ -50,7 +52,7 @@ export default function AddAccountCard({
         {adding ? (
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
         ) : (
-          'Añadir cuenta'
+          t('accounts.addButton')
         )}
       </button>
     </div>

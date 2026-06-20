@@ -45,6 +45,16 @@ export const handlers = [
       created_at: new Date().toISOString(),
     }),
   ),
+  http.patch(`${API_BASE}/mailboxes/:mailboxId`, async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      mailbox_id: String(params.mailboxId),
+      display_name: typeof body.display_name === 'string' ? body.display_name : 'Test mailbox',
+      owner_user_id: 'u_test',
+      created_at: new Date().toISOString(),
+    });
+  }),
+  http.delete(`${API_BASE}/mailboxes/:mailboxId`, () => HttpResponse.json({ status: 'deleted' })),
 
   // Accounts
   http.get(`${API_BASE}/mailboxes/:mailboxId/accounts`, () => HttpResponse.json([])),

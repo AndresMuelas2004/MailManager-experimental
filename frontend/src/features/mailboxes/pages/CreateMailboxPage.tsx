@@ -12,7 +12,7 @@ export default function CreateMailboxPage() {
 
   useEffect(() => {
     if (createdMailbox) {
-      navigate(`/m/${createdMailbox.mailbox_id}/accounts`, { replace: true });
+      navigate(`/m/${createdMailbox.mailbox_id}/inbox`, { replace: true });
     }
   }, [createdMailbox, navigate]);
 

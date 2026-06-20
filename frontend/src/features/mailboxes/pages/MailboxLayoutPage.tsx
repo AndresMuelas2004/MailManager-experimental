@@ -3,26 +3,26 @@ import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import { Filter, FileEdit, Inbox, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
-import { useAuth } from '../../../app/providers/AuthContext';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
+import { useTranslation } from '../../../lib/i18n';
 import Sidebar from '../../../components/ui/Sidebar';
 import useMailboxList from '../hooks/useMailboxList';
 
 // Inline because the array is mailbox-feature-only and the features layer's
 // "exactly three subdirs" rule (pages / hooks / components) does not allow a
-// dedicated constants file. Five entries are not worth a hop.
+// dedicated constants file. Labels are i18n keys resolved per render.
 const MAILBOX_NAV_ITEMS: Array<{
   icon: ComponentType<{ className?: string }>;
-  label: string;
+  labelKey: string;
   path: string;
 }> = [
-  { icon: Inbox, label: 'Bandeja unificada', path: 'inbox' },
-  { icon: Send, label: 'Enviados', path: 'sent' },
-  { icon: Star, label: 'Favoritos', path: 'favorites' },
-  { icon: Filter, label: 'Bandejas ficticias', path: 'virtual-mailboxes' },
-  { icon: ShieldAlert, label: 'Spam', path: 'spam' },
-  { icon: FileEdit, label: 'Borradores', path: 'drafts' },
-  { icon: Trash2, label: 'Papelera de reciclaje', path: 'trash' },
+  { icon: Inbox, labelKey: 'nav.inbox', path: 'inbox' },
+  { icon: Send, labelKey: 'nav.sent', path: 'sent' },
+  { icon: Star, labelKey: 'nav.favorites', path: 'favorites' },
+  { icon: Filter, labelKey: 'nav.virtualMailboxes', path: 'virtual-mailboxes' },
+  { icon: ShieldAlert, labelKey: 'nav.spam', path: 'spam' },
+  { icon: FileEdit, labelKey: 'nav.drafts', path: 'drafts' },
+  { icon: Trash2, labelKey: 'nav.trash', path: 'trash' },
 ];
 
 export default function MailboxLayoutPage() {
@@ -33,33 +33,25 @@ export default function MailboxLayoutPage() {
 
 function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const navigate = useNavigate();
-  const { logout, deleteCurrentUser } = useAuth();
+  const { t } = useTranslation();
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
   const composer = useDraftComposerContext();
 
-  const handleLogout = useCallback(async () => {
-    await logout();
-    navigate('/login', { replace: true });
-  }, [logout, navigate]);
-
-  const handleDeleteAccount = useCallback(async () => {
-    await deleteCurrentUser();
-    await logout();
-    navigate('/login', { replace: true });
-  }, [deleteCurrentUser, logout, navigate]);
-
-  const handleMailboxSelect = useCallback(
-    (id: string) => navigate(`/m/${id}/accounts`),
-    [navigate],
-  );
+  const handleMailboxSelect = useCallback((id: string) => navigate(`/m/${id}/inbox`), [navigate]);
 
   const handleMailboxCreate = useCallback(
     async (displayName: string) => {
       const created = await handleCreate(displayName);
-      if (created) navigate(`/m/${created.mailbox_id}/accounts`);
+      if (created) navigate(`/m/${created.mailbox_id}/inbox`);
     },
     [handleCreate, navigate],
   );
+
+  const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path }) => ({
+    icon,
+    label: t(labelKey),
+    path,
+  }));
 
   return (
     <div className="flex h-screen bg-[#F9FAFB]">
@@ -67,12 +59,10 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         mailboxId={mailboxId}
         mailboxName={currentMailboxName}
         mailboxes={mailboxes}
-        navItems={MAILBOX_NAV_ITEMS}
+        navItems={navItems}
         onMailboxSelect={handleMailboxSelect}
         onMailboxCreate={handleMailboxCreate}
         onCompose={composer.openForNewEmail}
-        onLogout={handleLogout}
-        onDeleteAccount={handleDeleteAccount}
       />
       <div className="relative min-w-0 flex-1 overflow-auto">
         <Outlet />

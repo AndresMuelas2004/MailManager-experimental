@@ -5,6 +5,7 @@ import {
   statusResponseSchema,
   type MailboxCreate,
   type MailboxOut,
+  type MailboxUpdate,
   type StatusResponse,
 } from '../types/dto';
 
@@ -18,6 +19,14 @@ export function listMailboxes(): Promise<MailboxOut[]> {
 
 export function getMailbox(mailboxId: string): Promise<MailboxOut> {
   return request(`/mailboxes/${mailboxId}`, { schema: mailboxOutSchema });
+}
+
+export function updateMailbox(mailboxId: string, payload: MailboxUpdate): Promise<MailboxOut> {
+  return request(`/mailboxes/${mailboxId}`, {
+    method: 'PATCH',
+    body: payload,
+    schema: mailboxOutSchema,
+  });
 }
 
 export function deleteMailbox(mailboxId: string): Promise<StatusResponse> {

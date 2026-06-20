@@ -4,10 +4,12 @@ import useConnectedAccounts from '../hooks/useConnectedAccounts';
 import AddAccountCard from '../components/AddAccountCard';
 import AccountCard from '../components/AccountCard';
 import Spinner from '../../../components/common/Spinner';
+import { useTranslation } from '../../../lib/i18n';
 
 export default function ConnectedAccountsPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   const {
     entries,
@@ -21,6 +23,7 @@ export default function ConnectedAccountsPage() {
     addAccount,
     removeAccount,
     reconnectAccount,
+    editAccountLabel,
     error,
   } = useConnectedAccounts(mailboxId!);
 
@@ -35,9 +38,11 @@ export default function ConnectedAccountsPage() {
   return (
     <div className="flex flex-col gap-8 px-8 pt-8 pb-6">
       <div className="flex flex-col gap-2">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">Cuentas conectadas</h1>
+        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+          {t('accounts.title')}
+        </h1>
         <p className="max-w-[600px] text-[15px] leading-[1.5] text-zinc-500">
-          Gestiona las cuentas de correo vinculadas a tu bandeja unificada.
+          {t('accounts.subtitle')}
         </p>
       </div>
 
@@ -61,6 +66,7 @@ export default function ConnectedAccountsPage() {
               emails={entry.emails}
               status={entry.status}
               onClick={() => navigate(`/m/${mailboxId}/account/${entry.account.account_id}`)}
+              onEditLabel={(label) => editAccountLabel(entry.account.account_id, label)}
               onReconnect={() => reconnectAccount(entry.account.account_id)}
               onDelete={() => removeAccount(entry.account.account_id)}
             />

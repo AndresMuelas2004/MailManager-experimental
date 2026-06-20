@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { EllipsisVertical, Loader2, Mail } from 'lucide-react';
+import { Check, EllipsisVertical, Loader2, Mail, X } from 'lucide-react';
 
 import { formatShortDate } from '../../../lib/formatters';
 import { getProviderMeta, isGenericLabel } from '../../../lib/providers';
+import { useTranslation } from '../../../lib/i18n';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import AccountCardDropdown from './AccountCardDropdown';
 
@@ -11,6 +12,7 @@ type Props = {
   emails: EmailMetadataOut[];
   status: 'syncing' | 'ready' | 'error';
   onClick?: () => void;
+  onEditLabel?: (label: string) => void;
   onReconnect?: () => void;
   onDelete?: () => void;
 };
@@ -20,9 +22,11 @@ export default function AccountCard({
   emails,
   status,
   onClick,
+  onEditLabel,
   onReconnect,
   onDelete,
 }: Props) {
+  const { t } = useTranslation();
   const meta = getProviderMeta(account.provider);
   const headerBg = meta.headerBgClass;
   const headerColor = meta.headerTextClass;
@@ -34,8 +38,10 @@ export default function AccountCard({
       ? `${account.display_label} - ${email}`
       : (email ?? account.display_label);
 
-  const hasActions = !!onDelete || !!onReconnect;
+  const hasActions = !!onDelete || !!onReconnect || !!onEditLabel;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,28 +57,81 @@ export default function AccountCard({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
 
+  const startEditing = () => {
+    setMenuOpen(false);
+    setDraft(account.display_label);
+    setEditing(true);
+  };
+
+  const submitEditing = () => {
+    const trimmed = draft.trim();
+    if (trimmed.length === 0) return;
+    onEditLabel?.(trimmed);
+    setEditing(false);
+  };
+
   return (
     <div
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onClick={onClick}
+      role={onClick && !editing ? 'button' : undefined}
+      tabIndex={onClick && !editing ? 0 : undefined}
+      onClick={editing ? undefined : onClick}
       onKeyDown={
-        onClick
+        onClick && !editing
           ? (e) => {
               if (e.key === 'Enter') onClick();
             }
           : undefined
       }
       className={`flex w-full flex-col overflow-hidden rounded-2xl border-[1.5px] border-zinc-200 bg-white ${
-        onClick ? 'cursor-pointer transition-shadow hover:shadow-md' : ''
+        onClick && !editing ? 'cursor-pointer transition-shadow hover:shadow-md' : ''
       }`}
     >
       <div className={`flex items-center gap-2 px-4 py-3 ${headerBg}`}>
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Mail className={`h-3.5 w-3.5 shrink-0 ${headerColor}`} />
-          <span className={`truncate text-xs font-semibold ${headerColor}`}>{headerText}</span>
-        </div>
-        {hasActions && (
+        {editing ? (
+          <div
+            className="flex min-w-0 flex-1 items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            role="presentation"
+          >
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitEditing();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              placeholder={t('accounts.editLabelPlaceholder')}
+              maxLength={120}
+              autoFocus
+              className="h-7 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={submitEditing}
+              disabled={draft.trim().length === 0}
+              aria-label={t('common.save')}
+              className="grid h-6 w-6 shrink-0 place-items-center rounded bg-blue-600 text-white disabled:opacity-40"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              aria-label={t('common.cancel')}
+              className="grid h-6 w-6 shrink-0 place-items-center rounded text-zinc-500 hover:bg-black/5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Mail className={`h-3.5 w-3.5 shrink-0 ${headerColor}`} />
+            <span className={`truncate text-xs font-semibold ${headerColor}`}>{headerText}</span>
+          </div>
+        )}
+        {hasActions && !editing && (
           <div
             ref={menuRef}
             className="relative"
@@ -89,6 +148,7 @@ export default function AccountCard({
             </button>
             {menuOpen && (
               <AccountCardDropdown
+                onEditLabel={onEditLabel ? startEditing : undefined}
                 onReconnect={
                   onReconnect
                     ? () => {
@@ -114,19 +174,19 @@ export default function AccountCard({
       {status === 'syncing' && (
         <div className="flex flex-col items-center justify-center gap-3 px-4 py-10 text-center">
           <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
-          <p className="text-xs text-zinc-400">Sincronizando correos, un momento...</p>
+          <p className="text-xs text-zinc-400">{t('accounts.syncingEmails')}</p>
         </div>
       )}
 
       {status === 'error' && (
         <div className="px-4 py-8 text-center">
-          <p className="text-xs text-red-500">Error al sincronizar</p>
+          <p className="text-xs text-red-500">{t('accounts.syncError')}</p>
         </div>
       )}
 
       {status === 'ready' && emails.length === 0 && (
         <div className="px-4 py-8 text-center">
-          <p className="text-xs text-zinc-400">Sin correos todavía</p>
+          <p className="text-xs text-zinc-400">{t('accounts.noEmailsYet')}</p>
         </div>
       )}
 
@@ -156,7 +216,7 @@ export default function AccountCard({
                   emailItem.is_read ? 'font-normal text-zinc-500' : 'font-medium text-zinc-600'
                 }`}
               >
-                {emailItem.subject ?? '(Sin asunto)'}
+                {emailItem.subject ?? t('common.noSubject')}
               </span>
             </div>
           ))}

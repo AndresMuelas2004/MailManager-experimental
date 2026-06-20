@@ -4,11 +4,11 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import RequireAuth from './RequireAuth';
 import RootLayout from '../layout/RootLayout';
 import LoginPage from '../../features/auth/pages/LoginPage';
-import CreateMailboxPage from '../../features/mailboxes/pages/CreateMailboxPage';
 import MailboxGatewayPage from '../../features/mailboxes/pages/MailboxGatewayPage';
 import MailboxLayoutPage from '../../features/mailboxes/pages/MailboxLayoutPage';
 import DraftComposerMount from '../../features/drafts/pages/DraftComposerMount';
 
+const CreateMailboxPage = lazy(() => import('../../features/mailboxes/pages/CreateMailboxPage'));
 const ConnectedAccountsPage = lazy(
   () => import('../../features/accounts/pages/ConnectedAccountsPage'),
 );
@@ -20,6 +20,14 @@ const FavoritesPage = lazy(() => import('../../features/emails/pages/FavoritesPa
 const VirtualMailboxesPage = lazy(() => import('../../features/emails/pages/VirtualMailboxesPage'));
 const VirtualMailboxViewPage = lazy(
   () => import('../../features/emails/pages/VirtualMailboxViewPage'),
+);
+const SettingsLayoutPage = lazy(() => import('../../features/settings/pages/SettingsLayoutPage'));
+const SettingsAccountPage = lazy(() => import('../../features/settings/pages/SettingsAccountPage'));
+const PreferencesPage = lazy(() => import('../../features/settings/pages/PreferencesPage'));
+const DataSyncPage = lazy(() => import('../../features/settings/pages/DataSyncPage'));
+const AboutPage = lazy(() => import('../../features/settings/pages/AboutPage'));
+const MailboxesSettingsPage = lazy(
+  () => import('../../features/mailboxes/pages/MailboxesSettingsPage'),
 );
 
 const router = createBrowserRouter([
@@ -43,7 +51,6 @@ const router = createBrowserRouter([
               {
                 element: <DraftComposerMount />,
                 children: [
-                  { path: 'accounts', element: <ConnectedAccountsPage /> },
                   { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
                   { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
                   { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
@@ -66,6 +73,22 @@ const router = createBrowserRouter([
                       { path: 'drafts', element: <AccountDraftsPage /> },
                     ],
                   },
+                ],
+              },
+              // Settings area — sibling of DraftComposerMount (not a mail view,
+              // so it does not need the composer singleton mounted). The
+              // ConnectedAccountsPage reused here is the same lazy component the
+              // old standalone /accounts route used.
+              {
+                path: 'settings',
+                element: <SettingsLayoutPage />,
+                children: [
+                  { index: true, element: <SettingsAccountPage /> },
+                  { path: 'accounts', element: <ConnectedAccountsPage /> },
+                  { path: 'mailboxes', element: <MailboxesSettingsPage /> },
+                  { path: 'preferences', element: <PreferencesPage /> },
+                  { path: 'data', element: <DataSyncPage /> },
+                  { path: 'about', element: <AboutPage /> },
                 ],
               },
             ],

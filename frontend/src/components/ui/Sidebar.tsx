@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Inbox, Send, Link, Settings, ChevronDown } from 'lucide-react';
+import { Inbox, Send, Settings, ChevronDown } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import MailboxDropdown from './MailboxDropdown';
-import SettingsDropdown from './SettingsDropdown';
+import { useTranslation } from '../../lib/i18n';
 
 type MailboxItem = {
   mailbox_id: string;
@@ -25,8 +25,6 @@ type Props = {
   onMailboxSelect: (mailboxId: string) => void;
   onMailboxCreate: (displayName: string) => void;
   onCompose: () => void;
-  onLogout: () => void;
-  onDeleteAccount: () => void;
 };
 
 export default function Sidebar({
@@ -37,37 +35,11 @@ export default function Sidebar({
   onMailboxSelect,
   onMailboxCreate,
   onCompose,
-  onLogout,
-  onDeleteAccount,
 }: Props) {
+  const { t } = useTranslation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsRef = useRef<HTMLDivElement>(null);
   const base = `/m/${mailboxId}`;
   const { search } = useLocation();
-
-  useEffect(() => {
-    if (!settingsOpen) return;
-
-    function handleClickOutside(e: MouseEvent) {
-      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
-        setSettingsOpen(false);
-      }
-    }
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        setSettingsOpen(false);
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [settingsOpen]);
 
   return (
     <aside className="sticky top-0 flex h-screen max-h-screen w-[260px] shrink-0 flex-col gap-1 overflow-visible border-r border-zinc-200 bg-white px-4 py-6">
@@ -87,7 +59,7 @@ export default function Sidebar({
           <div className="flex items-center gap-2.5">
             <Inbox className="h-[18px] w-[18px] text-blue-600" />
             <span className="text-sm font-semibold text-zinc-900">
-              {mailboxName || 'Cargando...'}
+              {mailboxName || t('sidebar.loadingMailbox')}
             </span>
           </div>
           <ChevronDown className="h-4 w-4 text-zinc-500" />
@@ -126,54 +98,29 @@ export default function Sidebar({
         ))}
       </nav>
 
-      <div className="my-2 h-px bg-zinc-200" />
-      <p className="px-3 text-[11px] font-semibold tracking-wider text-zinc-400">
-        CUENTAS CONECTADAS
-      </p>
-      <NavLink
-        to={`${base}/accounts`}
-        className={({ isActive }) =>
-          `flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-semibold ${
-            isActive ? 'bg-blue-50 text-blue-600' : 'text-zinc-500 hover:bg-zinc-50'
-          }`
-        }
-      >
-        <Link className="h-5 w-5" />
-        Cuentas conectadas
-      </NavLink>
-
       <div className="flex-1" />
 
       <div className="flex justify-center py-4">
         <button
           type="button"
           onClick={onCompose}
+          aria-label={t('sidebar.compose')}
           className="flex h-[52px] w-[52px] items-center justify-center rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/25 transition-colors hover:bg-blue-700"
         >
           <Send className="h-6 w-6" />
         </button>
       </div>
 
-      <div ref={settingsRef} className="relative px-1 py-2">
-        <button
-          type="button"
-          onClick={() => setSettingsOpen((v) => !v)}
-          className="text-zinc-400 hover:text-zinc-600"
+      <div className="px-1 py-2">
+        <NavLink
+          to={`${base}/settings`}
+          aria-label={t('sidebar.settings')}
+          className={({ isActive }) =>
+            `inline-flex ${isActive ? 'text-blue-600' : 'text-zinc-400 hover:text-zinc-600'}`
+          }
         >
           <Settings className="h-5 w-5" />
-        </button>
-        {settingsOpen && (
-          <SettingsDropdown
-            onLogout={() => {
-              setSettingsOpen(false);
-              onLogout();
-            }}
-            onDeleteAccount={() => {
-              setSettingsOpen(false);
-              onDeleteAccount();
-            }}
-          />
-        )}
+        </NavLink>
       </div>
     </aside>
   );

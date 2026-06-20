@@ -15,7 +15,7 @@ export default function MailboxGatewayPage() {
   }
 
   if (mailboxes.length > 0) {
-    return <Navigate to={`/m/${mailboxes[0].mailbox_id}/accounts`} replace />;
+    return <Navigate to={`/m/${mailboxes[0].mailbox_id}/inbox`} replace />;
   }
 
   return <Navigate to="/create-mailbox" replace />;
