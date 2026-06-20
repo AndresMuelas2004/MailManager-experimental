@@ -5,6 +5,7 @@ import { RefreshCw, Plus } from 'lucide-react';
 import { buildAccountMap, formatShortDate, resolveAccount } from '../../../lib/formatters';
 import Spinner from '../../../components/common/Spinner';
 import Checkbox from '../../../components/common/Checkbox';
+import { useTranslation } from '../../../lib/i18n';
 import type { HeaderCheckboxState } from '../../../lib/hooks/useSelection';
 import type { DraftOut, AccountOut } from '../../../api/types/dto';
 
@@ -39,6 +40,7 @@ export default function DraftsTable({
   headerCheckboxState = 'unchecked',
   bulkBar,
 }: Props) {
+  const { t } = useTranslation();
   const accountsById = useMemo(() => buildAccountMap(accounts), [accounts]);
 
   if (loading) {
@@ -62,7 +64,7 @@ export default function DraftsTable({
               <Checkbox
                 state={headerCheckboxState}
                 onClick={onToggleAll!}
-                ariaLabel="Seleccionar los 50 borradores más recientes"
+                ariaLabel={t('drafts.selectTopRecent')}
               />
             ) : (
               <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
@@ -73,10 +75,10 @@ export default function DraftsTable({
                 onClick={onSync}
                 disabled={syncing}
                 className="flex items-center gap-1.5 rounded px-2 py-1 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 disabled:opacity-50"
-                aria-label="Sincronizar borradores"
+                aria-label={t('drafts.syncAria')}
               >
                 <RefreshCw className={`h-[18px] w-[18px] ${syncing ? 'animate-spin' : ''}`} />
-                Sincronizar
+                {t('drafts.sync')}
               </button>
             ) : (
               <RefreshCw className="h-[18px] w-[18px] text-zinc-500" />
@@ -88,11 +90,11 @@ export default function DraftsTable({
                 className="flex items-center gap-1.5 rounded px-2 py-1 text-[13px] font-medium text-blue-600 transition-colors hover:bg-blue-50"
               >
                 <Plus className="h-[18px] w-[18px]" />
-                Nuevo borrador
+                {t('drafts.newDraft')}
               </button>
             )}
             <span className="text-[13px] font-medium text-zinc-500">
-              {drafts.length} borradores
+              {t('drafts.count', { count: drafts.length })}
             </span>
           </>
         )}
@@ -100,20 +102,20 @@ export default function DraftsTable({
 
       <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
         <div className="w-[18px]" />
-        <div className="w-[120px]">Remitente</div>
-        <div className="w-[170px]">Para</div>
-        <div className="w-[170px]">De</div>
-        <div className="flex-1">Asunto</div>
-        <div className="w-16 text-right">Fecha</div>
+        <div className="w-[120px]">{t('emailTable.colSender')}</div>
+        <div className="w-[170px]">{t('emailTable.colTo')}</div>
+        <div className="w-[170px]">{t('emailTable.colFrom')}</div>
+        <div className="flex-1">{t('emailTable.colSubject')}</div>
+        <div className="w-16 text-right">{t('emailTable.colDate')}</div>
       </div>
 
       {drafts.length === 0 ? (
-        <div className="py-16 text-center text-sm text-zinc-400">No hay borradores guardados</div>
+        <div className="py-16 text-center text-sm text-zinc-400">{t('drafts.empty')}</div>
       ) : (
         drafts.map((draft) => {
           const { providerName, accountEmail } = resolveAccount(draft.account_id, accountsById);
           const toDisplay =
-            draft.to_recipients.length > 0 ? draft.to_recipients[0] : '(Sin destinatario)';
+            draft.to_recipients.length > 0 ? draft.to_recipients[0] : t('drafts.noRecipient');
           const checked = isSelected?.(draft) ?? false;
           const rowBg = checked ? 'bg-blue-50' : 'bg-white';
           const clickable = Boolean(onRowClick);
@@ -130,7 +132,7 @@ export default function DraftsTable({
                 <Checkbox
                   state={checked ? 'checked' : 'unchecked'}
                   onClick={() => onToggle!(draft)}
-                  ariaLabel="Seleccionar borrador"
+                  ariaLabel={t('drafts.selectDraft')}
                 />
               ) : (
                 <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
@@ -139,7 +141,7 @@ export default function DraftsTable({
               <div className="w-[170px] truncate text-xs text-zinc-900">{toDisplay}</div>
               <div className="w-[170px] truncate text-xs text-zinc-900">{accountEmail}</div>
               <div className="flex-1 truncate text-[13px] text-zinc-900">
-                {draft.subject || '(Sin asunto)'}
+                {draft.subject || t('common.noSubject')}
               </div>
               <div className="w-16 text-right text-xs text-zinc-900">
                 {formatShortDate(draft.updated_at)}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 
+import { useTranslation } from '../../../lib/i18n';
 import type {
   AccountOut,
   MailboxOut,
@@ -36,11 +37,11 @@ const EMPTY_FILTER: FilterDraft = {
   is_favorite: '',
 };
 
-const BOX_OPTIONS: Array<{ value: VirtualMailboxFilterBox; label: string }> = [
-  { value: 'ALL_MAIL', label: 'Bandeja unificada (sin trash/spam)' },
-  { value: 'SENT', label: 'Enviados' },
-  { value: 'SPAM', label: 'Spam' },
-  { value: 'TRASH', label: 'Papelera' },
+const BOX_OPTIONS: Array<{ value: VirtualMailboxFilterBox; labelKey: string }> = [
+  { value: 'ALL_MAIL', labelKey: 'vmboxForm.boxAllMail' },
+  { value: 'SENT', labelKey: 'vmboxForm.boxSent' },
+  { value: 'SPAM', labelKey: 'vmboxForm.boxSpam' },
+  { value: 'TRASH', labelKey: 'vmboxForm.boxTrash' },
 ];
 
 function pickFilter(filter: FilterDraft): VirtualMailboxFilterPayload {
@@ -77,6 +78,7 @@ export default function VirtualMailboxForm({
   onSubmit,
   onCancel,
 }: Props) {
+  const { t } = useTranslation();
   const [name, setName] = useState(initial?.display_name ?? '');
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
     () => initial?.account_ids ?? [],
@@ -132,11 +134,11 @@ export default function VirtualMailboxForm({
     setSubmitError(null);
     const trimmedName = name.trim();
     if (trimmedName.length === 0) {
-      setSubmitError('Indica un nombre para la bandeja ficticia.');
+      setSubmitError(t('vmboxForm.errorNameRequired'));
       return;
     }
     if (selectedAccountIds.length === 0) {
-      setSubmitError('Selecciona al menos una cuenta.');
+      setSubmitError(t('vmboxForm.errorAccountRequired'));
       return;
     }
     const payload: VirtualMailboxCreate = {
@@ -147,8 +149,7 @@ export default function VirtualMailboxForm({
     try {
       await onSubmit(payload);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'No se pudo guardar la bandeja ficticia.';
+      const message = err instanceof Error ? err.message : t('vmboxForm.errorSaveFailed');
       setSubmitError(message);
     }
   };
@@ -157,7 +158,7 @@ export default function VirtualMailboxForm({
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <label htmlFor="vmb-name" className="text-[13px] font-semibold text-zinc-700">
-          Nombre
+          {t('vmboxForm.nameLabel')}
         </label>
         <input
           id="vmb-name"
@@ -166,22 +167,21 @@ export default function VirtualMailboxForm({
           onChange={(e) => setName(e.target.value)}
           maxLength={120}
           required
-          placeholder="Ej. Facturación · Newsletters · Notificaciones de banca"
+          placeholder={t('vmboxForm.namePlaceholder')}
           className="rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         />
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-[13px] font-semibold text-zinc-700">Cuentas</legend>
-        <p className="text-xs text-zinc-500">
-          Elige una o varias cuentas. Los desplegables agrupan tus cuentas por bandeja real solo
-          para localizarlas — la bandeja ficticia agrega los correos de las cuentas marcadas.
-        </p>
+        <legend className="text-[13px] font-semibold text-zinc-700">
+          {t('vmboxForm.accountsLegend')}
+        </legend>
+        <p className="text-xs text-zinc-500">{t('vmboxForm.accountsHelp')}</p>
 
         {/* Chips de cuentas seleccionadas */}
         <div className="flex min-h-[36px] flex-wrap gap-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-2">
           {selectedAccountIds.length === 0 ? (
-            <span className="text-xs text-zinc-400">No has añadido ninguna cuenta todavía.</span>
+            <span className="text-xs text-zinc-400">{t('vmboxForm.noAccountsAdded')}</span>
           ) : (
             selectedAccountIds.map((aid) => {
               const account = accountsById.get(aid);
@@ -197,7 +197,7 @@ export default function VirtualMailboxForm({
                   <button
                     type="button"
                     onClick={() => handleRemoveAccount(aid)}
-                    aria-label={`Quitar ${label}`}
+                    aria-label={t('vmboxForm.removeAccount', { label })}
                     className="grid h-4 w-4 place-items-center rounded-full text-blue-600 hover:bg-blue-200"
                   >
                     <X className="h-3 w-3" />
@@ -212,7 +212,7 @@ export default function VirtualMailboxForm({
         <div className="mt-1 max-h-72 overflow-auto rounded-md border border-zinc-300 text-sm">
           {sortedMailboxes.length === 0 ? (
             <div className="px-3 py-3 text-xs text-zinc-500">
-              No tienes ninguna bandeja conectada todavía.
+              {t('vmboxForm.noMailboxesConnected')}
             </div>
           ) : (
             sortedMailboxes.map((mailbox) => {
@@ -234,14 +234,16 @@ export default function VirtualMailboxForm({
                       {mailbox.display_name ?? mailbox.mailbox_id}
                     </span>
                     <span className="text-xs text-zinc-400">
-                      ({accs.length} {accs.length === 1 ? 'cuenta' : 'cuentas'})
+                      {accs.length === 1
+                        ? t('vmboxForm.accountsCountOne', { count: accs.length })
+                        : t('vmboxForm.accountsCountMany', { count: accs.length })}
                     </span>
                   </button>
                   {expanded && (
                     <div className="flex flex-col">
                       {accs.length === 0 ? (
                         <div className="px-9 pb-2 text-xs text-zinc-400">
-                          Esta bandeja no tiene cuentas conectadas.
+                          {t('vmboxForm.mailboxNoAccounts')}
                         </div>
                       ) : (
                         accs.map((account) => {
@@ -257,7 +259,9 @@ export default function VirtualMailboxForm({
                               className="flex items-center gap-2 px-9 py-1.5 text-left hover:bg-zinc-50 disabled:opacity-60 disabled:hover:bg-transparent"
                             >
                               {alreadySelected ? (
-                                <span className="text-xs text-zinc-400">añadida</span>
+                                <span className="text-xs text-zinc-400">
+                                  {t('vmboxForm.added')}
+                                </span>
                               ) : (
                                 <Plus className="h-3.5 w-3.5 text-blue-600" />
                               )}
@@ -279,14 +283,13 @@ export default function VirtualMailboxForm({
       </fieldset>
 
       <fieldset className="flex flex-col gap-3">
-        <legend className="text-[13px] font-semibold text-zinc-700">Filtros</legend>
-        <p className="text-xs text-zinc-500">
-          Si no rellenas ninguno, la bandeja muestra todos los correos de las cuentas seleccionadas
-          (excluyendo papelera y spam salvo que indiques lo contrario).
-        </p>
+        <legend className="text-[13px] font-semibold text-zinc-700">
+          {t('vmboxForm.filtersLegend')}
+        </legend>
+        <p className="text-xs text-zinc-500">{t('vmboxForm.filtersHelp')}</p>
 
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-xs font-medium text-zinc-600">Carpeta</span>
+          <span className="text-xs font-medium text-zinc-600">{t('vmboxForm.folderLabel')}</span>
           <select
             value={filter.box}
             onChange={(e) =>
@@ -297,40 +300,42 @@ export default function VirtualMailboxForm({
             }
             className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
           >
-            <option value="">Cualquiera (excluye papelera/spam)</option>
+            <option value="">{t('vmboxForm.folderAny')}</option>
             {BOX_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label}
+                {t(opt.labelKey)}
               </option>
             ))}
           </select>
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-xs font-medium text-zinc-600">Remitente exacto</span>
+          <span className="text-xs font-medium text-zinc-600">{t('vmboxForm.fromExactLabel')}</span>
           <input
             type="text"
             value={filter.from_email}
             onChange={(e) => setFilter((prev) => ({ ...prev, from_email: e.target.value }))}
-            placeholder="alguien@empresa.com"
+            placeholder={t('vmboxForm.fromExactPlaceholder')}
             className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
           />
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-xs font-medium text-zinc-600">Asunto contiene</span>
+          <span className="text-xs font-medium text-zinc-600">
+            {t('vmboxForm.subjectContainsLabel')}
+          </span>
           <input
             type="text"
             value={filter.subject_contains}
             onChange={(e) => setFilter((prev) => ({ ...prev, subject_contains: e.target.value }))}
-            placeholder="factura, pedido…"
+            placeholder={t('vmboxForm.subjectContainsPlaceholder')}
             className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
           />
         </label>
 
         <div className="flex gap-3">
           <label className="flex flex-1 flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-zinc-600">Leído / no leído</span>
+            <span className="text-xs font-medium text-zinc-600">{t('vmboxForm.readLabel')}</span>
             <select
               value={filter.is_read}
               onChange={(e) =>
@@ -341,14 +346,16 @@ export default function VirtualMailboxForm({
               }
               className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
             >
-              <option value="">Cualquiera</option>
-              <option value="false">Solo no leídos</option>
-              <option value="true">Solo leídos</option>
+              <option value="">{t('vmboxForm.readAny')}</option>
+              <option value="false">{t('vmboxForm.readUnreadOnly')}</option>
+              <option value="true">{t('vmboxForm.readReadOnly')}</option>
             </select>
           </label>
 
           <label className="flex flex-1 flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-zinc-600">Favoritos</span>
+            <span className="text-xs font-medium text-zinc-600">
+              {t('vmboxForm.favoriteLabel')}
+            </span>
             <select
               value={filter.is_favorite}
               onChange={(e) =>
@@ -359,9 +366,9 @@ export default function VirtualMailboxForm({
               }
               className="rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
             >
-              <option value="">Cualquiera</option>
-              <option value="true">Solo favoritos</option>
-              <option value="false">Excluir favoritos</option>
+              <option value="">{t('vmboxForm.favoriteAny')}</option>
+              <option value="true">{t('vmboxForm.favoriteOnly')}</option>
+              <option value="false">{t('vmboxForm.favoriteExclude')}</option>
             </select>
           </label>
         </div>
@@ -377,14 +384,14 @@ export default function VirtualMailboxForm({
           onClick={onCancel}
           className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
         >
-          Cancelar
+          {t('vmboxForm.cancel')}
         </button>
         <button
           type="submit"
           disabled={saving}
           className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
         >
-          {saving ? 'Guardando…' : (submitLabel ?? 'Guardar')}
+          {saving ? t('common.saving') : (submitLabel ?? t('vmboxForm.save'))}
         </button>
       </div>
     </form>

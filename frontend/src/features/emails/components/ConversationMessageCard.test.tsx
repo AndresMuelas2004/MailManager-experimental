@@ -1,9 +1,21 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen, type RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import ConversationMessageCard from './ConversationMessageCard';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import type { EmailMetadataOut } from '../../../api/types/dto';
+
+// ConversationMessageCard reads its folder labels through ``t()``, so it must
+// render inside the real I18nProvider. A local ``render`` injects it for every
+// call site; Spanish is pinned so the existing Spanish label assertions hold.
+pinTestLang('es');
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+  return rtlRender(ui, { wrapper: I18nProvider, ...options });
+}
 
 // ConversationMessageCard is presentational: its collapsed header renders
 // entirely from props and mounts no body (so no fetch, no MSW). These tests

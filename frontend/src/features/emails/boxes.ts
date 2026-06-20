@@ -2,30 +2,32 @@ import type { EmailBox } from '../../lib/types';
 import type { BulkAction } from './types';
 
 export type EmailBoxConfig = {
-  title: string;
-  subtitle: string;
+  // i18n keys (resolved with ``t`` by the consuming page). Stored as keys, not
+  // literals, so this static config stays language-agnostic.
+  titleKey: string;
+  subtitleKey: string;
   allowedBulkActions: BulkAction[];
 };
 
 export const EMAIL_BOX_CONFIG: Record<EmailBox, EmailBoxConfig> = {
   ALL_MAIL: {
-    title: 'Bandeja unificada',
-    subtitle: 'Todos los correos de tus cuentas conectadas en un solo lugar.',
+    titleKey: 'boxes.allMailTitle',
+    subtitleKey: 'boxes.allMailSubtitle',
     allowedBulkActions: ['toggle_read', 'move_to_trash', 'mark_spam'],
   },
   SENT: {
-    title: 'Correos enviados',
-    subtitle: 'Todos los correos enviados desde tus cuentas conectadas.',
+    titleKey: 'boxes.sentTitle',
+    subtitleKey: 'boxes.sentSubtitle',
     allowedBulkActions: ['toggle_read', 'move_to_trash'],
   },
   SPAM: {
-    title: 'Bandeja de spam',
-    subtitle: 'Correos no deseados de tus cuentas conectadas.',
+    titleKey: 'boxes.spamTitle',
+    subtitleKey: 'boxes.spamSubtitle',
     allowedBulkActions: ['toggle_read', 'move_to_trash', 'restore_from_spam'],
   },
   TRASH: {
-    title: 'Papelera de reciclaje',
-    subtitle: 'Correos eliminados de tus cuentas conectadas.',
+    titleKey: 'boxes.trashTitle',
+    subtitleKey: 'boxes.trashSubtitle',
     allowedBulkActions: ['toggle_read', 'restore_from_trash', 'delete_permanently'],
   },
 };

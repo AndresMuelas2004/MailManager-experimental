@@ -17,6 +17,7 @@ import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import { server } from '../../../test/msw/server';
 import FavoritesPage from './FavoritesPage';
 import {
@@ -25,6 +26,9 @@ import {
 } from '../../../app/providers/DraftComposerContext';
 
 const API_BASE = 'http://localhost:8000';
+
+// Pin Spanish so the fixed Spanish assertions hold (jsdom defaults to English).
+pinTestLang('es');
 
 const accountFixture = {
   account_id: 'a_1',

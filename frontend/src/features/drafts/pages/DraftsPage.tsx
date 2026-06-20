@@ -7,6 +7,7 @@ import useDraftBulkDelete from '../hooks/useDraftBulkDelete';
 import DraftsTable from '../components/DraftsTable';
 import DraftBulkActionsBar from '../components/DraftBulkActionsBar';
 import useSelection from '../../../lib/hooks/useSelection';
+import { useTranslation } from '../../../lib/i18n';
 import type { DraftRef } from '../types';
 import type { DraftOut } from '../../../api/types/dto';
 
@@ -16,6 +17,7 @@ function draftKey(d: DraftOut): string {
 
 export default function DraftsPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { t } = useTranslation();
   const { drafts, accounts, loading, syncing, error, refresh, syncAndRefresh } = useDraftsList(
     mailboxId!,
   );
@@ -57,10 +59,8 @@ export default function DraftsPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">Borradores</h1>
-        <p className="text-[15px] leading-[1.5] text-zinc-500">
-          Borradores guardados de tus cuentas conectadas.
-        </p>
+        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{t('drafts.title')}</h1>
+        <p className="text-[15px] leading-[1.5] text-zinc-500">{t('drafts.subtitle')}</p>
       </div>
 
       {combinedError && (

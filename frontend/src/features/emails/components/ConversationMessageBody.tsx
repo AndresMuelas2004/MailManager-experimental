@@ -4,6 +4,7 @@ import { MailMinus, Star, Trash2, Ban } from 'lucide-react';
 import Spinner from '../../../components/common/Spinner';
 import AttachmentsList from './AttachmentsList';
 import { wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
+import { useTranslation } from '../../../lib/i18n';
 import useEmailContent from '../hooks/useEmailContent';
 import useAttachmentDownloader from '../hooks/useAttachmentDownloader';
 import useFavorite from '../hooks/useFavorite';
@@ -29,6 +30,7 @@ const NOOP_SYNC = () => {};
 // real mailboxes, and the backend validates ``account ∈ mailbox`` on every
 // per-message path.
 export default function ConversationMessageBody({ message }: Props) {
+  const { t } = useTranslation();
   const { content, loading, error } = useEmailContent(message.mailbox_id, {
     account_id: message.account_id,
     provider_message_id: message.provider_message_id,
@@ -81,7 +83,7 @@ export default function ConversationMessageBody({ message }: Props) {
   } else if (content?.html_body) {
     bodyFrame = (
       <iframe
-        title="Contenido del correo"
+        title={t('viewer.iframeTitle')}
         srcDoc={wrapHtmlEmail(content.html_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
@@ -91,7 +93,7 @@ export default function ConversationMessageBody({ message }: Props) {
   } else if (content?.text_body) {
     bodyFrame = (
       <iframe
-        title="Contenido del correo"
+        title={t('viewer.iframeTitle')}
         srcDoc={wrapPlainText(content.text_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
@@ -100,9 +102,7 @@ export default function ConversationMessageBody({ message }: Props) {
     );
   } else {
     bodyFrame = (
-      <div className="px-2 py-6 text-center text-sm text-zinc-400">
-        Este correo no tiene contenido.
-      </div>
+      <div className="px-2 py-6 text-center text-sm text-zinc-400">{t('viewer.noContent')}</div>
     );
   }
 
@@ -113,7 +113,9 @@ export default function ConversationMessageBody({ message }: Props) {
           type="button"
           onClick={handleToggleFavorite}
           disabled={favorites.toggling}
-          aria-label={message.is_favorite ? 'Quitar de favoritos' : 'Marcar como favorito'}
+          aria-label={
+            message.is_favorite ? t('conversation.removeFavorite') : t('conversation.markFavorite')
+          }
           aria-pressed={message.is_favorite}
           className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -122,37 +124,37 @@ export default function ConversationMessageBody({ message }: Props) {
             style={{ width: 14, height: 14 }}
             strokeWidth={1.75}
           />
-          Favorito
+          {t('conversation.favorite')}
         </button>
         <button
           type="button"
           onClick={handleMarkUnread}
           disabled={bulk.loading}
-          aria-label="Marcar como no leído"
+          aria-label={t('conversation.markUnread')}
           className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <MailMinus style={{ width: 14, height: 14 }} strokeWidth={1.75} />
-          No leído
+          {t('conversation.notRead')}
         </button>
         <button
           type="button"
           onClick={handleSpam}
           disabled={bulk.loading}
-          aria-label="Marcar como spam"
+          aria-label={t('conversation.markSpam')}
           className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Ban style={{ width: 14, height: 14 }} strokeWidth={1.75} />
-          Spam
+          {t('conversation.spam')}
         </button>
         <button
           type="button"
           onClick={handleTrash}
           disabled={bulk.loading}
-          aria-label="Mover a la papelera"
+          aria-label={t('conversation.moveToTrash')}
           className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Trash2 style={{ width: 14, height: 14 }} strokeWidth={1.75} />
-          Papelera
+          {t('conversation.trash')}
         </button>
       </div>
       {bodyFrame}

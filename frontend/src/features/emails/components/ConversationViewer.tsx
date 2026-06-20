@@ -4,6 +4,7 @@ import Modal from '../../../components/common/Modal';
 import Spinner from '../../../components/common/Spinner';
 import ConversationMessageCard from './ConversationMessageCard';
 import { normaliseSubject } from '../../../lib/formatters';
+import { useTranslation } from '../../../lib/i18n';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -37,6 +38,7 @@ export default function ConversationViewer({
   onReplyAll,
   onForward,
 }: Props) {
+  const { t } = useTranslation();
   const lastKey = messages.length > 0 ? messageKey(messages[messages.length - 1]) : null;
 
   // Expansion is derived at render time, not seeded by an effect: the most-
@@ -64,9 +66,9 @@ export default function ConversationViewer({
   };
 
   const headerSubject = useMemo(() => {
-    if (messages.length === 0) return 'Conversación';
+    if (messages.length === 0) return t('conversation.title');
     return normaliseSubject(messages[messages.length - 1].subject);
-  }, [messages]);
+  }, [messages, t]);
 
   const last = messages.length > 0 ? messages[messages.length - 1] : null;
 
@@ -86,7 +88,7 @@ export default function ConversationViewer({
   } else if (messages.length === 0) {
     body = (
       <div className="flex h-[40vh] items-center justify-center text-sm text-zinc-400">
-        Esta conversación ya no tiene mensajes.
+        {t('conversation.empty')}
       </div>
     );
   } else {
@@ -108,7 +110,11 @@ export default function ConversationViewer({
   }
 
   return (
-    <Modal open onClose={onClose} ariaLabel={`Conversación: ${headerSubject}`}>
+    <Modal
+      open
+      onClose={onClose}
+      ariaLabel={t('conversation.ariaLabel', { subject: headerSubject })}
+    >
       <div className="flex flex-col gap-2 border-b border-zinc-200 px-6 pt-6 pb-4 pr-14">
         <h2 className="text-[20px] font-semibold leading-tight tracking-tight text-zinc-900">
           {headerSubject}
@@ -122,7 +128,7 @@ export default function ConversationViewer({
               }}
               className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
             >
-              Responder
+              {t('viewer.reply')}
             </button>
             <button
               type="button"
@@ -131,7 +137,7 @@ export default function ConversationViewer({
               }}
               className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
             >
-              Responder a todos
+              {t('viewer.replyAll')}
             </button>
             <button
               type="button"
@@ -140,7 +146,7 @@ export default function ConversationViewer({
               }}
               className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
             >
-              Reenviar
+              {t('viewer.forward')}
             </button>
           </div>
         )}

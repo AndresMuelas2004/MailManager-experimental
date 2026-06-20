@@ -1,17 +1,28 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen, type RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import EmailTable from './EmailTable';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 
 // EmailTable is presentational: it renders the header bar (range +
 // pagination controls), the column headers and the rows entirely from its
-// props. No MSW, no router, no query client — a plain render is enough.
+// props. No MSW, no router, no query client. Its column headers and range
+// copy come from ``t()``, so a local ``render`` wraps it in the real
+// I18nProvider (``rerender`` inherits the wrapper); Spanish is pinned so the
+// existing Spanish assertions hold.
 // EmailPagination's own behaviour is covered in EmailPagination.test.tsx;
 // here we only assert what EmailTable adds: the "from–to de total" range
 // that replaced the bare "{n} correos" counter, and the conditions under
 // which the controls appear.
+pinTestLang('es');
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+  return rtlRender(ui, { wrapper: I18nProvider, ...options });
+}
 
 const accountFixture: AccountOut = {
   account_id: 'a_1',

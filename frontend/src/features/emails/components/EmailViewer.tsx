@@ -7,6 +7,7 @@ import type { UiError } from '../../../api/client/errors';
 import AttachmentsList from './AttachmentsList';
 import { wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
+import { useTranslation } from '../../../lib/i18n';
 import type { EmailMetadataOut, AccountOut, EmailContentOut } from '../../../api/types/dto';
 
 type Props = {
@@ -36,6 +37,7 @@ export default function EmailViewer({
   onReplyAll,
   onForward,
 }: Props) {
+  const { t } = useTranslation();
   const readTriggered = useRef(false);
   useEffect(() => {
     if (readTriggered.current) return;
@@ -55,7 +57,7 @@ export default function EmailViewer({
       : email.to_email
     : null;
 
-  const subject = email.subject ?? '(Sin asunto)';
+  const subject = email.subject ?? t('common.noSubject');
 
   let body: React.ReactNode;
   if (loading) {
@@ -73,7 +75,7 @@ export default function EmailViewer({
   } else if (content?.html_body) {
     body = (
       <iframe
-        title="Contenido del correo"
+        title={t('viewer.iframeTitle')}
         srcDoc={wrapHtmlEmail(content.html_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
@@ -83,7 +85,7 @@ export default function EmailViewer({
   } else if (content?.text_body) {
     body = (
       <iframe
-        title="Contenido del correo"
+        title={t('viewer.iframeTitle')}
         srcDoc={wrapPlainText(content.text_body)}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
@@ -93,32 +95,32 @@ export default function EmailViewer({
   } else {
     body = (
       <div className="flex h-[70vh] items-center justify-center text-sm text-zinc-400">
-        Este correo no tiene contenido.
+        {t('viewer.noContent')}
       </div>
     );
   }
 
   return (
-    <Modal open onClose={onClose} ariaLabel={`Correo: ${subject}`}>
+    <Modal open onClose={onClose} ariaLabel={t('viewer.emailAria', { subject })}>
       <div className="flex flex-col gap-1.5 border-b border-zinc-200 px-6 pt-6 pb-4 pr-14">
         <h2 className="text-[20px] font-semibold leading-tight tracking-tight text-zinc-900">
           {subject}
         </h2>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-zinc-600">
-          <span className="font-medium text-zinc-900">De:</span>
+          <span className="font-medium text-zinc-900">{t('viewer.from')}</span>
           <span className="truncate">{fromLabel}</span>
           <span className="text-zinc-300">·</span>
           <span>{formatDate(email.received_at)}</span>
         </div>
         {toLabel && (
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-zinc-600">
-            <span className="font-medium text-zinc-900">Para:</span>
+            <span className="font-medium text-zinc-900">{t('viewer.to')}</span>
             <span className="truncate">{toLabel}</span>
           </div>
         )}
         {accountEmail && (
           <div className="flex items-center gap-2 text-[12px] text-zinc-500">
-            <span className="font-medium">Cuenta:</span>
+            <span className="font-medium">{t('viewer.account')}</span>
             <span>{providerName}</span>
             <span className="text-zinc-300">·</span>
             <span className="truncate">{accountEmail}</span>
@@ -132,7 +134,7 @@ export default function EmailViewer({
             }}
             className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
           >
-            Responder
+            {t('viewer.reply')}
           </button>
           <button
             type="button"
@@ -141,7 +143,7 @@ export default function EmailViewer({
             }}
             className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
           >
-            Responder a todos
+            {t('viewer.replyAll')}
           </button>
           <button
             type="button"
@@ -150,7 +152,7 @@ export default function EmailViewer({
             }}
             className="cursor-pointer rounded-[10px] border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 shadow-sm transition-all hover:border-zinc-300 hover:bg-zinc-100 hover:text-zinc-900 hover:shadow active:bg-zinc-200"
           >
-            Reenviar
+            {t('viewer.forward')}
           </button>
         </div>
       </div>

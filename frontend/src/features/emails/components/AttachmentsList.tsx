@@ -1,4 +1,5 @@
 import AttachmentCard from './AttachmentCard';
+import { useTranslation } from '../../../lib/i18n';
 import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
 import type { AttachmentMetadata } from '../../../api/types/dto';
 
@@ -13,6 +14,7 @@ type Props = {
 // queue / browser-trigger logic stays in the ``downloader`` prop (a hook
 // instantiated by the container), keeping this component fetch-free.
 export default function AttachmentsList({ attachments, downloader }: Props) {
+  const { t } = useTranslation();
   if (attachments.length === 0) {
     return null;
   }
@@ -20,7 +22,7 @@ export default function AttachmentsList({ attachments, downloader }: Props) {
   return (
     <section className="border-t border-zinc-200 px-6 py-4">
       <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-zinc-500">
-        Adjuntos ({attachments.length})
+        {t('attachments.title', { count: attachments.length })}
       </h3>
       <ul className="grid gap-2 sm:grid-cols-2">
         {attachments.map((attachment) => {

@@ -20,17 +20,26 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import RichTextEditor from './RichTextEditor';
+import { I18nProvider } from '../../lib/i18n';
+import { pinTestLang } from '../../test/i18nTestLang';
+
+// RichTextEditor's toolbar labels and the ``aria-label`` of the editable
+// surface come from ``t()``, so it must render inside the real I18nProvider;
+// Spanish is pinned so the existing Spanish label lookups resolve.
+pinTestLang('es');
 
 function Harness({ onHtml, initial = '' }: { onHtml: (html: string) => void; initial?: string }) {
   const [value, setValue] = useState(initial);
   return (
-    <RichTextEditor
-      value={value}
-      onChange={(html) => {
-        setValue(html);
-        onHtml(html);
-      }}
-    />
+    <I18nProvider>
+      <RichTextEditor
+        value={value}
+        onChange={(html) => {
+          setValue(html);
+          onHtml(html);
+        }}
+      />
+    </I18nProvider>
   );
 }
 

@@ -12,6 +12,7 @@ import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import { parsePageParam } from '../../../lib/pagination';
+import { useTranslation } from '../../../lib/i18n';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -20,6 +21,7 @@ const MIN_SEARCH_LENGTH = 2;
 
 export default function FavoritesPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
@@ -100,19 +102,17 @@ export default function FavoritesPage() {
   };
 
   const isSearching = debouncedQ.trim().length >= MIN_SEARCH_LENGTH;
-  const emptyMessage = isSearching
-    ? 'No se encontraron correos favoritos para tu búsqueda.'
-    : 'Aún no has marcado ningún correo como favorito.';
+  const emptyMessage = isSearching ? t('favorites.emptySearch') : t('favorites.emptyDefault');
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
         <div className="flex items-start justify-between gap-4">
           <div className="flex flex-col gap-1.5">
-            <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">Favoritos</h1>
-            <p className="text-[15px] leading-[1.5] text-zinc-500">
-              Correos marcados con estrella en Gmail o con bandera en Outlook.
-            </p>
+            <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+              {t('favorites.title')}
+            </h1>
+            <p className="text-[15px] leading-[1.5] text-zinc-500">{t('favorites.subtitle')}</p>
           </div>
           <button
             type="button"
@@ -121,7 +121,7 @@ export default function FavoritesPage() {
             className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${favorites.syncing ? 'animate-spin' : ''}`} />
-            {favorites.syncing ? 'Sincronizando…' : 'Sincronizar favoritos'}
+            {favorites.syncing ? t('favorites.syncing') : t('favorites.sync')}
           </button>
         </div>
         <div className="flex items-center gap-2 pt-2">

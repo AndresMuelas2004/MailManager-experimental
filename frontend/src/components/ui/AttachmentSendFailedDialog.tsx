@@ -1,4 +1,5 @@
 import Modal from '../common/Modal';
+import { useTranslation } from '../../lib/i18n';
 import type { FailedAttachmentDetail } from '../../api/types/dto';
 
 type Props = {
@@ -26,21 +27,17 @@ export default function AttachmentSendFailedDialog({
   onRemoveFailedAndRetry,
   onClose,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <Modal
       open={open}
       onClose={onClose}
-      ariaLabel="Error de envío con adjuntos"
+      ariaLabel={t('attachmentSendFailed.ariaLabel')}
       widthClass="max-w-md"
     >
       <div className="space-y-3 px-6 py-5">
-        <h2 className="text-base font-semibold text-zinc-900">
-          No se pudo enviar el correo
-        </h2>
-        <p className="text-[13px] text-zinc-700">
-          El correo no se pudo enviar porque uno o más adjuntos fallaron al subir al
-          proveedor.
-        </p>
+        <h2 className="text-base font-semibold text-zinc-900">{t('attachmentSendFailed.title')}</h2>
+        <p className="text-[13px] text-zinc-700">{t('attachmentSendFailed.description')}</p>
         {failedAttachments.length > 0 && (
           <ul className="max-h-40 overflow-auto rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-[12px] text-zinc-700">
             {failedAttachments.map((item) => (
@@ -61,7 +58,7 @@ export default function AttachmentSendFailedDialog({
             onClick={onClose}
             className="rounded-md border border-zinc-200 px-3 py-1.5 text-[13px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
           >
-            Cerrar
+            {t('common.close')}
           </button>
           <button
             type="button"
@@ -69,7 +66,7 @@ export default function AttachmentSendFailedDialog({
             onClick={onRemoveFailedAndRetry}
             className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-60"
           >
-            Quitar adjuntos fallidos y enviar
+            {t('attachmentSendFailed.removeFailedAndSend')}
           </button>
           <button
             type="button"
@@ -77,7 +74,7 @@ export default function AttachmentSendFailedDialog({
             onClick={onRetry}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
-            Reintentar enviar
+            {t('attachmentSendFailed.retry')}
           </button>
         </div>
       </div>

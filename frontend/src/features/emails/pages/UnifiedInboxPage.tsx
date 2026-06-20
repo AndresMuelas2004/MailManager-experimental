@@ -13,6 +13,7 @@ import useDebounce from '../../../lib/hooks/useDebounce';
 import { EMAIL_BOX_CONFIG } from '../boxes';
 import { parsePageParam } from '../../../lib/pagination';
 import { parseInOperator } from '../../../lib/searchOperators';
+import { useTranslation } from '../../../lib/i18n';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
 import type { EmailMetadataOut } from '../../../api/types/dto';
@@ -26,6 +27,7 @@ const MIN_SEARCH_LENGTH = 2;
 
 export default function UnifiedInboxPage({ box }: Props) {
   const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
@@ -91,9 +93,7 @@ export default function UnifiedInboxPage({ box }: Props) {
   };
 
   const isSearching = debouncedQ.trim().length >= MIN_SEARCH_LENGTH;
-  const emptyMessage = isSearching
-    ? 'No se encontraron correos para tu búsqueda.'
-    : 'No hay correos en esta bandeja';
+  const emptyMessage = isSearching ? t('inbox.emptySearch') : t('inbox.emptyDefault');
 
   // Columns follow the EFFECTIVE box: a valid in: in q shifts the box of
   // every returned row, so unified columns must render with that sense. The
@@ -104,8 +104,8 @@ export default function UnifiedInboxPage({ box }: Props) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{config.title}</h1>
-        <p className="text-[15px] leading-[1.5] text-zinc-500">{config.subtitle}</p>
+        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{t(config.titleKey)}</h1>
+        <p className="text-[15px] leading-[1.5] text-zinc-500">{t(config.subtitleKey)}</p>
         <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />
           <SearchHelpPopover />

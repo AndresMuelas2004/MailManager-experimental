@@ -1,4 +1,5 @@
 import Modal from '../common/Modal';
+import { useTranslation } from '../../lib/i18n';
 
 type Props = {
   open: boolean;
@@ -24,20 +25,17 @@ export default function CloseComposerDialog({
   onDiscard,
   onCancel,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <Modal
       open={open}
       onClose={onCancel}
-      ariaLabel="Cambios sin guardar"
+      ariaLabel={t('closeComposer.ariaLabel')}
       widthClass="max-w-md"
     >
       <div className="space-y-4 px-6 py-5">
-        <h2 className="text-base font-semibold text-zinc-900">
-          Tienes cambios sin guardar
-        </h2>
-        <p className="text-[13px] text-zinc-700">
-          ¿Qué quieres hacer con este borrador?
-        </p>
+        <h2 className="text-base font-semibold text-zinc-900">{t('closeComposer.title')}</h2>
+        <p className="text-[13px] text-zinc-700">{t('closeComposer.question')}</p>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
@@ -45,7 +43,7 @@ export default function CloseComposerDialog({
             onClick={onCancel}
             className="rounded-md border border-zinc-200 px-3 py-1.5 text-[13px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
           >
-            Cancelar
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -53,7 +51,7 @@ export default function CloseComposerDialog({
             onClick={onDiscard}
             className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-[13px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
-            Descartar
+            {t('closeComposer.discard')}
           </button>
           <button
             type="button"
@@ -61,7 +59,7 @@ export default function CloseComposerDialog({
             onClick={onSaveAndClose}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
-            Guardar y cerrar
+            {t('closeComposer.saveAndClose')}
           </button>
         </div>
       </div>

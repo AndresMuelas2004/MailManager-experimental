@@ -23,7 +23,13 @@ import { describe, expect, it } from 'vitest';
 
 import useBulkBar from './useBulkBar';
 import { createTestQueryClient } from '../../../test/renderWithProviders';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import type { EmailMetadataOut } from '../../../api/types/dto';
+
+// The bulk bar's "{n} seleccionado(s)" label comes from ``t()``; pin Spanish so
+// the existing ``/seleccionado/`` assertion holds (jsdom defaults to English).
+pinTestLang('es');
 
 function makeEmail(id: string, overrides: Partial<EmailMetadataOut> = {}): EmailMetadataOut {
   return {
@@ -48,7 +54,11 @@ function makeEmail(id: string, overrides: Partial<EmailMetadataOut> = {}): Email
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = createTestQueryClient();
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      <I18nProvider>{children}</I18nProvider>
+    </QueryClientProvider>
+  );
 }
 
 const noopRefresh = () => Promise.resolve();
@@ -56,7 +66,8 @@ const noopRefresh = () => Promise.resolve();
 // Render the bar node currently returned by the hook and read the
 // "{n} seleccionado(s)" label the Map drives.
 function selectedCountFromBar(node: ReactNode): number {
-  const { unmount } = render(<>{node}</>);
+  // The bar node carries ``t()`` calls, so it must render inside I18nProvider.
+  const { unmount } = render(<I18nProvider>{node}</I18nProvider>);
   const label = screen.getByText(/seleccionado/);
   const n = parseInt(label.textContent ?? '0', 10);
   unmount();
@@ -137,7 +148,7 @@ describe('useBulkBar — multi-page selection', () => {
       result.current.selection.toggle(c);
     });
 
-    render(<>{result.current.bulkBar}</>);
+    render(<I18nProvider>{result.current.bulkBar}</I18nProvider>);
     expect(screen.getByText('Marcar como no leídos')).toBeInTheDocument();
   });
 });

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import { normalizeEmpty } from '../../lib/richText';
+import { useTranslation } from '../../lib/i18n';
 
 export type RichTextEditorProps = {
   value: string; // HTML of the message body
@@ -97,6 +98,7 @@ function ToolbarButton({
 }
 
 function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [href, setHref] = useState('');
   const [invalid, setInvalid] = useState(false);
@@ -134,7 +136,7 @@ function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean 
         onClick={openPopover}
         active={Boolean(active)}
         disabled={disabled}
-        label="Insertar enlace"
+        label={t('editor.insertLink')}
       >
         <LinkIcon className="h-4 w-4" />
       </ToolbarButton>
@@ -157,12 +159,10 @@ function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean 
                 setOpen(false);
               }
             }}
-            placeholder="https://ejemplo.com"
+            placeholder={t('editor.linkPlaceholder')}
             className="h-9 rounded-md border-[1.5px] border-zinc-200 px-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
           />
-          {invalid && (
-            <p className="text-xs text-red-600">Introduce una URL http(s) o mailto válida.</p>
-          )}
+          {invalid && <p className="text-xs text-red-600">{t('editor.linkInvalid')}</p>}
           <div className="flex items-center justify-end gap-2">
             {active && (
               <button
@@ -170,7 +170,7 @@ function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean 
                 onClick={remove}
                 className="rounded-md px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100"
               >
-                Quitar
+                {t('editor.remove')}
               </button>
             )}
             <button
@@ -178,7 +178,7 @@ function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean 
               onClick={apply}
               className="rounded-md bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700"
             >
-              Aplicar
+              {t('editor.apply')}
             </button>
           </div>
         </div>
@@ -188,6 +188,7 @@ function LinkPopover({ editor, disabled }: { editor: Editor; disabled?: boolean 
 }
 
 function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
+  const { t } = useTranslation();
   const state =
     useEditorState({
       editor,
@@ -207,7 +208,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
         onClick={() => editor.chain().focus().toggleBold().run()}
         active={state.bold}
         disabled={disabled}
-        label="Negrita"
+        label={t('editor.bold')}
       >
         <Bold className="h-4 w-4" />
       </ToolbarButton>
@@ -215,7 +216,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
         onClick={() => editor.chain().focus().toggleItalic().run()}
         active={state.italic}
         disabled={disabled}
-        label="Cursiva"
+        label={t('editor.italic')}
       >
         <Italic className="h-4 w-4" />
       </ToolbarButton>
@@ -223,7 +224,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
         onClick={() => editor.chain().focus().toggleUnderline().run()}
         active={state.underline}
         disabled={disabled}
-        label="Subrayado"
+        label={t('editor.underline')}
       >
         <Underline className="h-4 w-4" />
       </ToolbarButton>
@@ -231,7 +232,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
         onClick={() => editor.chain().focus().toggleBulletList().run()}
         active={state.bulletList}
         disabled={disabled}
-        label="Lista con viñetas"
+        label={t('editor.bulletList')}
       >
         <List className="h-4 w-4" />
       </ToolbarButton>
@@ -239,7 +240,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
         active={state.orderedList}
         disabled={disabled}
-        label="Lista numerada"
+        label={t('editor.orderedList')}
       >
         <ListOrdered className="h-4 w-4" />
       </ToolbarButton>
@@ -247,7 +248,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled?: boolean }) {
       <ToolbarButton
         onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}
         disabled={disabled}
-        label="Quitar formato"
+        label={t('editor.clearFormat')}
       >
         <RemoveFormatting className="h-4 w-4" />
       </ToolbarButton>
@@ -274,6 +275,7 @@ export default function RichTextEditor({
   disabled,
   ariaLabel,
 }: RichTextEditorProps) {
+  const { t } = useTranslation();
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -298,7 +300,7 @@ export default function RichTextEditor({
       // StarterKit) — no extra top-level dependency. It adds the
       // ``is-editor-empty`` class + ``data-placeholder`` attribute that
       // ``globals.css`` renders as ghost text on the empty document.
-      Placeholder.configure({ placeholder: placeholder ?? 'Escribe tu mensaje...' }),
+      Placeholder.configure({ placeholder: placeholder ?? t('composer.messagePlaceholder') }),
     ],
     content: value,
     editable: !disabled,
@@ -311,7 +313,7 @@ export default function RichTextEditor({
     editorProps: {
       attributes: {
         class: 'prose prose-sm max-w-none focus:outline-none min-h-[8rem] px-3 py-2',
-        'aria-label': ariaLabel ?? 'Cuerpo del mensaje',
+        'aria-label': ariaLabel ?? t('composer.messageAria'),
       },
     },
   });

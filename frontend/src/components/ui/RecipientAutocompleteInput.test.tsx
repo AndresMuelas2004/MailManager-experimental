@@ -15,7 +15,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import RecipientAutocompleteInput from './RecipientAutocompleteInput';
+import { I18nProvider } from '../../lib/i18n';
+import { pinTestLang } from '../../test/i18nTestLang';
 import type { ContactSuggestion } from '../../api/types/dto';
+
+// The component reads its empty/loading copy through ``t()`` (useTranslation),
+// so the harness wraps it in the real I18nProvider; Spanish is pinned for
+// determinism even though these tests assert on prop-driven text.
+pinTestLang('es');
 
 const SUGGESTIONS: ContactSuggestion[] = [
   { email: 'amparo@ejemplo.com', name: 'Amparo López' },
@@ -42,18 +49,20 @@ function Harness({
 }: HarnessProps) {
   const [value, setValue] = useState(initialValue);
   return (
-    <RecipientAutocompleteInput
-      label="Para"
-      value={value}
-      onChange={(next) => {
-        setValue(next);
-        onChangeSpy?.(next);
-      }}
-      placeholder="correo@ejemplo.com"
-      suggestions={suggestions}
-      loading={loading}
-      onQueryChange={(f) => onQueryChangeSpy?.(f)}
-    />
+    <I18nProvider>
+      <RecipientAutocompleteInput
+        label="Para"
+        value={value}
+        onChange={(next) => {
+          setValue(next);
+          onChangeSpy?.(next);
+        }}
+        placeholder="correo@ejemplo.com"
+        suggestions={suggestions}
+        loading={loading}
+        onQueryChange={(f) => onQueryChangeSpy?.(f)}
+      />
+    </I18nProvider>
   );
 }
 

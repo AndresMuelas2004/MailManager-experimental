@@ -4,6 +4,7 @@ import { listAccounts } from '../../../api/endpoints/accounts';
 import { getReplyContext } from '../../../api/endpoints/emails';
 import { copyAttachmentsFromEmail, createDraft } from '../../../api/endpoints/drafts';
 import { toUiError } from '../../../api/client/errors';
+import { useTranslation } from '../../../lib/i18n';
 import type {
   AccountOut,
   DraftOut,
@@ -94,6 +95,7 @@ type UseDraftComposerReturn = {
 };
 
 export default function useDraftComposer(mailboxId: string | null): UseDraftComposerReturn {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<ComposerMode | null>(null);
   const [accounts, setAccounts] = useState<AccountOut[]>([]);
   const [providerDraftId, setProviderDraftIdState] = useState<string | null>(null);
@@ -242,7 +244,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         const accountId = email.account_id;
         if (!accountsList.some((a) => a.account_id === accountId)) {
           persistence.setError({
-            message: 'No se encontró la cuenta del correo para responder.',
+            message: t('composerErrors.accountNotFound'),
             code: 'account_not_found',
           });
           return;
@@ -327,7 +329,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         setReplyContextLoading(false);
       }
     },
-    [attachments, form, loadAccountsIfNeeded, mailboxId, persistence, resetAll],
+    [attachments, form, loadAccountsIfNeeded, mailboxId, persistence, resetAll, t],
   );
 
   const openForReply = useCallback(
@@ -556,7 +558,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     form.hasInvalidRecipients(form.bcc);
 
   const recipientError: UiError | null = recipientsInvalid
-    ? { message: 'Dirección de correo no válida.', code: 'invalid_recipient' }
+    ? { message: t('composerErrors.invalidRecipient'), code: 'invalid_recipient' }
     : null;
 
   // Oversized HTML body. ``form.body`` is the live editor HTML (already
@@ -566,7 +568,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   // draft exists, so the size block must hold on the draft paths too.
   const bodyError: UiError | null =
     form.body.length > BODY_MAX_CHARS
-      ? { message: 'El mensaje es demasiado grande. Reduce su tamaño.', code: 'body_too_large' }
+      ? { message: t('composerErrors.bodyTooLarge'), code: 'body_too_large' }
       : null;
 
   const canSendEmail =

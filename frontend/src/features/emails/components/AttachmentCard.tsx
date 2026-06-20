@@ -1,6 +1,7 @@
 import { Download, File, FileImage, FileSpreadsheet, FileText, FileWarning } from 'lucide-react';
 
 import { formatBytes } from '../../../lib/attachments';
+import { useTranslation } from '../../../lib/i18n';
 import Spinner from '../../../components/common/Spinner';
 import type { AttachmentMetadata } from '../../../api/types/dto';
 import type { DownloadStatus } from '../hooks/useDownloadQueue';
@@ -12,26 +13,26 @@ type Props = {
   onCancel?: () => void;
 };
 
-function pickIcon(mime: string) {
+function FileTypeIcon({ mime, className }: { mime: string; className: string }) {
   const lower = (mime || '').toLowerCase();
-  if (lower.startsWith('image/')) return FileImage;
-  if (lower.includes('pdf')) return FileText;
+  if (lower.startsWith('image/')) return <FileImage className={className} />;
+  if (lower.includes('pdf')) return <FileText className={className} />;
   if (
     lower.includes('spreadsheet') ||
     lower.includes('excel') ||
     lower.includes('csv') ||
     lower === 'text/csv'
   ) {
-    return FileSpreadsheet;
+    return <FileSpreadsheet className={className} />;
   }
   if (lower.startsWith('text/') || lower.includes('word') || lower.includes('document')) {
-    return FileText;
+    return <FileText className={className} />;
   }
-  return File;
+  return <File className={className} />;
 }
 
 export default function AttachmentCard({ attachment, status, onDownload, onCancel }: Props) {
-  const Icon = attachment.is_unavailable ? FileWarning : pickIcon(attachment.mime_type);
+  const { t } = useTranslation();
   const disabled = attachment.is_unavailable;
   const handleClick = () => {
     if (disabled) return;
@@ -55,22 +56,22 @@ export default function AttachmentCard({ attachment, status, onDownload, onCance
           : 'border-zinc-200 bg-white hover:border-blue-300 hover:bg-blue-50',
       ].join(' ')}
     >
-      <Icon className="h-5 w-5 shrink-0 text-zinc-500" />
+      {attachment.is_unavailable ? (
+        <FileWarning className="h-5 w-5 shrink-0 text-zinc-500" />
+      ) : (
+        <FileTypeIcon mime={attachment.mime_type} className="h-5 w-5 shrink-0 text-zinc-500" />
+      )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-zinc-900">{attachment.filename}</div>
         <div className="text-[11px] text-zinc-500">
           {formatBytes(attachment.size)}
-          {attachment.is_unavailable ? ' · No disponible en el servidor' : null}
-          {status === 'queued' ? ' · En cola' : null}
-          {status === 'error' ? ' · Error: no se pudo descargar' : null}
+          {attachment.is_unavailable ? ` · ${t('attachments.unavailable')}` : null}
+          {status === 'queued' ? ` · ${t('attachments.queued')}` : null}
+          {status === 'error' ? ` · ${t('attachments.error')}` : null}
         </div>
       </div>
       <div className="ml-2 h-5 w-5 shrink-0 text-zinc-400">
-        {status === 'downloading' ? (
-          <Spinner />
-        ) : (
-          <Download className="h-5 w-5" />
-        )}
+        {status === 'downloading' ? <Spinner /> : <Download className="h-5 w-5" />}
       </div>
     </button>
   );

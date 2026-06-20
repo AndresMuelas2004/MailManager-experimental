@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
+import { useTranslation } from '../../lib/i18n';
 import type { ContactSuggestion } from '../../api/types/dto';
 
 type Props = {
@@ -59,6 +60,7 @@ export default function RecipientAutocompleteInput({
   loading,
   onQueryChange,
 }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -184,7 +186,7 @@ export default function RecipientAutocompleteInput({
           className="absolute top-full left-0 z-20 mt-1 max-h-56 w-full overflow-auto rounded-[10px] border border-zinc-200 bg-white py-1 shadow-lg"
         >
           {filtered.length === 0 && loading ? (
-            <li className="px-3 py-2 text-sm text-zinc-400">Buscando…</li>
+            <li className="px-3 py-2 text-sm text-zinc-400">{t('composer.recipientSearching')}</li>
           ) : (
             filtered.map((s, index) => (
               <li key={s.email} role="presentation">
@@ -222,7 +224,7 @@ export default function RecipientAutocompleteInput({
 
       {showEmptyNotice && (
         <div className="absolute top-full left-0 z-20 mt-1 w-full rounded-[10px] border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-400 shadow-lg">
-          Sin sugerencias
+          {t('composer.recipientNoSuggestions')}
         </div>
       )}
     </div>

@@ -1,5 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
+import { useTranslation } from '../../../lib/i18n';
+
 type Props = {
   page: number;
   pageSize: number;
@@ -32,6 +34,7 @@ function buildPageTokens(current: number, totalPages: number): PageToken[] {
 // header bar, so this component is embeddable on the right side of that
 // bar with no footer chrome of its own.
 export default function EmailPagination({ page, pageSize, total, onPageChange, disabled }: Props) {
+  const { t } = useTranslation();
   if (total === 0) return null;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -46,11 +49,11 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
         type="button"
         onClick={() => onPageChange(page - 1)}
         disabled={prevDisabled}
-        aria-label="Página anterior"
+        aria-label={t('pagination.prevAria')}
         className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <ChevronLeft className="h-4 w-4" />
-        Anterior
+        {t('pagination.previous')}
       </button>
 
       {tokens.map((token) => {
@@ -68,7 +71,7 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
             type="button"
             onClick={() => onPageChange(token)}
             disabled={disabled || isCurrent}
-            aria-label={`Página ${token}`}
+            aria-label={t('pagination.pageAria', { page: token })}
             aria-current={isCurrent ? 'page' : undefined}
             className={`min-w-[34px] rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed ${
               isCurrent
@@ -85,10 +88,10 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
         type="button"
         onClick={() => onPageChange(page + 1)}
         disabled={nextDisabled}
-        aria-label="Página siguiente"
+        aria-label={t('pagination.nextAria')}
         className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Siguiente
+        {t('pagination.next')}
         <ChevronRight className="h-4 w-4" />
       </button>
     </div>

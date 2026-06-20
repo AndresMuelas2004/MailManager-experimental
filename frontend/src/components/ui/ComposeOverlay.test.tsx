@@ -17,7 +17,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import ComposeOverlay from './ComposeOverlay';
+import { I18nProvider } from '../../lib/i18n';
+import { pinTestLang } from '../../test/i18nTestLang';
 import type { AccountOut } from '../../api/types/dto';
+
+// ComposeOverlay reads its copy through ``t()`` (it calls useTranslation), so
+// every render must run inside the real I18nProvider; Spanish is pinned so the
+// fixed Spanish title assertions hold.
+pinTestLang('es');
 
 type ComposeAccount = Pick<
   AccountOut,
@@ -86,7 +93,11 @@ function renderOverlay(overrides: RenderOpts = {}) {
     onRecipientQueryChange: noop,
   };
 
-  const utils = render(<ComposeOverlay {...defaults} {...overrides} />);
+  const utils = render(
+    <I18nProvider>
+      <ComposeOverlay {...defaults} {...overrides} />
+    </I18nProvider>,
+  );
   return { ...utils, onAddFiles, onSelectedAccountChange, onClose };
 }
 

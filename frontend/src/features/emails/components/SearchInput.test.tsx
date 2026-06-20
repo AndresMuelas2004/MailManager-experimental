@@ -1,8 +1,20 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen, type RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import SearchInput from './SearchInput';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
+
+// SearchInput reads its placeholder/clear-button copy through ``t()``, so it
+// must render inside the real I18nProvider; a local ``render`` injects it and
+// Spanish is pinned so the existing Spanish assertions hold.
+pinTestLang('es');
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+  return rtlRender(ui, { wrapper: I18nProvider, ...options });
+}
 
 describe('SearchInput', () => {
   it('renders an input that reflects the controlled value', () => {

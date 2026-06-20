@@ -2,6 +2,8 @@ import { NavLink } from 'react-router-dom';
 import { Inbox, Send, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
+import { useTranslation } from '../../lib/i18n';
+
 type TabDef = {
   to: string;
   label: string;
@@ -13,13 +15,14 @@ type Props = {
   inboxLabel?: string;
 };
 
-export default function AccountTabs({ basePath, inboxLabel = 'Bandeja' }: Props) {
+export default function AccountTabs({ basePath, inboxLabel }: Props) {
+  const { t } = useTranslation();
   const tabs: TabDef[] = [
-    { to: `${basePath}/inbox`, label: inboxLabel, icon: Inbox },
-    { to: `${basePath}/sent`, label: 'Enviados', icon: Send },
-    { to: `${basePath}/spam`, label: 'Spam', icon: ShieldAlert },
-    { to: `${basePath}/drafts`, label: 'Borradores', icon: FileEdit },
-    { to: `${basePath}/trash`, label: 'Papelera', icon: Trash2 },
+    { to: `${basePath}/inbox`, label: inboxLabel ?? t('nav.mailbox'), icon: Inbox },
+    { to: `${basePath}/sent`, label: t('nav.sent'), icon: Send },
+    { to: `${basePath}/spam`, label: t('nav.spam'), icon: ShieldAlert },
+    { to: `${basePath}/drafts`, label: t('drafts.title'), icon: FileEdit },
+    { to: `${basePath}/trash`, label: t('virtualMailboxes.boxTrash'), icon: Trash2 },
   ];
 
   return (

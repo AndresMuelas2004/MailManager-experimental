@@ -1,5 +1,7 @@
 import { X, Trash2, Mail, MailOpen, ShieldAlert, ArchiveRestore, Flame } from 'lucide-react';
 
+import { useTranslation } from '../../../lib/i18n';
+import type { Translate } from '../../../lib/i18n';
 import type { EmailBox } from '../../../lib/types';
 import type { BulkAction, ReadToggleTarget } from '../types';
 import { EMAIL_BOX_CONFIG } from '../boxes';
@@ -15,12 +17,12 @@ type Props = {
   onAction: (action: BulkAction) => void;
 };
 
-function readLabel(target: ReadToggleTarget, count: number): string {
+function readLabel(t: Translate, target: ReadToggleTarget, count: number): string {
   const plural = count > 1;
   if (target === 'mark_read') {
-    return plural ? 'Marcar como leídos' : 'Marcar como leído';
+    return plural ? t('bulk.markReadMany', { count }) : t('bulk.markReadOne', { count });
   }
-  return plural ? 'Marcar como no leídos' : 'Marcar como no leído';
+  return plural ? t('bulk.markUnreadMany', { count }) : t('bulk.markUnreadOne', { count });
 }
 
 type ActionBtnProps = {
@@ -54,11 +56,12 @@ export default function BulkActionsBar({
   onClear,
   onAction,
 }: Props) {
+  const { t } = useTranslation();
   const confirmDelete = () => {
     const msg =
       selectedCount > 1
-        ? `¿Eliminar permanentemente ${selectedCount} correos? Esta acción no se puede deshacer.`
-        : '¿Eliminar permanentemente este correo? Esta acción no se puede deshacer.';
+        ? t('bulk.confirmDeleteMany', { count: selectedCount })
+        : t('bulk.confirmDeleteOne');
     if (window.confirm(msg)) onAction('delete_permanently');
   };
 
@@ -72,19 +75,21 @@ export default function BulkActionsBar({
         type="button"
         onClick={onClear}
         className="flex h-7 w-7 items-center justify-center rounded hover:bg-zinc-100"
-        aria-label="Limpiar selección"
+        aria-label={t('bulk.clearSelection')}
       >
         <X className="h-[18px] w-[18px] text-zinc-600" />
       </button>
       <span className="text-[13px] font-medium text-zinc-700">
-        {selectedCount} seleccionado{selectedCount === 1 ? '' : 's'}
+        {selectedCount === 1
+          ? t('bulk.selectedOne', { count: selectedCount })
+          : t('bulk.selectedMany', { count: selectedCount })}
       </span>
       <div className="mx-2 h-5 w-px bg-zinc-200" />
 
       {allows('toggle_read') && (
         <ActionButton
           icon={readIcon}
-          label={readLabel(readToggleTarget, selectedCount)}
+          label={readLabel(t, readToggleTarget, selectedCount)}
           onClick={() => onAction('toggle_read')}
           disabled={disabled}
         />
@@ -93,7 +98,7 @@ export default function BulkActionsBar({
       {allows('move_to_trash') && (
         <ActionButton
           icon={Trash2}
-          label="Mover a papelera"
+          label={t('bulk.moveToTrash')}
           onClick={() => onAction('move_to_trash')}
           disabled={disabled}
         />
@@ -102,7 +107,7 @@ export default function BulkActionsBar({
       {allows('mark_spam') && (
         <ActionButton
           icon={ShieldAlert}
-          label="Marcar como spam"
+          label={t('bulk.markSpam')}
           onClick={() => onAction('mark_spam')}
           disabled={disabled}
         />
@@ -111,7 +116,7 @@ export default function BulkActionsBar({
       {allows('restore_from_spam') && (
         <ActionButton
           icon={ArchiveRestore}
-          label="Restaurar de spam"
+          label={t('bulk.restoreFromSpam')}
           onClick={() => onAction('restore_from_spam')}
           disabled={disabled}
         />
@@ -120,7 +125,7 @@ export default function BulkActionsBar({
       {allows('restore_from_trash') && (
         <ActionButton
           icon={ArchiveRestore}
-          label="Restaurar"
+          label={t('bulk.restore')}
           onClick={() => onAction('restore_from_trash')}
           disabled={disabled}
         />
@@ -129,7 +134,7 @@ export default function BulkActionsBar({
       {allows('delete_permanently') && (
         <ActionButton
           icon={Flame}
-          label="Eliminar"
+          label={t('bulk.deletePermanently')}
           onClick={confirmDelete}
           disabled={disabled}
           danger

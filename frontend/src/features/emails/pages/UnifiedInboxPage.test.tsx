@@ -5,10 +5,14 @@ import { Route, Routes, useLocation } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import { server } from '../../../test/msw/server';
 import UnifiedInboxPage from './UnifiedInboxPage';
 
 const API_BASE = 'http://localhost:8000';
+
+// Pin Spanish so the fixed Spanish assertions hold (jsdom defaults to English).
+pinTestLang('es');
 
 // MemoryRouter does not touch window.location, so to assert on the URL we
 // render the router's current search string into the DOM via a probe.

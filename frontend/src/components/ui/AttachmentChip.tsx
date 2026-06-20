@@ -1,6 +1,7 @@
 import { File, FileImage, FileSpreadsheet, FileText, X } from 'lucide-react';
 
 import { formatBytes } from '../../lib/attachments';
+import { useTranslation } from '../../lib/i18n';
 
 // Minimal display contract — kept inline to respect the
 // components/ui boundary (no imports from app/). The composer hook
@@ -19,17 +20,17 @@ type Props = {
   onRemove: () => void;
 };
 
-function pickIcon(mime: string) {
+function FileTypeIcon({ mime, className }: { mime: string; className: string }) {
   const lower = (mime || '').toLowerCase();
-  if (lower.startsWith('image/')) return FileImage;
-  if (lower.includes('pdf')) return FileText;
+  if (lower.startsWith('image/')) return <FileImage className={className} />;
+  if (lower.includes('pdf')) return <FileText className={className} />;
   if (lower.includes('spreadsheet') || lower.includes('excel') || lower.includes('csv')) {
-    return FileSpreadsheet;
+    return <FileSpreadsheet className={className} />;
   }
   if (lower.startsWith('text/') || lower.includes('word') || lower.includes('document')) {
-    return FileText;
+    return <FileText className={className} />;
   }
-  return File;
+  return <File className={className} />;
 }
 
 function truncate(name: string, max = 20): string {
@@ -42,7 +43,7 @@ function truncate(name: string, max = 20): string {
 }
 
 export default function AttachmentChip({ chip, onRemove }: Props) {
-  const Icon = pickIcon(chip.mimeType);
+  const { t } = useTranslation();
   const failed = chip.status === 'failed';
   const uploading = chip.status === 'uploading';
   const containerClass = [
@@ -56,16 +57,14 @@ export default function AttachmentChip({ chip, onRemove }: Props) {
 
   return (
     <span className={containerClass} title={chip.filename}>
-      <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+      <FileTypeIcon mime={chip.mimeType} className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
       <span className="truncate font-medium">{truncate(chip.filename)}</span>
       <span className="text-[11px] text-zinc-500">{formatBytes(chip.size)}</span>
-      {uploading ? (
-        <span className="text-[11px] text-blue-600">{chip.progress ?? 0}%</span>
-      ) : null}
+      {uploading ? <span className="text-[11px] text-blue-600">{chip.progress ?? 0}%</span> : null}
       <button
         type="button"
         onClick={onRemove}
-        aria-label={`Quitar ${chip.filename}`}
+        aria-label={t('composer.removeAttachment', { filename: chip.filename })}
         className="ml-1 rounded-full p-0.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
       >
         <X className="h-3.5 w-3.5" />

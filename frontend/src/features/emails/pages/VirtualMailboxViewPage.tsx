@@ -12,6 +12,7 @@ import useVirtualMailbox from '../hooks/useVirtualMailbox';
 import useVirtualMailboxEmails from '../hooks/useVirtualMailboxEmails';
 import { parsePageParam } from '../../../lib/pagination';
 import { parseInOperator } from '../../../lib/searchOperators';
+import { useTranslation } from '../../../lib/i18n';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
@@ -24,6 +25,7 @@ export default function VirtualMailboxViewPage() {
     virtualMailboxId: string;
   }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
@@ -86,8 +88,8 @@ export default function VirtualMailboxViewPage() {
 
   const isSearching = debouncedQ.trim().length >= MIN_SEARCH_LENGTH;
   const emptyMessage = isSearching
-    ? 'No se encontraron correos para tu búsqueda en esta bandeja ficticia.'
-    : 'Ningún correo coincide con los filtros de esta bandeja ficticia.';
+    ? t('virtualMailboxes.emptySearch')
+    : t('virtualMailboxes.emptyDefault');
 
   // Columns follow the EFFECTIVE box. A valid in: in q intersects the
   // vmbox filter server-side and makes every returned row share that box,
@@ -116,22 +118,22 @@ export default function VirtualMailboxViewPage() {
             onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
             className="self-start text-xs text-zinc-500 hover:text-zinc-900"
           >
-            ← Volver a bandejas ficticias
+            {t('virtualMailboxes.notFoundBack')}
           </button>
         </div>
         <div className="mx-8 mt-8 rounded-md bg-zinc-50 px-6 py-10 text-center">
           <h1 className="text-[20px] font-semibold text-zinc-900">
-            Esta bandeja ficticia ya no existe
+            {t('virtualMailboxes.notFoundTitle')}
           </h1>
           <p className="mt-2 text-[14px] text-zinc-500">
-            Es posible que la hayas eliminado o que la URL sea incorrecta.
+            {t('virtualMailboxes.notFoundDescription')}
           </p>
           <button
             type="button"
             onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
             className="mt-4 inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
           >
-            Volver al listado
+            {t('virtualMailboxes.backToList')}
           </button>
         </div>
       </div>
@@ -148,18 +150,18 @@ export default function VirtualMailboxViewPage() {
               onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
               className="self-start text-xs text-zinc-500 hover:text-zinc-900"
             >
-              ← Volver a bandejas ficticias
+              {t('virtualMailboxes.notFoundBack')}
             </button>
             <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
-              {record?.display_name ?? 'Bandeja ficticia'}
+              {record?.display_name ?? t('virtualMailboxes.defaultName')}
             </h1>
             <p className="text-[15px] leading-[1.5] text-zinc-500">
-              Vista filtrada — los correos siguen viviendo en sus bandejas reales.
+              {t('virtualMailboxes.viewSubtitle')}
             </p>
             {syncing && (
               <span className="inline-flex items-center gap-2 text-[13px] font-medium text-zinc-500">
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                Sincronizando…
+                {t('common.syncing')}
               </span>
             )}
           </div>

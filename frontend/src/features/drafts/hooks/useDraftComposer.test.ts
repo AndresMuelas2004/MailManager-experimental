@@ -22,14 +22,30 @@
  * boundary — the entire endpoint and HTTP-client layer runs unmocked.
  */
 
-import { act, renderHook, waitFor } from '@testing-library/react';
+import {
+  act,
+  renderHook as rtlRenderHook,
+  waitFor,
+  type RenderHookOptions,
+} from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 
 import { server } from '../../../test/msw/server';
+import { I18nProvider } from '../../../lib/i18n';
 import useDraftComposer from './useDraftComposer';
 
 const API_BASE = 'http://localhost:8000';
+
+// ``useDraftComposer`` now reads composer error copy through ``useTranslation``,
+// so every ``renderHook`` must run inside the real I18nProvider. A local
+// ``renderHook`` injects it without touching the dozens of call sites.
+function renderHook<R, P>(
+  render: (props: P) => R,
+  options?: Omit<RenderHookOptions<P>, 'wrapper'>,
+) {
+  return rtlRenderHook(render, { wrapper: I18nProvider, ...options });
+}
 
 function gmailAccountFixture(accountId = 'acc_1') {
   return {

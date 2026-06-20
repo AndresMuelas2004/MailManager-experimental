@@ -1,14 +1,23 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen, type RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import EmailPagination from './EmailPagination';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
 
 // EmailPagination is purely presentational: it renders the navigation
 // controls (prev / elided page numbers / next) and derives their
 // enabled/disabled state entirely from its props. The "from–to de total"
 // range moved to EmailTable's header and is covered by EmailTable.test.tsx.
-// No MSW, no router — a plain render is enough.
+// No MSW, no router. Its aria-labels come from ``t()``, so a local ``render``
+// wraps it in the real I18nProvider; Spanish is pinned for the assertions.
+pinTestLang('es');
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+  return rtlRender(ui, { wrapper: I18nProvider, ...options });
+}
 
 describe('EmailPagination', () => {
   it('renders nothing when there are no emails', () => {

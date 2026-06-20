@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import AuthProvider from '../../../app/providers/AuthProvider';
+import { I18nProvider } from '../../../lib/i18n';
 import { server } from '../../../test/msw/server';
 import { createTestQueryClient } from '../../../test/renderWithProviders';
 import LoginPage from './LoginPage';
@@ -13,15 +14,21 @@ import LoginPage from './LoginPage';
 const API_BASE = 'http://localhost:8000';
 
 function renderLoginAtRoute() {
+  // LoginPage and its branding/buttons read copy through ``t()``; the default
+  // (English) locale is fine here — the assertions use English / a
+  // case-insensitive matcher / backend-supplied text — but the provider must
+  // still wrap the tree.
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
       <AuthProvider>
-        <MemoryRouter initialEntries={['/login']}>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/" element={<div>Inbox landing</div>} />
-          </Routes>
-        </MemoryRouter>
+        <I18nProvider>
+          <MemoryRouter initialEntries={['/login']}>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/" element={<div>Inbox landing</div>} />
+            </Routes>
+          </MemoryRouter>
+        </I18nProvider>
       </AuthProvider>
     </QueryClientProvider>,
   );

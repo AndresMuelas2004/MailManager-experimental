@@ -4,10 +4,14 @@ import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import { server } from '../../../test/msw/server';
 import VirtualMailboxViewPage from './VirtualMailboxViewPage';
 
 const API_BASE = 'http://localhost:8000';
+
+// Pin Spanish so the fixed Spanish assertions hold (jsdom defaults to English).
+pinTestLang('es');
 
 const sentEmail = {
   provider_message_id: 'm_sent',

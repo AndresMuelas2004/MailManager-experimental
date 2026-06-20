@@ -7,6 +7,7 @@ import RichTextEditor from './RichTextEditor';
 import RecipientAutocompleteInput from './RecipientAutocompleteInput';
 import { getProviderMeta } from '../../lib/providers';
 import { MAX_MESSAGE_SIZE, formatBytes } from '../../lib/attachments';
+import { useTranslation } from '../../lib/i18n';
 import type { ComposerMode } from '../../lib/types';
 import type { UiError } from '../../api/client/errors';
 import type { AccountOut, ContactSuggestion } from '../../api/types/dto';
@@ -67,13 +68,13 @@ type Props = {
   onRecipientQueryChange: (fragment: string) => void;
 };
 
-const TITLE_BY_MODE: Record<ComposerMode, string> = {
-  new_email: 'Nuevo mensaje',
-  new_draft: 'Nuevo borrador',
-  edit_draft: 'Editar borrador',
-  reply: 'Responder',
-  reply_all: 'Responder a todos',
-  forward: 'Reenviar',
+const TITLE_KEY_BY_MODE: Record<ComposerMode, string> = {
+  new_email: 'composer.titleNewEmail',
+  new_draft: 'composer.titleNewDraft',
+  edit_draft: 'composer.titleEditDraft',
+  reply: 'composer.titleReply',
+  reply_all: 'composer.titleReplyAll',
+  forward: 'composer.titleForward',
 };
 
 export default function ComposeOverlay({
@@ -113,6 +114,7 @@ export default function ComposeOverlay({
   recipientSuggestionsLoading,
   onRecipientQueryChange,
 }: Props) {
+  const { t } = useTranslation();
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [ccBccOpen, setCcBccOpen] = useState(() => cc.trim().length > 0 || bcc.trim().length > 0);
   const [dragActive, setDragActive] = useState(false);
@@ -145,7 +147,7 @@ export default function ComposeOverlay({
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId);
   const accountLabel = (a: ComposeAccount) => a.email_address ?? a.display_label;
-  const title = TITLE_BY_MODE[mode];
+  const title = t(TITLE_KEY_BY_MODE[mode]);
 
   const showSendEmail = mode === 'new_email';
   const showSaveDraft =
@@ -166,7 +168,7 @@ export default function ComposeOverlay({
     >
       {dragActive && attachmentsEnabled ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-t-2xl border-2 border-dashed border-blue-400 bg-blue-50/80 text-[14px] font-medium text-blue-700">
-          Suelta el archivo para adjuntarlo
+          {t('composer.dropToAttach')}
         </div>
       ) : null}
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -175,7 +177,7 @@ export default function ComposeOverlay({
           type="button"
           onClick={onClose}
           className="text-zinc-500 hover:text-zinc-700"
-          aria-label="Cerrar"
+          aria-label={t('common.close')}
         >
           <X className="h-5 w-5" />
         </button>
@@ -189,14 +191,14 @@ export default function ComposeOverlay({
               onClick={() => setCcBccOpen(true)}
               className="absolute top-0 right-0 z-10 text-xs font-medium text-blue-600 hover:text-blue-700"
             >
-              Añadir CC/BCC
+              {t('composer.addCcBcc')}
             </button>
           )}
           <RecipientAutocompleteInput
-            label="Para"
+            label={t('composer.fieldTo')}
             value={to}
             onChange={onToChange}
-            placeholder="correo@ejemplo.com"
+            placeholder={t('composer.toPlaceholder')}
             suggestions={recipientSuggestions}
             loading={recipientSuggestionsLoading}
             onQueryChange={onRecipientQueryChange}
@@ -206,19 +208,19 @@ export default function ComposeOverlay({
         {ccBccOpen && (
           <>
             <RecipientAutocompleteInput
-              label="CC"
+              label={t('composer.fieldCc')}
               value={cc}
               onChange={onCcChange}
-              placeholder="cc@ejemplo.com"
+              placeholder={t('composer.ccPlaceholder')}
               suggestions={recipientSuggestions}
               loading={recipientSuggestionsLoading}
               onQueryChange={onRecipientQueryChange}
             />
             <RecipientAutocompleteInput
-              label="BCC"
+              label={t('composer.fieldBcc')}
               value={bcc}
               onChange={onBccChange}
-              placeholder="bcc@ejemplo.com"
+              placeholder={t('composer.bccPlaceholder')}
               suggestions={recipientSuggestions}
               loading={recipientSuggestionsLoading}
               onQueryChange={onRecipientQueryChange}
@@ -227,14 +229,16 @@ export default function ComposeOverlay({
         )}
 
         <div className="relative flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-zinc-900">Origen</label>
+          <label className="text-sm font-medium text-zinc-900">{t('composer.sourceLabel')}</label>
           <button
             type="button"
             onClick={() => setSelectorOpen((v) => !v)}
             disabled={accountSelectorLocked}
             className="flex h-10 items-center justify-between rounded-[10px] bg-zinc-100 px-3 text-sm text-zinc-900 disabled:opacity-70"
           >
-            <span>{selectedAccount ? accountLabel(selectedAccount) : 'Selecciona una cuenta'}</span>
+            <span>
+              {selectedAccount ? accountLabel(selectedAccount) : t('composer.selectAccount')}
+            </span>
             {!accountSelectorLocked && <ChevronDown className="h-4 w-4 text-zinc-500" />}
           </button>
           {selectorOpen && !accountSelectorLocked && (
@@ -263,12 +267,12 @@ export default function ComposeOverlay({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-zinc-900">Asunto</label>
+          <label className="text-sm font-medium text-zinc-900">{t('composer.subjectLabel')}</label>
           <input
             type="text"
             value={subject}
             onChange={(e) => onSubjectChange(e.target.value)}
-            placeholder="Escribe el asunto..."
+            placeholder={t('composer.subjectPlaceholder')}
             className="h-10 rounded-[10px] border-[1.5px] border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
           />
         </div>
@@ -286,16 +290,16 @@ export default function ComposeOverlay({
         ) : null}
 
         <div className="flex flex-1 flex-col gap-1.5">
-          <label className="text-sm font-medium text-zinc-900">Mensaje</label>
+          <label className="text-sm font-medium text-zinc-900">{t('composer.messageLabel')}</label>
           {/* Body is HTML now: RichTextEditor.onChange already hands back the
               HTML string (no event adapter). Safe-rendering rationale lives in
               RichTextEditor (no dangerouslySetInnerHTML; backend re-sanitises). */}
           <RichTextEditor
             value={body}
             onChange={onBodyChange}
-            placeholder="Escribe tu mensaje..."
+            placeholder={t('composer.messagePlaceholder')}
             disabled={sending || saving}
-            ariaLabel="Cuerpo del mensaje"
+            ariaLabel={t('composer.messageAria')}
           />
         </div>
 
@@ -313,16 +317,16 @@ export default function ComposeOverlay({
               className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
             >
               <Paperclip className="h-4 w-4" />
-              <span>Adjuntar</span>
+              <span>{t('composer.attach')}</span>
             </button>
             <span
               className={[
                 'tabular-nums',
                 sizeOverLimit ? 'text-red-600 font-medium' : 'text-zinc-500',
               ].join(' ')}
-              aria-label="Tamaño total del mensaje"
+              aria-label={t('composer.totalSizeAria')}
             >
-              {formatBytes(attachmentTotalSize)} / 25 MB
+              {t('composer.sizeOfLimit', { size: formatBytes(attachmentTotalSize) })}
             </span>
             <input
               ref={fileInputRef}
@@ -347,7 +351,7 @@ export default function ComposeOverlay({
               ) : (
                 <>
                   <Send className="h-[18px] w-[18px]" />
-                  Enviar
+                  {t('composer.send')}
                 </>
               )}
             </button>
@@ -365,7 +369,7 @@ export default function ComposeOverlay({
               ) : (
                 <>
                   <Send className="h-[18px] w-[18px]" />
-                  Enviar borrador
+                  {t('composer.sendDraft')}
                 </>
               )}
             </button>
@@ -383,7 +387,7 @@ export default function ComposeOverlay({
               ) : (
                 <>
                   <Save className="h-[18px] w-[18px]" />
-                  Guardar
+                  {t('composer.save')}
                 </>
               )}
             </button>

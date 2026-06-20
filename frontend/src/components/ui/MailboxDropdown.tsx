@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Inbox, Plus, Check } from 'lucide-react';
 
+import { useTranslation } from '../../lib/i18n';
+
 type MailboxItem = {
   mailbox_id: string;
   display_name: string | null;
@@ -19,6 +21,7 @@ export default function MailboxDropdown({
   onSelect,
   onCreate,
 }: Props) {
+  const { t } = useTranslation();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
 
@@ -56,7 +59,7 @@ export default function MailboxDropdown({
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCreate();
             }}
-            placeholder="Nombre de la bandeja"
+            placeholder={t('mailboxesSettings.renamePlaceholder')}
             autoFocus
             className="h-8 flex-1 rounded-lg border border-zinc-200 px-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
           />
@@ -76,7 +79,7 @@ export default function MailboxDropdown({
           className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-blue-600 hover:bg-zinc-50"
         >
           <Plus className="h-4 w-4" />
-          Crear nueva bandeja
+          {t('createMailbox.dropdownCreate')}
         </button>
       )}
     </div>

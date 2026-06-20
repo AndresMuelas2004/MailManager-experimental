@@ -8,6 +8,7 @@ import {
   normaliseSubject,
   resolveAccount,
 } from '../../../lib/formatters';
+import { useTranslation } from '../../../lib/i18n';
 import Spinner from '../../../components/common/Spinner';
 import Checkbox from '../../../components/common/Checkbox';
 import FavoriteButton from './FavoriteButton';
@@ -109,6 +110,7 @@ export default function EmailTable({
   onPageChange,
   paginationDisabled,
 }: Props) {
+  const { t } = useTranslation();
   const accountsById = useMemo(() => buildAccountMap(accounts), [accounts]);
   const { showTo, showFrom } = resolveColumnLayout(view, isSent);
 
@@ -131,15 +133,19 @@ export default function EmailTable({
   // The left-hand label replaces the old "{n} correos" counter with the
   // pagination range when pagination is wired; an empty result collapses
   // to a plain "0 correos" instead of a nonsensical "1–0 de 0".
-  let countLabel = `${emails.length} correos`;
+  let countLabel = t('emailTable.count', { count: emails.length });
   if (hasPagination) {
     if (total! === 0) {
-      countLabel = '0 correos';
+      countLabel = t('emailTable.count', { count: 0 });
     } else {
       const offset = (page! - 1) * pageSize!;
       const from = offset + 1;
       const to = Math.min(offset + pageSize!, total!);
-      countLabel = `${formatThousands(from)}–${formatThousands(to)} de ${formatThousands(total!)}`;
+      countLabel = t('emailTable.rangeOf', {
+        from: formatThousands(from),
+        to: formatThousands(to),
+        total: formatThousands(total!),
+      });
     }
   }
 
@@ -155,7 +161,7 @@ export default function EmailTable({
                 <Checkbox
                   state={headerCheckboxState}
                   onClick={onToggleAll!}
-                  ariaLabel="Seleccionar los 50 correos más recientes"
+                  ariaLabel={t('emailTable.selectTopRecent')}
                 />
               ) : (
                 <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
@@ -181,17 +187,17 @@ export default function EmailTable({
         <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
           <div className="w-[18px]" />
           <div className="w-5" aria-hidden />
-          <div className="w-[120px]">Remitente</div>
-          {showTo && <div className="w-[170px]">Para</div>}
-          {showFrom && <div className="w-[170px]">De</div>}
-          <div className="flex-1">Asunto</div>
-          <div className="w-16 text-right">Fecha</div>
+          <div className="w-[120px]">{t('emailTable.colSender')}</div>
+          {showTo && <div className="w-[170px]">{t('emailTable.colTo')}</div>}
+          {showFrom && <div className="w-[170px]">{t('emailTable.colFrom')}</div>}
+          <div className="flex-1">{t('emailTable.colSubject')}</div>
+          <div className="w-16 text-right">{t('emailTable.colDate')}</div>
         </div>
       </div>
 
       {emails.length === 0 ? (
         <div className="py-16 text-center text-sm text-zinc-400">
-          {emptyMessage ?? 'No hay correos en esta bandeja'}
+          {emptyMessage ?? t('inbox.emptyDefault')}
         </div>
       ) : (
         emails.map((email) => {
@@ -241,7 +247,7 @@ export default function EmailTable({
                 <Checkbox
                   state={checked ? 'checked' : 'unchecked'}
                   onClick={() => onToggle!(email)}
-                  ariaLabel="Seleccionar correo"
+                  ariaLabel={t('emailTable.selectEmail')}
                 />
               ) : (
                 <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
@@ -287,7 +293,9 @@ export default function EmailTable({
                 {conversationMode && email.thread_message_count > 1 ? (
                   <span
                     className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500"
-                    aria-label={`${email.thread_message_count} mensajes`}
+                    aria-label={t('emailTable.threadMessages', {
+                      count: email.thread_message_count,
+                    })}
                   >
                     {email.thread_message_count}
                   </span>
@@ -295,7 +303,7 @@ export default function EmailTable({
                 {email.has_attachments ? (
                   <Paperclip
                     className="h-3.5 w-3.5 shrink-0 text-zinc-500"
-                    aria-label="Tiene adjuntos"
+                    aria-label={t('emailTable.hasAttachments')}
                   />
                 ) : null}
                 <span className="truncate">
@@ -303,7 +311,7 @@ export default function EmailTable({
                       prefix stack (docs/features/conversaciones.md § 3). */}
                   {conversationMode
                     ? normaliseSubject(email.subject)
-                    : (email.subject ?? '(Sin asunto)')}
+                    : (email.subject ?? t('common.noSubject'))}
                 </span>
               </div>
               <div className={`w-16 text-right text-xs ${weight} text-zinc-900`}>

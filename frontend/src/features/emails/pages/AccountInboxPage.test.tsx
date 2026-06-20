@@ -23,6 +23,7 @@ import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
+import { pinTestLang } from '../../../test/i18nTestLang';
 import { server } from '../../../test/msw/server';
 import AccountInboxPage from './AccountInboxPage';
 import {
@@ -32,6 +33,10 @@ import {
 import type { EmailMetadataOut } from '../../../api/types/dto';
 
 const API_BASE = 'http://localhost:8000';
+
+// The page renders backend-independent copy through ``t()``; pin Spanish so
+// the fixed Spanish assertions in this file hold (default is English in jsdom).
+pinTestLang('es');
 
 // A sent email: the recipient (to_email) is the "other side" the SENT
 // column must surface; from_email is the user's own account.

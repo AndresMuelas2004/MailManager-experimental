@@ -1,14 +1,23 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen, type RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 
 import SearchHelpPopover from './SearchHelpPopover';
+import { I18nProvider } from '../../../lib/i18n';
+import { pinTestLang } from '../../../test/i18nTestLang';
 
 // SearchHelpPopover is a presentational, self-contained widget: it owns its
 // open/closed UI state and its dismissal listeners. No MSW, no router, no
-// query client — a plain render is enough. The trigger is a real <button>
-// with an aria-label, so it never collides with the searchbox queries of
-// the page-level tests.
+// query client. Its copy comes from ``t()``, so a local ``render`` wraps it in
+// the real I18nProvider; Spanish is pinned so the existing Spanish assertions
+// hold. The trigger is a real <button> with an aria-label, so it never
+// collides with the searchbox queries of the page-level tests.
+pinTestLang('es');
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+  return rtlRender(ui, { wrapper: I18nProvider, ...options });
+}
 
 describe('SearchHelpPopover', () => {
   it('does not show the panel until the trigger is clicked', () => {

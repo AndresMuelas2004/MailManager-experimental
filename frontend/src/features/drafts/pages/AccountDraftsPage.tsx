@@ -9,6 +9,7 @@ import DraftBulkActionsBar from '../components/DraftBulkActionsBar';
 import AccountTabs from '../../../components/ui/AccountTabs';
 import useSelection from '../../../lib/hooks/useSelection';
 import { isGenericLabel } from '../../../lib/providers';
+import { useTranslation } from '../../../lib/i18n';
 import type { DraftRef } from '../types';
 import type { DraftOut } from '../../../api/types/dto';
 
@@ -21,6 +22,7 @@ export default function AccountDraftsPage() {
     mailboxId: string;
     accountId: string;
   }>();
+  const { t } = useTranslation();
   const { drafts, accounts, loading, syncing, error, refresh, syncAndRefresh } = useDraftsList(
     mailboxId!,
     accountId!,
@@ -56,10 +58,12 @@ export default function AccountDraftsPage() {
       : false;
     const email = account?.email_address ?? account?.display_label ?? accountId!;
     const computedTitle = hasCustomLabel && account ? `${account.display_label} - ${email}` : email;
-    const computedBandeja =
-      hasCustomLabel && account ? `Bandeja ${account.display_label}` : `Bandeja ${email}`;
-    return { title: computedTitle, bandejaLabel: computedBandeja };
-  }, [accounts, accountId]);
+    const labelBase = hasCustomLabel && account ? account.display_label : email;
+    return {
+      title: computedTitle,
+      bandejaLabel: t('inbox.inboxLabelPrefix', { label: labelBase }),
+    };
+  }, [accounts, accountId, t]);
 
   const bulkBar = (
     <DraftBulkActionsBar
@@ -77,7 +81,9 @@ export default function AccountDraftsPage() {
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-2">
         <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{title}</h1>
-        <p className="text-[15px] leading-[1.5] text-zinc-500">Borradores de {title}</p>
+        <p className="text-[15px] leading-[1.5] text-zinc-500">
+          {t('drafts.accountSubtitle', { title })}
+        </p>
       </div>
 
       <AccountTabs basePath={basePath} inboxLabel={bandejaLabel} />
