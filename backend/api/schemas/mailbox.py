@@ -15,12 +15,20 @@ class MailboxCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=120)
 
 
+class MailboxUpdate(BaseModel):
+    """
+    Request model for renaming a mailbox.
+    """
+
+    display_name: str = Field(..., min_length=1, max_length=120)
+
+
 class MailboxOut(BaseModel):
     """
     Response model for mailbox data.
     """
 
     mailbox_id: str
-    display_name: str | None = None
+    display_name: str
     owner_user_id: str
     created_at: str

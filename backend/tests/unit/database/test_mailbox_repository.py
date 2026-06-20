@@ -98,6 +98,13 @@ def test_list_by_owner_returns_empty_on_invalid_text_representation(monkeypatch)
     assert mailbox_module.mailbox_store.list_by_owner("not-a-uuid") == []
 
 
+def test_list_by_owner_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, mailbox_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        mailbox_module.mailbox_store.list_by_owner("user1")
+
+
 # ===== get =====
 
 
@@ -131,6 +138,14 @@ def test_get_raises_query_error_on_psycopg2(monkeypatch):
         mailbox_module.mailbox_store.get("mb1")
 
 
+def test_get_raises_query_error_on_generic(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("unexpected"))
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        mailbox_module.mailbox_store.get("mb1")
+
+
 def test_get_propagates_connection_pool_error(monkeypatch):
     patch_connection_error(monkeypatch, mailbox_module, ConnectionPoolError("no pool"))
 
@@ -138,22 +153,83 @@ def test_get_propagates_connection_pool_error(monkeypatch):
         mailbox_module.mailbox_store.get("mb1")
 
 
-# ===== delete =====
+# ===== update =====
 
 
-def test_delete_happy_path(monkeypatch):
-    cursor = FakeCursor()
+def test_update_happy_path(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[_fake_row(display_name="Renamed")])
     patch_connection(monkeypatch, mailbox_module, [cursor])
 
-    mailbox_module.mailbox_store.delete("mb1")
-    assert len(cursor.executed) == 1
+    result = mailbox_module.mailbox_store.update("mb1", "Renamed")
+    assert result["mailbox_id"] == "mb1"
+    assert result["display_name"] == "Renamed"
+    assert isinstance(result["created_at"], str)
 
 
-def test_delete_noop_on_invalid_text_representation(monkeypatch):
+def test_update_returns_none_when_row_missing(monkeypatch):
+    # Race: the row was deleted between the ownership pre-check and the UPDATE.
+    cursor = FakeCursor(fetchone_results=[None])
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    assert mailbox_module.mailbox_store.update("mb1", "Renamed") is None
+
+
+def test_update_returns_none_on_invalid_text_representation(monkeypatch):
     cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
     patch_connection(monkeypatch, mailbox_module, [cursor])
 
-    mailbox_module.mailbox_store.delete("not-a-uuid")
+    assert mailbox_module.mailbox_store.update("not-a-uuid", "Renamed") is None
+
+
+def test_update_raises_query_error_on_psycopg2(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to update mailbox"):
+        mailbox_module.mailbox_store.update("mb1", "Renamed")
+
+
+def test_update_raises_query_error_on_generic(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("unexpected"))
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        mailbox_module.mailbox_store.update("mb1", "Renamed")
+
+
+def test_update_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, mailbox_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        mailbox_module.mailbox_store.update("mb1", "Renamed")
+
+
+# ===== delete =====
+
+
+def test_delete_returns_true_when_row_present(monkeypatch):
+    cursor = FakeCursor()
+    cursor.rowcount = 1
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    assert mailbox_module.mailbox_store.delete("mb1") is True
+    assert len(cursor.executed) == 1
+
+
+def test_delete_returns_false_when_row_missing(monkeypatch):
+    # Race: the row was deleted between the ownership pre-check and the DELETE.
+    cursor = FakeCursor()
+    cursor.rowcount = 0
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    assert mailbox_module.mailbox_store.delete("mb1") is False
+
+
+def test_delete_returns_false_on_invalid_text_representation(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, mailbox_module, [cursor])
+
+    assert mailbox_module.mailbox_store.delete("not-a-uuid") is False
 
 
 def test_delete_raises_query_error_on_psycopg2(monkeypatch):
@@ -169,4 +245,11 @@ def test_delete_raises_query_error_on_generic(monkeypatch):
     patch_connection(monkeypatch, mailbox_module, [cursor])
 
     with pytest.raises(QueryError, match="RuntimeError"):
+        mailbox_module.mailbox_store.delete("mb1")
+
+
+def test_delete_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, mailbox_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
         mailbox_module.mailbox_store.delete("mb1")

@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.routers.routers_helpers import require_session
-from api.schemas.mailbox import MailboxCreate, MailboxOut
+from api.schemas.mailbox import MailboxCreate, MailboxOut, MailboxUpdate
 from api.services import mailboxes_service
 
 
@@ -42,6 +42,18 @@ def get_mailbox(
     Retrieve a single mailbox by identifier.
     """
     return mailboxes_service.get_mailbox(mailbox_id, user_id)
+
+
+@router.patch("/{mailbox_id}", response_model=MailboxOut)
+def update_mailbox(
+    mailbox_id: str,
+    payload: MailboxUpdate,
+    user_id: str = Depends(require_session),
+) -> MailboxOut:
+    """
+    Rename a mailbox owned by the authenticated user.
+    """
+    return mailboxes_service.update_mailbox(mailbox_id, payload, user_id)
 
 
 @router.delete("/{mailbox_id}")

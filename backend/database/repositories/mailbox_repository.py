@@ -87,13 +87,37 @@ class PgMailboxStore(MailboxStore):
             return None
         return _row_to_dict(row)
 
-    def delete(self, mailbox_id: str) -> None:
+    def update(self, mailbox_id: str, display_name: str) -> dict[str, Any] | None:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        mailboxes.UPDATE_MAILBOX,
+                        {"mailbox_id": mailbox_id, "display_name": display_name},
+                    )
+                    row = cur.fetchone()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return None
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to update mailbox.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected mailbox update error ({type(exc).__name__}): {exc}"
+            ) from exc
+        if row is None:
+            return None
+        return _row_to_dict(row)
+
+    def delete(self, mailbox_id: str) -> bool:
         try:
             with connection.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(mailboxes.DELETE_MAILBOX, {"mailbox_id": mailbox_id})
+                    return cur.rowcount > 0
         except psycopg2.errors.InvalidTextRepresentation:
-            return
+            return False
         except DatabaseError:
             raise
         except psycopg2.Error as exc:

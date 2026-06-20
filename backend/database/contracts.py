@@ -26,7 +26,26 @@ class MailboxStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, mailbox_id: str) -> None:
+    def update(self, mailbox_id: str, display_name: str) -> dict[str, Any] | None:
+        """Rename a mailbox, returning the updated row.
+
+        Returns the updated row when the UPDATE matched, or ``None`` when
+        no row matched the id — typically because the row was deleted
+        between the service's ownership pre-check and this call (race).
+        The service translates ``None`` into a 404 to keep the contract
+        symmetric with the rest of the mailbox surface.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, mailbox_id: str) -> bool:
+        """Delete a mailbox by id. Returns ``True`` iff a row was removed.
+
+        Returns ``False`` when no row matched — typically because the row
+        was deleted between the service's ownership pre-check and this
+        call (race). The service translates ``False`` into a 404 to keep
+        the contract symmetric with the rest of the mailbox surface.
+        """
         raise NotImplementedError
 
 

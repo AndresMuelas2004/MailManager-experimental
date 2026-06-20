@@ -7,8 +7,8 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from api.errors.exceptions import MailboxOperationError
-from api.schemas.mailbox import MailboxCreate, MailboxOut
+from api.errors.exceptions import MailboxNotFound, MailboxOperationError
+from api.schemas.mailbox import MailboxCreate, MailboxOut, MailboxUpdate
 from database import DatabaseError, mailbox_store
 from api.services.services_helpers import ensure_mailbox_access, translate_database_error
 
@@ -47,14 +47,34 @@ def get_mailbox(mailbox_id: str, user_id: str) -> MailboxOut:
     return MailboxOut(**record)
 
 
+def update_mailbox(mailbox_id: str, payload: MailboxUpdate, user_id: str) -> MailboxOut:
+    ensure_mailbox_access(mailbox_id, user_id)
+    try:
+        updated = mailbox_store.update(mailbox_id, payload.display_name)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected mailbox rename error (%s): %s", type(exc).__name__, exc)
+        raise MailboxOperationError("Failed to rename mailbox.") from exc
+    if updated is None:
+        # Race: the row passed the ownership pre-check but was deleted
+        # before the UPDATE ran. Surface a 404 instead of a silent 200.
+        raise MailboxNotFound(f"Mailbox '{mailbox_id}' not found while renaming.")
+    return MailboxOut(**updated)
+
+
 def delete_mailbox(mailbox_id: str, user_id: str) -> dict[str, str]:
     ensure_mailbox_access(mailbox_id, user_id)
     # ON DELETE CASCADE removes associated accounts and tokens automatically.
     try:
-        mailbox_store.delete(mailbox_id)
+        deleted = mailbox_store.delete(mailbox_id)
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc
     except Exception as exc:
         logger.warning("Unexpected mailbox deletion error (%s): %s", type(exc).__name__, exc)
         raise MailboxOperationError("Failed to delete mailbox.") from exc
+    if not deleted:
+        # Race: the row passed the ownership pre-check but was deleted
+        # before the DELETE ran. Surface a 404 instead of a silent 200.
+        raise MailboxNotFound(f"Mailbox '{mailbox_id}' not found while deleting.")
     return {"status": "deleted"}

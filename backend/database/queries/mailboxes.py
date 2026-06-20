@@ -23,6 +23,13 @@ GET_MAILBOX = """
     WHERE mailbox_id = %(mailbox_id)s
 """
 
+UPDATE_MAILBOX = """
+    UPDATE mailboxes
+    SET display_name = %(display_name)s
+    WHERE mailbox_id = %(mailbox_id)s
+    RETURNING mailbox_id, display_name, owner_user_id, created_at
+"""
+
 DELETE_MAILBOX = """
     DELETE FROM mailboxes
     WHERE mailbox_id = %(mailbox_id)s

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from api.errors.exceptions import ApiError, DatabaseQueryError, MailboxNotFound
-from api.schemas.mailbox import MailboxCreate, MailboxOut
+from api.errors.exceptions import ApiError, DatabaseQueryError, Forbidden, MailboxNotFound
+from api.schemas.mailbox import MailboxCreate, MailboxOut, MailboxUpdate
 from api.services import mailboxes_service
 from database import QueryError
 
@@ -27,10 +27,20 @@ _FAKE_MAILBOX = {
 
 
 class FakeMailboxStore:
-    def __init__(self, *, records=None, create_return=None):
+    def __init__(
+        self,
+        *,
+        records=None,
+        create_return=None,
+        update_returns_none=False,
+        delete_returns_false=False,
+    ):
         self._records = list(records or [])
         self._create_return = create_return
+        self._update_returns_none = update_returns_none
+        self._delete_returns_false = delete_returns_false
         self.deleted_ids: list[str] = []
+        self.updated: list[tuple[str, str]] = []
 
     def create(self, record):
         if self._create_return is not None:
@@ -40,8 +50,17 @@ class FakeMailboxStore:
     def list_by_owner(self, user_id):
         return [r for r in self._records if r["owner_user_id"] == user_id]
 
+    def update(self, mailbox_id, display_name):
+        self.updated.append((mailbox_id, display_name))
+        if self._update_returns_none:
+            return None
+        # Return a display_name DISTINCT from the requested one so the happy-path
+        # test proves the service surfaces the STORE's row, not the request payload.
+        return {**_FAKE_MAILBOX, "mailbox_id": mailbox_id, "display_name": "FromStore"}
+
     def delete(self, mailbox_id):
         self.deleted_ids.append(mailbox_id)
+        return not self._delete_returns_false
 
 
 class FakeMailboxStoreRaising:
@@ -54,6 +73,9 @@ class FakeMailboxStoreRaising:
         raise self._exc
 
     def list_by_owner(self, user_id):
+        raise self._exc
+
+    def update(self, mailbox_id, display_name):
         raise self._exc
 
     def delete(self, mailbox_id):
@@ -141,6 +163,87 @@ class TestGetMailbox:
 
 
 # ------------------------------------------------------------------
+# update_mailbox
+# ------------------------------------------------------------------
+
+
+class TestUpdateMailbox:
+
+    def test_happy_path_returns_renamed_mailbox_out(self, monkeypatch):
+        store = FakeMailboxStore()
+        monkeypatch.setattr(mailboxes_service, "mailbox_store", store)
+        monkeypatch.setattr(
+            mailboxes_service, "ensure_mailbox_access",
+            lambda mid, uid: _FAKE_MAILBOX,
+        )
+        result = mailboxes_service.update_mailbox(
+            "mb-1", MailboxUpdate(display_name="Renamed"), "user-1",
+        )
+        assert isinstance(result, MailboxOut)
+        assert result.mailbox_id == "mb-1"
+        # The service must surface the STORE's row, not the request payload.
+        assert result.display_name == "FromStore"
+        assert ("mb-1", "Renamed") in store.updated
+
+    def test_not_owner_raises_forbidden(self, monkeypatch):
+        def _deny(mid, uid):
+            raise Forbidden("You do not have access to this mailbox.")
+
+        monkeypatch.setattr(mailboxes_service, "ensure_mailbox_access", _deny)
+        with pytest.raises(Forbidden):
+            mailboxes_service.update_mailbox(
+                "mb-1", MailboxUpdate(display_name="X"), "user-1",
+            )
+
+    def test_mailbox_not_found_propagates_from_access_check(self, monkeypatch):
+        def _missing(mid, uid):
+            raise MailboxNotFound(f"Mailbox '{mid}' not found.")
+
+        monkeypatch.setattr(mailboxes_service, "ensure_mailbox_access", _missing)
+        with pytest.raises(MailboxNotFound):
+            mailboxes_service.update_mailbox(
+                "mb-1", MailboxUpdate(display_name="X"), "user-1",
+            )
+
+    def test_update_returning_none_raises_mailbox_not_found(self, monkeypatch):
+        # Race: ownership pre-check passes but the row is gone by the UPDATE.
+        store = FakeMailboxStore(update_returns_none=True)
+        monkeypatch.setattr(mailboxes_service, "mailbox_store", store)
+        monkeypatch.setattr(
+            mailboxes_service, "ensure_mailbox_access",
+            lambda mid, uid: _FAKE_MAILBOX,
+        )
+        with pytest.raises(MailboxNotFound):
+            mailboxes_service.update_mailbox(
+                "mb-1", MailboxUpdate(display_name="X"), "user-1",
+            )
+
+    def test_database_error_on_update_translated(self, monkeypatch):
+        store = FakeMailboxStoreRaising(QueryError("DB fail"))
+        monkeypatch.setattr(mailboxes_service, "mailbox_store", store)
+        monkeypatch.setattr(
+            mailboxes_service, "ensure_mailbox_access",
+            lambda mid, uid: _FAKE_MAILBOX,
+        )
+        with pytest.raises(DatabaseQueryError):
+            mailboxes_service.update_mailbox(
+                "mb-1", MailboxUpdate(display_name="X"), "user-1",
+            )
+
+    def test_generic_exception_on_update_raises_api_error(self, monkeypatch):
+        store = FakeMailboxStoreRaising(RuntimeError("boom"))
+        monkeypatch.setattr(mailboxes_service, "mailbox_store", store)
+        monkeypatch.setattr(
+            mailboxes_service, "ensure_mailbox_access",
+            lambda mid, uid: _FAKE_MAILBOX,
+        )
+        with pytest.raises(ApiError, match="Failed to rename mailbox"):
+            mailboxes_service.update_mailbox(
+                "mb-1", MailboxUpdate(display_name="X"), "user-1",
+            )
+
+
+# ------------------------------------------------------------------
 # delete_mailbox
 # ------------------------------------------------------------------
 
@@ -157,6 +260,17 @@ class TestDeleteMailbox:
         result = mailboxes_service.delete_mailbox("mb-1", "user-1")
         assert result == {"status": "deleted"}
         assert "mb-1" in store.deleted_ids
+
+    def test_delete_returning_false_raises_mailbox_not_found(self, monkeypatch):
+        # Race: ownership pre-check passes but the row is gone by the DELETE.
+        store = FakeMailboxStore(delete_returns_false=True)
+        monkeypatch.setattr(mailboxes_service, "mailbox_store", store)
+        monkeypatch.setattr(
+            mailboxes_service, "ensure_mailbox_access",
+            lambda mid, uid: _FAKE_MAILBOX,
+        )
+        with pytest.raises(MailboxNotFound):
+            mailboxes_service.delete_mailbox("mb-1", "user-1")
 
     def test_database_error_on_delete_translated(self, monkeypatch):
         store = FakeMailboxStoreRaising(QueryError("DB fail"))

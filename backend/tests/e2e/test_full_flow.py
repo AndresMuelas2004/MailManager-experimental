@@ -237,6 +237,21 @@ def test_07_get_mailbox_detail(e2e_client, flow_state):
     assert response.json()["mailbox_id"] == flow_state["temp_mid"]
 
 
+def test_07b_rename_mailbox(e2e_client, flow_state):
+    _require(flow_state, "temp_mid")
+    response = e2e_client.patch(
+        f"/mailboxes/{flow_state['temp_mid']}",
+        json={"display_name": "E2E Renamed Mailbox"},
+    )
+    _assert_ok(response)
+    assert response.json()["display_name"] == "E2E Renamed Mailbox"
+    # The rename persisted: a fresh GET reflects the new name (same test, per
+    # common_mistakes.md §1 — a follow-up read is not a separate behaviour).
+    detail = e2e_client.get(f"/mailboxes/{flow_state['temp_mid']}")
+    _assert_ok(detail)
+    assert detail.json()["display_name"] == "E2E Renamed Mailbox"
+
+
 def test_08_list_accounts(e2e_client, flow_state):
     _require(flow_state, "temp_mid")
     response = e2e_client.get(f"/mailboxes/{flow_state['temp_mid']}/accounts")
@@ -286,13 +301,11 @@ def test_13_delete_mailbox(e2e_client, flow_state):
     response = e2e_client.delete(f"/mailboxes/{flow_state['temp_mid']}")
     _assert_ok(response)
     assert response.json() == {"status": "deleted"}
-    flow_state["temp_mid_deleted"] = flow_state["temp_mid"]
-
-
-def test_14_get_deleted_mailbox_404(e2e_client, flow_state):
-    _require(flow_state, "temp_mid_deleted")
-    response = e2e_client.get(f"/mailboxes/{flow_state['temp_mid_deleted']}")
-    _assert_ok(response, expected=404)
+    # The mailbox is gone: a follow-up GET returns 404. Kept in the same test
+    # per common_mistakes.md §1 — verifying the delete's side effect is not a
+    # separate behaviour.
+    gone = e2e_client.get(f"/mailboxes/{flow_state['temp_mid']}")
+    _assert_ok(gone, expected=404)
 
 
 # ===================================================================
