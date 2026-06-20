@@ -75,16 +75,23 @@ Si el usuario intenta marcar un correo que ya no está en la base de datos local
 
 Existe una pestaña dedicada que lista **únicamente** los correos marcados como favoritos. Es el equivalente a "Destacados" de Gmail o a la vista de elementos marcados de Outlook.
 
+Favoritos aparece en **dos sitios** según desde dónde se mire, y los dos se comportan igual salvo por el alcance del listado:
+
+- **A nivel de mailbox** (la entrada de "Favoritos" del menú lateral): lista los favoritos de **todas** las cuentas del mailbox.
+- **A nivel de una cuenta concreta** (una pestaña "Favoritos", con icono de estrella, dentro de la barra de pestañas de la cuenta, **entre "Enviados" y "Spam"**): lista solo los favoritos de **esa** cuenta. Su posición copia el orden en que la barra lateral del mailbox ya coloca Favoritos, y su botón de sincronizar reconcilia solo la cuenta actual (ver § 5).
+
+La pestaña de cuenta es el cierre de la segunda mitad de § 4.1 de este mismo documento: la afirmación *"en una cuenta concreta, solo los de esa cuenta"* ya estaba escrita pero el código nunca la había implementado; ahora sí existe. No hubo cambios de backend ni nuevas llamadas al proveedor — reutiliza el mismo listado de favoritos filtrando por la cuenta.
+
 ### 4.1 Qué muestra
 
-- Una cabecera "Favoritos" con el subtítulo "Correos marcados con estrella en Gmail o con bandera en Outlook".
+- Una cabecera "Favoritos" con su subtítulo (a nivel de mailbox, "Correos marcados con estrella en Gmail o con bandera en Outlook"; a nivel de cuenta, "Favoritos de" la cuenta).
 - Un botón **"Sincronizar favoritos"** (ver § 5).
 - Una **lupa de búsqueda** que filtra dentro de los favoritos (mismas reglas que la lupa general: literal, sin tildes/mayúsculas, mínimo 2 caracteres, debounce; ver [`lupa.md`](lupa.md)).
 - La tabla de correos favoritos, ordenados por fecha de recepción descendente.
 
 La pestaña hereda el modo del listado: en vista unificada de un mailbox lista los favoritos de **todas** las cuentas del mailbox; en una cuenta concreta, solo los de esa cuenta.
 
-Como la pestaña mezcla correos recibidos y enviados, **cada fila resuelve por sí misma** qué columna mostrar ("De" para los recibidos, "Para" para los enviados) en lugar de asumir un único sentido para toda la tabla.
+Como la pestaña mezcla correos recibidos y enviados, **cada fila resuelve por sí misma** qué columna mostrar ("De" para los recibidos, "Para" para los enviados) en lugar de asumir un único sentido para toda la tabla. Igual que la pestaña de mailbox, la de cuenta **no agrupa por conversación**, así que la estrella de cada fila es clicable directamente (no el indicador agregado de solo lectura de las bandejas agrupadas; ver § 2).
 
 ### 4.2 Spam y papelera quedan fuera por defecto
 
@@ -109,8 +116,8 @@ El botón **"Sincronizar favoritos"** existe porque MailManager y el proveedor p
 
 ### 5.1 Qué hace exactamente
 
-1. Pregunta al proveedor (a cada cuenta del mailbox) **qué correos tiene marcados como favoritos** ahora mismo.
-2. Para cada cuenta, en una sola operación: marca como favoritos en la base de datos local **todos** los correos que el proveedor reporta como favoritos, y marca como **no favoritos** absolutamente todos los demás correos de esa cuenta.
+1. Pregunta al proveedor **qué correos tiene marcados como favoritos** ahora mismo. El alcance depende de desde dónde se pulse el botón: desde la pestaña de Favoritos del **mailbox** pregunta a **cada cuenta** del mailbox; desde la pestaña de Favoritos de una **cuenta concreta** pregunta **solo a esa cuenta** (es lo coherente con una vista ya filtrada a una sola cuenta, y no toca el estado de las demás). La etiqueta del botón es la misma en ambos casos: "Sincronizar favoritos".
+2. Para cada cuenta implicada, en una sola operación: marca como favoritos en la base de datos local **todos** los correos que el proveedor reporta como favoritos, y marca como **no favoritos** absolutamente todos los demás correos de esa cuenta.
 
 Es una **reconciliación completa**, no un "añadir lo nuevo": si el usuario desmarcó una estrella en Gmail web, tras sincronizar ese correo deja de ser favorito también en MailManager.
 
@@ -152,7 +159,7 @@ El estado de favorito se gestiona **por cuenta y por correo**, no por mailbox. E
 - Cada correo lleva la información de **a qué mailbox real pertenece**. Cuando el usuario marca un favorito —sea con la estrella clicable de la fila en Favoritos, sea con el botón por mensaje dentro del visor de la conversación—, la app dirige la llamada al mailbox real que posee la cuenta de ese correo, **no** al mailbox de la URL. Esto es crítico para un hilo abierto desde una bandeja ficticia, cuyos mensajes pueden vivir en mailboxes distintos (ver [conversaciones.md](conversaciones.md)).
 - Si no lo hiciera así, marcar como favorito un correo cuya cuenta vive en otro mailbox fallaría con "cuenta no encontrada", porque el backend valida que la cuenta pertenezca al mailbox indicado.
 
-La sincronización funciona por mailbox: la pestaña de Favoritos sincroniza el mailbox actual. Reconciliar cuentas repartidas entre varios mailboxes reales requeriría disparar una sincronización por cada mailbox implicado.
+La sincronización funciona por mailbox o por cuenta: la pestaña de Favoritos del mailbox reconcilia todas las cuentas del mailbox actual; la pestaña de Favoritos de una cuenta reconcilia solo esa cuenta (§ 5.1). En ninguno de los dos casos hay reconciliación de un tirón de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios): eso requeriría disparar una sincronización por cada mailbox implicado.
 
 ---
 
@@ -197,6 +204,6 @@ Las implicaciones cuantitativas (ausencia de batch y de acción multi-selección
 
 ## 10. Resumen en una frase
 
-> Un favorito es la estrella de Gmail (`STARRED`) o la bandera de Outlook proyectada como un estado **ortogonal a la ubicación** del correo, que el usuario marca y desmarca con respuesta instantánea (optimista, con reversión si el proveedor falla) desde cualquier listado; la pestaña de Favoritos lista todos los favoritos del mailbox ordenados por fecha excluyendo por defecto spam y papelera; el botón de sincronizar reconcilia por completo el estado local con el del proveedor sin importar correos nuevos (Opción A); y todo se aplica Provider-First, alternando la estrella correo a correo (sin acción multi-selección ni marca en bloque en el MVP), respetando idénticamente cómo modelan el favorito ambos proveedores.
+> Un favorito es la estrella de Gmail (`STARRED`) o la bandera de Outlook proyectada como un estado **ortogonal a la ubicación** del correo, que el usuario marca y desmarca con respuesta instantánea (optimista, con reversión si el proveedor falla) desde cualquier listado; la pestaña de Favoritos lista los favoritos ordenados por fecha excluyendo por defecto spam y papelera, y existe en dos sitios —a nivel de mailbox (todas sus cuentas) y a nivel de una cuenta concreta (solo esa, pestaña entre "Enviados" y "Spam")—; el botón de sincronizar reconcilia por completo el estado local con el del proveedor sin importar correos nuevos (Opción A), con el mismo alcance que la vista desde la que se pulsa (todo el mailbox o solo la cuenta); y todo se aplica Provider-First, alternando la estrella correo a correo (sin acción multi-selección ni marca en bloque en el MVP), respetando idénticamente cómo modelan el favorito ambos proveedores.
 
 Eso es todo lo que necesita saber un programador (o cualquier persona del equipo) para entender cómo se va a comportar la gestión de favoritos en el MVP.
