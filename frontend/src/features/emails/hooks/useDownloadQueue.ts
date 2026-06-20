@@ -53,10 +53,7 @@ export default function useDownloadQueue(): UseDownloadQueueReturn {
   }, []);
 
   const drainQueue = useCallback(() => {
-    while (
-      activeRef.current.size < MAX_CONCURRENT_DOWNLOADS
-      && queueRef.current.length > 0
-    ) {
+    while (activeRef.current.size < MAX_CONCURRENT_DOWNLOADS && queueRef.current.length > 0) {
       const next = queueRef.current.shift()!;
       const controller = new AbortController();
       activeRef.current.set(next.id, { id: next.id, controller });
@@ -74,6 +71,7 @@ export default function useDownloadQueue(): UseDownloadQueueReturn {
           });
           next.resolve(result);
           refreshSnapshots();
+          // eslint-disable-next-line react-hooks/immutability -- drainQueue is stable across renders (its only dep refreshSnapshots is a []-dep callback; it closes over stable refs), so this recursive self-call to pump the FIFO queue when a slot frees is safe.
           drainQueue();
         })
         .catch((error) => {
@@ -98,22 +96,25 @@ export default function useDownloadQueue(): UseDownloadQueueReturn {
     [drainQueue, refreshSnapshots],
   );
 
-  const cancel = useCallback((id: string) => {
-    const live = activeRef.current.get(id);
-    if (live) {
-      live.controller.abort();
-      activeRef.current.delete(id);
-      refreshSnapshots();
-      drainQueue();
-      return;
-    }
-    const idx = queueRef.current.findIndex((entry) => entry.id === id);
-    if (idx >= 0) {
-      const removed = queueRef.current.splice(idx, 1)[0];
-      removed.reject(new Error('Download cancelled.'));
-      refreshSnapshots();
-    }
-  }, [drainQueue, refreshSnapshots]);
+  const cancel = useCallback(
+    (id: string) => {
+      const live = activeRef.current.get(id);
+      if (live) {
+        live.controller.abort();
+        activeRef.current.delete(id);
+        refreshSnapshots();
+        drainQueue();
+        return;
+      }
+      const idx = queueRef.current.findIndex((entry) => entry.id === id);
+      if (idx >= 0) {
+        const removed = queueRef.current.splice(idx, 1)[0];
+        removed.reject(new Error('Download cancelled.'));
+        refreshSnapshots();
+      }
+    },
+    [drainQueue, refreshSnapshots],
+  );
 
   const status = useCallback(
     (id: string): DownloadStatus => {

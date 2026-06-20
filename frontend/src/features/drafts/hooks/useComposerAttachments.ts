@@ -1,9 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import {
-  addDraftAttachment,
-  removeDraftAttachment,
-} from '../../../api/endpoints/attachments';
+import { addDraftAttachment, removeDraftAttachment } from '../../../api/endpoints/attachments';
 import {
   humaniseAttachmentError,
   validateFileForUpload,
@@ -15,7 +12,7 @@ import type { DraftAttachmentMetadata } from '../../../api/types/dto';
 export type ChipStatus = 'uploading' | 'uploaded' | 'failed';
 
 export type AttachmentChip = {
-  id: string;                    // 'tmp-XYZ' while uploading, then real uuid
+  id: string; // 'tmp-XYZ' while uploading, then real uuid
   filename: string;
   mimeType: string;
   size: number;
@@ -61,7 +58,9 @@ function tmpId(): string {
 export default function useComposerAttachments(): UseComposerAttachmentsReturn {
   const [chips, setChips] = useState<AttachmentChip[]>([]);
   const chipsRef = useRef<AttachmentChip[]>([]);
-  chipsRef.current = chips;
+  useEffect(() => {
+    chipsRef.current = chips;
+  }, [chips]);
 
   const totalSize = chips.reduce((sum, chip) => sum + chip.size, 0);
   const count = chips.length;
