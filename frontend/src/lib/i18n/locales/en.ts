@@ -294,10 +294,12 @@ export const en: EsDictionary = {
   favorites: {
     title: 'Favorites',
     subtitle: 'Email starred in Gmail or flagged in Outlook.',
+    accountSubtitle: 'Favorites of {title}',
     sync: 'Sync favorites',
     syncing: 'Syncing…',
     emptySearch: 'No favorite email found for your search.',
     emptyDefault: 'You have not marked any email as a favorite yet.',
+    emptyDefaultAccount: 'You have not marked any email as a favorite in this account yet.',
   },
 
   virtualMailboxes: {
