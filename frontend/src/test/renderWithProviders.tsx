@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { render, type RenderOptions, type RenderResult } from '@testing-library/react';
 
 import { AuthContext, type AuthState } from '../app/providers/AuthContext';
+import { I18nProvider } from '../lib/i18n';
 import type { UserOut } from '../api/types/dto';
 
 type ProvidersOptions = {
@@ -51,7 +52,9 @@ function TestProviders({
   return (
     <QueryClientProvider client={client}>
       <AuthContext.Provider value={buildAuthValue(user ?? null)}>
-        <MemoryRouter initialEntries={initialEntries ?? ['/']}>{children}</MemoryRouter>
+        <I18nProvider>
+          <MemoryRouter initialEntries={initialEntries ?? ['/']}>{children}</MemoryRouter>
+        </I18nProvider>
       </AuthContext.Provider>
     </QueryClientProvider>
   );
