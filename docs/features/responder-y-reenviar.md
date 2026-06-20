@@ -77,7 +77,7 @@ El cursor queda **encima** de la cita, sobre dos líneas en blanco, para que el 
 - **Responder / Responder a todos**: una línea de atribución del tipo *"El 23 de mayo de 2026 a las 14:32, Ana López &lt;ana@example.com&gt; escribió:"* y, debajo, el cuerpo original dentro del recuadro de cita.
 - **Reenviar**: un bloque *"---------- Mensaje reenviado ----------"* con las líneas *De / Fecha / Asunto / Para / Cc* y, debajo, el cuerpo original dentro del recuadro de cita.
 
-> **Detalle de idioma y zona horaria.** La fecha de la cita se redacta en español y se renderiza en UTC (la internacionalización y la zona horaria local quedan fuera del MVP). El formato exacto, el recorte del original citado y sus límites están en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).
+> **Detalle de idioma y zona horaria.** La cabecera de cita se redacta en español y la fecha se renderiza en UTC (la internacionalización y la zona horaria local quedan fuera del MVP). Esto es **contenido del correo**, así que el **selector de idioma de la interfaz** (Español/English, ver [ajustes.md](ajustes.md)) **no** lo cambia: aunque la app ya no sea "español-fija", la cita sigue en español. El formato exacto, el recorte del original citado y sus límites están en [../limits/responder-y-reenviar.md](../limits/responder-y-reenviar.md).
 
 ---
 

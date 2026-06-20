@@ -12,12 +12,14 @@ El **comportamiento** (qué es un buzón, cómo se crea, vista unificada vs. cue
 
 | Límite | Valor exacto | Dónde se aplica | Notas |
 |---|---|---|---|
-| Longitud mínima del nombre del buzón | **1 carácter** (tras recortar espacios) | Validación de cliente (botón deshabilitado) y de servidor | Un nombre vacío o solo-espacios se rechaza. |
-| Longitud máxima del nombre del buzón | **120 caracteres** | Validación de servidor, columna de base de datos y atributo del campo de texto (los tres alineados en 120) | Pasarse de 120 produce un error de validación en el servidor; el campo de la interfaz no deja teclear más de 120. |
+| Longitud mínima del nombre del buzón | **1 carácter** (tras recortar espacios) | Validación de cliente (botón deshabilitado) y de servidor; **al crear y al renombrar** | Un nombre vacío o solo-espacios se rechaza. |
+| Longitud máxima del nombre del buzón | **120 caracteres** | Validación de servidor, columna de base de datos y atributo del campo de texto (los tres alineados en 120); **al crear y al renombrar** | Pasarse de 120 produce un error de validación en el servidor; el campo de la interfaz no deja teclear más de 120. |
 | Cuentas conectadas por buzón | **Sin límite** | — | No hay ningún tope codificado. Un buzón puede agrupar tantas cuentas como el usuario conecte. Ver § 2. |
 | Buzones por usuario | **Sin límite** | — | No hay ningún tope codificado. El usuario puede crear tantos buzones como quiera. Ver § 2. |
 
-No hay TTLs, reintentos, concurrencia ni timeouts propios de esta funcionalidad: crear, listar, consultar y borrar un buzón son operaciones de base de datos local de un solo paso, sin llamadas a proveedores externos.
+No hay TTLs, reintentos, concurrencia ni timeouts propios de esta funcionalidad: crear, listar, consultar, **renombrar** y borrar un buzón son operaciones de base de datos local de un solo paso, sin llamadas a proveedores externos.
+
+> **Renombrar y eliminar buzones ya se exponen en la interfaz** (sección "Bandejas" de Ajustes y desplegable del selector). El renombrado usa un endpoint `PATCH` propio con las mismas validaciones de tamaño de la fila de arriba; el borrado reutiliza la cascada que ya existía. El flujo y a dónde va el usuario tras borrar la bandeja activa están en [../features/ajustes.md](../features/ajustes.md); la política de propiedad/carrera del `PATCH` y las cifras, en [ajustes.md](ajustes.md). Lo que sigue **sin** existir es compartir y mover cuentas entre buzones (§ 3.1).
 
 ---
 
@@ -38,8 +40,6 @@ Consecuencia a tener en cuenta: una vista unificada con **muchas** cuentas conec
 
 | No soporta | Porqué breve |
 |---|---|
-| **Renombrar un buzón ya creado** | No existe endpoint de actualización (`PATCH`/`PUT`) ni interfaz para ello. El texto del onboarding ("Podrás cambiarlo más tarde") describe la intención de producto, no una capacidad disponible. Cambiar el nombre requeriría una funcionalidad nueva. |
-| **Botón de eliminar buzón en la interfaz** | El borrado existe en el backend (con cascada total: cuentas, credenciales y todo lo asociado se van con el buzón), pero **no hay ningún control visible** que lo dispare desde la app. La capacidad está, la puerta de entrada no. |
 | **Compartir un buzón entre usuarios** | Un buzón pertenece a un único usuario y la propiedad se valida en cada acción. No hay modelo de permisos, invitaciones ni acceso multiusuario. Fuera del alcance del MVP. |
 | **Mover una cuenta de un buzón a otro** | Una cuenta pertenece a exactamente un buzón desde que se conecta. No hay reasignación. Para "mover" una cuenta habría que desconectarla y volver a conectarla en el otro buzón. |
 | **Reordenar o marcar un buzón como favorito/por defecto** | Los buzones se listan siempre por fecha de creación. No hay orden personalizado ni concepto de "buzón principal" más allá de que el onboarding entra al primero de la lista. |
@@ -75,4 +75,4 @@ Para evitar duplicar cifras, estos topes —que el usuario *experimenta* dentro 
 
 ## 5. Resumen
 
-> El modelo de buzón tiene un único tope numérico real —el nombre, de 1 a 120 caracteres— y **ninguna cuota** de cantidad (cuentas por buzón y buzones por usuario son ilimitados a propósito). El resto de "límites" son ausencias deliberadas de funcionalidad: no se puede renombrar, no hay botón de borrar en la interfaz, no se comparte, no se mueven cuentas entre buzones, no existe una vista de todos los buzones a la vez (eso son las bandejas ficticias) y la columna "Para" muestra solo el primer destinatario. El comportamiento completo está en [../features/buzones-y-vista-unificada.md](../features/buzones-y-vista-unificada.md).
+> El modelo de buzón tiene un único tope numérico real —el nombre, de 1 a 120 caracteres, tanto al crear como al renombrar— y **ninguna cuota** de cantidad (cuentas por buzón y buzones por usuario son ilimitados a propósito). Renombrar y eliminar un buzón **ya se exponen** en la interfaz (renombrar vía un `PATCH` propio; eliminar reutiliza la cascada existente — flujo en [ajustes.md](ajustes.md)). El resto de "límites" siguen siendo ausencias deliberadas de funcionalidad: no se comparte, no se mueven cuentas entre buzones, no existe una vista de todos los buzones a la vez (eso son las bandejas ficticias) y la columna "Para" muestra solo el primer destinatario. El comportamiento completo está en [../features/buzones-y-vista-unificada.md](../features/buzones-y-vista-unificada.md).

@@ -25,6 +25,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
 - Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
+- In-app Settings area (identity, connected accounts, mailbox rename/delete, account-label editing, "sync everything", account deletion) and an interface-language switch (Spanish / English). The language is a browser-local preference (localStorage) — it is not persisted server-side.
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow (browser popup + API-side redirect callback, container-friendly) plus silent re-authentication and a manual "Reconnect account" action that re-runs consent to recover a revoked/expired account without deleting its synced mail.
@@ -255,6 +256,7 @@ Mailboxes:
 - `POST /mailboxes`
 - `GET /mailboxes`
 - `GET /mailboxes/{mailbox_id}`
+- `PATCH /mailboxes/{mailbox_id}` — Rename a mailbox (`{ "display_name": ... }`, 1–120 chars, no uniqueness). Ownership-checked like `DELETE`; a row deleted between the check and the update collapses to 404.
 - `DELETE /mailboxes/{mailbox_id}`
 
 Accounts:

@@ -9,6 +9,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 ### Identidad, cuentas y buzones
 - [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Duración de sesión, permisos OAuth exactos por proveedor, validaciones de cuenta, dev login, los topes del rate limiting (buckets, exenciones y Retry-After) e infraestructura de despliegue.
 - [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md) — Asimetrías multi-cuenta / multi-buzón y lo que la vista unificada no resuelve.
+- [ajustes.md](ajustes.md) — Longitud de nombres (renombrar bandeja, etiqueta de cuenta), versión fija de la app, persistencia del idioma (clave/valores/precedencia), el endpoint `PATCH` de renombrar bandeja y lo que el panel NO soporta.
 
 ### Traer y leer correo
 - [sincronizacion.md](sincronizacion.md) — Cap de bootstrap, umbral de eventos, tamaño de lote, workers, reintentos y paginación por proveedor.

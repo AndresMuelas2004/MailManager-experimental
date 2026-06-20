@@ -61,7 +61,7 @@ Cuando la validación local de Gmail falla, el usuario recibe un error determini
 |---|---|
 | Formato de la cita | **HTML** (`build_quoted_body_html`): línea(s) de atribución en `<p>` + el original dentro de un `<blockquote>`. El original **se degrada primero a texto** (mismo degradador `_html_to_text`) y luego se re-envuelve; la cita **no** ingiere el HTML del remitente. |
 | Estilo del recuadro de cita (`<blockquote style>`) | `margin:0 0 0 .8ex; border-left:2px solid #ccc; padding-left:1ex; color:#555;` — barra lateral gris + sangría. Sus propiedades CSS deben estar en la allowlist del saneador de salida (ver [composicion-y-envio.md](./composicion-y-envio.md)) para sobrevivir al saneado en persistir/enviar. |
-| Idioma de la atribución de cita | **Español fijo** (p. ej. *"El 23 de mayo de 2026 a las 14:32, … escribió:"*). i18n fuera del MVP. |
+| Idioma de la atribución de cita | **Español fijo** (p. ej. *"El 23 de mayo de 2026 a las 14:32, … escribió:"*). Es **contenido del correo**, no interfaz: **no** lo cambia el selector de idioma de la app (Español/English, ver [ajustes.md](ajustes.md)). i18n de la cita fuera del MVP. |
 | Zona horaria de la fecha | **UTC** (sin conversión a hora local). Fuera del MVP. |
 | Estilo Responder / Resp. a todos | `<p>` de atribución (fecha + remitente) seguido del `<blockquote>` con el original. **Ya no** se prefija cada línea con `> ` (el recuadro de cita sustituye al prefijo del antiguo camino en texto plano). |
 | Estilo Reenviar | `<p>` con `---------- Mensaje reenviado ----------` + `De / Fecha / Asunto / Para / Cc` (separadas por `<br>`), seguido del `<blockquote>` con el original. |
@@ -139,7 +139,7 @@ Motivos de "saltado" (`reason`) posibles:
 | **Distintivo "este correo fue reenviado"** | El "Forwarded" de Gmail web es solo UI, no lo expone su API; Outlook tampoco da un equivalente fiable. Requeriría heurística sobre la cadena `References`. |
 | **Reenvío entre cuentas distintas (cross-account)** | Bloqueado a la cuenta del original en el MVP; el esquema ya está preparado (columnas account-scoped) para añadirlo. |
 | **Variantes de prefijo numeradas (`Re[2]:`)** | No se reconocen como prefijo; se tratan como parte del asunto. Fallo benigno (el hilo se forma por `threadId`/`conversationId`). |
-| **i18n y zona horaria local en la cita** | La cabecera de cita es español fijo y la fecha va en UTC. Fuera del MVP (R-05). |
+| **i18n y zona horaria local en la cita** | La cabecera de cita es español fijo y la fecha va en UTC. Fuera del MVP (R-05). El selector de idioma de la interfaz (Español/English, ver [ajustes.md](ajustes.md)) **no** la traduce: es contenido del correo, no interfaz — esta limitación sigue vigente aunque la app ya no sea "español-fija". |
 | **Preservar el formato HTML del original en la cita** | El cuerpo es HTML (editor enriquecido) y la cita va dentro de un `<blockquote>`, pero el **contenido citado** se degrada a texto antes de envolverlo: no se conserva el formato original del remitente (negritas, tablas, imágenes del original). Es deliberado para no arrastrar HTML arbitrario al editor restringido. |
 | **Deduplicar bytes en herencia Outlook con nombres repetidos** | Dos adjuntos del original con el mismo nombre pueden provocar una re-subida redundante en el envío (caso vanishingly raro, sin pérdida de datos). |
 | **Edición del threading desde el cliente al enviar** | Los seis campos de respuesta se leen de la fila local, no del cuerpo del envío; un cliente no puede sobrescribir el enhebrado (es una protección, no una carencia funcional). |

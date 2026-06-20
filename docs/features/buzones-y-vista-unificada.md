@@ -64,9 +64,13 @@ Desde ese mismo selector, elegir otro buzón **cambia todo el contexto**: la bar
 
 Un detalle de continuidad: al cambiar de bandeja (recibidos, enviados, etc.) **dentro** de un mismo buzón, la app conserva los parámetros de la dirección actual —en particular, el término de búsqueda activo de la lupa— para no perder el filtro al saltar entre secciones. El cambio de **buzón** sí reinicia el contexto.
 
-### 2.4 Qué NO se puede hacer con un buzón hoy
+### 2.4 Renombrar y eliminar un buzón
 
-El modelo de buzón del MVP es deliberadamente minimalista. **No** existe renombrar un buzón ya creado, **no** existe un botón visible de "eliminar buzón" en la interfaz, y **no** hay forma de compartir un buzón con otro usuario ni de mover una cuenta de un buzón a otro. El detalle de cada una de estas ausencias y su motivo está en [../limits/buzones-y-vista-unificada.md](../limits/buzones-y-vista-unificada.md). La promesa que sí hace la interfaz al crear el buzón ("Podrás cambiarlo más tarde") se refiere a la intención de producto, no a una capacidad ya disponible.
+Un buzón ya creado se puede **renombrar** y **eliminar** desde la interfaz. Hay dos puntos de entrada para ambas acciones: la sección **"Bandejas"** del área de Ajustes (que las ofrece para **todas** las bandejas a la vez) y el desplegable del selector de la cabecera (para la bandeja activa). El flujo de cada acción —edición en línea del nombre al renombrar, confirmación que enumera lo que se borra al eliminar, y a dónde va el usuario tras borrar la bandeja que estaba viendo— se documenta en [ajustes.md](ajustes.md) § 4.
+
+El **borrado es en cascada**: se lleva por delante las cuentas de esa bandeja y todos sus correos sincronizados (ver § 1.1). La confirmación lo avisa antes de ejecutar. Borrar la última bandeja está permitido: el usuario vuelve a "crear bandeja".
+
+Lo que el modelo de buzón sigue **sin** ofrecer es **compartir** un buzón con otro usuario y **mover** una cuenta de un buzón a otro. El detalle de estas ausencias está en [../limits/buzones-y-vista-unificada.md](../limits/buzones-y-vista-unificada.md). La promesa que la interfaz hace al crear el buzón ("Podrás cambiarlo más tarde") ya se cumple para el nombre.
 
 ---
 
@@ -179,4 +183,4 @@ Para entender el flujo completo de un vistazo:
 
 ## 7. Resumen en una frase
 
-> Un buzón es un contenedor por usuario que agrupa varias cuentas reales de Gmail y Outlook bajo un nombre; el usuario crea su primero en el onboarding y los siguientes desde el selector de la cabecera, y dentro de cada buzón puede ver los correos de **todas** sus cuentas mezclados (vista unificada, con columnas "Para"/"De" que desambiguan cuál de sus cuentas está implicada) o entrar en **una** cuenta concreta (que oculta la columna redundante y añade identidad y pestañas propias), mientras un modo "mixto" especial resuelve fila a fila los listados que mezclan recibidos y enviados —como Favoritos— y cada acción individual sobre un correo viaja siempre a su buzón y cuenta reales aunque la vista mezcle cuentas de buzones distintos; lo que el modelo deliberadamente no hace (renombrar, borrar desde la UI, compartir, mover cuentas, y sus topes) vive en [../limits/buzones-y-vista-unificada.md](../limits/buzones-y-vista-unificada.md).
+> Un buzón es un contenedor por usuario que agrupa varias cuentas reales de Gmail y Outlook bajo un nombre; el usuario crea su primero en el onboarding y los siguientes desde el selector de la cabecera, lo **renombra** o lo **elimina** (con cascada) desde Ajustes o el propio selector, y dentro de cada buzón puede ver los correos de **todas** sus cuentas mezclados (vista unificada, con columnas "Para"/"De" que desambiguan cuál de sus cuentas está implicada) o entrar en **una** cuenta concreta (que oculta la columna redundante y añade identidad y pestañas propias), mientras un modo "mixto" especial resuelve fila a fila los listados que mezclan recibidos y enviados —como Favoritos— y cada acción individual sobre un correo viaja siempre a su buzón y cuenta reales aunque la vista mezcle cuentas de buzones distintos; lo que el modelo deliberadamente sigue sin hacer (compartir, mover cuentas) y sus topes viven en [../limits/buzones-y-vista-unificada.md](../limits/buzones-y-vista-unificada.md), y el flujo de renombrar/eliminar está en [ajustes.md](ajustes.md).
