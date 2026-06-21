@@ -7,7 +7,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 ## Índice por área
 
 ### Identidad, cuentas y buzones
-- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Duración de sesión, permisos OAuth exactos por proveedor, validaciones de cuenta, dev login, los topes del rate limiting (buckets, exenciones y Retry-After) e infraestructura de despliegue.
+- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Duración de sesión, permisos OAuth exactos por proveedor (incluidos los scopes y el desfase de reloj del login con Microsoft), validaciones de cuenta, dev login, los topes del rate limiting (buckets, exenciones y Retry-After) e infraestructura de despliegue.
 - [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md) — Asimetrías multi-cuenta / multi-buzón y lo que la vista unificada no resuelve.
 - [ajustes.md](ajustes.md) — Longitud de nombres (renombrar bandeja, etiqueta de cuenta), versión fija de la app, persistencia del idioma (clave/valores/precedencia), el endpoint `PATCH` de renombrar bandeja y lo que el panel NO soporta.
 
