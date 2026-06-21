@@ -143,7 +143,7 @@ describe('LoginPage — Microsoft login', () => {
 
     renderLoginAtRoute();
 
-    const button = await screen.findByRole('button', { name: /continuar con microsoft/i });
+    const button = await screen.findByRole('button', { name: /continue with microsoft/i });
     await userEvent.click(button);
 
     await waitFor(() => {
@@ -159,7 +159,7 @@ describe('LoginPage — Microsoft login', () => {
 
     renderLoginAtRoute();
 
-    const button = await screen.findByRole('button', { name: /continuar con microsoft/i });
+    const button = await screen.findByRole('button', { name: /continue with microsoft/i });
     await userEvent.click(button);
 
     // loginPopup → POST /auth/microsoft (default MSW handler) → setUser →
@@ -183,7 +183,7 @@ describe('LoginPage — Microsoft login', () => {
 
     renderLoginAtRoute();
 
-    const button = await screen.findByRole('button', { name: /continuar con microsoft/i });
+    const button = await screen.findByRole('button', { name: /continue with microsoft/i });
     await userEvent.click(button);
 
     await waitFor(() => {
@@ -199,7 +199,7 @@ describe('LoginPage — Microsoft login', () => {
 
     renderLoginAtRoute();
 
-    const button = await screen.findByRole('button', { name: /continuar con microsoft/i });
+    const button = await screen.findByRole('button', { name: /continue with microsoft/i });
     await userEvent.click(button);
 
     await waitFor(() => {
