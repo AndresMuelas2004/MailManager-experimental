@@ -13,18 +13,31 @@ from tests.shared.database_fakes import FakeCursor, patch_connection, patch_conn
 
 def _fake_row(
     user_id: str = "u1",
-    google_sub: str = "google-sub-1",
+    auth_provider: str = "google",
+    provider_sub: str = "provider-sub-1",
     email: str = "user@example.com",
     name: str = "Test User",
     avatar_url: str | None = None,
 ) -> dict:
     return {
         "user_id": user_id,
-        "google_sub": google_sub,
+        "auth_provider": auth_provider,
+        "provider_sub": provider_sub,
         "email": email,
         "name": name,
         "avatar_url": avatar_url,
         "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+    }
+
+
+def _upsert_payload() -> dict:
+    return {
+        "user_id": "u1",
+        "auth_provider": "google",
+        "provider_sub": "gs",
+        "email": "a@b.com",
+        "name": "N",
+        "avatar_url": None,
     }
 
 
@@ -35,9 +48,7 @@ def test_upsert_happy_path(monkeypatch):
     cursor = FakeCursor(fetchone_results=[_fake_row()])
     patch_connection(monkeypatch, user_module, [cursor])
 
-    result = user_module.user_store.upsert(
-        {"user_id": "u1", "google_sub": "gs", "email": "a@b.com", "name": "N", "avatar_url": None}
-    )
+    result = user_module.user_store.upsert(_upsert_payload())
     assert result["user_id"] == "u1"
     assert isinstance(result["created_at"], str)
 
@@ -47,9 +58,7 @@ def test_upsert_raises_query_error_on_psycopg2(monkeypatch):
     patch_connection(monkeypatch, user_module, [cursor])
 
     with pytest.raises(QueryError, match="Failed to upsert user"):
-        user_module.user_store.upsert(
-            {"user_id": "u1", "google_sub": "gs", "email": "a@b.com", "name": "N", "avatar_url": None}
-        )
+        user_module.user_store.upsert(_upsert_payload())
 
 
 def test_upsert_raises_query_error_on_generic(monkeypatch):
@@ -57,18 +66,14 @@ def test_upsert_raises_query_error_on_generic(monkeypatch):
     patch_connection(monkeypatch, user_module, [cursor])
 
     with pytest.raises(QueryError, match="RuntimeError"):
-        user_module.user_store.upsert(
-            {"user_id": "u1", "google_sub": "gs", "email": "a@b.com", "name": "N", "avatar_url": None}
-        )
+        user_module.user_store.upsert(_upsert_payload())
 
 
 def test_upsert_propagates_connection_pool_error(monkeypatch):
     patch_connection_error(monkeypatch, user_module, ConnectionPoolError("pool down"))
 
     with pytest.raises(ConnectionPoolError, match="pool down"):
-        user_module.user_store.upsert(
-            {"user_id": "u1", "google_sub": "gs", "email": "a@b.com", "name": "N", "avatar_url": None}
-        )
+        user_module.user_store.upsert(_upsert_payload())
 
 
 # ===== get_by_id =====
@@ -103,6 +108,45 @@ def test_get_by_id_raises_query_error_on_psycopg2(monkeypatch):
 
     with pytest.raises(QueryError, match="Failed to get user"):
         user_module.user_store.get_by_id("u1")
+
+
+# ===== get_by_email =====
+
+
+def test_get_by_email_happy_path(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[_fake_row(email="dev@example.com")])
+    patch_connection(monkeypatch, user_module, [cursor])
+
+    result = user_module.user_store.get_by_email("dev@example.com")
+    assert result["email"] == "dev@example.com"
+    assert isinstance(result["created_at"], str)
+
+
+def test_get_by_email_returns_none_when_not_found(monkeypatch):
+    cursor = FakeCursor(fetchone_results=[None])
+    patch_connection(monkeypatch, user_module, [cursor])
+
+    assert user_module.user_store.get_by_email("missing@example.com") is None
+
+
+def test_get_by_email_does_not_swallow_invalid_text(monkeypatch):
+    """Asymmetry guard: unlike get_by_id/delete, get_by_email does NOT catch
+    InvalidTextRepresentation gracefully. The email column is free text (never a
+    UUID cast), so swallowing it would only mask a real bug — it must surface as
+    QueryError. Documented in database_guide.md; locks the deliberate asymmetry."""
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, user_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to get user by email"):
+        user_module.user_store.get_by_email("dev@example.com")
+
+
+def test_get_by_email_raises_query_error_on_psycopg2(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, user_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to get user by email"):
+        user_module.user_store.get_by_email("dev@example.com")
 
 
 # ===== delete =====

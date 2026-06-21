@@ -155,13 +155,14 @@ def _seed_test_user(isolated_db):
     with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email, name)
-            VALUES (%(user_id)s, %(google_sub)s, %(email)s, %(name)s)
-            ON CONFLICT (google_sub) DO UPDATE SET email = EXCLUDED.email
+            INSERT INTO users (user_id, auth_provider, provider_sub, email, name)
+            VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s, %(name)s)
+            ON CONFLICT (auth_provider, provider_sub) DO UPDATE SET email = EXCLUDED.email
             """,
             {
                 "user_id": TEST_USER_ID,
-                "google_sub": TEST_USER_GOOGLE_SUB,
+                "auth_provider": "google",
+                "provider_sub": TEST_USER_GOOGLE_SUB,
                 "email": TEST_USER_EMAIL,
                 "name": "Test User",
             },

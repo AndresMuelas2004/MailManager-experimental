@@ -148,6 +148,219 @@ def test_google_login_unverified_email(test_client_base, isolated_db, monkeypatc
 
 
 # ------------------------------------------------------------------
+# POST /auth/microsoft
+# ------------------------------------------------------------------
+
+def _set_ms_env(monkeypatch):
+    """Both env vars are required: _load_auth_settings still demands GOOGLE_CLIENT_ID."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "test-client-id")
+
+
+def test_microsoft_login_success(test_client_base, isolated_db, monkeypatch, app):
+    """Monkeypatch Microsoft verification, verify cookie set and user returned."""
+    claims = {
+        "sub": "entra-sub-login-test",
+        "email": "ms-login@contoso.com",
+        "name": "MS Login User",
+        "tid": "11111111-2222-4333-8444-555555555555",
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: claims,
+    )
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["message"] == "Login successful."
+    assert data["user"]["email"] == "ms-login@contoso.com"
+    assert "session_id" in resp.cookies
+
+
+def test_microsoft_login_invalid_token(test_client_base, isolated_db, monkeypatch, app):
+    """AuthTokenInvalidError -> 401 unauthorized."""
+    def _raise(*_a, **_kw):
+        raise AuthTokenInvalidError("Invalid token")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _raise)
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "bad-token"})
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
+def test_microsoft_login_network_error(test_client_base, isolated_db, monkeypatch, app):
+    """AuthTokenNetworkError -> 502 external_api_error (not 401)."""
+    def _raise(*_a, **_kw):
+        raise AuthTokenNetworkError("JWKS unreachable")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _raise)
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "any-token"})
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "external_api_error"
+
+
+def test_microsoft_login_falls_back_to_preferred_username(test_client_base, isolated_db, monkeypatch, app):
+    """email absent, preferred_username present -> 200 with email = preferred_username."""
+    claims = {
+        "sub": "entra-sub-upn",
+        "preferred_username": "upn@contoso.com",
+        "name": "UPN User",
+        "tid": "11111111-2222-4333-8444-555555555555",
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: claims,
+    )
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+    assert resp.status_code == 200
+    assert resp.json()["user"]["email"] == "upn@contoso.com"
+
+
+def test_microsoft_login_missing_email_and_preferred_username(test_client_base, isolated_db, monkeypatch, app):
+    """Neither email nor preferred_username -> 401."""
+    claims = {"sub": "entra-sub-noemail", "name": "No Email"}
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: claims,
+    )
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
+def test_microsoft_login_missing_sub_claim(test_client_base, isolated_db, monkeypatch, app):
+    """Token without 'sub' claim -> 401 (mirrors the Google missing-sub guard)."""
+    claims = {
+        "email": "ms-nosub@contoso.com",
+        "name": "No Sub",
+        "tid": "11111111-2222-4333-8444-555555555555",
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: claims,
+    )
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
+def test_microsoft_login_does_not_require_email_verified(test_client_base, isolated_db, monkeypatch, app):
+    """email_verified=False must NOT block Microsoft login — deliberate asymmetry
+    with Google (Entra does not emit email_verified). A future 'harmonisation' that
+    added the Google guard here would silently break org-account logins; this test
+    locks the contract end-to-end."""
+    claims = {
+        "sub": "entra-sub-unverified",
+        "email": "ms-unverified@contoso.com",
+        "name": "MS Unverified",
+        "email_verified": False,
+        "tid": "11111111-2222-4333-8444-555555555555",
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: claims,
+    )
+    _set_ms_env(monkeypatch)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+    assert resp.status_code == 200
+    assert resp.json()["user"]["email"] == "ms-unverified@contoso.com"
+
+
+def test_microsoft_login_not_configured(test_client_base, isolated_db, monkeypatch, app):
+    """MICROSOFT_CLIENT_ID absent (GOOGLE_CLIENT_ID set) -> 500 env_var_error."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+
+    def _must_not_run(*_a, **_kw):
+        raise AssertionError("verify_microsoft_token must not run when unconfigured")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _must_not_run)
+
+    resp = test_client_base.post("/auth/microsoft", json={"id_token": "valid-token"})
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "env_var_error"
+
+
+# ------------------------------------------------------------------
+# Identity model (migration 0037): composite (auth_provider, provider_sub)
+# ------------------------------------------------------------------
+
+def test_login_idempotent_same_provider_sub_returns_same_user(test_client_base, isolated_db, monkeypatch, app):
+    """Logging in twice with the same (auth_provider, provider_sub) returns the SAME
+    user_id and creates exactly one users row (migration 0037 ON CONFLICT upsert)."""
+    fake_id_info = {
+        "sub": "google-sub-idempotent",
+        "email": "idem@example.com",
+        "name": "Idem User",
+        "email_verified": True,
+    }
+    monkeypatch.setattr(
+        auth_service, "verify_google_token",
+        lambda *_a, **_kw: fake_id_info,
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    resp1 = test_client_base.post("/auth/google", json={"id_token": "tok"})
+    resp2 = test_client_base.post("/auth/google", json={"id_token": "tok"})
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    assert resp1.json()["user"]["user_id"] == resp2.json()["user"]["user_id"]
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM users WHERE auth_provider = %s AND provider_sub = %s",
+            ("google", "google-sub-idempotent"),
+        )
+        assert cur.fetchone()[0] == 1
+
+
+def test_same_email_two_providers_creates_distinct_users(test_client_base, isolated_db, monkeypatch, app):
+    """No account-linking (migration 0037): the same email logging in via Google and
+    via Microsoft produces TWO distinct user rows / user_ids — the composite identity
+    key, not the email, is what disambiguates."""
+    shared_email = "shared@example.com"
+    monkeypatch.setattr(
+        auth_service, "verify_google_token",
+        lambda *_a, **_kw: {
+            "sub": "g-sub-shared", "email": shared_email,
+            "name": "Shared G", "email_verified": True,
+        },
+    )
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {
+            "sub": "ms-sub-shared", "email": shared_email,
+            "name": "Shared M", "tid": "11111111-2222-4333-8444-555555555555",
+        },
+    )
+    _set_ms_env(monkeypatch)
+
+    g_resp = test_client_base.post("/auth/google", json={"id_token": "tok"})
+    ms_resp = test_client_base.post("/auth/microsoft", json={"id_token": "tok"})
+    assert g_resp.status_code == 200
+    assert ms_resp.status_code == 200
+    assert g_resp.json()["user"]["user_id"] != ms_resp.json()["user"]["user_id"]
+
+    with isolated_db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM users WHERE email = %s", (shared_email,))
+        assert cur.fetchone()[0] == 2
+
+
+# ------------------------------------------------------------------
 # GET /auth/me
 # ------------------------------------------------------------------
 
@@ -292,10 +505,15 @@ def test_list_mailboxes_filtered_by_owner(test_client, isolated_db):
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email)
-            VALUES (%(user_id)s, %(google_sub)s, %(email)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email)
+            VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s)
             """,
-            {"user_id": other_user_id, "google_sub": "other-sub", "email": "other@example.com"},
+            {
+                "user_id": other_user_id,
+                "auth_provider": "google",
+                "provider_sub": "other-sub",
+                "email": "other@example.com",
+            },
         )
         cur.execute(
             """
@@ -386,10 +604,15 @@ def test_mailbox_ownership_forbidden(test_client, isolated_db):
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email)
-            VALUES (%(user_id)s, %(google_sub)s, %(email)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email)
+            VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s)
             """,
-            {"user_id": other_user_id, "google_sub": "forbidden-sub", "email": "b@example.com"},
+            {
+                "user_id": other_user_id,
+                "auth_provider": "google",
+                "provider_sub": "forbidden-sub",
+                "email": "b@example.com",
+            },
         )
         cur.execute(
             """
@@ -458,10 +681,15 @@ def _create_foreign_mailbox(isolated_db) -> str:
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email)
-            VALUES (%(user_id)s, %(google_sub)s, %(email)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email)
+            VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s)
             """,
-            {"user_id": other_user_id, "google_sub": f"sub-{other_user_id[:8]}", "email": "other@e.com"},
+            {
+                "user_id": other_user_id,
+                "auth_provider": "google",
+                "provider_sub": f"sub-{other_user_id[:8]}",
+                "email": "other@e.com",
+            },
         )
         cur.execute(
             """

@@ -211,9 +211,9 @@ def test_addresses_of_other_users_are_not_suggested(
     _mid, _account_id = setup_mailbox_and_account(test_client_base)
     with isolated_db.cursor() as cur:
         cur.execute(
-            "INSERT INTO users (user_id, google_sub, email) "
-            "VALUES (%s, %s, %s)",
-            (_OTHER_USER_ID, "contacts-other-sub", "other@example.com"),
+            "INSERT INTO users (user_id, auth_provider, provider_sub, email) "
+            "VALUES (%s, %s, %s, %s)",
+            (_OTHER_USER_ID, "google", "contacts-other-sub", "other@example.com"),
         )
         cur.execute(
             "INSERT INTO mailboxes (mailbox_id, display_name, owner_user_id) "

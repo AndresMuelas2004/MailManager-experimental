@@ -36,7 +36,8 @@ from api.services import auth_service
 
 _FAKE_USER = {
     "user_id": str(uuid4()),
-    "google_sub": "goog-sub-123",
+    "auth_provider": "google",
+    "provider_sub": "goog-sub-123",
     "email": "unit@example.com",
     "name": "Unit Tester",
     "avatar_url": None,
@@ -197,7 +198,7 @@ def test_google_login_new_user(monkeypatch, mock_response):
 
 
 def test_google_login_existing_user(monkeypatch, mock_response):
-    fake_id_info = {"sub": _FAKE_USER["google_sub"], "email": "updated@example.com", "name": "Updated", "email_verified": True}
+    fake_id_info = {"sub": _FAKE_USER["provider_sub"], "email": "updated@example.com", "name": "Updated", "email_verified": True}
     monkeypatch.setattr(
         auth_service, "verify_google_token",
         lambda *_a, **_kw: fake_id_info,
@@ -223,6 +224,253 @@ def test_google_login_cookie_honours_secure_and_samesite_settings(monkeypatch, m
     monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "strict")
 
     auth_service.google_login("valid-token", mock_response)
+
+    kwargs = mock_response.set_cookie.call_args.kwargs
+    assert kwargs["secure"] is True
+    assert kwargs["samesite"] == "strict"
+    assert kwargs["httponly"] is True
+
+
+# ------------------------------------------------------------------
+# microsoft_login
+# ------------------------------------------------------------------
+
+
+class RecordingUserStore(FakeUserStore):
+    """FakeUserStore that records the dict passed to ``upsert``."""
+
+    def __init__(self, *, user=None):
+        super().__init__(user=user)
+        self.upserts: list[dict] = []
+
+    def upsert(self, user):
+        self.upserts.append(dict(user))
+        return super().upsert(user)
+
+
+def _ms_env(monkeypatch, *, microsoft="ms-cid"):
+    """Set GOOGLE_CLIENT_ID (always required by _load_auth_settings) and MS id."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    if microsoft is None:
+        monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+    else:
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", microsoft)
+
+
+def test_microsoft_login_not_configured_raises_env_var_error(monkeypatch, mock_response):
+    """MICROSOFT_CLIENT_ID absent → EnvVarError before verify_microsoft_token is called."""
+    _ms_env(monkeypatch, microsoft=None)
+
+    def _must_not_run(*_a, **_kw):
+        raise AssertionError("verify_microsoft_token must not be called when unconfigured")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _must_not_run)
+
+    with pytest.raises(
+        EnvVarError,
+        match="Microsoft login is not configured: MICROSOFT_CLIENT_ID is missing.",
+    ):
+        auth_service.microsoft_login("any-token", mock_response)
+
+
+def test_microsoft_login_invalid_token(monkeypatch, mock_response):
+    """AuthTokenInvalidError from verify → Unauthorized (translated)."""
+    def _raise(*_a, **_kw):
+        raise AuthTokenInvalidError("bad ms token")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _raise)
+    _ms_env(monkeypatch)
+
+    with pytest.raises(Unauthorized, match="bad ms token"):
+        auth_service.microsoft_login("bad-token", mock_response)
+
+
+def test_microsoft_login_network_error(monkeypatch, mock_response):
+    """AuthTokenNetworkError from verify → ExternalAPIError (502, not 401)."""
+    def _raise(*_a, **_kw):
+        raise AuthTokenNetworkError("JWKS unreachable")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _raise)
+    _ms_env(monkeypatch)
+
+    with pytest.raises(ExternalAPIError, match="JWKS unreachable"):
+        auth_service.microsoft_login("some-token", mock_response)
+
+
+def test_microsoft_login_verify_unexpected_error(monkeypatch, mock_response):
+    """A non-AuthError escaping verify → Unauthorized fallback."""
+    def _raise(*_a, **_kw):
+        raise RuntimeError("TLS handshake failed")
+
+    monkeypatch.setattr(auth_service, "verify_microsoft_token", _raise)
+    _ms_env(monkeypatch)
+
+    with pytest.raises(Unauthorized, match="Microsoft token verification failed unexpectedly"):
+        auth_service.microsoft_login("some-token", mock_response)
+
+
+def test_microsoft_login_missing_sub(monkeypatch, mock_response):
+    """Claims without 'sub' → Unauthorized."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"email": "x@contoso.com", "tid": "t"},
+    )
+    _ms_env(monkeypatch)
+
+    with pytest.raises(Unauthorized, match="Microsoft token missing 'sub' claim"):
+        auth_service.microsoft_login("valid-token", mock_response)
+
+
+def test_microsoft_login_missing_email_and_preferred_username(monkeypatch, mock_response):
+    """Neither 'email' nor 'preferred_username' → Unauthorized."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "name": "No Email"},
+    )
+    _ms_env(monkeypatch)
+
+    with pytest.raises(
+        Unauthorized,
+        match="Microsoft token missing both 'email' and 'preferred_username' claims",
+    ):
+        auth_service.microsoft_login("valid-token", mock_response)
+
+
+def test_microsoft_login_uses_email_when_present(monkeypatch, mock_response):
+    """email present → it is used as the user email."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "primary@contoso.com", "name": "X"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    result = auth_service.microsoft_login("valid-token", mock_response)
+    assert isinstance(result, AuthResponse)
+    assert result.user.email == "primary@contoso.com"
+    assert result.message == "Login successful."
+    mock_response.set_cookie.assert_called_once()
+
+
+def test_microsoft_login_falls_back_to_preferred_username(monkeypatch, mock_response):
+    """email absent but preferred_username present → preferred_username used as email."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "preferred_username": "upn@contoso.com", "name": "X"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    result = auth_service.microsoft_login("valid-token", mock_response)
+    assert result.user.email == "upn@contoso.com"
+
+
+def test_microsoft_login_accepts_claims_without_email_verified(monkeypatch, mock_response):
+    """email_verified is NOT checked (deliberate asymmetry with Google)."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "noev@contoso.com", "name": "X"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    # No email_verified key at all → still a successful login.
+    result = auth_service.microsoft_login("valid-token", mock_response)
+    assert result.user.email == "noev@contoso.com"
+
+
+def test_microsoft_login_upsert_uses_microsoft_provider_and_sub(monkeypatch, mock_response):
+    """The upsert dict carries auth_provider='microsoft' and provider_sub=sub."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "entra-sub-999", "email": "u@contoso.com", "name": "U"},
+    )
+    store = RecordingUserStore()
+    monkeypatch.setattr(auth_service, "user_store", store)
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    auth_service.microsoft_login("valid-token", mock_response)
+
+    assert len(store.upserts) == 1
+    upserted = store.upserts[0]
+    assert upserted["auth_provider"] == "microsoft"
+    assert upserted["provider_sub"] == "entra-sub-999"
+    assert upserted["email"] == "u@contoso.com"
+    # Entra normally emits no picture → avatar_url None.
+    assert upserted["avatar_url"] is None
+
+
+def test_microsoft_login_upsert_database_error_translated(monkeypatch, mock_response):
+    """DatabaseError from user_store.upsert → translated ApiError."""
+    class FailingUserStore(FakeUserStore):
+        def upsert(self, user):
+            raise QueryError("DB fail")
+
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "u@contoso.com", "name": "U"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FailingUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    with pytest.raises(ApiError):
+        auth_service.microsoft_login("valid-token", mock_response)
+
+
+def test_microsoft_login_upsert_unexpected_error(monkeypatch, mock_response):
+    """RuntimeError from user_store.upsert → UserOperationError."""
+    class FailingUserStore(FakeUserStore):
+        def upsert(self, user):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "u@contoso.com", "name": "U"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FailingUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+
+    with pytest.raises(UserOperationError, match="Failed to upsert user during Microsoft login"):
+        auth_service.microsoft_login("valid-token", mock_response)
+
+
+def test_microsoft_login_session_create_unexpected_error(monkeypatch, mock_response):
+    """RuntimeError from session_store.create → SessionOperationError."""
+    class FailingSessionStore(FakeSessionStore):
+        def create(self, session):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "u@contoso.com", "name": "U"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FailingSessionStore())
+    _ms_env(monkeypatch)
+
+    with pytest.raises(SessionOperationError, match="Failed to create session during Microsoft login"):
+        auth_service.microsoft_login("valid-token", mock_response)
+
+
+def test_microsoft_login_cookie_honours_secure_and_samesite_settings(monkeypatch, mock_response):
+    """The session cookie reflects the cookie_secure / cookie_samesite settings."""
+    monkeypatch.setattr(
+        auth_service, "verify_microsoft_token",
+        lambda *_a, **_kw: {"sub": "ms-sub", "email": "u@contoso.com", "name": "U"},
+    )
+    monkeypatch.setattr(auth_service, "user_store", FakeUserStore())
+    monkeypatch.setattr(auth_service, "session_store", FakeSessionStore())
+    _ms_env(monkeypatch)
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "strict")
+
+    auth_service.microsoft_login("valid-token", mock_response)
 
     kwargs = mock_response.set_cookie.call_args.kwargs
     assert kwargs["secure"] is True

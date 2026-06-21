@@ -353,10 +353,10 @@ def test_foreign_mailbox_returns_403(
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email)
-            VALUES (%(uid)s, %(sub)s, %(email)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email)
+            VALUES (%(uid)s, %(provider)s, %(sub)s, %(email)s)
             """,
-            {"uid": other_user, "sub": f"sub-{other_user[:8]}",
+            {"uid": other_user, "provider": "google", "sub": f"sub-{other_user[:8]}",
              "email": "other@e.com"},
         )
         cur.execute(

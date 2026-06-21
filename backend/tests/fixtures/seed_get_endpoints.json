@@ -3,7 +3,8 @@
 
   "user": {
     "user_id": "11111111-1111-4000-a000-111111111111",
-    "google_sub": "inventadoParaEndpointGet-google-sub",
+    "auth_provider": "google",
+    "provider_sub": "inventadoParaEndpointGet-google-sub",
     "email": "inventadoParaEndpointGet@fake.test",
     "name": "inventadoParaEndpointGet",
     "avatar_url": null
