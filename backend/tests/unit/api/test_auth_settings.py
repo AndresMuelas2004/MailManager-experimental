@@ -31,6 +31,21 @@ def test_get_auth_settings_missing_client_id(monkeypatch):
         settings.get_auth_settings()
 
 
+def test_get_auth_settings_reads_microsoft_client_id_when_present(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "ms-client-id")
+
+    assert settings.get_auth_settings().microsoft_client_id == "ms-client-id"
+
+
+def test_get_auth_settings_microsoft_client_id_optional_defaults_empty(monkeypatch):
+    """Unlike GOOGLE_CLIENT_ID, an absent MICROSOFT_CLIENT_ID does NOT raise."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+
+    assert settings.get_auth_settings().microsoft_client_id == ""
+
+
 def test_get_auth_settings_custom_values(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "custom-id")
     monkeypatch.setenv("AUTH_SESSION_LIFETIME_DAYS", "14")

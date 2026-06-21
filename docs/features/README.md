@@ -7,7 +7,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 ## Índice por área
 
 ### Identidad, cuentas y buzones
-- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Login con Google, sesión de la app, conectar / editar / desconectar cuentas de Gmail y Outlook, y el límite de frecuencia anti-abuso (rate limiting).
+- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Login con Google y con Microsoft, sesión de la app, conectar / editar / desconectar cuentas de Gmail y Outlook, y el límite de frecuencia anti-abuso (rate limiting).
 - [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md) — Qué es un buzón, la vista de una cuenta vs. la vista unificada, y la lógica de columnas "Para" / "De".
 - [ajustes.md](ajustes.md) — El área de Ajustes: identidad del usuario, gestión de cuentas (con editar etiqueta), renombrar/eliminar bandejas, idioma de la interfaz (Español/English), "sincronizar todo" y "acerca de".
 

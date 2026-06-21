@@ -16,6 +16,14 @@ export function loginWithGoogle(idToken: string): Promise<AuthResponse> {
   });
 }
 
+export function loginWithMicrosoft(idToken: string): Promise<AuthResponse> {
+  return request('/auth/microsoft', {
+    method: 'POST',
+    body: { id_token: idToken },
+    schema: authResponseSchema,
+  });
+}
+
 export function devLogin(): Promise<AuthResponse> {
   return request('/auth/dev-login', {
     method: 'POST',

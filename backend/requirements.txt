@@ -45,6 +45,7 @@ pycparser==3.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 Pygments==2.19.2
+PyJWT[crypto]==2.13.0
 pyparsing==3.2.5
 pytest==9.0.2
 python-dotenv==1.2.1

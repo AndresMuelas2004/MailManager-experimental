@@ -2,14 +2,25 @@ import type { RefObject } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type { UiError } from '../../../api/client/errors';
 import { useTranslation } from '../../../lib/i18n';
+import MicrosoftSignInButton from './MicrosoftSignInButton';
 
 type Props = {
   buttonRef: RefObject<HTMLDivElement | null>;
   error: UiError | null;
   loading: boolean;
+  msOnClick: () => void;
+  msLoading: boolean;
+  msError: UiError | null;
 };
 
-export default function GoogleSignInButton({ buttonRef, error, loading }: Props) {
+export default function GoogleSignInButton({
+  buttonRef,
+  error,
+  loading,
+  msOnClick,
+  msLoading,
+  msError,
+}: Props) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-20">
@@ -21,16 +32,20 @@ export default function GoogleSignInButton({ buttonRef, error, loading }: Props)
           <p className="text-center text-base text-slate-500">{t('login.signInPrompt')}</p>
         </div>
 
-        <div className="w-full">
-          <div className="overflow-hidden rounded-2xl shadow-lg shadow-blue-600/25">
-            <div ref={buttonRef} />
+        <div className="flex w-full flex-col gap-4">
+          <div className="w-full">
+            <div className="overflow-hidden rounded-2xl shadow-lg shadow-blue-600/25">
+              <div ref={buttonRef} />
+            </div>
+
+            {loading && (
+              <p className="mt-4 text-center text-sm text-gray-500">{t('login.signingIn')}</p>
+            )}
+
+            {error && <p className="mt-4 text-center text-sm text-red-600">{error.message}</p>}
           </div>
 
-          {loading && (
-            <p className="mt-4 text-center text-sm text-gray-500">{t('login.signingIn')}</p>
-          )}
-
-          {error && <p className="mt-4 text-center text-sm text-red-600">{error.message}</p>}
+          <MicrosoftSignInButton onClick={msOnClick} loading={msLoading} error={msError} />
         </div>
 
         <div className="flex items-center gap-1.5">

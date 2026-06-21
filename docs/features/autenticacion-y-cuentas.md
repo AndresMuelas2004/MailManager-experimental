@@ -4,20 +4,22 @@ Este documento describe **qué hace** MailManager cuando alguien inicia sesión 
 
 Hay dos conceptos que conviene no mezclar y que este documento trata en este orden:
 
-1. **La sesión de la aplicación** — quién está usando MailManager. Se obtiene iniciando sesión con Google y vive en una cookie. Es la identidad del *usuario de la app*.
+1. **La sesión de la aplicación** — quién está usando MailManager. Se obtiene iniciando sesión con **Google o con Microsoft** y vive en una cookie. Es la identidad del *usuario de la app*.
 2. **Las cuentas de correo conectadas** — los buzones de Gmail y Outlook cuyos correos la app va a leer y gestionar. Son recursos que el usuario vincula *después* de iniciar sesión.
 
-Iniciar sesión con Google **no** conecta ninguna cuenta de correo: solo identifica a la persona. Son dos autorizaciones OAuth distintas, con proveedores y permisos distintos, y ocurren en momentos distintos.
+Iniciar sesión (sea con Google o con Microsoft) **no** conecta ninguna cuenta de correo: solo identifica a la persona. Son autorizaciones distintas, con proveedores y permisos distintos, y ocurren en momentos distintos. En particular, **entrar con Microsoft no conecta ningún buzón de Outlook**: una persona puede entrar con su cuenta Microsoft y luego conectar (o no) buzones de Gmail y/o de Outlook, que es otra cosa (sección 2).
 
 La frontera de este documento llega hasta el **ciclo de vida de la cuenta y de la sesión**. Cómo se agrupan las cuentas bajo un buzón y cómo se presenta la vista unificada se documenta en [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md). Los topes, valores por defecto y la lista de "lo que NO soporta" viven en un documento aparte para no repetir cifras aquí: **[../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)**.
 
 ---
 
-## 1. Iniciar sesión con Google
+## 1. Iniciar sesión (Google o Microsoft)
 
-### 1.1 El flujo que ve el usuario
+La pantalla de login ofrece **dos métodos** para entrar, uno al lado del otro: **"Continuar con Google"** y **"Continuar con Microsoft"**. Cualquiera de los dos identifica a la persona y abre **la misma sesión** (la cookie, su duración y todo el comportamiento posterior son idénticos, sección 4); lo único que cambia es por dónde se verifica la identidad. Microsoft admite tanto cuentas **personales** (Outlook.com, Hotmail, Live) como **de organización** (trabajo o estudio).
 
-La pantalla de login muestra el botón oficial de **"Continuar con Google"** (el widget de Google Identity Services). Al pulsarlo, Google gestiona toda la interacción de consentimiento y devuelve a la app una credencial firmada que la identifica. La app la verifica contra el servidor, crea una sesión y, si todo va bien, redirige a la aplicación.
+### 1.1 El flujo con Google
+
+La pantalla muestra el botón oficial de **"Continuar con Google"** (el widget de Google Identity Services). Al pulsarlo, Google gestiona toda la interacción de consentimiento y devuelve a la app una credencial firmada que la identifica. La app la verifica contra el servidor, crea una sesión y, si todo va bien, redirige a la aplicación.
 
 A nivel de experiencia:
 
@@ -27,30 +29,54 @@ A nivel de experiencia:
 
 > El login es contra **Google**, sea cual sea el correo del usuario. Es la identidad de la *app*, no el primer correo conectado. Alguien puede entrar con su Google personal y luego conectar cuentas de Outlook del trabajo; son cosas separadas.
 
-### 1.2 Qué valida el servidor antes de dar por buena la sesión
+### 1.2 El flujo con Microsoft
 
-No basta con que Google diga "esta credencial es mía". El servidor exige que la credencial:
+Al pulsar **"Continuar con Microsoft"**, la app abre una **ventana emergente** de Microsoft donde el usuario elige su cuenta y da su consentimiento. Tras consentir, la ventana se cierra, la app recibe la credencial de identidad, el servidor la verifica y, si todo va bien, el usuario entra directamente en la aplicación. De cara al usuario la experiencia es equivalente a la de Google: mientras se verifica, el botón muestra un breve "Iniciando sesión…"; si algo falla, aparece un mensaje de error bajo los botones y el usuario se queda en el login.
 
-- Sea **criptográficamente válida** y esté **emitida para esta aplicación** concreta (se comprueba el destinatario del token). Una credencial generada para otra app distinta se rechaza aunque sea legítima.
-- Traiga un **identificador estable de Google** y un **email**. Si falta cualquiera de los dos, el login se rechaza.
-- Tenga el **email verificado** por Google (la credencial trae una marca `email_verified`). Una cuenta de Google cuyo email primario no está verificado se rechaza, aunque la credencial sea criptográficamente válida: la identidad se ancla al identificador de Google, pero un email sin verificar no es fiable para mostrarlo ni para futuras notificaciones.
+Una diferencia de mecánica que conviene conocer (aunque para el usuario el resultado sea el mismo): el consentimiento de Microsoft ocurre en una **ventana emergente** —igual que el popup de *conectar* una cuenta de Outlook (sección 2.2), pero aquí es para **entrar en la app**, no para vincular un buzón—. Los permisos que pide este popup son solo los de **identidad** (saber quién eres), no permisos de correo; la lista exacta está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
 
-Se tolera un pequeño desfase de reloj entre el cliente y el servidor para que un reloj ligeramente adelantado o atrasado no tumbe logins legítimos (el margen exacto está en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)).
+> Reintentar tras cancelar: por una limitación de la librería de Microsoft que usa el frontend, detectar que el usuario **cerró la ventana** sin terminar no es instantáneo. La app lo gestiona para que el cierre se interprete como una **cancelación suave** ("Inicio de sesión cancelado.") y el usuario pueda volver a pulsar el botón sin esperas largas. El detalle técnico vive en el documento de frontend.
 
-La distinción de errores es deliberada: un **fallo de red** al contactar con Google para verificar (el servicio de verificación está caído o inalcanzable) **no** es lo mismo que una credencial inválida. El primero se reporta como un error de servidor temporal —reintentar más tarde tiene sentido—, el segundo como "no autorizado". Confundirlos haría que un corte momentáneo de Google se mostrase como "tu sesión es inválida", empujando al usuario a acciones inútiles.
+### 1.3 Qué valida el servidor antes de dar por buena la sesión
 
-### 1.3 Usuario nuevo vs. usuario que vuelve
+No basta con que el proveedor diga "esta credencial es mía". En **ambos** proveedores el servidor exige que la credencial sea **criptográficamente válida** y esté **emitida para esta aplicación** concreta (se comprueba el destinatario del token): una credencial generada para otra app distinta se rechaza aunque sea legítima. Más allá de eso, cada proveedor tiene su política de identidad:
 
-La app identifica a cada persona por su **identificador estable de Google**, no por su email:
+- **Google.** La credencial debe traer un **identificador estable de Google** y un **email**, y ese email debe estar **verificado** (la credencial trae una marca `email_verified`). Una cuenta de Google cuyo email primario no está verificado se rechaza: la identidad se ancla al identificador de Google, pero un email sin verificar no es fiable para mostrarlo ni para futuras notificaciones.
+- **Microsoft.** La credencial debe traer un **identificador estable de Microsoft**. Microsoft **no** entrega una marca de "email verificado", así que el login con Microsoft **no la exige** (sección 6). El email es más laxo que en Google: si Microsoft no entrega un email "limpio", la app cae al **nombre de usuario principal** y no se bloquea (sección 6). Solo si faltaran a la vez el identificador o ambos campos de email se rechazaría el login.
 
-- **Usuario nuevo**: se crea su ficha (email, nombre y foto de Google).
-- **Usuario que vuelve**: se reconoce por el mismo identificador de Google y **conserva su misma identidad interna** y, con ella, todos sus buzones, cuentas y datos. En cada inicio de sesión se **refrescan** su nombre, su email y su foto con los datos actuales de Google, por si los cambió.
+Se tolera un pequeño desfase de reloj entre el cliente y el servidor para que un reloj ligeramente adelantado o atrasado no tumbe logins legítimos (los márgenes —que difieren entre Google y Microsoft— están en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md)).
 
-Una consecuencia práctica de identificar por el identificador de Google y no por el email: si una persona cambia la dirección de email de su cuenta de Google pero mantiene la misma cuenta, **sigue siendo el mismo usuario** de MailManager y no pierde nada.
+La distinción de errores es deliberada y **la misma para los dos proveedores**: un **fallo de red** al contactar con el proveedor para verificar (el servicio de verificación está caído o inalcanzable) **no** es lo mismo que una credencial inválida. El primero se reporta como un error de servidor temporal —reintentar más tarde tiene sentido—, el segundo como "no autorizado". Confundirlos haría que un corte momentáneo del proveedor se mostrase como "tu sesión es inválida", empujando al usuario a acciones inútiles.
+
+### 1.4 Usuario nuevo vs. usuario que vuelve
+
+La app identifica a cada persona por el **identificador estable que entrega su proveedor** (el de Google o el de Microsoft), no por su email:
+
+- **Usuario nuevo**: se crea su ficha con su email y su nombre (y, en Google, su foto). En Microsoft el email puede ser el nombre de usuario si la cuenta no expone un email "limpio" (sección 6).
+- **Usuario que vuelve**: se reconoce por el mismo identificador del mismo proveedor y **conserva su misma identidad interna** y, con ella, todos sus buzones, cuentas y datos. En cada inicio de sesión se **refrescan** su nombre y su email (y la foto en Google) con los datos actuales del proveedor, por si los cambió.
+
+Una consecuencia práctica de identificar por el identificador del proveedor y no por el email: si una persona cambia la dirección de email de su cuenta pero mantiene la misma cuenta del proveedor, **sigue siendo el mismo usuario** de MailManager y no pierde nada.
+
+El identificador es **propio de cada proveedor**: el mismo usuario que entra unas veces con Google y otras con Microsoft se trata como **dos usuarios distintos** aunque comparta email. Esto es deliberado y se explica en la sección 5 ("no hay enlace de cuentas").
 
 #### Ejemplo
 
-> Una usuaria entra por primera vez con `ana@gmail.com`; se crea su perfil. Meses después cambia el nombre visible de su cuenta de Google. La próxima vez que entra en MailManager, su nombre aparece actualizado automáticamente, sin haber tocado nada en la app.
+> Una usuaria entra por primera vez con su cuenta de Google `ana@gmail.com`; se crea su perfil. Meses después cambia el nombre visible de su cuenta de Google. La próxima vez que entra en MailManager, su nombre aparece actualizado automáticamente, sin haber tocado nada en la app. Si esa misma persona entrara otro día con **Continuar con Microsoft**, MailManager crearía un **usuario aparte**, sin los buzones ni los datos del usuario de Google.
+
+### 1.5 Sin enlace de cuentas: cada método identifica a su propio usuario
+
+El login con Google y el login con Microsoft son **independientes**. Si una misma persona usa el **mismo email** en su cuenta de Google y en su cuenta de Microsoft y entra unas veces con una y otras con otra, MailManager la tratará como **dos usuarios distintos**, cada uno con sus propios buzones, cuentas y datos. **No se fusionan.**
+
+Es una limitación consciente del MVP: vincular ("enlazar") la cuenta de Google y la de Microsoft de una misma persona bajo un único usuario queda fuera de alcance. La identidad interna se ancla al par *(proveedor, identificador del proveedor)*, no al email, de modo que el email coincidente no basta para unirlas. Quien quiera conservar un único conjunto de buzones y datos debe **entrar siempre con el mismo método**.
+
+### 1.6 El email de Microsoft puede no venir (asimetría con Google)
+
+Con Google la app exige siempre un email **verificado** (sección 1.3). **Microsoft funciona distinto** y el login lo asume de forma explícita:
+
+- Microsoft **no** entrega la marca de "email verificado", así que el login con Microsoft **no la exige**.
+- En algunas cuentas —sobre todo de organización— Microsoft puede **no entregar el email**. En ese caso la app usa el **nombre de usuario principal** que sí entrega Microsoft (que muy a menudo es el propio email) y **el login NO se bloquea**. Solo si Microsoft no entregara ni email ni nombre de usuario —caso muy raro— se rechazaría el login.
+
+Para el usuario el efecto es: entrar con Microsoft funciona aunque su cuenta no exponga un email "limpio"; como mucho, el email mostrado en su perfil será su nombre de usuario de Microsoft. (Esto es distinto del email *de una cuenta de correo conectada*, que es best-effort por otra razón — sección 2.4.)
 
 ---
 
@@ -212,7 +238,7 @@ Además, la app **no reintenta automáticamente** una petición rechazada por es
 
 Tienen un tope pensado para frenar el abuso sin estorbar el uso legítimo:
 
-- **Iniciar sesión** — tanto el login con Google como el dev login (sección 5).
+- **Iniciar sesión** — el login con Google, el login con Microsoft y el dev login (sección 5) comparten el mismo tope.
 - **Enviar correo** — el envío directo y el envío de un borrador.
 - **Sincronizar con el proveedor** — sincronizar correos, borradores y favoritos.
 
@@ -240,8 +266,9 @@ La protección se **activa en producción** y está **desactivada por defecto en
 
 Sin entrar en códigos, conviene tener clara la intención detrás de los errores más habituales de esta área, porque están elegidos para que el usuario o el equipo entiendan qué hacer:
 
-- **Credenciales de login inválidas** → "no autorizado": hay que volver a intentar el login.
-- **Google inalcanzable al verificar** → error temporal de servidor: reintentar más tarde, la credencial podría estar bien.
+- **Credenciales de login inválidas** (Google o Microsoft) → "no autorizado": hay que volver a intentar el login.
+- **Proveedor de login inalcanzable al verificar** (Google o Microsoft) → error temporal de servidor: reintentar más tarde, la credencial podría estar bien.
+- **Login con Microsoft no configurado en este despliegue** → error de configuración del servidor: el botón existe pero el operador no terminó de configurar Microsoft; no es culpa del usuario.
 - **Fallo de autorización al conectar una cuenta** → se trata como "credenciales incorrectas" (no como "vuelve a conectar"), para no meter al usuario en un bucle de reintentos sobre el mismo paso.
 - **Acceder a un buzón que no es tuyo** → se distingue entre "no existe" y "no tienes acceso", de forma que la app nunca confirme la existencia de buzones ajenos a quien no debe.
 - **Operar sobre un usuario o cuenta que ya no existe** → "no encontrado", nunca un éxito silencioso.
@@ -253,4 +280,4 @@ La correspondencia exacta de cada situación con su código y estado HTTP está 
 
 ## 8. Resumen en una frase
 
-> MailManager separa dos autorizaciones: el **login con Google** —que solo identifica al usuario de la app, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que registra la cuenta y lanza la autorización OAuth en una **ventana emergente** cuyo callback recibe el propio servidor; si la autorización no se completa, el registro **se deshace** y no queda ninguna tarjeta vacía, y si se completa la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor; como endurecimiento previo al despliegue, un **límite de frecuencia opt-in (apagado por defecto)** protege el login, el envío y las sincronizaciones —más una red global por IP— mostrando un aviso de "demasiadas peticiones" cuando alguien se pasa, invisible en uso normal; y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).
+> MailManager separa dos autorizaciones: el **login de la app** —con **Google o con Microsoft** (cuenta personal o de organización), que solo identifica al usuario, crea una sesión en una cookie `HttpOnly` de caducidad fija y es la única vía para dar de alta un usuario; cada método identifica a su **propio** usuario sin enlace de cuentas, y como Microsoft no garantiza un email verificado el login lo tolera (cae al nombre de usuario si falta el email) sin bloquearse— y la **conexión de cuentas de correo** Gmail u Outlook bajo un buzón, que registra la cuenta y lanza la autorización OAuth en una **ventana emergente** cuyo callback recibe el propio servidor; si la autorización no se completa, el registro **se deshace** y no queda ninguna tarjeta vacía, y si se completa la app guarda credenciales cifradas, descubre el email de la cuenta de forma best-effort (sin caerse si falla) y sincroniza los correos; cada proveedor pide permisos distintos (Gmail uno solo y amplio, Outlook varios separados, con el envío como permiso aparte), borrar una cuenta o el usuario entero limpia en cascada todo lo asociado sin tocar nada en el proveedor; como endurecimiento previo al despliegue, un **límite de frecuencia opt-in (apagado por defecto)** protege el login, el envío y las sincronizaciones —más una red global por IP— mostrando un aviso de "demasiadas peticiones" cuando alguien se pasa, invisible en uso normal; y los topes y todo lo que deliberadamente no soporta viven en [../limits/autenticacion-y-cuentas.md](../limits/autenticacion-y-cuentas.md).

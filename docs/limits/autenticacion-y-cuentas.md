@@ -5,7 +5,7 @@ Catálogo cuantitativo de **hasta dónde llega** la autenticación y la gestión
 El **comportamiento** (flujos, UX, casos borde y el porqué de las decisiones de diseño) está en **[../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md)**. Aquí solo van los números y los límites.
 
 Conviene distinguir dos planos a lo largo de este documento:
-- **La sesión de la app** (login con Google) — afecta a la identidad del usuario.
+- **La sesión de la app** (login con Google **o con Microsoft**) — afecta a la identidad del usuario.
 - **Las cuentas de correo conectadas** (Gmail / Outlook) — afecta a los buzones que la app gestiona.
 
 ---
@@ -20,12 +20,14 @@ Conviene distinguir dos planos a lo largo de este documento:
 | Cuentas de correo por buzón | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
 | Cuentas de correo por usuario | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
 | Buzones por usuario | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
-| Margen de desfase de reloj al verificar el token de Google | **10 segundos** | Backend (verificación OIDC) | Tolerancia para relojes ligeramente desincronizados; evita rechazar logins legítimos por unos segundos de diferencia. |
+| Margen de desfase de reloj al verificar el token de Google | **10 segundos** | Backend (verificación OIDC de Google) | Tolerancia para relojes ligeramente desincronizados; evita rechazar logins legítimos por unos segundos de diferencia. |
+| Margen de desfase de reloj al verificar el token de Microsoft | **60 segundos** | Backend (verificación OIDC de Microsoft) | Más holgado que el de Google (Microsoft no fija un valor); aplica a `exp` / `nbf`. |
 | Espera máxima del resultado de la ventana emergente OAuth | **5 minutos (300 segundos)** | Frontend (página de cuentas, ambos proveedores) | Si la ventana de consentimiento no comunica resultado ni se cierra en ese plazo, el intento se da por fallido y el registro de la cuenta se deshace (rollback). |
 | Vida del flujo de conexión pendiente en el servidor | **600 segundos (10 minutos)** | Backend (registro en memoria de flujos OAuth pendientes) | El `state` emitido al iniciar la conexión caduca a los 10 minutos; un callback posterior responde "intento desconocido o caducado". El `state` es además de **un solo uso**, y un nuevo intento sobre la misma cuenta invalida el anterior. |
 | Sondeo de cierre de la ventana emergente | **cada 500 ms** | Frontend | Frecuencia con la que se detecta que el usuario cerró la ventana sin completar el consentimiento. |
 | URL de redirección OAuth de Gmail | **`http://localhost:8000/auth/google/callback` por defecto** (configurable con `GOOGLE_OAUTH_REDIRECT_URI`) | Backend (conexión de Gmail) | El cliente de Google es de tipo "Desktop app": acepta cualquier redirección `http://localhost` sin registrarla en la consola de Google. |
 | URL de redirección OAuth de Outlook | **La declarada en el JSON de credenciales** (hoy `http://localhost:8000/auth/outlook/callback`) | Backend (conexión de Outlook) | Debe coincidir **exactamente** con la registrada en el App Registration de Azure; un cambio en cualquiera de los dos lados sin el otro rompe la conexión. |
+| Redirección del **login** con Microsoft | **`/redirect.html` del propio frontend** (origen del SPA) | Frontend (popup de login) | El login con Microsoft es **distinto** de conectar un buzón: el `id_token` lo recibe y verifica el navegador (vía MSAL), el backend **solo verifica el token** —no hay callback del servidor ni intercambio de código—, por eso **no existe** un `MICROSOFT_OAUTH_REDIRECT_URI` en el backend. La página de redirección debe estar registrada como redirect URI de tipo SPA en el App Registration de Azure. |
 | Procesos backend compatibles con el flujo de conexión | **1 worker** | Backend | El flujo pendiente entre el inicio y el callback vive en memoria del proceso; con varios workers el callback podría aterrizar en un proceso que no conoce el `state`. Un reinicio del servidor a mitad de flujo también lo invalida. |
 
 ---
@@ -36,7 +38,7 @@ Conviene distinguir dos planos a lo largo de este documento:
 |---------|-------|---------|
 | Duración de la sesión | **7 días por defecto** (configurable, mínimo 1 día) | Se controla con la variable de entorno `AUTH_SESSION_LIFETIME_DAYS`. Un valor inferior a 1 se rechaza al arrancar. |
 | Renovación por actividad | **No existe** | La caducidad es **fija desde el login** y no se prolonga por usar la app. Al cumplirse el plazo, la sesión deja de valer aunque el usuario estuviera activo. |
-| Tipo de cookie | **`HttpOnly`**, **`SameSite=lax`** | Inaccesible desde JavaScript de la página. La duración (`max_age`) coincide con la duración de la sesión. |
+| Tipo de cookie | **`HttpOnly`**; `SameSite` configurable (**`lax` por defecto**) | Inaccesible desde JavaScript de la página. La duración (`max_age`) coincide con la duración de la sesión. El `SameSite` se controla con `AUTH_COOKIE_SAMESITE` (valores aceptados: `lax`, `strict`, `none`); `none` **exige** `AUTH_COOKIE_SECURE=true` o el arranque falla (los navegadores rechazan `SameSite=None` sin `Secure`). |
 | Cookie marcada como `Secure` | **No por defecto** (configurable) | Se controla con `AUTH_COOKIE_SECURE` (por defecto `False` para permitir desarrollo en HTTP local). En producción sobre HTTPS debe ponerse a `True`. |
 | Contenido del identificador de sesión | **Opaco** | No contiene datos del usuario; es solo una referencia resuelta server-side contra el almacén de sesiones. |
 | Validez de la sesión | **`expires_at > ahora`** | Una sesión caducada se trata como inexistente: la siguiente petición protegida redirige al login. |
@@ -57,6 +59,20 @@ Los dos proveedores piden conjuntos de permisos distintos. Esta diferencia es la
 
 - **En Outlook, "enviar" es un permiso aparte de "leer/escribir".** Una cuenta a la que se le recorte `Mail.Send` podrá crear y guardar borradores pero fallará al enviarlos, y el fallo se manifiesta **en un momento distinto** (al enviar, no al conectar). En Gmail esto no ocurre: su permiso es único e indivisible.
 - **`offline_access` (Outlook) es lo que permite el refresco silencioso de tokens.** Sin él, la sesión del proveedor no se podría renovar sin volver a molestar al usuario.
+
+### Permisos del login con Microsoft (identidad, distintos de los de conectar un buzón)
+
+⚠️ No confundir con la tabla de arriba: esos permisos son los de **conectar una cuenta de correo** de Outlook. El **login** con Microsoft (entrar en la app, sección 1.2 del gemelo) pide un conjunto distinto y mucho más reducido —solo **identidad**, ningún permiso de correo—:
+
+| Concepto | Valor exacto | Detalle |
+|----------|--------------|---------|
+| Permisos (scopes) que pide el popup de login | **`openid`, `profile`, `email`** | Scopes OIDC estándar: solo identifican a la persona (id, nombre, email). No dan acceso a ningún buzón. |
+| Autoridad (tenancy) | **`common`** | Admite cuentas Microsoft **personales y de organización** en el mismo flujo. |
+| Selección de cuenta | **Siempre se pide elegir cuenta** (`prompt=select_account`) | El popup nunca reutiliza silenciosamente una sesión previa del navegador. |
+| Algoritmo de firma aceptado del token | **Solo RS256** | Cerrado a RS256; nunca se deriva de la cabecera del token (evita confusión de algoritmo). |
+| Caché de claves de verificación (JWKS) | **24 h** de vida proactiva | Una clave desconocida fuerza un refresco inmediato, así que el TTL solo gobierna el refresco proactivo, no la corrección ante rotación de claves. |
+
+> La identidad del usuario se ancla al identificador estable de Microsoft (`sub`), nunca al email; el email puede faltar y entonces cae al nombre de usuario principal (ver sección 7 y el gemelo § 1.6). El login con Microsoft **no** comprueba "email verificado" (Microsoft no lo emite), a diferencia de Google.
 
 ---
 
@@ -139,8 +155,10 @@ Es una decisión del MVP: no se ha implementado ninguna cuota porque el producto
 | No soporta | Detalle | Por qué |
 |------------|---------|---------|
 | **Proveedores distintos de Gmail y Outlook** | No hay IMAP genérico, Yahoo, iCloud, Exchange on-premise, etc. | El MVP integra solo las dos APIs (Gmail API y Microsoft Graph). El proveedor está restringido a `gmail`/`outlook` a nivel de base de datos. |
-| **Registro de usuario sin login interactivo** | No hay endpoint de "sign up" separado | El primer login con Google es lo que crea al usuario. No se puede crear un usuario por otra vía. |
-| **Login con proveedores de identidad que no sean Google** | No hay "entrar con Microsoft", email/contraseña, magic link, etc. | La identidad de la app es exclusivamente Google OIDC en el MVP. (Conectar **cuentas de correo** de Outlook sí es posible; es otra cosa: no es el login de la app.) |
+| **Registro de usuario sin login interactivo** | No hay endpoint de "sign up" separado | El primer login (con Google o con Microsoft) es lo que crea al usuario. No se puede crear un usuario por otra vía. |
+| **Métodos de login distintos de Google y Microsoft** | No hay email/contraseña, magic link / OTP por correo, ni otros proveedores (Apple, GitHub, etc.) | El MVP integra solo Google OIDC y Microsoft OIDC como identidad. El email/contraseña y el magic link exigirían una infraestructura de correo transaccional que el proyecto no tiene. |
+| **Enlace de cuentas ("account linking") entre Google y Microsoft** | La misma persona con el mismo email en Google y en Microsoft se trata como **dos usuarios distintos**, cada uno con sus propios buzones y datos; no se fusionan | La identidad se ancla al par *(proveedor, identificador del proveedor)*, no al email. Vincular ambas identidades bajo un único usuario queda fuera del alcance del MVP. Ver el gemelo § 1.5. |
+| **"Email verificado" garantizado en el login con Microsoft** | El login con Microsoft no exige la marca `email_verified` y acepta caer al nombre de usuario si falta el email | Microsoft (autoridad `common`) no emite esa marca y puede no entregar el email en cuentas de organización; bloquear el login por ello dejaría fuera a esas cuentas. Asimetría deliberada con Google, que sí la exige. Ver el gemelo § 1.6. |
 | **Renovación de sesión por actividad** | La sesión caduca a plazo fijo desde el login | Simplicidad del MVP; no hay refresco deslizante de la cookie. |
 | **Reconexión automática tras revocación** | Si el usuario revoca el acceso (o el token caduca), hay que reconectar **manualmente** con el botón "Reconectar cuenta" (ver [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 2.7) | La app refresca tokens silenciosamente mientras el proveedor lo permita, pero no puede recuperar un acceso revocado/caducado por sí sola: hace falta un nuevo consentimiento del usuario. |
 | **Cuentas registradas sin conectar ("tarjetas vacías")** | Si la autorización OAuth no se completa, el registro de la cuenta se deshace y no queda tarjeta | Una cuenta recién registrada que **nunca llegó a conectarse** no puede hacer nada; conservarla solo acumularía tarjetas muertas. El botón "Reconectar cuenta" (§ 2.7) aplica a cuentas que **sí** estuvieron conectadas y cuyo token murió, no a este caso. Ver [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 2.2. |
@@ -178,6 +196,10 @@ Correspondencia exacta entre cada situación y la respuesta de la API. El compor
 | Email de Google **no verificado** (`email_verified` ausente o falso) | `unauthorized` | 401 |
 | Token de Google malformado o rechazado por el proveedor | `unauthorized` | 401 |
 | Google inalcanzable al verificar (fallo de red) | `external_api_error` | 502 |
+| Credencial de Microsoft inválida / sin `sub`, o sin **ni** `email` **ni** `preferred_username` | `unauthorized` | 401 |
+| Token de Microsoft malformado, mal firmado, con `aud`/`iss`/`tid` incorrectos o caducado | `unauthorized` | 401 |
+| Microsoft inalcanzable al verificar (JWKS de red / backend criptográfico) | `external_api_error` | 502 |
+| Login con Microsoft sin configurar (`MICROSOFT_CLIENT_ID` ausente) | `env_var_error` | 500 |
 | Fallo de autorización al **conectar** una cuenta | `account_connect_auth_error` | **401** (no 409 — evita el bucle de reintentos sobre el mismo paso) |
 | Cuenta no conectada al operar sobre ella | `account_not_connected` | 409 |
 | Buzón inexistente | `mailbox_not_found` | 404 |
@@ -204,6 +226,15 @@ Estos valores son **configuración de despliegue/operación**, no topes que perc
 | Conexiones máximas del pool de BD | **10** | `DB_POOL_MAX_CONN` | Techo de conexiones concurrentes a PostgreSQL. El mínimo no puede ser mayor que el máximo: si lo es, el arranque falla. |
 | Timeout de conexión a la BD | **10 segundos** | `DB_CONNECT_TIMEOUT_SECONDS` | Tiempo máximo para establecer una conexión nueva antes de fallar. |
 
+### Configuración del login con Microsoft
+
+| Parámetro | Variable de entorno | Detalle |
+|-----------|---------------------|---------|
+| Client ID de Microsoft (backend) | `MICROSOFT_CLIENT_ID` | El "Application (client) ID" del App Registration de Azure. **Opcional** (a diferencia de `GOOGLE_CLIENT_ID`): un despliegue sin él arranca igual y solo falla el **primer** intento de login con Microsoft (la comprobación de "¿está configurado?" vive en el punto de uso, no en el arranque). Es el `aud` esperado del `id_token`. |
+| Client ID de Microsoft (frontend) | `VITE_MICROSOFT_CLIENT_ID` | **De tiempo de compilación** (se hornea en el bundle con `vite build`): cambiarlo exige **reconstruir** el frontend, no solo reiniciar. Si está vacío, el botón "Continuar con Microsoft" queda **deshabilitado**. Debe coincidir con `MICROSOFT_CLIENT_ID` del backend. |
+
+> No hay `MICROSOFT_OAUTH_REDIRECT_URI` (ver § 1): el login con Microsoft no usa callback de servidor.
+
 ---
 
-> La autenticación y las cuentas llegan hasta: **login solo con Google OIDC** (única vía de alta de usuario), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** sin tope de cuentas ni de buzones, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). Como endurecimiento previo al despliegue, un **rate limiting opt-in (apagado por defecto)** pone topes de frecuencia por cliente sobre login, envío y sincronizaciones más una red global por IP, devolviendo `429 rate_limit_exceeded` con `Retry-After` cuando se superan. El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).
+> La autenticación y las cuentas llegan hasta: **login con Google OIDC o Microsoft OIDC** (única vía de alta de usuario; sin enlace de cuentas entre ambos, y el de Microsoft no exige email verificado), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** sin tope de cuentas ni de buzones, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). Como endurecimiento previo al despliegue, un **rate limiting opt-in (apagado por defecto)** pone topes de frecuencia por cliente sobre login, envío y sincronizaciones más una red global por IP, devolviendo `429 rate_limit_exceeded` con `Retry-After` cuando se superan. El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).

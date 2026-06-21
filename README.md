@@ -26,6 +26,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
 - Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
 - In-app Settings area (identity, connected accounts, mailbox rename/delete, account-label editing, "sync everything", account deletion) and an interface-language switch (Spanish / English). The language is a browser-local preference (localStorage) — it is not persisted server-side.
+- Login with Google or Microsoft (both OIDC `id_token` verification → server-side session cookie). Each provider creates its own user; there is no account-linking. Microsoft login is optional per deploy (disabled button when `MICROSOFT_CLIENT_ID` / `VITE_MICROSOFT_CLIENT_ID` are unset).
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow (browser popup + API-side redirect callback, container-friendly) plus silent re-authentication and a manual "Reconnect account" action that re-runs consent to recover a revoked/expired account without deleting its synced mail.
@@ -51,7 +52,7 @@ Layer contracts:
 
 - `Routers`: HTTP interface only. No business logic.
 - `Services`: orchestration, validation, and error translation.
-- `Auth`: framework-agnostic authentication (Google OIDC, session management).
+- `Auth`: framework-agnostic authentication (Google / Microsoft OIDC, session management).
 - `Database`: PostgreSQL persistence and token storage (independent layer).
 - `Core`: provider-specific email behavior and client orchestration.
 
@@ -210,6 +211,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `MIA_GMAIL_CREDENTIALS_PATH` | Yes | Path to Gmail OAuth credentials JSON file. |
 | `MIA_OUTLOOK_CREDENTIALS_PATH` | Yes | Path to Outlook app credentials JSON file. |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID for OIDC authentication. |
+| `MICROSOFT_CLIENT_ID` | No | Azure App Registration client ID for Microsoft (Entra) login. The backend verifies the `id_token` only (no redirect URI / token exchange). Leave empty to disable Microsoft login server-side — `POST /auth/microsoft` then returns 500 `env_var_error`. Must match the frontend's `VITE_MICROSOFT_CLIENT_ID`. |
 | `GOOGLE_OAUTH_REDIRECT_URI` | No | Redirect URI for the interactive Gmail connect flow. Default: `http://localhost:8000/auth/google/callback` (Google "Desktop app" clients accept any localhost redirect without registration). In production set it to `https://DOMAIN/api/auth/google/callback` and register it in Google Cloud. |
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
@@ -225,11 +227,12 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 
 ### Frontend environment variables
 
-The following variable is consumed only by the Vite dev server / frontend bundle. It is **not** read by the backend; configure it in `frontend/.env`.
+The following variables are consumed only by the Vite dev server / frontend bundle. They are **not** read by the backend; configure them in `frontend/.env`.
 
 | Variable | Required | Description |
 |---|---|---|
 | `VITE_API_BASE_URL` | No | Frontend override for the backend URL. Defaults to `http://localhost:8000`. **Build-time** (baked into the bundle); in production set it to `https://DOMAIN/api` and rebuild the image. |
+| `VITE_MICROSOFT_CLIENT_ID` | No | Azure App Registration (SPA) client ID for the "Continue with Microsoft" button. **Build-time** (baked into the bundle). Empty → the button renders disabled. Must match the backend's `MICROSOFT_CLIENT_ID`. |
 | `VITE_DEV_AUTO_LOGIN` | No | When `"true"`, the dev server auto-logs-in through the backend dev-login backdoor on boot, skipping the login screen. Set in `frontend/.env.development` (not in compose env — see `repository_guide.md`). Requires `DEV_LOGIN_ENABLED` + `DEV_LOGIN_EMAIL` in the backend. Gated by `import.meta.env.DEV`, so production builds ignore it. |
 
 Outlook credential file keys: `client_id`, `client_secret`, `tenant`, `redirect_uri`, `scopes`.
@@ -321,7 +324,8 @@ Contacts (recipient autocomplete):
 
 Auth:
 
-- `POST /auth/google`
+- `POST /auth/google` — Verify a Google `id_token` and create a session. The first login with a given Google identity creates the user.
+- `POST /auth/microsoft` — Verify a Microsoft (Entra, tenancy `common`) `id_token` and create a session. The first login with a given Microsoft identity creates a **separate** user (no account-linking with Google, even at the same email). 500 `env_var_error` when `MICROSOFT_CLIENT_ID` is unset.
 - `POST /auth/dev-login` — Local-development backdoor that mints a session for `DEV_LOGIN_EMAIL` without the interactive Google flow. Inert unless `DEV_LOGIN_ENABLED` is truthy (503 `dev_login_disabled` otherwise) AND the request comes from a trusted host (403 `dev_login_not_localhost` otherwise). Never enable in production.
 - `GET /auth/me`
 - `POST /auth/logout`

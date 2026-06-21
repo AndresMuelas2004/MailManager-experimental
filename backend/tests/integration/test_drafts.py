@@ -88,12 +88,13 @@ def _create_foreign_mailbox(isolated_db) -> str:
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email)
-            VALUES (%(user_id)s, %(google_sub)s, %(email)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email)
+            VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s)
             """,
             {
                 "user_id": other_user_id,
-                "google_sub": f"sub-{other_user_id[:8]}",
+                "auth_provider": "google",
+                "provider_sub": f"sub-{other_user_id[:8]}",
                 "email": "other-drafts@e.com",
             },
         )

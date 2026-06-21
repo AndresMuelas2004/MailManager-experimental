@@ -15,6 +15,14 @@ class GoogleLoginRequest(BaseModel):
     id_token: str = Field(..., min_length=1)
 
 
+class MicrosoftLoginRequest(BaseModel):
+    """
+    Request model for Microsoft OIDC login.
+    """
+
+    id_token: str = Field(..., min_length=1)
+
+
 class UserOut(BaseModel):
     """
     Response model for user data.

@@ -159,11 +159,12 @@ def test_get_email_content_wrong_user(
     with isolated_db.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users (user_id, google_sub, email, name)
-            VALUES (%(uid)s, %(sub)s, %(email)s, %(name)s)
+            INSERT INTO users (user_id, auth_provider, provider_sub, email, name)
+            VALUES (%(uid)s, %(provider)s, %(sub)s, %(email)s, %(name)s)
             """,
             {
                 "uid": other_user_id,
+                "provider": "google",
                 "sub": f"google-sub-{other_user_id}",
                 "email": f"{other_user_id}@example.com",
                 "name": "Other User",

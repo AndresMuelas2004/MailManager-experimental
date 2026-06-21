@@ -18,28 +18,46 @@
 
 ## Traps
 
-### `TransportError` must be caught **before** `GoogleAuthError`
+### Subclass capture order — network error must be caught **before** its base
 
-`google.auth.exceptions.TransportError` is a **subclass** of `GoogleAuthError`. Its handler must come first. Swap the order and network failures get misclassified as provider rejections — users see 401 "invalid token" when the real problem is that Google's verification endpoint is unreachable (which should surface as 502 via `AuthTokenNetworkError`).
+A network/transport exception that is a **subclass** of the provider's generic error must be caught first, or a verification-endpoint outage gets misclassified as a bad token: the user sees 401 "invalid token" when the real failure is "verification service unreachable" (which must surface as 502 via `AuthTokenNetworkError`). Each provider expresses this differently:
 
-### Never-double-wrap guard — conditional, currently unneeded
+- **Google** (`google.py`): `google.auth.exceptions.TransportError` is a subclass of `GoogleAuthError`.
+- **Microsoft** (`microsoft.py`): `jwt.exceptions.PyJWKClientConnectionError` is a subclass of `PyJWKClientError` (both raised by `PyJWKClient.get_signing_key_from_jwt`). The connection subclass → `AuthTokenNetworkError` (502); the base "kid not found" → `AuthTokenInvalidError` (401).
 
-The guard pattern described in `auth/CLAUDE.md` §7 rule 6 is only required when code inside a `try` block can raise an `AuthError` subclass. The current `google.py` does not need it: `id_token.verify_oauth2_token(...)` is a Google library call that cannot produce `AuthError`. A future provider whose `verify_*_token` helper internally calls something that raises `AuthTokenError` **must** add:
+### Microsoft: broken JWK / JWKS / crypto backend is infra → 502, not a 4th error subclass
+
+`microsoft.py` maps `PyJWKError` / `PyJWKSetError` / `InvalidKeyError` (malformed key material, crypto backend broken) to `AuthTokenNetworkError`, **not** `AuthTokenInvalidError`: a broken signing-key fetch is "our side / the provider's infrastructure", not "the user's token is bad". This deliberately reuses the existing 502 subclass rather than inventing a provider-specific one (`CLAUDE.md` §9 — only add a subclass when a provider needs a *different* HTTP response).
+
+### Never-double-wrap guard — now REQUIRED by `microsoft.py` (Google still does not need it)
+
+The guard pattern in `auth/CLAUDE.md` §7 rule 6 is conditional. `google.py` still does not need it: `id_token.verify_oauth2_token(...)` cannot produce `AuthError`. `microsoft.py` **does** need it and carries it — its `try` body raises `AuthTokenInvalidError` / `AuthTokenNetworkError` directly (the `tid` pre-check, the per-clause `get_signing_key_from_jwt` mapping, the post-verification `iss`/`tid` re-bind), so without
 
 ```python
 except AuthTokenError:  # re-raise before the generic catch
     raise
 ```
 
-Otherwise the `except Exception` below re-wraps our own typed error as `AuthTokenInvalidError`, losing the network/provider/format classification.
+the trailing `except Exception` would re-wrap those typed errors as `AuthTokenInvalidError`, collapsing the network/invalid distinction (and turning a 502 into a 401).
+
+### Microsoft tenancy `common` has no fixed issuer — bind `iss` to the token's own `tid`
+
+`verify_microsoft_token` targets the multi-tenant `common` authority, whose `iss` is `https://login.microsoftonline.com/{tid}/v2.0` and therefore not a constant. The function reads `tid` from the **unverified** payload only to build the expected issuer (re-validated GUID-shape), verifies the token against that issuer, then re-checks `iss == .../{verified tid}/v2.0` on the now-verified claims (belt-and-braces). A reviewer "simplifying" this to a hardcoded issuer constant would either reject every legitimate tenant or accept tokens from a foreign one.
 
 ### Claim validation lives in the service, not in the auth layer
 
 `verify_google_token` only verifies cryptographic validity and provider issuance. Business-logic checks (`sub` present, `email` present, etc.) belong in `auth_service.google_login`, which raises `Unauthorized`. This separation keeps the auth layer reusable across endpoints and free of API concerns.
+
+### Microsoft vs Google — asymmetries that live in the auth-layer files
+
+Two cross-provider asymmetries live in the auth-layer files themselves (the *service-side* claim rules — `email` → `preferred_username` fallback and `email_verified` NOT checked — are documented in `api_guide.md` § "New identity provider"):
+
+- **`MICROSOFT_CLIENT_ID` is optional in `settings.py`** (defaults to `""`), unlike `GOOGLE_CLIENT_ID`, whose absence raises `AuthSettingsError`. The "is Microsoft configured?" guard lives at the point of use (`auth_service.microsoft_login` → `EnvVarError`), so a Google-only deploy still loads settings and boots. Do NOT move the guard into `get_auth_settings` — it would break Google-only deploys and every test that sets only `GOOGLE_CLIENT_ID`.
+- **`microsoft.py` uses `leeway = 60 s`; `google.py` uses `10 s`.** Microsoft Entra does not specify a clock-skew tolerance, so the more generous window is intentional. Do not "align" the two values.
 
 ## Extension — new identity provider
 
 See the general checklist in `auth/CLAUDE.md` §9. Project-specific additions:
 
 - The existing `AuthTokenError` subclasses (`AuthTokenNetworkError`, `AuthTokenInvalidError`, `AuthTokenProviderError`) are provider-agnostic. Only create a new subclass when a provider introduces a failure mode that needs a different HTTP response or client-side handling.
-- When adding a new provider module, update the "TransportError must be caught first" trap above with that provider's specific subclass relationship (or confirm it doesn't apply).
+- When adding a new provider module, extend the "Subclass capture order" trap above with that provider's specific subclass relationship (or confirm it doesn't apply).

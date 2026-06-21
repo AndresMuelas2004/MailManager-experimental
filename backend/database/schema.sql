@@ -1,17 +1,28 @@
 -- ============================================================
--- MailManager - Database Schema Snapshot (legacy reference)
--- Source of truth for schema evolution: Alembic migrations.
+-- MailManager - Database Schema Snapshot (legacy reference, NON-AUTHORITATIVE)
+-- Source of truth for schema evolution: Alembic migrations (backend/database/migrations/)
+--   + the fallback runner (backend/database/migrations/runner.py).
+--
+-- ⚠️  This snapshot is INCOMPLETE and OUTDATED. It reflects an early schema plus a
+--     few ad-hoc updates (e.g. the migration-0037 `users` shape). Many later
+--     migrations are NOT mirrored here — among them previous_box / DELETED box
+--     value, has_attachments, is_favorite, to_email/to_name, email_content
+--     last_accessed_at, and the drafts / email_attachments / virtual_mailboxes
+--     tables. Do NOT rely on this file for the current schema: read the
+--     migrations / runner.py instead. Kept only as a historical reference.
 -- ============================================================
 
 -- ---------- USERS ----------
 
 CREATE TABLE IF NOT EXISTS users (
-    user_id    UUID         PRIMARY KEY,
-    google_sub VARCHAR(255) UNIQUE NOT NULL,
-    email      VARCHAR(320) NOT NULL,
-    name       VARCHAR(200),
-    avatar_url TEXT,
-    created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    user_id       UUID         PRIMARY KEY,
+    auth_provider VARCHAR(20)  NOT NULL CHECK (auth_provider IN ('google', 'microsoft')),
+    provider_sub  VARCHAR(255) NOT NULL,
+    email         VARCHAR(320) NOT NULL,
+    name          VARCHAR(200),
+    avatar_url    TEXT,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (auth_provider, provider_sub)
 );
 
 -- ---------- MAILBOXES ----------

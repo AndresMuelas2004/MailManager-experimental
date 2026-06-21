@@ -53,6 +53,12 @@ The recipient-autocomplete data hook (`useRecipientSuggestions`) is invoked by `
 
 The interface-language provider (`frontend/src/lib/i18n/I18nProvider.tsx`) is mounted in `app/providers/Providers.tsx` like the auth/query providers, but its **code** lives under `lib/i18n/` on purpose: `components/ui/` widgets (`AccountCard`, `MailboxDropdown`, `Sidebar`, …) call `useTranslation`, and `components/` may not import from `app/` (`frontend/CLAUDE.md` §3). `lib/` is the only layer every higher layer — `app/`, `features/`, AND `components/` — is allowed to import from, so it is the sole legal home for a provider that the whole tree (widgets included) must reach. This is a deliberate placement, not a `lib/`-purity break: `lib/CLAUDE.md` §3.1 permits documented impure helpers, and the language detect/persist functions (`detect.ts`) read/write `localStorage` for exactly that reason. A future move of the provider into `app/providers/` would silently break every `components/ui/` import of `useTranslation`.
 
+### 1.8 `AuthProvider` imports from `api/endpoints/auth` (app §8 exception)
+
+`frontend/src/app/providers/AuthProvider.tsx` imports the auth endpoint wrappers (`loginWithGoogle`, `loginWithMicrosoft`, `devLogin`, `getMe`, `logout`, `deleteMe`) directly from `api/endpoints/auth`. The `app/CLAUDE.md` §8 import table lists only `api/client/errors`, `lib/`, and pinned third-party providers for `providers/`, so `api/endpoints/` is not enumerated.
+
+The exception is deliberate: `AuthProvider` is the session-bootstrap provider, and the session calls cannot be delegated to a feature hook — `features/` may not hold global auth state (`frontend/CLAUDE.md` §5), and moving them into a feature would invert the `app/ → features/` arrow. Keeping the auth endpoint calls in the provider is the only home that satisfies every rule, and is the symmetric counterpart to the §1.1 host bridge (which exists so `app/providers/` never imports `features/`). The alternative — a thin re-export at the `api/` boundary — was considered and rejected as indirection without benefit. The architecture-compliance reviewer flags this on every run; it is an accepted exception, not a regression.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The seven namespaces in active use:

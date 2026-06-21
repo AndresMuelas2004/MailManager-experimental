@@ -13,6 +13,7 @@ from auth.errors import (
     AuthTokenProviderError,
 )
 from auth.google_auth.google import verify_google_token
+from auth.microsoft_auth.microsoft import verify_microsoft_token
 from auth.settings import AuthSettings, get_auth_settings
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "AuthTokenProviderError",
     "get_auth_settings",
     "verify_google_token",
+    "verify_microsoft_token",
 ]
