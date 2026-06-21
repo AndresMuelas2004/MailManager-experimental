@@ -59,6 +59,9 @@ services:
         # Build-time constants baked into the bundle by `vite build`.
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:?VITE_API_BASE_URL is required in .env.production}
         VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:?VITE_GOOGLE_CLIENT_ID is required in .env.production}
+        # Optional (mirrors the backend MICROSOFT_CLIENT_ID being optional): an
+        # empty value bakes a disabled "Continue with Microsoft" button.
+        VITE_MICROSOFT_CLIENT_ID: ${VITE_MICROSOFT_CLIENT_ID:-}
     restart: unless-stopped
     depends_on:
       - backend
