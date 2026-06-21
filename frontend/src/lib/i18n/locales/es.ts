@@ -297,10 +297,12 @@ export const es = {
   favorites: {
     title: 'Favoritos',
     subtitle: 'Correos marcados con estrella en Gmail o con bandera en Outlook.',
+    accountSubtitle: 'Favoritos de {title}',
     sync: 'Sincronizar favoritos',
     syncing: 'Sincronizando…',
     emptySearch: 'No se encontraron correos favoritos para tu búsqueda.',
     emptyDefault: 'Aún no has marcado ningún correo como favorito.',
+    emptyDefaultAccount: 'Aún no has marcado ningún correo como favorito en esta cuenta.',
   },
 
   virtualMailboxes: {

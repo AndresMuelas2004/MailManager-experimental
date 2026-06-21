@@ -65,7 +65,7 @@ Nota: un fallo del proveedor en el toggle o la sync se reporta como **`external_
 
 - **El botón de favorito está en el visor de la conversación (por mensaje), no en el visor de un solo correo.** En las bandejas que agrupan por conversación, cada mensaje expandido del visor trae su botón "Favorito"; en Favoritos (que no agrupa) la marca sigue siendo la estrella clicable de la fila, y su visor de un solo correo no expone botón de favorito. No hay, por tanto, un toggle de favorito en la cabecera del visor mono-mensaje. (Ver [`../features/conversaciones.md`](../features/conversaciones.md).)
 
-- **No hay sincronización global multi-mailbox de un tirón.** La sincronización opera sobre el mailbox actual. Reconciliar favoritos de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios) exige disparar una sincronización por cada mailbox implicado.
+- **No hay sincronización global multi-mailbox de un tirón.** La sincronización opera sobre el mailbox actual (o sobre una sola cuenta de él, según desde qué pestaña de Favoritos se pulse — ver [`../features/favoritos.md`](../features/favoritos.md) § 5.1). Reconciliar favoritos de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios) exige disparar una sincronización por cada mailbox implicado.
 
 - **No hay carpeta/colección de favoritos en el proveedor.** El favorito es solo la etiqueta `STARRED` (Gmail) o la bandera de seguimiento (Outlook); no se crea ninguna carpeta dedicada ni se ordena por prioridad de bandera.
 

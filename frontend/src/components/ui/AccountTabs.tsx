@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Inbox, Send, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
+import { Inbox, Send, Star, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { useTranslation } from '../../lib/i18n';
@@ -20,6 +20,7 @@ export default function AccountTabs({ basePath, inboxLabel }: Props) {
   const tabs: TabDef[] = [
     { to: `${basePath}/inbox`, label: inboxLabel ?? t('nav.mailbox'), icon: Inbox },
     { to: `${basePath}/sent`, label: t('nav.sent'), icon: Send },
+    { to: `${basePath}/favorites`, label: t('nav.favorites'), icon: Star },
     { to: `${basePath}/spam`, label: t('nav.spam'), icon: ShieldAlert },
     { to: `${basePath}/drafts`, label: t('drafts.title'), icon: FileEdit },
     { to: `${basePath}/trash`, label: t('virtualMailboxes.boxTrash'), icon: Trash2 },
