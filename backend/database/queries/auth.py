@@ -5,23 +5,23 @@ SQL statements for users and sessions.
 from __future__ import annotations
 
 UPSERT_USER = """
-    INSERT INTO users (user_id, google_sub, email, name, avatar_url)
-    VALUES (%(user_id)s, %(google_sub)s, %(email)s, %(name)s, %(avatar_url)s)
-    ON CONFLICT (google_sub) DO UPDATE
+    INSERT INTO users (user_id, auth_provider, provider_sub, email, name, avatar_url)
+    VALUES (%(user_id)s, %(auth_provider)s, %(provider_sub)s, %(email)s, %(name)s, %(avatar_url)s)
+    ON CONFLICT (auth_provider, provider_sub) DO UPDATE
         SET email      = EXCLUDED.email,
             name       = EXCLUDED.name,
             avatar_url = EXCLUDED.avatar_url
-    RETURNING user_id, google_sub, email, name, avatar_url, created_at
+    RETURNING user_id, auth_provider, provider_sub, email, name, avatar_url, created_at
 """
 
 GET_USER_BY_ID = """
-    SELECT user_id, google_sub, email, name, avatar_url, created_at
+    SELECT user_id, auth_provider, provider_sub, email, name, avatar_url, created_at
     FROM users
     WHERE user_id = %(user_id)s
 """
 
 GET_USER_BY_EMAIL = """
-    SELECT user_id, google_sub, email, name, avatar_url, created_at
+    SELECT user_id, auth_provider, provider_sub, email, name, avatar_url, created_at
     FROM users
     WHERE email = %(email)s
     LIMIT 1

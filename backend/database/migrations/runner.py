@@ -14,13 +14,44 @@ from database.errors import DatabaseError, MigrationError
 _DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS users (
-        user_id    UUID         PRIMARY KEY,
-        google_sub VARCHAR(255) UNIQUE NOT NULL,
-        email      VARCHAR(320) NOT NULL,
-        name       VARCHAR(200),
-        avatar_url TEXT,
-        created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+        user_id       UUID         PRIMARY KEY,
+        auth_provider VARCHAR(20)  NOT NULL CHECK (auth_provider IN ('google', 'microsoft')),
+        provider_sub  VARCHAR(255) NOT NULL,
+        email         VARCHAR(320) NOT NULL,
+        name          VARCHAR(200),
+        avatar_url    TEXT,
+        created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        UNIQUE (auth_provider, provider_sub)
     );
+    """,
+    # Migration 0037: generalize a pre-0037 ``users`` table (single
+    # ``google_sub UNIQUE NOT NULL``) to the multi-provider model. The whole
+    # block is gated by the presence of ``google_sub`` so re-running the runner
+    # over an already-migrated DB is a clean no-op: ``ALTER TABLE ... ADD
+    # CONSTRAINT ... UNIQUE`` does NOT accept ``IF NOT EXISTS`` in PostgreSQL,
+    # so a second run would otherwise crash with "constraint already exists".
+    # On a fresh bootstrap the CREATE TABLE above already has the final shape
+    # and ``google_sub`` never existed, so this is a no-op there too.
+    """
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'users' AND column_name = 'google_sub'
+        ) THEN
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20)
+                NOT NULL DEFAULT 'google'
+                CHECK (auth_provider IN ('google', 'microsoft'));
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_sub VARCHAR(255);
+            UPDATE users SET provider_sub = google_sub WHERE provider_sub IS NULL;
+            ALTER TABLE users ALTER COLUMN provider_sub SET NOT NULL;
+            ALTER TABLE users ALTER COLUMN auth_provider DROP DEFAULT;
+            ALTER TABLE users DROP COLUMN google_sub;
+            ALTER TABLE users ADD CONSTRAINT users_auth_provider_provider_sub_key
+                UNIQUE (auth_provider, provider_sub);
+        END IF;
+    END
+    $$;
     """,
     """
     CREATE TABLE IF NOT EXISTS mailboxes (
@@ -461,6 +492,10 @@ _DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_email_content_last_accessed ON email_content (account_id, last_accessed_at);",
     "TRUNCATE TABLE email_content;",
     "UPDATE alembic_version SET version_num = '0036_email_content_ttl_and_truncate';",
+    # Migration 0037: generalize users to (auth_provider, provider_sub). The
+    # schema change itself is applied above (fresh CREATE TABLE shape + the
+    # gated DO-block upgrade for pre-existing databases); this is the stamp only.
+    "UPDATE alembic_version SET version_num = '0037_generalize_users_auth_provider';",
 ]
 
 
@@ -470,14 +505,15 @@ _DDL_STATEMENTS = [
 # upgrade() of the Alembic migration 0010_seed_fake_data_for_get_tests.
 _SEED_STATEMENTS = [
     """
-    INSERT INTO users (user_id, google_sub, email, name)
+    INSERT INTO users (user_id, auth_provider, provider_sub, email, name)
     VALUES (
         '11111111-1111-4000-a000-111111111111',
+        'google',
         'inventadoParaEndpointGet-google-sub',
         'inventadoParaEndpointGet@fake.test',
         'inventadoParaEndpointGet'
     )
-    ON CONFLICT (google_sub) DO NOTHING;
+    ON CONFLICT (auth_provider, provider_sub) DO NOTHING;
     """,
     """
     INSERT INTO mailboxes (mailbox_id, display_name, owner_user_id)
