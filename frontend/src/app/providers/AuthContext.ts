@@ -8,6 +8,7 @@ export type AuthState = {
   loading: boolean;
   error: UiError | null;
   login: (idToken: string) => Promise<void>;
+  loginWithMicrosoft: (idToken: string) => Promise<void>;
   devLogin: () => Promise<void>;
   logout: () => Promise<void>;
   deleteCurrentUser: () => Promise<boolean>;

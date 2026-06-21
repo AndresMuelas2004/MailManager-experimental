@@ -16,6 +16,7 @@ from auth import (
     AuthSettings,
     get_auth_settings,
     verify_google_token,
+    verify_microsoft_token,
 )
 
 from database import DatabaseError, session_store, user_store
@@ -107,7 +108,8 @@ def google_login(raw_id_token: str, response: Response) -> AuthResponse:
     try:
         user = user_store.upsert({
             "user_id": user_id,
-            "google_sub": google_sub,
+            "auth_provider": "google",
+            "provider_sub": google_sub,
             "email": email,
             "name": id_info.get("name"),
             "avatar_url": id_info.get("picture"),
@@ -131,6 +133,89 @@ def google_login(raw_id_token: str, response: Response) -> AuthResponse:
     except Exception as exc:
         logger.warning("Unexpected session creation error (%s): %s", type(exc).__name__, exc)
         raise SessionOperationError("Failed to create session during Google login.") from exc
+
+    _set_session_cookie(response, session_id, settings)
+    _cleanup_expired_sessions()
+    return AuthResponse(user=UserOut(**user), message="Login successful.")
+
+
+def microsoft_login(raw_id_token: str, response: Response) -> AuthResponse:
+    """
+    Verify a Microsoft id_token, upsert the user, create a session,
+    and set the session cookie on *response*.
+
+    Mirrors ``google_login`` (same session/cookie machinery) with the
+    Microsoft-specific identity policy:
+
+    - ``MICROSOFT_CLIENT_ID`` is checked at the point of use (it is optional in
+      settings), so a deploy that never configured it fails the first Microsoft
+      login cleanly instead of breaking every Google-only deploy at boot.
+    - The email falls back to ``preferred_username`` when ``email`` is absent
+      (Microsoft does not guarantee ``email`` on the ``common`` authority).
+    - ``email_verified`` is NOT checked — Entra does not emit it (deliberate
+      asymmetry with Google).
+    """
+    settings = _load_auth_settings()
+    if not settings.microsoft_client_id:
+        raise EnvVarError("Microsoft login is not configured: MICROSOFT_CLIENT_ID is missing.")
+    try:
+        claims = verify_microsoft_token(raw_id_token, settings.microsoft_client_id)
+    except AuthError as exc:
+        logger.debug("Microsoft token verification failed: %s", exc)
+        raise translate_auth_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Microsoft token verification unexpected error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise Unauthorized("Microsoft token verification failed unexpectedly.") from exc
+
+    provider_sub = claims.get("sub")
+    if not provider_sub:
+        raise Unauthorized("Microsoft token missing 'sub' claim.")
+
+    # Email policy: fall back to preferred_username when email is absent; the
+    # identity is ALWAYS the sub, never the email. Keeps users.email NOT NULL.
+    email = claims.get("email") or claims.get("preferred_username")
+    if not email:
+        raise Unauthorized("Microsoft token missing both 'email' and 'preferred_username' claims.")
+
+    # Only used for new users; the UPSERT returns the existing user_id for returning users.
+    user_id = str(uuid4())
+    try:
+        user = user_store.upsert({
+            "user_id": user_id,
+            "auth_provider": "microsoft",
+            "provider_sub": provider_sub,
+            "email": email,
+            "name": claims.get("name"),
+            "avatar_url": claims.get("picture"),  # normally None on Entra
+        })
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected user upsert error during Microsoft login (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise UserOperationError("Failed to upsert user during Microsoft login.") from exc
+
+    session_id = str(uuid4())
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.session_lifetime_days)
+    try:
+        session_store.create({
+            "session_id": session_id,
+            "user_id": user["user_id"],
+            "expires_at": expires_at.isoformat(),
+        })
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected session creation error during Microsoft login (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise SessionOperationError("Failed to create session during Microsoft login.") from exc
 
     _set_session_cookie(response, session_id, settings)
     _cleanup_expired_sessions()

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 
 import {
   loginWithGoogle,
+  loginWithMicrosoft as apiLoginWithMicrosoft,
   devLogin as apiDevLogin,
   getMe,
   logout as apiLogout,
@@ -66,6 +67,17 @@ export default function AuthProvider({ children }: Props) {
     }
   }, []);
 
+  const loginWithMicrosoft = useCallback(async (idToken: string) => {
+    setError(null);
+    try {
+      const response = await apiLoginWithMicrosoft(idToken);
+      setUser(response.user);
+    } catch (err) {
+      setError(toUiError(err));
+      throw err;
+    }
+  }, []);
+
   const devLogin = useCallback(async () => {
     setError(null);
     try {
@@ -99,8 +111,17 @@ export default function AuthProvider({ children }: Props) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, error, login, devLogin, logout, deleteCurrentUser }),
-    [user, loading, error, login, devLogin, logout, deleteCurrentUser],
+    () => ({
+      user,
+      loading,
+      error,
+      login,
+      loginWithMicrosoft,
+      devLogin,
+      logout,
+      deleteCurrentUser,
+    }),
+    [user, loading, error, login, loginWithMicrosoft, devLogin, logout, deleteCurrentUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

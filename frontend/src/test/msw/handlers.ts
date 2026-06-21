@@ -18,6 +18,12 @@ export const handlers = [
       message: 'Logged in',
     }),
   ),
+  http.post(`${API_BASE}/auth/microsoft`, () =>
+    HttpResponse.json({
+      user: { user_id: 'u_test', email: 'tester@example.com', name: 'Tester', avatar_url: null },
+      message: 'Logged in',
+    }),
+  ),
   http.post(`${API_BASE}/auth/dev-login`, () =>
     HttpResponse.json({
       user: { user_id: 'u_dev', email: 'dev@example.com', name: 'Dev User', avatar_url: null },

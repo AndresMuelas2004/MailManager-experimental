@@ -2,6 +2,7 @@ import { Navigate } from 'react-router-dom';
 
 import { useAuth } from '../../../app/providers/AuthContext';
 import useGoogleLogin from '../hooks/useGoogleLogin';
+import useMicrosoftLogin from '../hooks/useMicrosoftLogin';
 import useDevLogin from '../hooks/useDevLogin';
 import LoginBranding from '../components/LoginBranding';
 import GoogleSignInButton from '../components/GoogleSignInButton';
@@ -10,6 +11,7 @@ import DevLoginButton from '../components/DevLoginButton';
 export default function LoginPage() {
   const { user, loading: authLoading } = useAuth();
   const { buttonRef, error, loading } = useGoogleLogin();
+  const msLogin = useMicrosoftLogin();
   const devLogin = useDevLogin();
 
   if (authLoading) {
@@ -28,7 +30,14 @@ export default function LoginPage() {
     <>
       <div className="flex min-h-screen">
         <LoginBranding />
-        <GoogleSignInButton buttonRef={buttonRef} error={error} loading={loading} />
+        <GoogleSignInButton
+          buttonRef={buttonRef}
+          error={error}
+          loading={loading}
+          msOnClick={msLogin.trigger}
+          msLoading={msLogin.loading}
+          msError={msLogin.error}
+        />
       </div>
       {import.meta.env.DEV && (
         <DevLoginButton

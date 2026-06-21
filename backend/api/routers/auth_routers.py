@@ -1,5 +1,5 @@
 """
-Authentication router for Google OIDC login, session management.
+Authentication router for Google/Microsoft OIDC login, session management.
 """
 
 from __future__ import annotations
@@ -7,7 +7,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 
 from api.routers.routers_helpers import rate_limit_by_ip, require_session
-from api.schemas.auth import AuthResponse, GoogleLoginRequest, UserOut
+from api.schemas.auth import (
+    AuthResponse,
+    GoogleLoginRequest,
+    MicrosoftLoginRequest,
+    UserOut,
+)
 from api.services import auth_service
 
 
@@ -24,6 +29,18 @@ def google_login(payload: GoogleLoginRequest, response: Response) -> AuthRespons
     Verify a Google id_token and create a server-side session.
     """
     return auth_service.google_login(payload.id_token, response)
+
+
+@router.post(
+    "/microsoft",
+    response_model=AuthResponse,
+    dependencies=[Depends(rate_limit_by_ip("auth_login"))],
+)
+def microsoft_login(payload: MicrosoftLoginRequest, response: Response) -> AuthResponse:
+    """
+    Verify a Microsoft id_token and create a server-side session.
+    """
+    return auth_service.microsoft_login(payload.id_token, response)
 
 
 @router.post(
