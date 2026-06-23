@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useAccountUnreadCounts from '../hooks/useAccountUnreadCounts';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import AccountTabs from '../../../components/ui/AccountTabs';
@@ -63,6 +64,8 @@ export default function AccountInboxPage({ box }: Props) {
     refresh,
     searchKey: debouncedQ,
   });
+
+  const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -143,7 +146,12 @@ export default function AccountInboxPage({ box }: Props) {
         />
       </div>
 
-      <AccountTabs basePath={basePath} inboxLabel={bandejaLabel} />
+      <AccountTabs
+        basePath={basePath}
+        inboxLabel={bandejaLabel}
+        inboxUnread={inboxUnread}
+        spamUnread={spamUnread}
+      />
 
       <div className="flex items-center gap-2 px-4 pt-4 lg:px-8">
         <SearchInput value={rawQ} onChange={handleSearchChange} />

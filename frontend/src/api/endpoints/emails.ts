@@ -13,6 +13,7 @@ import {
   statusResponseSchema,
   syncResultOutSchema,
   trashActionResultSchema,
+  unreadCountSchema,
   type ConversationOut,
   type EmailContentOut,
   type EmailItemRef,
@@ -28,6 +29,7 @@ import {
   type StatusResponse,
   type SyncResultOut,
   type TrashActionResult,
+  type UnreadCount,
 } from '../types/dto';
 
 export type ListEmailsOptions = {
@@ -130,6 +132,18 @@ export function getEmailContent(
   const params = new URLSearchParams({ account_id: accountId });
   return request(`/mailboxes/${mailboxId}/emails/${providerMessageId}/content?${params}`, {
     schema: emailContentOutSchema,
+  });
+}
+
+export function getUnreadCount(
+  mailboxId: string,
+  box: 'ALL_MAIL' | 'SPAM',
+  signal?: AbortSignal,
+): Promise<UnreadCount> {
+  const params = new URLSearchParams({ box });
+  return request(`/mailboxes/${mailboxId}/emails/unread-count?${params}`, {
+    schema: unreadCountSchema,
+    signal,
   });
 }
 

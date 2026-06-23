@@ -243,6 +243,25 @@ export const spamResponseSchema = z.object({
 });
 export type SpamResponse = z.infer<typeof spamResponseSchema>;
 
+// Unread-count response of ``GET /mailboxes/{mid}/emails/unread-count?box=...``.
+// ``total`` is the sum of unread messages of the mailbox in that box; ``accounts``
+// is the per-account breakdown including accounts with 0 unread. ``box`` is a
+// plain string (mirrors ``box`` in ``emailMetadataOutSchema`` — the backend
+// validates the value against ``ALL_MAIL``/``SPAM`` on the request side).
+export const accountUnreadDetailSchema = z.object({
+  account_id: z.string(),
+  unread: z.number(),
+});
+export type AccountUnreadDetail = z.infer<typeof accountUnreadDetailSchema>;
+
+export const unreadCountSchema = z.object({
+  mailbox_id: z.string(),
+  box: z.string(),
+  total: z.number(),
+  accounts: z.array(accountUnreadDetailSchema),
+});
+export type UnreadCount = z.infer<typeof unreadCountSchema>;
+
 // Drafts — body is HTML (rich-text composer; sanitised server-side).
 // The ``.max(1_000_000)`` on the request schemas documents the contract and
 // refines the type only — it does NOT run at runtime (``request<T>()`` only

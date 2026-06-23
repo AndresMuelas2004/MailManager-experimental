@@ -44,6 +44,7 @@ export const es = {
     trash: 'Papelera de reciclaje',
     mailbox: 'Bandeja',
     openMenu: 'Abrir menú',
+    unreadBadge: '{count} sin leer',
   },
 
   login: {

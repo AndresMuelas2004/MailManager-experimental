@@ -42,6 +42,7 @@ export const en: EsDictionary = {
     trash: 'Trash',
     mailbox: 'Mailbox',
     openMenu: 'Open menu',
+    unreadBadge: '{count} unread',
   },
 
   login: {

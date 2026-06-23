@@ -4,6 +4,7 @@ import { Inbox, Send, Settings, ChevronDown, X } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import MailboxDropdown from './MailboxDropdown';
+import Badge from '../common/Badge';
 import { useTranslation } from '../../lib/i18n';
 
 type MailboxItem = {
@@ -15,6 +16,7 @@ type NavItem = {
   icon: ComponentType<{ className?: string }>;
   label: string;
   path: string;
+  badge?: number; // nº of unread; the Badge hides itself when 0
 };
 
 type Props = {
@@ -105,7 +107,7 @@ export default function Sidebar({
       </div>
 
       <nav className="mt-1 flex flex-col gap-0.5">
-        {navItems.map(({ icon: Icon, label, path }) => (
+        {navItems.map(({ icon: Icon, label, path, badge }) => (
           <NavLink
             key={path}
             to={{ pathname: `${base}/${path}`, search }}
@@ -117,7 +119,10 @@ export default function Sidebar({
             }
           >
             <Icon className="h-5 w-5" />
-            {label}
+            <span className="flex-1">{label}</span>
+            {typeof badge === 'number' && (
+              <Badge count={badge} aria-label={t('nav.unreadBadge', { count: badge })} />
+            )}
           </NavLink>
         ))}
       </nav>

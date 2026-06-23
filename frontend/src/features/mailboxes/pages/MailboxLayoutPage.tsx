@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import { Filter, FileEdit, Inbox, Menu, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -7,6 +7,7 @@ import { useDraftComposerContext } from '../../../app/providers/DraftComposerCon
 import { useTranslation } from '../../../lib/i18n';
 import Sidebar from '../../../components/ui/Sidebar';
 import useMailboxList from '../hooks/useMailboxList';
+import useMailboxUnreadCounts from '../hooks/useMailboxUnreadCounts';
 
 // Inline because the array is mailbox-feature-only and the features layer's
 // "exactly three subdirs" rule (pages / hooks / components) does not allow a
@@ -35,6 +36,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
+  const { inboxTotal, spamTotal } = useMailboxUnreadCounts(mailboxId);
   const composer = useDraftComposerContext();
 
   // Mobile drawer open/close — the only new JS state (legitimate UI state, not
@@ -70,10 +72,23 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     composer.openForNewEmail();
   }, [composer, closeDrawer]);
 
+  // Browser tab title reflects the current mailbox's inbox (ALL_MAIL) unread
+  // total: ``(N) MailManager`` / ``(99+) MailManager`` / ``MailManager`` at 0.
+  // This is the only runtime writer of document.title (index.html ships the
+  // static fallback); the cleanup restores it when leaving the mailbox shell.
+  useEffect(() => {
+    document.title =
+      inboxTotal > 0 ? `(${inboxTotal > 99 ? '99+' : inboxTotal}) MailManager` : 'MailManager';
+    return () => {
+      document.title = 'MailManager';
+    };
+  }, [inboxTotal]);
+
   const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path }) => ({
     icon,
     label: t(labelKey),
     path,
+    badge: path === 'inbox' ? inboxTotal : path === 'spam' ? spamTotal : undefined,
   }));
 
   return (

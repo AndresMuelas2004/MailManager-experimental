@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import useDraftsList from '../hooks/useDraftsList';
 import useDraftBulkDelete from '../hooks/useDraftBulkDelete';
+import useAccountUnreadCounts from '../hooks/useAccountUnreadCounts';
 import DraftsTable from '../components/DraftsTable';
 import DraftBulkActionsBar from '../components/DraftBulkActionsBar';
 import AccountTabs from '../../../components/ui/AccountTabs';
@@ -27,6 +28,8 @@ export default function AccountDraftsPage() {
     mailboxId!,
     accountId!,
   );
+
+  const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);
 
   const selection = useSelection<DraftOut>(draftKey);
   const composer = useDraftComposerContext();
@@ -86,7 +89,12 @@ export default function AccountDraftsPage() {
         </p>
       </div>
 
-      <AccountTabs basePath={basePath} inboxLabel={bandejaLabel} />
+      <AccountTabs
+        basePath={basePath}
+        inboxLabel={bandejaLabel}
+        inboxUnread={inboxUnread}
+        spamUnread={spamUnread}
+      />
 
       {combinedError && (
         <div className="px-8 pt-4 text-sm text-red-600">{combinedError.message}</div>

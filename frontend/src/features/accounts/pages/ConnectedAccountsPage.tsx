@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 
 import useConnectedAccounts from '../hooks/useConnectedAccounts';
+import useMailboxUnreadByAccount from '../hooks/useMailboxUnreadByAccount';
 import AddAccountCard from '../components/AddAccountCard';
 import AccountCard from '../components/AccountCard';
 import Spinner from '../../../components/common/Spinner';
@@ -26,6 +27,7 @@ export default function ConnectedAccountsPage() {
     editAccountLabel,
     error,
   } = useConnectedAccounts(mailboxId!);
+  const { unreadByAccount } = useMailboxUnreadByAccount(mailboxId!);
 
   if (loading) {
     return (
@@ -65,6 +67,7 @@ export default function ConnectedAccountsPage() {
               account={entry.account}
               emails={entry.emails}
               status={entry.status}
+              unreadCount={unreadByAccount.get(entry.account.account_id) ?? 0}
               onClick={() => navigate(`/m/${mailboxId}/account/${entry.account.account_id}`)}
               onEditLabel={(label) => editAccountLabel(entry.account.account_id, label)}
               onReconnect={() => reconnectAccount(entry.account.account_id)}
