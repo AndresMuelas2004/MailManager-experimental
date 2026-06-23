@@ -130,6 +130,10 @@ The copy endpoint builds its provider clients from `drafts_service`, so the loca
 
 It covers two invariants the plain drafts tests do not: the `COALESCE(EXCLUDED.col, drafts.col)` guard on `UPSERT_DRAFTS_BATCH` (a drafts sync must not clobber locally-persisted reply metadata with the NULLs the provider read path carries), and that `send_draft` reads the threading from the **local row**, not from the request body (a tampered client cannot rethread at send time). It asserts against the fake's `send_draft_with_attachments_reply_kwargs` tracker.
 
+### Trap — `unread-count` badge: fixed seed counts, but multi-account needs ephemeral rows
+
+The seeded happy-path assertions pin exact unread counts from the migration-0010 Gmail seed (a single account) — a seed change shifts them and they break with no other signal. `box` is a router `Literal["ALL_MAIL","SPAM"]`, so TRASH/SENT collapse to 422 (FastAPI) without reaching the service. The load-bearing invariant — `COUNT_UNREAD_BY_ACCOUNT`'s GROUP BY emits no row for a zero-unread account, and the service back-fills it as `unread:0` while summing `total` in Python — CANNOT be exercised by the single-account seed, so the two multi-account tests are the documented exception to "use seeded data, not ephemeral" below: they create a second account via the API and insert controlled `email_metadata` through `isolated_db` (`_insert_unread_rows`). A single-account-only suite stays green even if the back-fill or the Python sum regresses.
+
 ## GET Endpoint Testing Rules (mandatory)
 
 GET endpoints that read exclusively from the database (no provider calls) are covered by integration tests with the same fidelity as E2E. GETs with external dependencies (e.g. cache-aside with provider fallback) need their own strategy documented per-endpoint.
