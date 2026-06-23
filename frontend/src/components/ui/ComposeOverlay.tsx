@@ -161,7 +161,7 @@ export default function ComposeOverlay({
 
   return (
     <div
-      className="fixed right-6 bottom-0 z-50 flex w-[400px] flex-col rounded-t-2xl border border-zinc-200 bg-white shadow-xl"
+      className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col bg-white lg:inset-auto lg:right-6 lg:bottom-0 lg:h-auto lg:w-[400px] lg:rounded-t-2xl lg:border lg:border-zinc-200 lg:shadow-xl"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -183,7 +183,7 @@ export default function ComposeOverlay({
         </button>
       </div>
 
-      <div className="flex flex-col gap-4 px-5 pb-5">
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 lg:flex-none lg:overflow-visible">
         <div className="relative">
           {!ccBccOpen && (
             <button

@@ -32,3 +32,6 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 
 ### Adjuntos
 - [adjuntos.md](adjuntos.md) — Recibir y descargar adjuntos, adjuntar al componer y heredarlos al reenviar.
+
+### Experiencia e interfaz
+- [diseno-responsive-movil.md](diseno-responsive-movil.md) — Disposición móvil por debajo de 1024 px: barra superior con cajón de navegación, botón flotante de redactar, compositor y visores a pantalla completa, listado como tarjetas, paginador compacto y demás ajustes de aspecto (sin cambios de backend).

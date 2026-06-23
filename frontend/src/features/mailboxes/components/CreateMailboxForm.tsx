@@ -21,14 +21,14 @@ export default function CreateMailboxForm({
 }: Props) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-20">
+    <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-6 lg:px-20">
       <div className="flex w-full max-w-[420px] flex-col gap-8">
         <span className="w-fit rounded-full bg-blue-50 px-4 py-1.5 text-[13px] font-medium text-blue-600">
           {t('createMailbox.step')}
         </span>
 
         <div className="flex flex-col gap-2.5">
-          <h2 className="text-[32px] font-bold tracking-tight text-slate-950">
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950 lg:text-[32px]">
             {t('createMailbox.title')}
           </h2>
           <p className="text-base leading-[1.5] text-slate-500">{t('createMailbox.subtitle')}</p>

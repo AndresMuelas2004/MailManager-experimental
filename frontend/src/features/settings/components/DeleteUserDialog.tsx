@@ -27,7 +27,7 @@ export default function DeleteUserDialog({ open, email, busy, onConfirm, onClose
       ariaLabel={t('settings.account.deleteDialogAria')}
       widthClass="max-w-md"
     >
-      <div className="flex flex-col gap-4 px-6 py-6 pr-12">
+      <div className="flex flex-col gap-4 px-4 py-5 pr-10 lg:px-6 lg:py-6 lg:pr-12">
         <h2 className="text-lg font-semibold text-zinc-900">{t('settings.account.deleteTitle')}</h2>
         <p className="text-sm text-zinc-600">{t('settings.account.deleteWarning')}</p>
         <ul className="list-disc space-y-1 pl-5 text-sm text-zinc-600">
@@ -46,7 +46,7 @@ export default function DeleteUserDialog({ open, email, busy, onConfirm, onClose
             className="h-10 rounded-lg border-[1.5px] border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-red-500 focus:outline-none"
           />
         </label>
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
           <button
             type="button"
             onClick={onClose}

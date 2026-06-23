@@ -28,9 +28,9 @@ export default function SettingsLayoutPage() {
   const base = `/m/${mailboxId}/settings`;
 
   return (
-    <div className="flex h-full min-h-0">
-      <nav className="flex w-[240px] shrink-0 flex-col gap-1 border-r border-zinc-200 bg-white px-3 py-6">
-        <h2 className="px-3 pb-3 text-lg font-bold tracking-tight text-zinc-900">
+    <div className="flex h-full min-h-0 flex-col lg:flex-row">
+      <nav className="flex gap-1 overflow-x-auto border-b border-zinc-200 bg-white px-2 py-2 lg:w-[240px] lg:shrink-0 lg:flex-col lg:overflow-visible lg:border-b-0 lg:border-r lg:px-3 lg:py-6">
+        <h2 className="hidden px-3 pb-3 text-lg font-bold tracking-tight text-zinc-900 lg:block">
           {t('settings.title')}
         </h2>
         {SECTIONS.map(({ to, labelKey, icon: Icon, end }) => (
@@ -39,7 +39,7 @@ export default function SettingsLayoutPage() {
             to={to ? `${base}/${to}` : base}
             end={end}
             className={({ isActive }) =>
-              `flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
+              `flex h-10 shrink-0 items-center gap-3 rounded-lg px-3 text-sm font-medium whitespace-nowrap ${
                 isActive ? 'bg-blue-50 text-blue-600' : 'text-zinc-600 hover:bg-zinc-50'
               }`
             }

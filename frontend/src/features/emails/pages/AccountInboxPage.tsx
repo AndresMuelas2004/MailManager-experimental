@@ -128,9 +128,9 @@ export default function AccountInboxPage({ box }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-4 px-8 pt-8 pb-2">
+      <div className="flex items-start justify-between gap-4 px-4 pt-6 pb-2 lg:px-8 lg:pt-8">
         <div className="flex flex-col gap-2">
-          <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{title}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">{title}</h1>
           <p className="text-[15px] leading-[1.5] text-zinc-500">
             {t('inbox.accountSubtitle', { title })}
           </p>
@@ -145,7 +145,7 @@ export default function AccountInboxPage({ box }: Props) {
 
       <AccountTabs basePath={basePath} inboxLabel={bandejaLabel} />
 
-      <div className="flex items-center gap-2 px-8 pt-4">
+      <div className="flex items-center gap-2 px-4 pt-4 lg:px-8">
         <SearchInput value={rawQ} onChange={handleSearchChange} />
         <SearchHelpPopover />
       </div>

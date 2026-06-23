@@ -101,7 +101,7 @@ export default function EmailViewer({
   }
 
   return (
-    <Modal open onClose={onClose} ariaLabel={t('viewer.emailAria', { subject })}>
+    <Modal open mobileFullScreen onClose={onClose} ariaLabel={t('viewer.emailAria', { subject })}>
       <div className="flex flex-col gap-1.5 border-b border-zinc-200 px-6 pt-6 pb-4 pr-14">
         <h2 className="text-[20px] font-semibold leading-tight tracking-tight text-zinc-900">
           {subject}

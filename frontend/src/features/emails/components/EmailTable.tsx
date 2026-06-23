@@ -152,7 +152,7 @@ export default function EmailTable({
   return (
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 bg-[#F9FAFB]">
-        <div className="flex h-11 items-center justify-between gap-4 border-b border-zinc-200 px-8">
+        <div className="flex h-11 items-center justify-between gap-4 border-b border-zinc-200 px-4 lg:px-8">
           {hasSelection && bulkBar ? (
             bulkBar
           ) : (
@@ -184,7 +184,7 @@ export default function EmailTable({
           )}
         </div>
 
-        <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+        <div className="hidden h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 lg:flex">
           <div className="w-[18px]" />
           <div className="w-5" aria-hidden />
           <div className="w-[120px]">{t('emailTable.colSender')}</div>
@@ -241,7 +241,7 @@ export default function EmailTable({
                     }
                   : undefined
               }
-              className={`flex h-11 items-center gap-3 border-b border-zinc-100 px-8 ${rowBg} ${openable ? 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600' : ''}`}
+              className={`flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-100 px-4 py-2 ${rowBg} lg:h-11 lg:flex-nowrap lg:gap-3 lg:px-8 lg:py-0 ${openable ? 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600' : ''}`}
             >
               {selectionEnabled ? (
                 <Checkbox
@@ -276,19 +276,27 @@ export default function EmailTable({
               ) : (
                 <div className="w-5" />
               )}
-              <div className={`w-[120px] truncate text-[13px] ${weight} text-zinc-900`}>
+              <div
+                className={`min-w-0 flex-1 truncate text-[13px] ${weight} text-zinc-900 lg:w-[120px] lg:flex-none`}
+              >
                 {providerName}
               </div>
               {showTo && (
-                <div className={`w-[170px] truncate text-xs ${weight} text-zinc-900`}>{toCell}</div>
+                <div
+                  className={`hidden w-[170px] truncate text-xs ${weight} text-zinc-900 lg:block`}
+                >
+                  {toCell}
+                </div>
               )}
               {showFrom && (
-                <div className={`w-[170px] truncate text-xs ${weight} text-zinc-900`}>
+                <div
+                  className={`hidden w-[170px] truncate text-xs ${weight} text-zinc-900 lg:block`}
+                >
                   {fromCell}
                 </div>
               )}
               <div
-                className={`flex-1 flex items-center gap-1.5 truncate text-[13px] ${weight} text-zinc-900`}
+                className={`order-last flex basis-full items-center gap-1.5 truncate text-[13px] ${weight} text-zinc-900 lg:order-none lg:basis-auto lg:flex-1`}
               >
                 {conversationMode && email.thread_message_count > 1 ? (
                   <span
@@ -314,7 +322,7 @@ export default function EmailTable({
                     : (email.subject ?? t('common.noSubject'))}
                 </span>
               </div>
-              <div className={`w-16 text-right text-xs ${weight} text-zinc-900`}>
+              <div className={`w-16 shrink-0 text-right text-xs ${weight} text-zinc-900`}>
                 {formatDate(email.received_at)}
               </div>
             </div>

@@ -333,7 +333,7 @@ export default function VirtualMailboxForm({
           />
         </label>
 
-        <div className="flex gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
           <label className="flex flex-1 flex-col gap-1 text-sm">
             <span className="text-xs font-medium text-zinc-600">{t('vmboxForm.readLabel')}</span>
             <select
@@ -378,7 +378,7 @@ export default function VirtualMailboxForm({
         <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{submitError}</div>
       )}
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}

@@ -55,7 +55,7 @@ export default function DraftsTable({
 
   return (
     <div className="flex flex-col">
-      <div className="flex h-11 items-center gap-4 border-b border-zinc-200 px-8">
+      <div className="flex h-11 items-center gap-4 border-b border-zinc-200 px-4 lg:px-8">
         {hasSelection && bulkBar ? (
           bulkBar
         ) : (
@@ -100,7 +100,7 @@ export default function DraftsTable({
         )}
       </div>
 
-      <div className="flex h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+      <div className="hidden h-8 items-center gap-3 border-b border-zinc-200 px-8 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 lg:flex">
         <div className="w-[18px]" />
         <div className="w-[120px]">{t('emailTable.colSender')}</div>
         <div className="w-[170px]">{t('emailTable.colTo')}</div>
@@ -124,7 +124,7 @@ export default function DraftsTable({
             <div
               key={`${draft.provider_draft_id}-${draft.account_id}`}
               onClick={clickable ? () => onRowClick!(draft) : undefined}
-              className={`flex h-11 items-center gap-3 border-b border-zinc-100 px-8 ${rowBg} ${
+              className={`flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-100 px-4 py-2 ${rowBg} lg:h-11 lg:flex-nowrap lg:gap-3 lg:px-8 lg:py-0 ${
                 clickable ? 'cursor-pointer hover:bg-zinc-50' : ''
               }`}
             >
@@ -137,13 +137,19 @@ export default function DraftsTable({
               ) : (
                 <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
               )}
-              <div className="w-[120px] truncate text-[13px] text-zinc-900">{providerName}</div>
-              <div className="w-[170px] truncate text-xs text-zinc-900">{toDisplay}</div>
-              <div className="w-[170px] truncate text-xs text-zinc-900">{accountEmail}</div>
-              <div className="flex-1 truncate text-[13px] text-zinc-900">
+              <div className="min-w-0 flex-1 truncate text-[13px] text-zinc-900 lg:w-[120px] lg:flex-none">
+                {providerName}
+              </div>
+              <div className="hidden w-[170px] truncate text-xs text-zinc-900 lg:block">
+                {toDisplay}
+              </div>
+              <div className="hidden w-[170px] truncate text-xs text-zinc-900 lg:block">
+                {accountEmail}
+              </div>
+              <div className="order-last basis-full truncate text-[13px] text-zinc-900 lg:order-none lg:basis-auto lg:flex-1">
                 {draft.subject || t('common.noSubject')}
               </div>
-              <div className="w-16 text-right text-xs text-zinc-900">
+              <div className="w-16 shrink-0 text-right text-xs text-zinc-900">
                 {formatShortDate(draft.updated_at)}
               </div>
             </div>

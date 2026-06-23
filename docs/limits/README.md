@@ -32,3 +32,6 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 
 ### Adjuntos
 - [adjuntos.md](adjuntos.md) — Tamaños (por archivo / total), número máximo, blocklist de extensiones, TTL del caché y concurrencia.
+
+### Experiencia e interfaz
+- [diseno-responsive-movil.md](diseno-responsive-movil.md) — Punto de corte exacto (1024 px) y reflujo secundario (640 px), tamaños fijos de la chrome móvil (cajón, barra superior, botón flotante, pantalla completa), qué se oculta/transforma, la cadena nueva y lo que NO soporta.

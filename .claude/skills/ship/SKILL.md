@@ -1,20 +1,29 @@
 ---
 name: ship
-description: "Ship a feature from a worktree: commit, push, create PR, merge to master, clean up the worktree and branches, then rebase all remaining worktrees with conflict resolution. Use when user says \"ship\", \"ship it\", \"merge this feature\", \"send to master\", or wants to finalize a worktree and sync the rest."
+description: "Ship a feature from a worktree: commit, push, create PR, merge to master, clean up the worktree and branches, then rebase all remaining worktrees with conflict resolution. Use when user says \"ship\", \"ship it\", \"merge this feature\", \"send to master\", or wants to finalize a worktree and sync the rest. Pass the literal TODO as the first argument (/ship TODO) to batch-ship every active worktree sequentially, ordered most-to-least complex via complexity-rubric.md."
 model: opus
 effort: max
 allowed-tools: Bash, Read, Edit, Grep, Glob, Agent, AskUserQuestion
 user-invocable: true
-argument-hint: "[worktree-dir] [worktrees-to-exclude-from-rebase ...] (e.g., feature-name wt-a wt-b)"
+argument-hint: "<worktree-dir> [exclude...]  |  TODO [exclude...] — ship one worktree, or TODO to ship all worktrees most-to-least complex"
 ---
 
 # Ship — Full Worktree Shipping Workflow
 
 This skill finalizes a feature developed in a git worktree: commits, pushes, creates a PR, merges it, cleans up, and rebases every other active worktree so they stay in sync with master.
 
-**Invocation**: Must be run from the main MailManager directory (master branch). The full argument string is: $ARGUMENTS. The **first** whitespace-separated token is the worktree directory to ship (referred to as `<worktree-to-ship>` throughout this skill); **every token after it** names a worktree to **exclude** from the Phase 3/4 rebase (the **exclusion list**). Examples: `/ship feature-name` (ship and rebase ALL remaining worktrees) · `/ship feature-name wt-a wt-b` (ship, then rebase all remaining worktrees except `wt-a` and `wt-b`).
+**Invocation**: Must be run from the main repository directory (master branch). The full argument string is: $ARGUMENTS. The **first** whitespace-separated token is the worktree directory to ship (referred to as `<worktree-to-ship>` throughout this skill); **every token after it** names a worktree to **exclude** from the Phase 3/4 rebase (the **exclusion list**). Examples: `/ship feature-name` (ship and rebase ALL remaining worktrees) · `/ship feature-name wt-a wt-b` (ship, then rebase all remaining worktrees except `wt-a` and `wt-b`).
 
-The main repo directory is always named **MailManager**. Worktrees are sibling directories named directly after the feature (e.g., `feature-name`, `fix-bug-123`) — there is no `MailManager-` prefix. The default branch is **master**. GitHub CLI (`gh`) is available.
+The main repository working tree is always the first entry of `git worktree list`; worktrees are its sibling directories named directly after the feature (e.g., `feature-name`, `fix-bug-123`), with no repo-name prefix. The default branch is **master**. GitHub CLI (`gh`) is available.
+
+---
+
+## Mode selection — read this first
+
+Look at the first whitespace-separated token of `$ARGUMENTS` (call it `$0`):
+
+- **`$0` is `TODO`** (case-insensitive) → **batch mode**. Do NOT follow the single-worktree phases below; instead read and follow [mode-todo.md](mode-todo.md). Every token after `TODO` is a worktree directory to exclude from the batch. The batch ordering is scored via [complexity-rubric.md](complexity-rubric.md).
+- **Otherwise** → **single-worktree mode** (the default, described below). `$0` is the worktree directory to ship; any remaining tokens are worktrees to exclude from the Phase 4 rebase. Continue with Phase 0.
 
 ---
 
@@ -40,7 +49,7 @@ git rev-parse --git-common-dir
 ```
 
 If the two values differ, we are inside a worktree. **STOP** with message:
-> "Run /ship from the main MailManager directory, not from inside a worktree."
+> "Run /ship from the main repository directory, not from inside a worktree."
 
 ### 0.3 Derive and validate worktree path
 
@@ -132,7 +141,7 @@ If the merge fails for any reason, **STOP IMMEDIATELY** and notify the user with
 
 ### 2.2 Update local master
 
-We are already in the main MailManager directory. Pull the latest master with `--ff-only` so an unexpectedly divergent local master fails loudly instead of producing a silent merge commit:
+We are already in the main repository directory. Pull the latest master with `--ff-only` so an unexpectedly divergent local master fails loudly instead of producing a silent merge commit:
 
 ```bash
 git pull --ff-only origin master
@@ -315,7 +324,7 @@ The `/creacion-worktree` skill adds a navigation function to the PowerShell prof
 git worktree list
 ```
 
-Filter out the main MailManager directory — only show actual worktrees (sibling directories with branches other than master).
+Filter out the main repository directory — only show actual worktrees (sibling directories with branches other than master).
 
 ### 3.2 Apply the exclusion list from the arguments
 
@@ -492,7 +501,7 @@ After all phases complete, output a structured final summary to chat. This is **
 - Never force push (`--force` / `-f`) unless the user explicitly asks.
 - Never skip hooks (`--no-verify`).
 - Never stage `.env`, credentials, or secret files.
-- Must be invoked from the main MailManager directory (master branch), never from inside a worktree.
+- Must be invoked from the main repository directory (master branch), never from inside a worktree.
 - The worktree to ship is the **first** argument (the directory name, e.g., `feature-name`); any **additional** arguments name worktrees to exclude from the Phase 4 rebase.
 - Worktree exclusion is decided exclusively by the invocation arguments — Phase 3 must never prompt the user about exclusions.
 - The worktree path is derived as: `<parent-of-repo-root>/<worktree-to-ship>`.

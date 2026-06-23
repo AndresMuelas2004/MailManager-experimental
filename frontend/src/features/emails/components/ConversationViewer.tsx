@@ -112,6 +112,7 @@ export default function ConversationViewer({
   return (
     <Modal
       open
+      mobileFullScreen
       onClose={onClose}
       ariaLabel={t('conversation.ariaLabel', { subject: headerSubject })}
     >

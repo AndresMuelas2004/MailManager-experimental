@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Inbox, Send, Settings, ChevronDown } from 'lucide-react';
+import { Inbox, Send, Settings, ChevronDown, X } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import MailboxDropdown from './MailboxDropdown';
@@ -25,6 +25,15 @@ type Props = {
   onMailboxSelect: (mailboxId: string) => void;
   onMailboxCreate: (displayName: string) => void;
   onCompose: () => void;
+  // Mobile drawer state, owned by MailboxShell. On desktop (lg:) the aside is a
+  // static sticky column and these are inert; below lg it slides in/out.
+  open: boolean;
+  onClose: () => void;
+  // Fired when the user taps any navigation link (mailbox section or settings)
+  // so the host can close the mobile drawer. The mailbox dropdown and the
+  // compose button report through their own callbacks (onMailboxSelect /
+  // onMailboxCreate / onCompose), which the host also uses to close the drawer.
+  onNavigate: () => void;
 };
 
 export default function Sidebar({
@@ -35,6 +44,9 @@ export default function Sidebar({
   onMailboxSelect,
   onMailboxCreate,
   onCompose,
+  open,
+  onClose,
+  onNavigate,
 }: Props) {
   const { t } = useTranslation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -42,12 +54,23 @@ export default function Sidebar({
   const { search } = useLocation();
 
   return (
-    <aside className="sticky top-0 flex h-screen max-h-screen w-[260px] shrink-0 flex-col gap-1 overflow-visible border-r border-zinc-200 bg-white px-4 py-6">
+    <aside
+      id="mailbox-sidebar"
+      className={`fixed inset-y-0 left-0 z-50 flex h-screen max-h-screen w-[280px] max-w-[85vw] flex-col gap-1 overflow-y-auto border-r border-zinc-200 bg-white px-4 py-6 transition-transform duration-200 ease-out ${open ? 'translate-x-0' : '-translate-x-full'} lg:sticky lg:top-0 lg:z-auto lg:w-[260px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:shrink-0 lg:transition-none`}
+    >
       <div className="flex items-center gap-2.5 px-2 pb-5">
         <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg">
           <img src="/logo.png" alt="MailManager" className="h-full w-full object-cover" />
         </div>
         <span className="text-lg font-bold tracking-tight text-zinc-900">MailManager</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('common.close')}
+          className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 lg:hidden"
+        >
+          <X className="h-5 w-5" />
+        </button>
       </div>
 
       <div className="relative">
@@ -86,6 +109,7 @@ export default function Sidebar({
           <NavLink
             key={path}
             to={{ pathname: `${base}/${path}`, search }}
+            onClick={onNavigate}
             className={({ isActive }) =>
               `flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
                 isActive ? 'bg-blue-50 text-blue-600' : 'text-zinc-500 hover:bg-zinc-50'
@@ -114,6 +138,7 @@ export default function Sidebar({
       <div className="px-1 py-2">
         <NavLink
           to={`${base}/settings`}
+          onClick={onNavigate}
           aria-label={t('sidebar.settings')}
           className={({ isActive }) =>
             `inline-flex ${isActive ? 'text-blue-600' : 'text-zinc-400 hover:text-zinc-600'}`

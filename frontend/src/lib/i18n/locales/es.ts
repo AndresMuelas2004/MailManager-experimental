@@ -43,6 +43,7 @@ export const es = {
     drafts: 'Borradores',
     trash: 'Papelera de reciclaje',
     mailbox: 'Bandeja',
+    openMenu: 'Abrir menú',
   },
 
   login: {

@@ -43,7 +43,7 @@ export default function MailboxSettingsRow({
   };
 
   return (
-    <li className="flex items-center gap-3 border-b border-zinc-100 px-8 py-4">
+    <li className="flex items-center gap-3 border-b border-zinc-100 px-4 py-4 lg:px-8">
       <Inbox className="h-5 w-5 shrink-0 text-zinc-400" />
 
       {editing ? (

@@ -43,7 +43,7 @@ function ActionButton({ icon: Icon, label, onClick, disabled, danger }: ActionBt
       className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[13px] font-medium transition-colors disabled:opacity-50 ${color}`}
     >
       <Icon className="h-[18px] w-[18px]" />
-      {label}
+      <span className="hidden lg:inline">{label}</span>
     </button>
   );
 }
@@ -70,7 +70,7 @@ export default function BulkActionsBar({
   const allows = (action: BulkAction) => allowed.includes(action);
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2 overflow-x-auto lg:overflow-visible">
       <button
         type="button"
         onClick={onClear}
@@ -79,7 +79,8 @@ export default function BulkActionsBar({
       >
         <X className="h-[18px] w-[18px] text-zinc-600" />
       </button>
-      <span className="text-[13px] font-medium text-zinc-700">
+      <span className="text-[13px] font-medium text-zinc-700 lg:hidden">{selectedCount}</span>
+      <span className="hidden text-[13px] font-medium text-zinc-700 lg:inline">
         {selectedCount === 1
           ? t('bulk.selectedOne', { count: selectedCount })
           : t('bulk.selectedMany', { count: selectedCount })}

@@ -27,6 +27,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
 - Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
 - In-app Settings area (identity, connected accounts, mailbox rename/delete, account-label editing, "sync everything", account deletion) and an interface-language switch (Spanish / English). The language is a browser-local preference (localStorage) — it is not persisted server-side.
+- Responsive layout for phone-sized viewports: the side navigation collapses behind a hamburger drawer, a floating button opens the composer, viewers and the composer go full-screen, and the email listing renders as cards instead of table columns. Pure client-side presentation — same endpoints and page size as desktop.
 - Login with Google or Microsoft (both OIDC `id_token` verification → server-side session cookie). Each provider creates its own user; there is no account-linking. Microsoft login is optional per deploy (disabled button when `MICROSOFT_CLIENT_ID` / `VITE_MICROSOFT_CLIENT_ID` are unset).
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
