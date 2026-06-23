@@ -18,6 +18,11 @@ export const es = {
     back: 'Volver',
     saving: 'Guardando…',
     syncing: 'Sincronizando…',
+    refresh: 'Refrescar',
+    refreshAria: 'Buscar correo nuevo',
+    lastSync: 'Última actualización: {time}',
+    lastSyncNever: 'Sin sincronizar todavía',
+    syncFailed: 'No se pudo actualizar',
     noSubject: '(Sin asunto)',
   },
 
