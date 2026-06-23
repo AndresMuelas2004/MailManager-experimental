@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   keepPreviousData,
   useMutation,
@@ -13,6 +13,7 @@ import { listMailboxes } from '../../../api/endpoints/mailboxes';
 import { syncEmailMetadata } from '../../../api/endpoints/emails';
 import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
+import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
@@ -28,6 +29,8 @@ type UseVirtualMailboxEmailsReturn = {
   isPlaceholder: boolean;
   error: UiError | null;
   refresh: () => Promise<void>;
+  sync: () => void;
+  lastSyncedAt: number | null;
 };
 
 const MIN_SEARCH_LENGTH = 2;
@@ -40,6 +43,10 @@ export default function useVirtualMailboxEmails(
   page = 1,
 ): UseVirtualMailboxEmailsReturn {
   const queryClient = useQueryClient();
+  // Per-vmbox last-synced mark (independent of q / page): the open-sync fan-out
+  // covers the whole vmbox's account set in one go.
+  const scopeKey = `vmbox:${virtualMailboxId}`;
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(() => readLastSyncedAt(scopeKey));
   const trimmedQuery = (searchQuery ?? '').trim();
   const effectiveQ = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : undefined;
   const emailsKey = ['virtual-mailbox-emails', virtualMailboxId, effectiveQ ?? null, page] as const;
@@ -126,9 +133,23 @@ export default function useVirtualMailboxEmails(
     // from other real mailboxes → invalidate ONLY ['virtual-mailbox-emails']
     // (the vmbox listing does not consume the bare ['emails'] key). Minimal
     // blast radius. Promise.allSettled never rejects, so onSuccess always runs
-    // and refreshes the listing even when one account's sync failed.
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] }),
+    // and refreshes the listing even when one account's sync failed — which is
+    // why the mark is stamped on "attempt completed" and NO aggregated
+    // syncError is exposed (asymmetry vs useEmailList's single-call sync).
+    onSuccess: () => {
+      const ts = Date.now();
+      writeLastSyncedAt(scopeKey, ts);
+      setLastSyncedAt(ts);
+      return queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] });
+    },
   });
+
+  // Re-read the persisted mark when the vmbox scope changes without unmounting
+  // (e.g. navigating from one virtual mailbox to another): the useState
+  // initializer only runs on the first mount.
+  useEffect(() => {
+    setLastSyncedAt(readLastSyncedAt(scopeKey));
+  }, [scopeKey]);
 
   // Sync the vmbox's accounts on open (mirrors how the regular listing syncs
   // in useEmailList), gated until the catalogue resolved so account_id can be
@@ -154,6 +175,17 @@ export default function useVirtualMailboxEmails(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [virtualMailboxId, syncKey, accountsReady]);
 
+  // Manual trigger for the refresh button. Respects the same gating as the
+  // open-sync (no-op until the vmbox id and its resolved targets exist). Keyed
+  // by ``syncKey`` so the callback identity tracks the target set, not object
+  // reorders. Fires the provider SYNC fan-out — NOT refresh (local re-read).
+  const sync = useCallback(() => {
+    if (virtualMailboxId.length === 0) return;
+    if (syncTargets.length === 0) return;
+    syncMutation.mutate(syncTargets);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualMailboxId, syncKey]);
+
   const total = emailsQuery.data?.total ?? 0;
 
   return {
@@ -168,5 +200,7 @@ export default function useVirtualMailboxEmails(
     isPlaceholder: emailsQuery.isPlaceholderData,
     error,
     refresh,
+    sync,
+    lastSyncedAt,
   };
 }

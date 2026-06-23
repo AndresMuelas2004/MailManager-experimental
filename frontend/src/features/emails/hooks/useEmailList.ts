@@ -1,10 +1,11 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { listEmails, syncEmailMetadata } from '../../../api/endpoints/emails';
 import { listAccounts } from '../../../api/endpoints/accounts';
 import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
+import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailBox } from '../../../lib/types';
@@ -21,6 +22,9 @@ type UseEmailListReturn = {
   isPlaceholder: boolean;
   error: UiError | null;
   refresh: () => Promise<void>;
+  sync: () => void;
+  lastSyncedAt: number | null;
+  syncError: UiError | null;
 };
 
 const MIN_SEARCH_LENGTH = 2;
@@ -35,6 +39,11 @@ export default function useEmailList(
   groupByThread = false,
 ): UseEmailListReturn {
   const queryClient = useQueryClient();
+  // The underlying sync is per mailbox/account (all boxes at once), so the
+  // last-synced mark is scoped to mailbox+account — independent of box, q,
+  // favorite and page.
+  const scopeKey = `emails:${mailboxId}:${accountId ?? 'ALL'}`;
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(() => readLastSyncedAt(scopeKey));
   const trimmedQuery = (searchQuery ?? '').trim();
   const effectiveQ = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : undefined;
   // ``groupByThread`` is a non-nullable boolean → it goes straight into the
@@ -78,11 +87,17 @@ export default function useEmailList(
     // aggregates from other real mailboxes, so invalidate the bare ['emails']
     // prefix plus ['virtual-mailbox-emails'] — same blast radius as
     // useEmailBulkActions / useFavorite / useEmailViewer (frontend_guide §2).
-    onSuccess: () =>
-      Promise.all([
+    // onSuccess only runs on a resolved sync, so the mark advances exclusively
+    // on a real provider success (a 4xx/5xx leaves it untouched).
+    onSuccess: () => {
+      const ts = Date.now();
+      writeLastSyncedAt(scopeKey, ts);
+      setLastSyncedAt(ts);
+      return Promise.all([
         queryClient.invalidateQueries({ queryKey: ['emails'] }),
         queryClient.invalidateQueries({ queryKey: ['virtual-mailbox-emails'] }),
-      ]),
+      ]);
+    },
   });
 
   useEffect(() => {
@@ -91,6 +106,23 @@ export default function useEmailList(
     // syncMutation identity is stable per TanStack Query docs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailboxId, accountId]);
+
+  // Re-read the persisted mark when the scope changes without unmounting (e.g.
+  // navigating between accounts in AccountInboxPage): the useState initializer
+  // only runs on the first mount, so a scope switch would otherwise keep the
+  // previous account's mark until the next sync.
+  useEffect(() => {
+    setLastSyncedAt(readLastSyncedAt(scopeKey));
+  }, [scopeKey]);
+
+  // Manual trigger for the refresh button. Stable identity (mutate is stable
+  // per TanStack Query). This fires the provider SYNC mutation — NOT refresh,
+  // which only re-reads the local query.
+  const sync = useCallback(() => {
+    if (mailboxId.length === 0) return;
+    syncMutation.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailboxId]);
 
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: emailsKey });
@@ -105,6 +137,11 @@ export default function useEmailList(
 
   const total = emailsQuery.data?.total ?? 0;
 
+  // Non-blocking sync error: surfaced as an inline notice on the refresh
+  // control. Kept SEPARATE from ``error`` (which replaces the table) so a
+  // transient provider failure never empties the already-loaded listing.
+  const syncError = syncMutation.error ? toUiError(syncMutation.error) : null;
+
   return {
     emails: emailsQuery.data?.items ?? [],
     accounts: accountsQuery.data ?? [],
@@ -117,5 +154,8 @@ export default function useEmailList(
     isPlaceholder: emailsQuery.isPlaceholderData,
     error,
     refresh,
+    sync,
+    lastSyncedAt,
+    syncError,
   };
 }

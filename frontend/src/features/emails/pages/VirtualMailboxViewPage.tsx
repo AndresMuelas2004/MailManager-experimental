@@ -1,11 +1,11 @@
 import { useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { RefreshCw } from 'lucide-react';
 
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
+import RefreshControl from '../components/RefreshControl';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import useVirtualMailbox from '../hooks/useVirtualMailbox';
@@ -35,14 +35,25 @@ export default function VirtualMailboxViewPage() {
   // The virtual listing is always grouped by thread server-side, so the rows
   // arrive as conversations. Conversation mode makes each row read-only +
   // open; no selection / favourite wiring on this page.
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, syncing } =
-    useVirtualMailboxEmails(
-      virtualMailboxId!,
-      mailboxId!,
-      record?.account_ids ?? [],
-      debouncedQ,
-      page,
-    );
+  const {
+    emails,
+    accounts,
+    total,
+    pageSize,
+    totalPages,
+    loading,
+    isPlaceholder,
+    error,
+    syncing,
+    sync,
+    lastSyncedAt,
+  } = useVirtualMailboxEmails(
+    virtualMailboxId!,
+    mailboxId!,
+    record?.account_ids ?? [],
+    debouncedQ,
+    page,
+  );
 
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
@@ -158,13 +169,8 @@ export default function VirtualMailboxViewPage() {
             <p className="text-[15px] leading-[1.5] text-zinc-500">
               {t('virtualMailboxes.viewSubtitle')}
             </p>
-            {syncing && (
-              <span className="inline-flex items-center gap-2 text-[13px] font-medium text-zinc-500">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                {t('common.syncing')}
-              </span>
-            )}
           </div>
+          <RefreshControl onRefresh={sync} syncing={syncing} lastSyncedAt={lastSyncedAt} />
         </div>
         <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />

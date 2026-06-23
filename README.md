@@ -17,6 +17,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Attachments support across received emails (cache-aside download) and outgoing drafts (lazy push, atomic Gmail send / partial-resume Outlook send).
 - Reply / Reply All / Forward composer flow with provider-native threading (Gmail `threadId` + RFC 5322 headers; Outlook `createReply` / `createReplyAll` / `createForward`) and server-side attachment inheritance on Outlook forwards / explicit copy on Gmail forwards.
 - Conversation view: account, unified, and virtual listings collapse each thread into one row (count of the thread's messages in that box), and opening a row fetches the full message chain from the provider with cache-aside persistence ("complete the mailbox"). Favourites is the exception — it stays per-message, not grouped.
+- Manual "Refresh" button per listing (unified, account, virtual) that re-runs the provider sync on demand, with an inline "last updated: X ago" indicator. The last-synced mark is browser-local (localStorage) — it reflects when this browser last synced, not server state.
 - Batch read/unread status management across accounts.
 - Trash management: move emails to trash, permanently delete, or restore.
 - Spam operations: move to spam and restore from spam with cross-provider support.

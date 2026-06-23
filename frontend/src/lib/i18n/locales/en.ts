@@ -16,6 +16,11 @@ export const en: EsDictionary = {
     back: 'Back',
     saving: 'Saving…',
     syncing: 'Syncing…',
+    refresh: 'Refresh',
+    refreshAria: 'Check for new mail',
+    lastSync: 'Last updated: {time}',
+    lastSyncNever: 'Not synced yet',
+    syncFailed: 'Could not refresh',
     noSubject: '(No subject)',
   },
 
