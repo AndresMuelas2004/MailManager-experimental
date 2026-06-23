@@ -9,6 +9,7 @@ import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
+import RefreshControl from '../components/RefreshControl';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import { EMAIL_BOX_CONFIG } from '../boxes';
 import { parsePageParam } from '../../../lib/pagination';
@@ -38,8 +39,21 @@ export default function UnifiedInboxPage({ box }: Props) {
   // message. Selection + bulk actions are wired below and act on that
   // representative message; the favourite star stays the read-only aggregated
   // thread indicator (not re-wired here).
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
-    useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page, true);
+  const {
+    emails,
+    accounts,
+    total,
+    pageSize,
+    totalPages,
+    loading,
+    isPlaceholder,
+    error,
+    refresh,
+    sync,
+    syncing,
+    lastSyncedAt,
+    syncError,
+  } = useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page, true);
   const config = EMAIL_BOX_CONFIG[box];
 
   const { selection, bulkError, bulkBar } = useBulkBar({
@@ -104,8 +118,20 @@ export default function UnifiedInboxPage({ box }: Props) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{t(config.titleKey)}</h1>
-        <p className="text-[15px] leading-[1.5] text-zinc-500">{t(config.subtitleKey)}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+              {t(config.titleKey)}
+            </h1>
+            <p className="text-[15px] leading-[1.5] text-zinc-500">{t(config.subtitleKey)}</p>
+          </div>
+          <RefreshControl
+            onRefresh={sync}
+            syncing={syncing}
+            lastSyncedAt={lastSyncedAt}
+            hasError={Boolean(syncError)}
+          />
+        </div>
         <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />
           <SearchHelpPopover />

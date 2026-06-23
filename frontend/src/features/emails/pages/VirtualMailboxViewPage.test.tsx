@@ -1,7 +1,8 @@
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse, delay } from 'msw';
 import { Route, Routes } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { pinTestLang } from '../../../test/i18nTestLang';
@@ -260,5 +261,104 @@ describe('VirtualMailboxViewPage', () => {
     expect(
       screen.queryByRole('checkbox', { name: 'Seleccionar los 50 correos más recientes' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Refresh control. The passive "Sincronizando…" span was replaced by the full
+// RefreshControl; its button is addressed by the accessible name 'Buscar correo
+// nuevo' (aria-label). Clicking it re-fires the per-account sync fan-out, and
+// while in flight the button is disabled and shows the "Sincronizando…" label.
+describe('VirtualMailboxViewPage — refresh control', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem('lastSync:vmbox:vmb_1');
+  });
+  afterEach(() => {
+    window.localStorage.removeItem('lastSync:vmbox:vmb_1');
+  });
+
+  function stubRecord() {
+    server.use(
+      http.get(`${API_BASE}/virtual-mailboxes/vmb_1`, () =>
+        HttpResponse.json({
+          virtual_mailbox_id: 'vmb_1',
+          owner_user_id: 'u_test',
+          display_name: 'My vmbox',
+          account_ids: ['a_1'],
+          filter_payload: {},
+          created_at: new Date('2024-01-01T00:00:00Z').toISOString(),
+          updated_at: new Date('2024-01-01T00:00:00Z').toISOString(),
+        }),
+      ),
+      http.get(`${API_BASE}/virtual-mailboxes/vmb_1/emails`, () =>
+        HttpResponse.json({ items: [sentEmail], total: 1, limit: 50, offset: 0 }),
+      ),
+    );
+  }
+
+  it('mounts the refresh button addressable by its accessible name', async () => {
+    useAccountFanout();
+    stubRecord();
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json({ total_synced: 0, accounts: [] }),
+      ),
+    );
+
+    renderVmbox('/m/mb_1/virtual-mailboxes/vmb_1');
+
+    await waitFor(() => expect(screen.getByText('A vmbox sent message')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Buscar correo nuevo' })).toBeInTheDocument();
+  });
+
+  it('clicking the refresh button re-fires a sync-metadata fan-out per aggregated account', async () => {
+    useAccountFanout();
+    stubRecord();
+    const seenSyncs: string[] = [];
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params, request }) => {
+        const accountId = new URL(request.url).searchParams.get('account_id');
+        seenSyncs.push(`${String(params.mailboxId)}/${accountId}`);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+
+    renderVmbox('/m/mb_1/virtual-mailboxes/vmb_1');
+
+    await waitFor(() => expect(screen.getByText('A vmbox sent message')).toBeInTheDocument());
+    // Wait for the open auto-sync fan-out (mb_1/a_1) to land.
+    await waitFor(() => expect(seenSyncs).toContain('mb_1/a_1'));
+    const before = seenSyncs.length;
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Buscar correo nuevo' }));
+
+    // The single aggregated account is synced again.
+    await waitFor(() => expect(seenSyncs.length).toBe(before + 1));
+    expect(seenSyncs[seenSyncs.length - 1]).toBe('mb_1/a_1');
+  });
+
+  it('disables the button and shows the syncing label while a refresh is in flight', async () => {
+    useAccountFanout();
+    stubRecord();
+    server.use(
+      // Delay the sync so the button's in-flight state is observable.
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, async () => {
+        await delay(80);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+
+    renderVmbox('/m/mb_1/virtual-mailboxes/vmb_1');
+
+    // The open auto-sync already drives the in-flight state: the button shows
+    // the reused "Sincronizando…" label and is disabled, then settles.
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Buscar correo nuevo' });
+      expect(button).toBeDisabled();
+      expect(button).toHaveTextContent('Sincronizando…');
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Buscar correo nuevo' })).toBeEnabled(),
+    );
   });
 });

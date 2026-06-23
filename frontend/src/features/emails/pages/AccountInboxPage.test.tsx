@@ -20,7 +20,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { Route, Routes } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { pinTestLang } from '../../../test/i18nTestLang';
@@ -530,5 +530,63 @@ describe('AccountInboxPage — selection', () => {
     // The checkbox stops click propagation, so the row's open handler — and
     // therefore the conversation fetch — never fires.
     expect(conversationCalls).toHaveLength(0);
+  });
+});
+
+// Refresh control. The account header mounts a RefreshControl; its button is
+// addressed by the accessible name 'Buscar correo nuevo' (aria-label). The
+// per-account scope means the sync-metadata POST carries account_id=a_1. The
+// page auto-syncs on mount, so the click is asserted as a DELTA.
+describe('AccountInboxPage — refresh control', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem('lastSync:emails:mb_1:a_1');
+  });
+  afterEach(() => {
+    window.localStorage.removeItem('lastSync:emails:mb_1:a_1');
+  });
+
+  function stubInbox(seenSyncs: string[]) {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: [makeMessage('rep', { subject: 'Account thread' })],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params, request }) => {
+        const accountId = new URL(request.url).searchParams.get('account_id');
+        seenSyncs.push(`${String(params.mailboxId)}/${accountId}`);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+  }
+
+  it('mounts the refresh button addressable by its accessible name', async () => {
+    stubInbox([]);
+    renderAccountInbox();
+
+    await waitFor(() => expect(screen.getByText('Account thread')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Buscar correo nuevo' })).toBeInTheDocument();
+  });
+
+  it('clicking the refresh button fires an extra sync-metadata POST scoped to the account', async () => {
+    const seenSyncs: string[] = [];
+    stubInbox(seenSyncs);
+    renderAccountInbox();
+
+    await waitFor(() => expect(screen.getByText('Account thread')).toBeInTheDocument());
+    // Wait for the mount auto-sync (carrying account_id=a_1) to land.
+    await waitFor(() => expect(seenSyncs.length).toBeGreaterThanOrEqual(1));
+    const before = seenSyncs.length;
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Buscar correo nuevo' }));
+
+    await waitFor(() => expect(seenSyncs.length).toBe(before + 1));
+    // The per-account scope flows into the sync as account_id=a_1.
+    expect(seenSyncs[seenSyncs.length - 1]).toBe('mb_1/a_1');
   });
 });

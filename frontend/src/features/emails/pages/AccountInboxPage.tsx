@@ -9,6 +9,7 @@ import ViewerMount from '../components/ViewerMount';
 import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
+import RefreshControl from '../components/RefreshControl';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';
 import { parsePageParam } from '../../../lib/pagination';
@@ -41,8 +42,21 @@ export default function AccountInboxPage({ box }: Props) {
   // message. Selection + bulk actions are wired below and act on that
   // representative message (the row's ``provider_message_id``); the favourite
   // star stays the read-only aggregated thread indicator (not re-wired here).
-  const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
-    useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page, true);
+  const {
+    emails,
+    accounts,
+    total,
+    pageSize,
+    totalPages,
+    loading,
+    isPlaceholder,
+    error,
+    refresh,
+    sync,
+    syncing,
+    lastSyncedAt,
+    syncError,
+  } = useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page, true);
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
@@ -114,11 +128,19 @@ export default function AccountInboxPage({ box }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-col gap-2 px-8 pt-8 pb-2">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{title}</h1>
-        <p className="text-[15px] leading-[1.5] text-zinc-500">
-          {t('inbox.accountSubtitle', { title })}
-        </p>
+      <div className="flex items-start justify-between gap-4 px-8 pt-8 pb-2">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">{title}</h1>
+          <p className="text-[15px] leading-[1.5] text-zinc-500">
+            {t('inbox.accountSubtitle', { title })}
+          </p>
+        </div>
+        <RefreshControl
+          onRefresh={sync}
+          syncing={syncing}
+          lastSyncedAt={lastSyncedAt}
+          hasError={Boolean(syncError)}
+        />
       </div>
 
       <AccountTabs basePath={basePath} inboxLabel={bandejaLabel} />

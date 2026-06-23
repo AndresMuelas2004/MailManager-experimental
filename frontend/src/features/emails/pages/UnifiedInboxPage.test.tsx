@@ -2,7 +2,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { Route, Routes, useLocation } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { pinTestLang } from '../../../test/i18nTestLang';
@@ -536,5 +536,65 @@ describe('UnifiedInboxPage — selection', () => {
     const rowChecks = screen.getAllByRole('checkbox', { name: 'Seleccionar correo' });
     expect(rowChecks[0]).toBeChecked();
     expect(rowChecks[1]).not.toBeChecked();
+  });
+});
+
+// Refresh control. The header now mounts a RefreshControl whose button is
+// located by its ACCESSIBLE NAME 'Buscar correo nuevo' (the aria-label), NOT
+// the visible 'Refrescar' text. The page already fires a sync-metadata POST on
+// mount (auto-sync), so the click is asserted as a DELTA over that baseline.
+describe('UnifiedInboxPage — refresh control', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem('lastSync:emails:mb_1:ALL');
+  });
+  afterEach(() => {
+    window.localStorage.removeItem('lastSync:emails:mb_1:ALL');
+  });
+
+  function stubInbox(seenSyncs: string[]) {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params }) => {
+        seenSyncs.push(String(params.mailboxId));
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+  }
+
+  it('mounts the refresh button addressable by its accessible name', async () => {
+    stubInbox([]);
+    renderInboxAtMailbox();
+
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Buscar correo nuevo' })).toBeInTheDocument();
+  });
+
+  it('clicking the refresh button fires an extra sync-metadata POST and surfaces the last-updated status', async () => {
+    const seenSyncs: string[] = [];
+    stubInbox(seenSyncs);
+    renderInboxAtMailbox();
+
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+    // Wait for the mount auto-sync to land, then snapshot the baseline count.
+    await waitFor(() => expect(seenSyncs.length).toBeGreaterThanOrEqual(1));
+    const before = seenSyncs.length;
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Buscar correo nuevo' }));
+
+    // One additional unified-mailbox sync (no account_id → all accounts).
+    await waitFor(() => expect(seenSyncs.length).toBe(before + 1));
+    expect(seenSyncs[seenSyncs.length - 1]).toBe('mb_1');
+
+    // After the sync resolves the "last updated" status renders under the button.
+    await waitFor(() => expect(screen.getByText(/Última actualización:/)).toBeInTheDocument());
   });
 });
