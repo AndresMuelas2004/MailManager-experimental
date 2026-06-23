@@ -17,11 +17,12 @@
 
 import { type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse, delay } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import useVirtualMailboxEmails from './useVirtualMailboxEmails';
+import { readLastSyncedAt } from '../../../lib/lastSync';
 import { createTestQueryClient } from '../../../test/renderWithProviders';
 import { server } from '../../../test/msw/server';
 
@@ -94,10 +95,14 @@ let seenOffsets: (string | null)[] = [];
 
 beforeEach(() => {
   seenOffsets = [];
+  // The sync mark persists to localStorage; clear it so ``lastSyncedAt``
+  // deterministically starts null for the refresh tests below.
+  window.localStorage.clear();
 });
 
 afterEach(() => {
   server.resetHandlers();
+  window.localStorage.clear();
 });
 
 describe('useVirtualMailboxEmails — pagination', () => {
@@ -305,5 +310,43 @@ describe('useVirtualMailboxEmails — sync on open', () => {
     rerender({ ids: ['a_1'] });
     await delay(50);
     expect(seenSyncs).toHaveLength(1);
+  });
+});
+
+describe('useVirtualMailboxEmails — manual refresh & sync mark', () => {
+  it('sync() fires the fan-out again, one sync-metadata POST per resolved account', async () => {
+    const seenSyncs: string[] = [];
+    installCatalogueAndCaptureSync(seenSyncs);
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1', 'a_2'], undefined, 1),
+      { wrapper },
+    );
+
+    // The open auto-sync fans out to both accounts; record the count and assert
+    // the explicit sync() click adds a second full fan-out.
+    await waitFor(() => expect(seenSyncs).toHaveLength(2));
+
+    await act(async () => {
+      result.current.sync();
+    });
+
+    await waitFor(() => expect(seenSyncs).toHaveLength(4));
+    expect(seenSyncs.slice(2).sort()).toEqual(['mb_1/a_1', 'mb_2/a_2']);
+  });
+
+  it('advances lastSyncedAt from null to a numeric epoch and persists it under the vmbox scope', async () => {
+    installCatalogueAndCaptureSync([]);
+
+    const { result } = renderHook(
+      () => useVirtualMailboxEmails(VMB_ID, 'mb_1', ['a_1'], undefined, 1),
+      { wrapper },
+    );
+
+    // Starts null (storage cleared); the resolved fan-out stamps it.
+    expect(result.current.lastSyncedAt).toBeNull();
+
+    await waitFor(() => expect(typeof result.current.lastSyncedAt).toBe('number'));
+    expect(readLastSyncedAt(`vmbox:${VMB_ID}`)).toBe(result.current.lastSyncedAt);
   });
 });

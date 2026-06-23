@@ -14,11 +14,12 @@
 
 import { type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse, delay } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import useEmailList from './useEmailList';
+import { readLastSyncedAt } from '../../../lib/lastSync';
 import { createTestQueryClient } from '../../../test/renderWithProviders';
 import { server } from '../../../test/msw/server';
 
@@ -48,10 +49,14 @@ let seenOffsets: (string | null)[] = [];
 
 beforeEach(() => {
   seenOffsets = [];
+  // The sync mark persists to localStorage; clear it so ``lastSyncedAt``
+  // deterministically starts null for the refresh tests below.
+  window.localStorage.clear();
 });
 
 afterEach(() => {
   server.resetHandlers();
+  window.localStorage.clear();
 });
 
 describe('useEmailList — pagination', () => {
@@ -163,5 +168,91 @@ describe('useEmailList — pagination', () => {
     // Once the new page resolves the data swaps and the flag clears.
     await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('p2'));
     expect(result.current.isPlaceholder).toBe(false);
+  });
+});
+
+describe('useEmailList — manual refresh & sync mark', () => {
+  it('sync() fires a provider sync-metadata POST', async () => {
+    const seenSyncs: string[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params, request }) => {
+        const accountId = new URL(request.url).searchParams.get('account_id');
+        seenSyncs.push(`${String(params.mailboxId)}/${accountId}`);
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', 'a_1', undefined, undefined, 1),
+      { wrapper },
+    );
+
+    // The mount auto-sync already fires once; capture the count and assert the
+    // explicit sync() click adds exactly one more (carrying the scope's
+    // account_id).
+    await waitFor(() => expect(seenSyncs.length).toBeGreaterThanOrEqual(1));
+    const before = seenSyncs.length;
+
+    await act(async () => {
+      result.current.sync();
+    });
+
+    await waitFor(() => expect(seenSyncs.length).toBe(before + 1));
+    expect(seenSyncs[seenSyncs.length - 1]).toBe('mb_1/a_1');
+  });
+
+  it('advances lastSyncedAt from null to a numeric epoch and persists it on success', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json({ total_synced: 0, accounts: [] }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', 'a_1', undefined, undefined, 1),
+      { wrapper },
+    );
+
+    // Starts null (storage cleared); the resolved sync stamps it.
+    expect(result.current.lastSyncedAt).toBeNull();
+
+    await waitFor(() => expect(typeof result.current.lastSyncedAt).toBe('number'));
+    // Persisted under the mailbox+account scope (independent of box/q/page).
+    expect(readLastSyncedAt('emails:mb_1:a_1')).toBe(result.current.lastSyncedAt);
+  });
+
+  it('a failed sync sets syncError without emptying the already-loaded listing', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      // The provider sync fails; the listing read keeps working.
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json(
+          { error: { code: 'forbidden', message: 'Mailbox not accessible' } },
+          { status: 403 },
+        ),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', 'a_1', undefined, undefined, 1),
+      { wrapper },
+    );
+
+    // The listing still renders its row.
+    await waitFor(() => expect(result.current.emails).toHaveLength(1));
+    // The sync failure surfaces as a non-blocking syncError, separate from the
+    // table-replacing ``error`` (which stays null), and the mark never advances.
+    await waitFor(() => expect(result.current.syncError).not.toBeNull());
+    expect(result.current.error).toBeNull();
+    expect(result.current.emails).toHaveLength(1);
+    expect(result.current.lastSyncedAt).toBeNull();
   });
 });
