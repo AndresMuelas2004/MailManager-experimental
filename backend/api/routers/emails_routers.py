@@ -27,6 +27,7 @@ from api.schemas.email import (
     SyncResultOut,
     TrashActionRequest,
     TrashActionResult,
+    UnreadCountOut,
 )
 from api.services import emails_service
 
@@ -90,6 +91,25 @@ def list_emails(
         mailbox_id, box, user_id, account_id, q, limit, offset, favorite,
         group_by_thread,
     )
+
+
+@router.get("/unread-count", response_model=UnreadCountOut)
+def count_unread_emails(
+    mailbox_id: str,
+    box: Literal["ALL_MAIL", "SPAM"] = Query(default="ALL_MAIL"),
+    user_id: str = Depends(require_session),
+) -> UnreadCountOut:
+    """Return the unread-message counts for a mailbox + box.
+
+    Local-only (no provider call): reads only the locally synced
+    ``email_metadata`` copy. Used by the frontend to render the unread
+    badges in the sidebar, the per-account tabs and the connected-accounts
+    cards, plus the browser tab title. ``total`` is the mailbox-wide sum;
+    ``accounts`` is the per-account breakdown (every account, 0 included).
+    Counts individual messages, not conversations. ``box`` is restricted
+    to ALL_MAIL | SPAM (any other value is a 422).
+    """
+    return emails_service.count_unread_emails(mailbox_id, user_id, box)
 
 
 @router.post(

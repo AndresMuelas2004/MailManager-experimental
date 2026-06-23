@@ -222,7 +222,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
             raise QueryError(error_msg) from exc
         except Exception as exc:
             raise QueryError(
-                f"Unexpected {error_msg.lower()} ({type(exc).__name__}): {exc}"
+                f"{error_msg} Unexpected error ({type(exc).__name__}): {exc}"
             ) from exc
 
     def upsert_batch(self, account_id: str, rows: list[tuple]) -> int:
@@ -367,7 +367,6 @@ class PgEmailMetadataStore(EmailMetadataStore):
             ) from exc
         return dict(row) if row is not None else None
 
-
     def get_trash_emails_by_ids(self, account_id: str, message_ids: list[str]) -> list[dict[str, Any]]:
         if not message_ids:
             return []
@@ -479,10 +478,14 @@ class PgEmailMetadataStore(EmailMetadataStore):
         elif box_in:
             params["box_in_list"] = list(box_in)
             box_predicate = "AND box = ANY(%(box_in_list)s)"
-        elif box_not_in:
-            # Empty list means "do not exclude anything" — callers use
-            # it to opt back into seeing TRASH/SPAM. Leave the slot
-            # empty so we do not emit a tautological ``NOT (box = ANY('{}'))``.
+        elif box_not_in is not None:
+            # `is not None`, NOT a truthiness test: an explicit empty list is the
+            # deliberate opt-in to exclude nothing (see TRASH/SPAM too) and MUST
+            # reach this branch (database_guide.md, "LIST_FILTERED slot triple").
+            # With [] the predicate is the harmless tautology
+            # ``NOT (box = ANY('{}'))`` — TRUE for every row, i.e. "no box
+            # exclusion". A truthiness ``if box_not_in:`` would send [] to the
+            # else and silently restore the default exclusion, reversing intent.
             params["box_not_in_list"] = list(box_not_in)
             box_predicate = "AND NOT (box = ANY(%(box_not_in_list)s))"
         else:
@@ -629,6 +632,37 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected count filtered email metadata error ({type(exc).__name__}): {exc}"
             ) from exc
         return int(row[0]) if row else 0
+
+    def count_unread_by_account(
+        self,
+        account_ids: list[str],
+        box: str,
+    ) -> dict[str, int]:
+        # Mirror the empty-accounts short-circuit of count_filtered /
+        # list_filtered: never touch the DB when there is nothing to count.
+        if not account_ids:
+            return {}
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        queries.COUNT_UNREAD_BY_ACCOUNT,
+                        {"account_ids": account_ids, "box": box},
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            # Malformed UUID in account_ids → treat as "no results",
+            # consistent with exists() / list_filtered().
+            return {}
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to count unread messages by account.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected unread-by-account count error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return {str(row["account_id"]): int(row["unread"]) for row in rows}
 
     def update_has_attachments(self, account_id: str, provider_message_id: str) -> None:
         try:

@@ -200,6 +200,29 @@ class EmailPageOut(BaseModel):
     offset: int
 
 
+class AccountUnreadDetail(BaseModel):
+    """Per-account unread count for a single box."""
+
+    account_id: str
+    unread: int
+
+
+class UnreadCountOut(BaseModel):
+    """Unread-message counts for a mailbox + box.
+
+    ``total`` is the mailbox-wide sum across all accounts; ``accounts``
+    carries the per-account breakdown (every account of the mailbox,
+    including those with 0). Counts individual unread messages (not
+    threads). Reflects only the locally synced copy, never the provider's
+    live mailbox. ``box`` echoes the requested value (ALL_MAIL | SPAM).
+    """
+
+    mailbox_id: str
+    box: str
+    total: int
+    accounts: list[AccountUnreadDetail]
+
+
 class ConversationOut(BaseModel):
     """Full message chain of a conversation (conversation viewer).
 

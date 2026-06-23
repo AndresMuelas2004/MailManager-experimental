@@ -37,6 +37,7 @@ from api.errors.exceptions import (
     SpamMoveError,
     SpamRestoreError,
     TrashOperationError,
+    UnreadCountError,
 )
 from core.email import (
     ConversationMessage,
@@ -55,6 +56,7 @@ from api.schemas.email import (
     AccountReadStatusDetail,
     AccountSpamDetail,
     AccountSyncDetail,
+    AccountUnreadDetail,
     ConversationOut,
     EmailContentOut,
     EmailMetadataOut,
@@ -73,6 +75,7 @@ from api.schemas.email import (
     SyncResultOut,
     TrashActionRequest,
     TrashActionResult,
+    UnreadCountOut,
 )
 from api.schemas.attachment import AttachmentMetadataOut
 from api.services.services_helpers import (
@@ -829,7 +832,7 @@ def _execute_spam_operation(
             "Unexpected account listing error (%s): %s",
             type(exc).__name__, exc,
         )
-        raise fallback_error("Failed to list accounts during spam operation.") from exc
+        raise fallback_error(f"Failed to list accounts during {operation_label}.") from exc
 
     account_map = {str(a["account_id"]): a for a in accounts}
     for aid in items_by_account:
@@ -1037,6 +1040,66 @@ def list_emails(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+def count_unread_emails(
+    mailbox_id: str,
+    user_id: str,
+    box: str = "ALL_MAIL",
+) -> UnreadCountOut:
+    """Count unread messages for a mailbox + box, with per-account breakdown.
+
+    Local-only (no provider call). ``box`` is restricted at the router to
+    ALL_MAIL | SPAM. Returns the mailbox-wide ``total`` plus one
+    ``AccountUnreadDetail`` per account of the mailbox (0 included), so the
+    frontend can feed the sidebar badge (total), the per-account tabs and
+    the connected-accounts cards from a single response per (mailbox, box).
+    Counts INDIVIDUAL messages (not threads) and reflects only the locally
+    synced copy.
+    """
+    ensure_mailbox_access(mailbox_id, user_id)
+
+    try:
+        accounts = account_store.list_by_mailbox(mailbox_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account listing error during unread count for mailbox '%s' (%s): %s",
+            mailbox_id, type(exc).__name__, exc,
+        )
+        raise UnreadCountError(
+            "Failed to load mailbox accounts for unread count."
+        ) from exc
+
+    account_ids = [str(a["account_id"]) for a in accounts]
+    if not account_ids:
+        return UnreadCountOut(mailbox_id=mailbox_id, box=box, total=0, accounts=[])
+
+    try:
+        counts = email_metadata_store.count_unread_by_account(account_ids, box)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected unread count error for mailbox '%s' box '%s' (%s): %s",
+            mailbox_id, box, type(exc).__name__, exc,
+        )
+        raise UnreadCountError(
+            "Failed to count unread emails while building the mailbox unread badge."
+        ) from exc
+
+    # Fill 0 for accounts with no unread rows (GROUP BY omits them). Order
+    # follows ``list_by_mailbox`` (the same stable order the listing uses).
+    details = [
+        AccountUnreadDetail(account_id=aid, unread=counts.get(aid, 0))
+        for aid in account_ids
+    ]
+    total = sum(d.unread for d in details)
+
+    return UnreadCountOut(
+        mailbox_id=mailbox_id, box=box, total=total, accounts=details,
     )
 
 
@@ -1691,6 +1754,10 @@ def get_conversation(
        build the response from the provider's fresh state ordered oldest
        first.
     """
+    # Re-canonicalise mailbox_id from the authoritative DB record instead of
+    # trusting the path param verbatim. ensure_mailbox_access already proved the
+    # param resolves to this owned row, so this only normalises its exact form
+    # (no behavioural change) before it is threaded into every downstream call.
     mailbox_record = ensure_mailbox_access(mailbox_id, user_id)
     mailbox_id = str(mailbox_record.get("mailbox_id") or mailbox_id)
 

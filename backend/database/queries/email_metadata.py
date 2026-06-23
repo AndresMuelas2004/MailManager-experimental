@@ -202,6 +202,30 @@ COUNT_FILTERED = """
       {extra_predicate}
 """
 
+# Unread-message counter (feature: contador de no leídos). Counts UNREAD
+# (``is_read = FALSE``) messages per account for a single box, across the
+# given accounts, in one ``GROUP BY account_id`` round trip. The service
+# sums the rows for the mailbox-wide ``total`` and fills 0 for accounts
+# with no unread rows (a ``GROUP BY`` emits no row for them). Local-only
+# (no provider call). Counts INDIVIDUAL messages — it does NOT group by
+# thread, by product decision (see docs/features/contador-no-leidos.md).
+#
+# ``box`` is a single trusted value constrained at the API boundary to
+# ALL_MAIL | SPAM; it is bound as a parameter, never interpolated.
+# ``account_ids`` is cast to uuid[] exactly like LIST_FILTERED. No new
+# index — ``idx_email_metadata_account_id`` only narrows by account_id
+# (``is_read`` / ``box`` remain heap post-filters, not index-covered),
+# which suffices for the bounded synced volume (same MVP trade-off as the
+# filtered listings).
+COUNT_UNREAD_BY_ACCOUNT = """
+    SELECT account_id, COUNT(*) AS unread
+    FROM email_metadata
+    WHERE account_id = ANY(%(account_ids)s::uuid[])
+      AND is_read = FALSE
+      AND box = %(box)s
+    GROUP BY account_id
+"""
+
 # Deduplicated row count for virtual mailboxes. ``COUNT(DISTINCT
 # provider_message_id)`` collapses the same provider message surfaced
 # under two ``account_id`` rows (one provider account connected under two
@@ -451,7 +475,10 @@ EXISTS_BY_MESSAGE_ID = """
 # maps it with no special-casing. Backs the conversation endpoint's base-message
 # lookup: the row yields both the ``thread_id`` (to fetch the thread) and the
 # presentation columns (to map the singleton EmailMetadataOut when thread_id is
-# empty), avoiding a second read.
+# empty), avoiding a second read. No ``LIMIT 1``: ``(provider_message_id,
+# account_id)`` is the table's primary key, so the WHERE matches at most one
+# row by definition (the JOIN on the unique ``accounts.account_id`` cannot
+# multiply it) — the uniqueness comes from the schema, not a defensive limit.
 GET_METADATA_BY_MESSAGE = """
     SELECT em.provider_message_id, em.account_id, em.thread_id, em.from_email,
            em.from_name, em.subject, em.received_at, em.is_read, em.box,
@@ -461,7 +488,6 @@ GET_METADATA_BY_MESSAGE = """
     JOIN accounts AS a USING (account_id)
     WHERE em.account_id = %(account_id)s
       AND em.provider_message_id = %(provider_message_id)s
-    LIMIT 1
 """
 
 # Recipient-autocomplete aggregation (user-level; no provider call).
@@ -538,9 +564,11 @@ UPDATE_HAS_ATTACHMENTS = """
 # messages whose body is NOT yet cached, most-recent first, capped at
 # ``limit``. The LEFT JOIN + ``ec.provider_message_id IS NULL`` excludes
 # rows already present in ``email_content`` (those are served from cache,
-# never re-fetched here). Existing indexes
-# (``idx_email_metadata_received_at`` / ``idx_email_metadata_account_id``)
-# cover the predicate for the MVP volume — no new index.
+# never re-fetched here). No new index for the MVP volume:
+# ``idx_email_metadata_account_id`` narrows by account_id (``is_read`` /
+# ``box`` stay heap post-filters) and ``idx_email_metadata_received_at`` can
+# serve the ``ORDER BY received_at DESC LIMIT`` — neither index covers the
+# full account+is_read+box predicate, an accepted trade-off at MVP scale.
 LIST_UNREAD_RECENT_UNCACHED = """
     SELECT em.provider_message_id
     FROM email_metadata em
