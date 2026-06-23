@@ -49,7 +49,7 @@ Cuando el usuario añade y autoriza una cuenta, la app encadena automáticamente
 
 ### 2.3 A mano, cuando el usuario quiere
 
-Algunos listados ofrecen además un botón explícito. El más visible es **"Sincronizar favoritos"** en la página de Favoritos, que reconcilia la columna de favoritos contra el proveedor a demanda (sección 6). Los borradores también pueden re-sincronizarse a mano desde su listado. En todos los casos el botón muestra un spinner mientras trabaja y se deshabilita para evitar dobles clics.
+Varios listados ofrecen además un botón explícito. El más visible es el botón **"Refrescar"** en la cabecera de la bandeja unificada, la vista por cuenta y la bandeja ficticia: dispara a demanda la **misma** sincronización que la apertura, acotada a esa vista, y junto a él un texto muestra **cuándo** fue la última sincronización ("Última actualización: hace X"). Esa capa de control y visibilidad tiene su propia feature: **[refrescar-y-estado-sincronizacion.md](refrescar-y-estado-sincronizacion.md)**. Hay además botones de semántica distinta: **"Sincronizar favoritos"** en la página de Favoritos, que reconcilia la columna de favoritos contra el proveedor (sección 6), y la re-sincronización de borradores desde su listado. En todos los casos el botón muestra un spinner mientras trabaja y se deshabilita para evitar dobles clics.
 
 ### 2.4 Lo que NO hay: sincronización automática en background
 
