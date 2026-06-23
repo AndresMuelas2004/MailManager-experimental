@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAccountMap,
   formatDate,
+  formatRelativeTime,
   formatShortDate,
   normaliseSubject,
   resolveAccount,
@@ -34,6 +35,43 @@ describe('formatShortDate', () => {
     const today = new Date();
     expect(formatShortDate(today.toISOString())).toMatch(/^\d{1,2} [a-z]{3}$/);
     expect(formatShortDate('2020-06-20T10:00:00Z')).toMatch(/20 jun/);
+  });
+});
+
+describe('formatRelativeTime', () => {
+  // ``nowMs`` is fixed so the function is exercised deterministically (the real
+  // ticking now is supplied by the caller — see RefreshControl). All Spanish
+  // strings come from Intl.RelativeTimeFormat('es', { numeric: 'auto' }).
+  const now = Date.parse('2024-06-01T12:00:00Z');
+
+  it('says "ahora" for a zero delta (es)', () => {
+    expect(formatRelativeTime(now, now, 'es')).toBe('ahora');
+  });
+
+  it('reports seconds for a sub-minute delta (es)', () => {
+    expect(formatRelativeTime(now - 30_000, now, 'es')).toBe('hace 30 segundos');
+  });
+
+  it('reports minutes for a sub-hour delta (es)', () => {
+    expect(formatRelativeTime(now - 5 * 60_000, now, 'es')).toBe('hace 5 minutos');
+  });
+
+  it('reports hours for a sub-day delta (es)', () => {
+    expect(formatRelativeTime(now - 2 * 3_600_000, now, 'es')).toBe('hace 2 horas');
+  });
+
+  it('reports days for a ≥24h delta — "ayer" at exactly one day (es)', () => {
+    // numeric: 'auto' renders -1 day as the idiomatic "ayer" rather than
+    // "hace 1 día"; 25h floors to 1 day.
+    expect(formatRelativeTime(now - 25 * 3_600_000, now, 'es')).toBe('ayer');
+  });
+
+  it('clamps a future target to zero → "ahora" (clock skew / cross-tab writes) (es)', () => {
+    expect(formatRelativeTime(now + 60_000, now, 'es')).toBe('ahora');
+  });
+
+  it('honours the lang argument — English locale (en)', () => {
+    expect(formatRelativeTime(now - 5 * 60_000, now, 'en')).toBe('5 minutes ago');
   });
 });
 
