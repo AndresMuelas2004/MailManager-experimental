@@ -728,6 +728,13 @@ def test_delete_foreign_mailbox_forbidden(test_client, isolated_db):
     assert resp.json()["error"]["code"] == "forbidden"
 
 
+def test_unread_count_on_foreign_mailbox_forbidden(test_client, isolated_db):
+    mid = _create_foreign_mailbox(isolated_db)
+    resp = test_client.get(f"{_MAILBOX_URL}/{mid}/emails/unread-count?box=ALL_MAIL")
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+
+
 def test_create_draft_on_foreign_mailbox_forbidden(test_client, isolated_db):
     mid = _create_foreign_mailbox(isolated_db)
     resp = test_client.post(

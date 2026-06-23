@@ -1522,6 +1522,116 @@ def test_list_emails_nonexistent_mailbox_returns_404(seeded_test_client):
 
 
 # ------------------------------------------------------------------
+# Emails — unread count badge (GET /emails/unread-count)
+# ------------------------------------------------------------------
+# Exact expected counts come from the migration-0010 Gmail seed (single
+# account in that mailbox): unread (is_read=FALSE) rows are 12 in ALL_MAIL
+# and 6 in SPAM — counting INDIVIDUAL messages (the endpoint never groups
+# by thread).
+
+def test_unread_count_default_box_is_all_mail(seeded_test_client):
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails/unread-count"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"mailbox_id", "box", "total", "accounts"}
+    assert body["mailbox_id"] == _SEEDED_GMAIL_MAILBOX
+    assert body["box"] == "ALL_MAIL"
+    assert body["total"] == 12
+    # The Gmail seed mailbox has exactly one account; its breakdown carries
+    # the whole total.
+    assert body["accounts"] == [{"account_id": _SEEDED_GMAIL_ACCOUNT, "unread": 12}]
+
+
+def test_unread_count_spam_box(seeded_test_client):
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails/unread-count",
+        params={"box": "SPAM"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["box"] == "SPAM"
+    assert body["total"] == 6
+    assert body["accounts"] == [{"account_id": _SEEDED_GMAIL_ACCOUNT, "unread": 6}]
+
+
+@pytest.mark.parametrize("box", ["TRASH", "SENT"])
+def test_unread_count_box_outside_allmail_spam_returns_422(seeded_test_client, box):
+    # The router Literal only accepts ALL_MAIL | SPAM; SENT / TRASH have no
+    # unread badge in the UI, so they collapse to a 422 (FastAPI validation).
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{_SEEDED_GMAIL_MAILBOX}/emails/unread-count",
+        params={"box": box},
+    )
+    assert resp.status_code == 422
+
+
+def test_unread_count_nonexistent_mailbox_returns_404(seeded_test_client):
+    fake_mailbox_id = "00000000-0000-4000-a000-000000000099"
+    resp = seeded_test_client.get(
+        f"{_MAILBOX_URL}/{fake_mailbox_id}/emails/unread-count?box=ALL_MAIL"
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "mailbox_not_found"
+
+
+def _insert_unread_rows(isolated_db, account_id, *, box, unread, read=0):
+    """Insert ``unread`` unread + ``read`` read email_metadata rows in ``box``.
+
+    Gives one account a controlled unread count for the badge tests. Only
+    ``is_read`` / ``box`` matter to the counter; the rest are filler.
+    """
+    rows = [(f"u-{account_id[:8]}-{box}-{i}", False) for i in range(unread)]
+    rows += [(f"r-{account_id[:8]}-{box}-{i}", True) for i in range(read)]
+    with isolated_db.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, to_email, to_name, received_at, is_read, box)
+            VALUES (%s, %s, NULL, 'x@e.com', 'X', 'S', '', '', now(), %s, %s)
+            """,
+            [(pmid, account_id, is_read, box) for (pmid, is_read) in rows],
+        )
+
+
+def test_unread_count_sums_across_multiple_accounts(test_client, setup_mailbox_and_account, isolated_db):
+    # Two accounts in one mailbox with DISTINCT unread counts. ``total`` is
+    # summed in Python from the per-account breakdown, so 2 + 3 must give 5 —
+    # a single-account seed cannot distinguish "summed" from "echoed".
+    mid, acc1 = setup_mailbox_and_account(test_client, "gmail")
+    acc2 = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "gmail", "display_label": "acc2"},
+    ).json()["account_id"]
+    _insert_unread_rows(isolated_db, acc1, box="ALL_MAIL", unread=2)
+    _insert_unread_rows(isolated_db, acc2, box="ALL_MAIL", unread=3)
+    resp = test_client.get(f"{_MAILBOX_URL}/{mid}/emails/unread-count?box=ALL_MAIL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 5
+    assert {a["account_id"]: a["unread"] for a in body["accounts"]} == {acc1: 2, acc2: 3}
+
+
+def test_unread_count_account_without_unread_is_zero_filled(test_client, setup_mailbox_and_account, isolated_db):
+    # The COUNT_UNREAD_BY_ACCOUNT GROUP BY emits no row for an account with
+    # zero unread; the service must still surface it as unread:0. acc2 has no
+    # rows at all; acc1's read row must NOT count (only is_read=FALSE counts).
+    mid, acc1 = setup_mailbox_and_account(test_client, "gmail")
+    acc2 = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "gmail", "display_label": "acc2"},
+    ).json()["account_id"]
+    _insert_unread_rows(isolated_db, acc1, box="ALL_MAIL", unread=2, read=1)
+    resp = test_client.get(f"{_MAILBOX_URL}/{mid}/emails/unread-count?box=ALL_MAIL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert {a["account_id"]: a["unread"] for a in body["accounts"]} == {acc1: 2, acc2: 0}
+
+
+# ------------------------------------------------------------------
 # Seeded GET endpoint tests — exact count per box (migration 0010)
 # ------------------------------------------------------------------
 
