@@ -87,6 +87,15 @@ describe('EmailPagination', () => {
     expect(screen.getAllByText('…').length).toBeGreaterThan(0);
   });
 
+  it('renders the compact "page/total" indicator for small viewports', () => {
+    // total 500 / 50 → 10 pages. The mobile-only indicator (lg:hidden, so still
+    // in the DOM under jsdom) shows the current page over the total as "3/10".
+    // The numbered buttons render their number alone, never the "N/M" form, so
+    // this text is unambiguous.
+    render(<EmailPagination page={3} pageSize={50} total={500} onPageChange={() => {}} />);
+    expect(screen.getByText('3/10')).toBeInTheDocument();
+  });
+
   it('disables every control when the disabled prop is set', () => {
     render(<EmailPagination page={3} pageSize={50} total={500} onPageChange={() => {}} disabled />);
     expect(screen.getByRole('button', { name: 'Página anterior' })).toBeDisabled();

@@ -23,10 +23,10 @@ export default function GoogleSignInButton({
 }: Props) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-20">
+    <div className="flex flex-1 flex-col items-center justify-center bg-[#F8FAFC] px-6 lg:px-20">
       <div className="flex w-full max-w-[400px] flex-col items-center gap-8">
         <div className="flex flex-col items-center gap-2.5">
-          <h2 className="text-[32px] font-bold tracking-tight text-slate-950">
+          <h2 className="text-2xl font-bold tracking-tight text-slate-950 lg:text-[32px]">
             {t('login.welcome')}
           </h2>
           <p className="text-center text-base text-slate-500">{t('login.signInPrompt')}</p>

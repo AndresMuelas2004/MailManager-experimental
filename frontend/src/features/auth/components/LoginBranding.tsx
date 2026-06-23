@@ -5,7 +5,7 @@ import { useTranslation } from '../../../lib/i18n';
 export default function LoginBranding() {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-10 bg-gradient-to-b from-blue-500 to-blue-900 px-15 text-white">
+    <div className="hidden flex-1 flex-col items-center justify-center gap-10 bg-gradient-to-b from-blue-500 to-blue-900 px-15 text-white lg:flex">
       <div className="flex flex-col items-center gap-6">
         <div className="flex items-center gap-3">
           <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[14px]">

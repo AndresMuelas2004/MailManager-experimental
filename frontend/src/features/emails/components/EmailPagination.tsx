@@ -53,13 +53,24 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
         className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <ChevronLeft className="h-4 w-4" />
-        {t('pagination.previous')}
+        <span className="hidden lg:inline">{t('pagination.previous')}</span>
       </button>
+
+      {/* Compact "page/total" indicator, mobile only. The numbered buttons
+          below are hidden on mobile (hidden lg:inline-flex), so this is the
+          mobile page status. */}
+      <span className="px-2 text-[13px] font-medium text-zinc-600 lg:hidden">
+        {page}/{totalPages}
+      </span>
 
       {tokens.map((token) => {
         if (token === 'ellipsis-left' || token === 'ellipsis-right') {
           return (
-            <span key={token} aria-hidden className="px-1.5 text-[13px] text-zinc-400 select-none">
+            <span
+              key={token}
+              aria-hidden
+              className="hidden px-1.5 text-[13px] text-zinc-400 select-none lg:inline"
+            >
               …
             </span>
           );
@@ -73,7 +84,7 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
             disabled={disabled || isCurrent}
             aria-label={t('pagination.pageAria', { page: token })}
             aria-current={isCurrent ? 'page' : undefined}
-            className={`min-w-[34px] rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed ${
+            className={`hidden min-w-[34px] rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed lg:inline-flex ${
               isCurrent
                 ? 'border-blue-600 bg-blue-600 text-white'
                 : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-50'
@@ -91,7 +102,7 @@ export default function EmailPagination({ page, pageSize, total, onPageChange, d
         aria-label={t('pagination.nextAria')}
         className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {t('pagination.next')}
+        <span className="hidden lg:inline">{t('pagination.next')}</span>
         <ChevronRight className="h-4 w-4" />
       </button>
     </div>

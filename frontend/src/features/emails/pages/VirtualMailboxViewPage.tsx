@@ -123,7 +123,7 @@ export default function VirtualMailboxViewPage() {
   if (isNotFound) {
     return (
       <div className="flex h-full flex-col">
-        <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
+        <div className="flex flex-col gap-2 px-4 pt-6 pb-6 lg:px-8 lg:pt-8">
           <button
             type="button"
             onClick={() => navigate(`/m/${mailboxId}/virtual-mailboxes`)}
@@ -132,7 +132,7 @@ export default function VirtualMailboxViewPage() {
             {t('virtualMailboxes.notFoundBack')}
           </button>
         </div>
-        <div className="mx-8 mt-8 rounded-md bg-zinc-50 px-6 py-10 text-center">
+        <div className="mx-4 mt-8 rounded-md bg-zinc-50 px-6 py-10 text-center lg:mx-8">
           <h1 className="text-[20px] font-semibold text-zinc-900">
             {t('virtualMailboxes.notFoundTitle')}
           </h1>
@@ -153,7 +153,7 @@ export default function VirtualMailboxViewPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-col gap-2 px-8 pt-8 pb-6">
+      <div className="flex flex-col gap-2 px-4 pt-6 pb-6 lg:px-8 lg:pt-8">
         <div className="flex items-start justify-between gap-4">
           <div className="flex flex-col gap-1.5">
             <button
@@ -163,7 +163,7 @@ export default function VirtualMailboxViewPage() {
             >
               {t('virtualMailboxes.notFoundBack')}
             </button>
-            <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+            <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
               {record?.display_name ?? t('virtualMailboxes.defaultName')}
             </h1>
             <p className="text-[15px] leading-[1.5] text-zinc-500">

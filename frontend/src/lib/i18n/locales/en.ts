@@ -41,6 +41,7 @@ export const en: EsDictionary = {
     drafts: 'Drafts',
     trash: 'Trash',
     mailbox: 'Mailbox',
+    openMenu: 'Open menu',
   },
 
   login: {

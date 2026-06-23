@@ -115,9 +115,9 @@ export default function VirtualMailboxesPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-4 px-8 pt-8 pb-6">
+      <div className="flex flex-col gap-4 px-4 pt-6 pb-6 sm:flex-row sm:items-start sm:justify-between lg:px-8 lg:pt-8">
         <div className="flex flex-col gap-1.5">
-          <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
             {t('virtualMailboxes.title')}
           </h1>
           <p className="text-[15px] leading-[1.5] text-zinc-500">
@@ -135,7 +135,7 @@ export default function VirtualMailboxesPage() {
       </div>
 
       {list.error && (
-        <div className="mx-8 mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mx-4 mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 lg:mx-8">
           {list.error.message}
         </div>
       )}
@@ -145,7 +145,7 @@ export default function VirtualMailboxesPage() {
           <Spinner />
         </div>
       ) : list.virtualMailboxes.length === 0 ? (
-        <div className="px-8 py-10 text-center text-sm text-zinc-400">
+        <div className="px-4 py-10 text-center text-sm text-zinc-400 lg:px-8">
           {t('virtualMailboxes.empty')}
         </div>
       ) : (
@@ -153,7 +153,7 @@ export default function VirtualMailboxesPage() {
           {list.virtualMailboxes.map((record) => (
             <li
               key={record.virtual_mailbox_id}
-              className="flex items-center gap-4 border-b border-zinc-100 px-8 py-4 hover:bg-zinc-50"
+              className="flex items-center gap-4 border-b border-zinc-100 px-4 py-4 hover:bg-zinc-50 lg:px-8"
             >
               <Filter className="h-5 w-5 shrink-0 text-zinc-400" />
               <div className="flex flex-1 flex-col gap-0.5">
@@ -193,11 +193,12 @@ export default function VirtualMailboxesPage() {
         open={editor.kind !== 'closed'}
         onClose={() => setEditor({ kind: 'closed' })}
         widthClass="max-w-2xl"
+        mobileFullScreen
         ariaLabel={
           editor.kind === 'edit' ? t('virtualMailboxes.editTitle') : t('virtualMailboxes.newTitle')
         }
       >
-        <div className="flex max-h-[80vh] flex-col overflow-auto px-6 pt-6 pb-6">
+        <div className="flex max-h-full flex-col overflow-auto px-4 pt-6 pb-6 lg:max-h-[80vh] lg:px-6">
           <h2 className="mb-4 text-lg font-semibold text-zinc-900">
             {editor.kind === 'edit'
               ? t('virtualMailboxes.editTitle')

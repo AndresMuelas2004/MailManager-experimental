@@ -27,13 +27,13 @@ export default function AccountTabs({ basePath, inboxLabel }: Props) {
   ];
 
   return (
-    <div className="flex gap-1 border-b border-zinc-200 px-8">
+    <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 px-4 lg:px-8">
       {tabs.map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}
           className={({ isActive }) =>
-            `flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+            `flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
               isActive
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-zinc-500 hover:text-zinc-700'

@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
-import { Filter, FileEdit, Inbox, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
+import { Filter, FileEdit, Inbox, Menu, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
@@ -37,15 +37,38 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
   const composer = useDraftComposerContext();
 
-  const handleMailboxSelect = useCallback((id: string) => navigate(`/m/${id}/inbox`), [navigate]);
+  // Mobile drawer open/close — the only new JS state (legitimate UI state, not
+  // server state). On lg: the Sidebar is a static column and this is inert.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+  // The drawer must close on every navigation so the listing reclaims the full
+  // width. The repo's react-hooks lint rules forbid both setState-in-effect and
+  // reading refs during render, so the close is driven from the interaction
+  // handlers (the React-recommended place for setState) instead of being
+  // derived from a location change: Sidebar fires ``onNavigate`` on every
+  // NavLink / settings click, and the select/create/compose callbacks below
+  // close it too. Tap-outside (backdrop) and the drawer's own X also close it.
+  const handleMailboxSelect = useCallback(
+    (id: string) => {
+      closeDrawer();
+      navigate(`/m/${id}/inbox`);
+    },
+    [navigate, closeDrawer],
+  );
 
   const handleMailboxCreate = useCallback(
     async (displayName: string) => {
+      closeDrawer();
       const created = await handleCreate(displayName);
       if (created) navigate(`/m/${created.mailbox_id}/inbox`);
     },
-    [handleCreate, navigate],
+    [handleCreate, navigate, closeDrawer],
   );
+
+  const handleCompose = useCallback(() => {
+    closeDrawer();
+    composer.openForNewEmail();
+  }, [composer, closeDrawer]);
 
   const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path }) => ({
     icon,
@@ -62,11 +85,55 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         navItems={navItems}
         onMailboxSelect={handleMailboxSelect}
         onMailboxCreate={handleMailboxCreate}
-        onCompose={composer.openForNewEmail}
+        onCompose={handleCompose}
+        open={drawerOpen}
+        onClose={closeDrawer}
+        onNavigate={closeDrawer}
       />
-      <div className="relative min-w-0 flex-1 overflow-auto">
-        <Outlet />
+
+      {/* Dimmed backdrop behind the open drawer (mobile only). */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+          aria-hidden
+          onClick={closeDrawer}
+        />
+      )}
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Mobile top bar: hamburger + current mailbox name. Stays out of the
+            scroll flow (shrink-0) so the sticky pager invariant of the Outlet
+            scroll container is preserved. Hidden on lg:. */}
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200 bg-white px-4 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-label={t('nav.openMenu')}
+            aria-expanded={drawerOpen}
+            aria-controls="mailbox-sidebar"
+            className="-ml-1 flex h-10 w-10 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100"
+          >
+            <Menu className="h-6 w-6" />
+          </button>
+          <span className="truncate text-sm font-semibold text-zinc-900">
+            {currentMailboxName || 'MailManager'}
+          </span>
+        </header>
+        <div className="relative min-w-0 flex-1 overflow-auto">
+          <Outlet />
+        </div>
       </div>
+
+      {/* Floating compose button (mobile only) — the round compose button lives
+          inside the sidebar, which is hidden in the drawer. */}
+      <button
+        type="button"
+        onClick={handleCompose}
+        aria-label={t('sidebar.compose')}
+        className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/30 transition-colors hover:bg-blue-700 lg:hidden"
+      >
+        <Send className="h-6 w-6" />
+      </button>
     </div>
   );
 }

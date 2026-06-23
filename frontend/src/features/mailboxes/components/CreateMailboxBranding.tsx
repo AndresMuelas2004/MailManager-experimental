@@ -5,7 +5,7 @@ import { useTranslation } from '../../../lib/i18n';
 export default function CreateMailboxBranding() {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-8 bg-gradient-to-b from-blue-500 to-blue-900 px-15 text-white">
+    <div className="hidden flex-1 flex-col items-center justify-center gap-8 bg-gradient-to-b from-blue-500 to-blue-900 px-15 text-white lg:flex">
       <div className="flex items-center gap-3">
         <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[14px]">
           <img src="/logo.png" alt="MailManager logo" className="h-full w-full object-cover" />

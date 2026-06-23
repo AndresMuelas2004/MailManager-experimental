@@ -36,9 +36,9 @@ export default function ConnectedAccountsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-8 px-8 pt-8 pb-6">
+    <div className="flex flex-col gap-8 px-4 pt-6 pb-6 lg:px-8 lg:pt-8">
       <div className="flex flex-col gap-2">
-        <h1 className="text-[28px] font-bold tracking-tight text-zinc-900">
+        <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
           {t('accounts.title')}
         </h1>
         <p className="max-w-[600px] text-[15px] leading-[1.5] text-zinc-500">
@@ -46,8 +46,8 @@ export default function ConnectedAccountsPage() {
         </p>
       </div>
 
-      <div className="flex gap-4">
-        <div className="w-full max-w-[240px]">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap">
+        <div className="w-full max-w-none sm:max-w-[240px]">
           <AddAccountCard
             displayLabel={displayLabel}
             onDisplayLabelChange={setDisplayLabel}
@@ -60,7 +60,7 @@ export default function ConnectedAccountsPage() {
         </div>
 
         {entries.map((entry) => (
-          <div key={entry.account.account_id} className="w-full max-w-[280px]">
+          <div key={entry.account.account_id} className="w-full max-w-none sm:max-w-[280px]">
             <AccountCard
               account={entry.account}
               emails={entry.emails}
