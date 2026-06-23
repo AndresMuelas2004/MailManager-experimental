@@ -15,6 +15,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [sincronizacion.md](sincronizacion.md) — Cap de bootstrap, umbral de eventos, tamaño de lote, workers, reintentos y paginación por proveedor.
 - [refrescar-y-estado-sincronizacion.md](refrescar-y-estado-sincronizacion.md) — Cada cuánto avanza solo el texto "hace X", los tramos de tiempo relativo, dónde y con qué clave se guarda la marca de "última actualización", y qué NO soporta el control.
 - [listado-de-correos.md](listado-de-correos.md) — Tamaño de página, paginación numerada (límite/offset, total exacto) y tope de selección.
+- [contador-no-leidos.md](contador-no-leidos.md) — Bandejas con badge, qué se cuenta (mensajes, no hilos), tope visual «99+», formato del título, superficies, y por qué no lleva índice ni migración.
 - [conversaciones.md](conversaciones.md) — Reglas de agregación de la fila-conversación, tamaño de lote del hilo por proveedor, asimetrías Gmail/Outlook y códigos de error del visor.
 - [visualizacion-de-correos.md](visualizacion-de-correos.md) — Etiquetas, atributos, protocolos y reglas CSS permitidos, umbrales del saneamiento, y el TTL y la pre-carga del caché de contenido.
 - [lupa.md](lupa.md) — Mínimo de caracteres, debounce, topes de tokens y de operadores, catálogo cerrado de operadores y formatos de fecha aceptados.

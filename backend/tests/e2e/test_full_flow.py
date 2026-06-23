@@ -76,6 +76,26 @@ def _count_by_box(account_id: str, box: str) -> int:
         conn.close()
 
 
+def _count_unread_by_box(account_id: str, box: str) -> int:
+    """Count UNREAD (is_read=FALSE) emails in a given box for an account.
+
+    The sibling ``_count_by_box`` counts every row regardless of read state;
+    the unread-count endpoint counts only is_read=FALSE, so it needs its own
+    control query.
+    """
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM email_metadata "
+                "WHERE account_id = %s AND box = %s AND is_read = FALSE",
+                (account_id, box),
+            )
+            return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
 def _boxes_for_ids(account_id: str, ids: list[str]) -> dict[str, str]:
     """Return {provider_message_id: box} for the given IDs under an account."""
     if not ids:
@@ -2448,6 +2468,137 @@ def test_46n_contact_suggestions(e2e_client):
     # Contract: a single-character fragment is rejected at the router.
     too_short = e2e_client.get("/contacts/suggestions", params={"q": "a"})
     _assert_ok(too_short, expected=422)
+
+
+def test_46o_unread_count(e2e_client):
+    """Unread-count badge against the real synced Gmail mailbox (DB-only, no
+    provider call). Verifies the count matches a direct SQL control query for
+    ALL_MAIL and SPAM, then proves it tracks a real read-state mutation:
+    marking one unread ALL_MAIL message as read drops ``total`` by one.
+
+    All follow-up assertions stay in this single flow test (common_mistakes
+    §1 — they verify side effects of the very endpoint under test, not
+    separate behaviours). The read mutation is restored at the end so the
+    seeded account looks identical before and after (pre-existing test data
+    is sacred).
+    """
+    # Sync so email_metadata reflects the provider before we count.
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    # ALL_MAIL: total + the account's breakdown entry both match the DB.
+    expected_allmail = _count_unread_by_box(GMAIL_ACCOUNT_ID, "ALL_MAIL")
+    resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/unread-count",
+        params={"box": "ALL_MAIL"},
+    )
+    _assert_ok(resp)
+    body = resp.json()
+    assert body["box"] == "ALL_MAIL"
+    assert body["total"] == expected_allmail
+    entry = next(a for a in body["accounts"] if a["account_id"] == GMAIL_ACCOUNT_ID)
+    assert entry["unread"] == expected_allmail
+    # total is summed in Python from the per-account breakdown (coherence check).
+    assert body["total"] == sum(a["unread"] for a in body["accounts"])
+
+    # SPAM: same contract against its own DB control count.
+    expected_spam = _count_unread_by_box(GMAIL_ACCOUNT_ID, "SPAM")
+    spam_resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/unread-count",
+        params={"box": "SPAM"},
+    )
+    _assert_ok(spam_resp)
+    assert spam_resp.json()["total"] == expected_spam
+
+    # Invalid box is rejected by the router Literal (422) — exercised against
+    # the real runtime, mirroring test_46n's q<2 boundary assertion.
+    bad_box = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/unread-count",
+        params={"box": "TRASH"},
+    )
+    assert bad_box.status_code == 422
+
+    # Track a real Provider-First mutation: pick one unread ALL_MAIL message,
+    # mark it read, and assert the badge total decrements by exactly one.
+    unread_id = None
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT provider_message_id FROM email_metadata "
+                "WHERE account_id = %s AND box = 'ALL_MAIL' AND is_read = FALSE LIMIT 1",
+                (GMAIL_ACCOUNT_ID,),
+            )
+            row = cur.fetchone()
+            unread_id = row[0] if row else None
+    finally:
+        conn.close()
+
+    if unread_id is None:
+        pytest.skip("No unread ALL_MAIL message available to exercise the decrement.")
+
+    mark_read = e2e_client.patch(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/read-status",
+        json={
+            "is_read": True,
+            "items": [{"account_id": GMAIL_ACCOUNT_ID, "provider_message_id": unread_id}],
+        },
+    )
+    _assert_ok(mark_read)
+    try:
+        after = e2e_client.get(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/unread-count",
+            params={"box": "ALL_MAIL"},
+        )
+        _assert_ok(after)
+        assert after.json()["total"] == expected_allmail - 1
+    finally:
+        # Restore the message to unread so the seeded account is unchanged.
+        e2e_client.patch(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/read-status",
+            json={
+                "is_read": False,
+                "items": [{"account_id": GMAIL_ACCOUNT_ID, "provider_message_id": unread_id}],
+            },
+        )
+
+
+def test_46p_unread_count_outlook_and_full_breakdown(e2e_client):
+    """Outlook counterpart of test_46o. The Gmail-only test could not exercise
+    the Outlook provider path nor the "every account present" invariant, since
+    each seeded mailbox holds a single account. Verifies the count against a DB
+    control query for ALL_MAIL and SPAM, the ``total == sum(breakdown)``
+    coherence, and that the breakdown lists an entry for EVERY account of the
+    mailbox — including any the GROUP BY omits (0-filled), never just the
+    accounts that have unread rows.
+    """
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata?account_id={OUTLOOK_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    accounts_resp = e2e_client.get(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/accounts")
+    _assert_ok(accounts_resp)
+    mailbox_account_ids = {a["account_id"] for a in accounts_resp.json()}
+
+    for box in ("ALL_MAIL", "SPAM"):
+        expected = _count_unread_by_box(OUTLOOK_ACCOUNT_ID, box)
+        resp = e2e_client.get(
+            f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/unread-count",
+            params={"box": box},
+        )
+        _assert_ok(resp)
+        body = resp.json()
+        assert body["box"] == box
+        # total is summed in Python from the per-account breakdown.
+        assert body["total"] == sum(a["unread"] for a in body["accounts"])
+        # Every owned account appears in the breakdown (0-filled if it has no
+        # unread rows) — the breakdown is never a subset of the mailbox.
+        assert {a["account_id"] for a in body["accounts"]} == mailbox_account_ids
+        entry = next(a for a in body["accounts"] if a["account_id"] == OUTLOOK_ACCOUNT_ID)
+        assert entry["unread"] == expected
 
 
 # ===================================================================

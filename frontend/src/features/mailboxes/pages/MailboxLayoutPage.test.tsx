@@ -1,8 +1,26 @@
+/**
+ * Integration tests for MailboxLayoutPage (its MailboxShell subcomponent).
+ *
+ * Two feature surfaces this page owns are pinned here:
+ *  - The responsive mobile shell: the hamburger / drawer / backdrop / floating
+ *    compose button and the composer opening from the FAB.
+ *  - The unread-count surfaces: the Sidebar badges next to "Bandeja unificada"
+ *    (ALL_MAIL) and "Spam" (SPAM), and the browser tab title (``(N) MailManager``).
+ *
+ * HTTP is intercepted at MSW; the real hooks (useMailboxList,
+ * useMailboxUnreadCounts), endpoints, schema validation and React Query cache
+ * all run. The unread-count handler is overridden per test to branch on the
+ * ``box`` query param.
+ *
+ * ``document.title`` is global jsdom state, so it is reset after every test to
+ * stop one spec leaking into the next.
+ */
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { Route, Routes } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { pinTestLang } from '../../../test/i18nTestLang';
@@ -19,6 +37,12 @@ const API_BASE = 'http://localhost:8000';
 // behaviour (aria-* state, element presence, the composer opening) rather than
 // on visibility, exactly as the responsive feature requires.
 pinTestLang('es');
+
+// ``document.title`` is global jsdom state written by the tab-title effect, so
+// reset it after every test to stop one spec leaking into the next.
+afterEach(() => {
+  document.title = 'MailManager';
+});
 
 // Translated aria-labels / copy the shell exposes (see locales/es.ts).
 const HAMBURGER = 'Abrir menú'; // nav.openMenu
@@ -160,5 +184,63 @@ describe('MailboxLayoutPage — mobile shell', () => {
     await waitFor(() => {
       expect(screen.getByText(COMPOSER_TITLE)).toBeInTheDocument();
     });
+  });
+});
+
+// Override the unread-count endpoint to return distinct figures per box.
+function useUnreadCounts(mailboxId: string, inboxTotal: number, spamTotal: number) {
+  server.use(
+    http.get(`${API_BASE}/mailboxes/:mailboxId/emails/unread-count`, ({ params, request }) => {
+      const box = new URL(request.url).searchParams.get('box') ?? 'ALL_MAIL';
+      return HttpResponse.json({
+        mailbox_id: String(params.mailboxId),
+        box,
+        total: box === 'SPAM' ? spamTotal : inboxTotal,
+        accounts: [{ account_id: 'a_1', unread: box === 'SPAM' ? spamTotal : inboxTotal }],
+      });
+    }),
+  );
+  return mailboxId;
+}
+
+function renderLayout() {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/m/:mailboxId" element={<MailboxLayoutPage />}>
+        <Route path="inbox" element={<div>Inbox content</div>} />
+      </Route>
+    </Routes>,
+    { initialEntries: ['/m/mb_1/inbox'] },
+  );
+}
+
+describe('MailboxLayoutPage — unread badges and tab title', () => {
+  it('shows the Sidebar badges for the inbox and spam totals', async () => {
+    useUnreadCounts('mb_1', 5, 2);
+    renderLayout();
+
+    // The Inbox nav entry carries the ALL_MAIL total, Spam the SPAM total.
+    await waitFor(() => expect(screen.getByLabelText('5 sin leer')).toBeInTheDocument());
+    expect(screen.getByLabelText('2 sin leer')).toBeInTheDocument();
+    // The badge text mirrors the count.
+    expect(screen.getByLabelText('5 sin leer')).toHaveTextContent('5');
+  });
+
+  it('sets the browser tab title from the inbox total', async () => {
+    useUnreadCounts('mb_1', 5, 2);
+    renderLayout();
+
+    await waitFor(() => expect(document.title).toBe('(5) MailManager'));
+  });
+
+  it('renders no badge and a plain title when both totals are zero', async () => {
+    useUnreadCounts('mb_1', 0, 0);
+    renderLayout();
+
+    // The inbox child renders, so the shell has mounted and the queries ran.
+    await waitFor(() => expect(screen.getByText('Inbox content')).toBeInTheDocument());
+    // Badge hides itself at 0 → no "… sin leer" labelled element anywhere.
+    expect(screen.queryByLabelText(/sin leer/)).not.toBeInTheDocument();
+    expect(document.title).toBe('MailManager');
   });
 });

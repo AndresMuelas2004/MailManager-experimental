@@ -112,6 +112,19 @@ export const handlers = [
   http.get(`${API_BASE}/mailboxes/:mailboxId/emails`, () =>
     HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
   ),
+  // Unread count badge. MSW v2 matches routes exactly, so this extra
+  // ``/unread-count`` segment never collides with the listing handler above.
+  // Happy-path zero counts; specs override with ``server.use(...)`` for figures.
+  http.get(`${API_BASE}/mailboxes/:mailboxId/emails/unread-count`, ({ params, request }) => {
+    const url = new URL(request.url);
+    const box = url.searchParams.get('box') ?? 'ALL_MAIL';
+    return HttpResponse.json({
+      mailbox_id: String(params.mailboxId),
+      box,
+      total: 0,
+      accounts: [],
+    });
+  }),
   http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
     HttpResponse.json({ total_synced: 0, accounts: [] }),
   ),

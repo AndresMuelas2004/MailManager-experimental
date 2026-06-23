@@ -171,6 +171,13 @@ class EmailListError(ApiError):
     code = "email_list_error"
 
 
+class UnreadCountError(ApiError):
+    """Unexpected (non-DB) failure while counting unread emails for the
+    mailbox unread badge. Mapped to HTTP 500 — same family as
+    ``EmailListError`` (a counting failure has no retry story)."""
+    code = "unread_count_error"
+
+
 class DraftCreationError(ApiError):
     code = "draft_creation_error"
 

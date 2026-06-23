@@ -281,6 +281,27 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def count_unread_by_account(
+        self,
+        account_ids: list[str],
+        box: str,
+    ) -> dict[str, int]:
+        """Count UNREAD messages per account for a single box.
+
+        Returns a mapping ``{account_id: unread_count}`` containing
+        **only** the accounts that have at least one unread message in
+        ``box`` (a ``GROUP BY`` emits no row for accounts with zero). The
+        caller is responsible for filling 0 for the remaining accounts of
+        the mailbox.
+
+        Counts INDIVIDUAL messages (no thread grouping). ``box`` is a
+        single value (the API restricts it to ALL_MAIL | SPAM). Returns
+        ``{}`` without touching the database when ``account_ids`` is empty
+        (mirrors ``count_filtered`` / ``list_filtered``).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def update_favorite(
         self,
         account_id: str,

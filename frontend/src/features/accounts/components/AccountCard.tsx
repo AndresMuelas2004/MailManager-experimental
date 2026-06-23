@@ -4,6 +4,7 @@ import { Check, EllipsisVertical, Loader2, Mail, X } from 'lucide-react';
 import { formatShortDate } from '../../../lib/formatters';
 import { getProviderMeta, isGenericLabel } from '../../../lib/providers';
 import { useTranslation } from '../../../lib/i18n';
+import Badge from '../../../components/common/Badge';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import AccountCardDropdown from './AccountCardDropdown';
 
@@ -11,6 +12,7 @@ type Props = {
   account: AccountOut;
   emails: EmailMetadataOut[];
   status: 'syncing' | 'ready' | 'error';
+  unreadCount?: number;
   onClick?: () => void;
   onEditLabel?: (label: string) => void;
   onReconnect?: () => void;
@@ -21,6 +23,7 @@ export default function AccountCard({
   account,
   emails,
   status,
+  unreadCount,
   onClick,
   onEditLabel,
   onReconnect,
@@ -130,6 +133,12 @@ export default function AccountCard({
             <Mail className={`h-3.5 w-3.5 shrink-0 ${headerColor}`} />
             <span className={`truncate text-xs font-semibold ${headerColor}`}>{headerText}</span>
           </div>
+        )}
+        {!editing && (
+          <Badge
+            count={unreadCount ?? 0}
+            aria-label={t('nav.unreadBadge', { count: unreadCount ?? 0 })}
+          />
         )}
         {hasActions && !editing && (
           <div

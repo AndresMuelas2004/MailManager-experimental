@@ -611,8 +611,8 @@ class TestListEmailsForVirtualMailbox:
     def test_in_applies_when_vmbox_opts_into_trash_and_spam(self, monkeypatch):
         # Config (c): vmbox created with box_not_in=[] (opt-in to TRASH/SPAM).
         # After the DELETED sanitisation _build_filter_args returns
-        # ["DELETED"], so this enters the ``elif box_not_in:`` branch (not the
-        # ``else``). The ["DELETED"] exclusion does not obstruct in:trash —
+        # ["DELETED"], so this enters the ``elif box_not_in is not None:`` branch
+        # (not the ``else``). The ["DELETED"] exclusion does not obstruct in:trash —
         # DELETED is not a selectable in: value — so it still narrows to TRASH.
         record = _fake_record(filter_payload={"box_not_in": []})
         captured = self._patch_listing(monkeypatch, record=record)

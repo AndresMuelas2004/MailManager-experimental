@@ -24,11 +24,13 @@ from api.errors.exceptions import (
     EmailNotInTrash,
     EmailSendError,
     ExternalAPIError,
+    MailboxNotFound,
     MoveToTrashError,
     ReadStatusUpdateError,
     SpamMoveError,
     SpamRestoreError,
     TrashOperationError,
+    UnreadCountError,
 )
 from api.schemas.email import ReadStatusItem, ReadStatusRequest, SpamItem, SpamRequest
 # Note: EmailExternalAPIError maps to ExternalAPIError via _CORE_TO_API_MAP,
@@ -1744,6 +1746,163 @@ class TestListEmailsPagination:
             match="Failed to count emails while paginating the mailbox listing",
         ):
             emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+
+
+# ==================================================================
+# count_unread_emails
+# ==================================================================
+
+
+def _patch_count_unread(
+    monkeypatch,
+    *,
+    accounts_for_mailbox=None,
+    counts=None,
+    count_calls=None,
+):
+    """Apply monkeypatches for count_unread_emails tests.
+
+    Patches the three symbols the service reads on the ``emails_service``
+    module (it imports them by name): ``ensure_mailbox_access``,
+    ``account_store.list_by_mailbox`` and
+    ``email_metadata_store.count_unread_by_account``. ``counts`` is the
+    per-account ``{account_id: unread}`` mapping the store returns (a
+    ``GROUP BY`` omits accounts with 0). ``count_calls`` optionally records
+    the ``(account_ids, box)`` the store was called with so a test can
+    assert the short-circuit (it stays empty) or the box propagation.
+    """
+    monkeypatch.setattr(
+        emails_service, "ensure_mailbox_access",
+        lambda _mb, _uid: {"mailbox_id": _MAILBOX_ID, "owner_user_id": _USER_ID},
+    )
+    monkeypatch.setattr(
+        emails_service.account_store, "list_by_mailbox",
+        lambda _mb: accounts_for_mailbox if accounts_for_mailbox is not None else [_fake_account()],
+    )
+
+    def _count(account_ids, box):
+        if count_calls is not None:
+            count_calls.append({"account_ids": account_ids, "box": box})
+        return counts if counts is not None else {}
+
+    monkeypatch.setattr(
+        emails_service.email_metadata_store, "count_unread_by_account", _count,
+    )
+
+
+class TestCountUnreadEmails:
+
+    def test_happy_path_breakdown_and_total(self, monkeypatch):
+        accounts = [_fake_account(account_id="a1"), _fake_account(account_id="a2")]
+        _patch_count_unread(
+            monkeypatch, accounts_for_mailbox=accounts, counts={"a1": 5, "a2": 7},
+        )
+        result = emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+        assert result.mailbox_id == _MAILBOX_ID
+        assert result.box == "ALL_MAIL"
+        assert result.total == 12
+        assert {(d.account_id, d.unread) for d in result.accounts} == {("a1", 5), ("a2", 7)}
+
+    def test_accounts_without_unread_rows_are_filled_with_zero(self, monkeypatch):
+        accounts = [_fake_account(account_id="a1"), _fake_account(account_id="a2")]
+        # GROUP BY omits a2 (no unread rows); the service must still list it as 0.
+        _patch_count_unread(
+            monkeypatch, accounts_for_mailbox=accounts, counts={"a1": 3},
+        )
+        result = emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+        assert result.total == 3
+        a2 = next(d for d in result.accounts if d.account_id == "a2")
+        assert a2.unread == 0
+
+    def test_mailbox_without_accounts_short_circuits_without_db_call(self, monkeypatch):
+        count_calls: list = []
+        _patch_count_unread(
+            monkeypatch, accounts_for_mailbox=[], count_calls=count_calls,
+        )
+        result = emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+        assert result.total == 0
+        assert result.accounts == []
+        # No accounts ⇒ the per-account count query must never run.
+        assert count_calls == []
+
+    def test_spam_box_is_propagated_to_store_and_response(self, monkeypatch):
+        count_calls: list = []
+        _patch_count_unread(
+            monkeypatch, counts={_ACCOUNT_ID: 4}, count_calls=count_calls,
+        )
+        result = emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "SPAM")
+        assert count_calls[0]["box"] == "SPAM"
+        assert result.box == "SPAM"
+
+    def test_ownership_error_propagates_unwrapped(self, monkeypatch):
+        _patch_count_unread(monkeypatch)
+        monkeypatch.setattr(
+            emails_service, "ensure_mailbox_access",
+            lambda _mb, _uid: (_ for _ in ()).throw(MailboxNotFound("foreign mailbox")),
+        )
+        with pytest.raises(MailboxNotFound):
+            emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+
+    def test_db_error_on_count_is_translated_not_wrapped(self, monkeypatch):
+        from api.errors.exceptions import DatabaseQueryError
+        from database.errors.exceptions import QueryError as DbQueryError
+        _patch_count_unread(monkeypatch)
+
+        def _raise(_ids, _box):
+            raise DbQueryError("count fail")
+
+        monkeypatch.setattr(
+            emails_service.email_metadata_store, "count_unread_by_account", _raise,
+        )
+        # A DatabaseError must surface as 503 DatabaseQueryError via
+        # translate_database_error — NOT as the 500 UnreadCountError.
+        with pytest.raises(DatabaseQueryError):
+            emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+
+    def test_unexpected_error_on_count_is_wrapped_in_unread_count_error(self, monkeypatch):
+        _patch_count_unread(monkeypatch)
+
+        def _raise(_ids, _box):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            emails_service.email_metadata_store, "count_unread_by_account", _raise,
+        )
+        with pytest.raises(
+            UnreadCountError,
+            match="Failed to count unread emails while building the mailbox unread badge",
+        ):
+            emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+
+    def test_unexpected_error_on_account_listing_is_wrapped(self, monkeypatch):
+        _patch_count_unread(monkeypatch)
+
+        def _raise(_mb):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(emails_service.account_store, "list_by_mailbox", _raise)
+        with pytest.raises(
+            UnreadCountError, match="Failed to load mailbox accounts for unread count",
+        ):
+            emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
+
+    def test_db_error_on_account_listing_is_translated_not_wrapped(self, monkeypatch):
+        from api.errors.exceptions import DatabaseQueryError
+        from database.errors.exceptions import QueryError as DbQueryError
+        _patch_count_unread(monkeypatch)
+
+        def _raise(_mb):
+            raise DbQueryError("list fail")
+
+        monkeypatch.setattr(emails_service.account_store, "list_by_mailbox", _raise)
+        # Mirror of test_db_error_on_count_is_translated_not_wrapped for the
+        # FIRST try block (account listing): a DatabaseError must surface as a
+        # 503 DatabaseQueryError via translate_database_error, NOT the 500
+        # UnreadCountError. Without this, swapping the two except clauses on the
+        # listing block would silently downgrade 503→500 and stay green (the
+        # sibling unexpected-error test only injects RuntimeError).
+        with pytest.raises(DatabaseQueryError):
+            emails_service.count_unread_emails(_MAILBOX_ID, _USER_ID, "ALL_MAIL")
 
 
 # ==================================================================

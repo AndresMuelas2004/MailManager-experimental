@@ -15,6 +15,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 - [sincronizacion.md](sincronizacion.md) — Copia local primero: bootstrap + incremental de correos, y reemplazo de borradores y favoritos.
 - [refrescar-y-estado-sincronizacion.md](refrescar-y-estado-sincronizacion.md) — El botón "Refrescar" y el texto "Última actualización: hace X" en la cabecera de las bandejas: refresco manual a demanda de la vista visible y visibilidad de cuándo fue la última sincronización.
 - [listado-de-correos.md](listado-de-correos.md) — Las cuatro bandejas reales, el orden, la navegación por páginas numeradas, y por qué cada acción va al buzón real del correo.
+- [contador-no-leidos.md](contador-no-leidos.md) — El badge numérico de correos sin leer en el menú, las pestañas de cuenta, las tarjetas de cuenta y el título del navegador; cuenta mensajes individuales (no conversaciones) de la copia sincronizada y se actualiza solo.
 - [conversaciones.md](conversaciones.md) — Vista de conversación: los mensajes de un hilo colapsados en una fila agrupada (con selección en la bandeja de cuenta y la unificada) y el visor que reconstruye la cadena completa del proveedor.
 - [visualizacion-de-correos.md](visualizacion-de-correos.md) — Abrir un correo: render del HTML saneado, imágenes embebidas (`cid:`→`data:`) y caché tras la primera apertura.
 - [lupa.md](lupa.md) — Búsqueda local sobre asunto y remitente (texto libre insensible a tildes) más operadores estilo Gmail (`from: to: subject: has: before: after: is: in:`) combinables con AND.

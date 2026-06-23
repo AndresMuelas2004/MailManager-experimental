@@ -270,6 +270,37 @@ def test_create_account_database_connection_error(test_client, setup_mailbox_and
     assert resp.json()["error"]["code"] == "database_connection_error"
 
 
+def test_unread_count_database_error_returns_503(test_client, setup_mailbox_and_account, monkeypatch):
+    # GET /emails/unread-count: a DatabaseError from the per-account count
+    # store call must translate to 503 database_query_error (the listing has
+    # one account from setup, so the service reaches the count call).
+    mid, _ = setup_mailbox_and_account(test_client)
+
+    def _raise(_account_ids, _box):
+        raise QueryError("count fail")
+
+    monkeypatch.setattr(emails_service.email_metadata_store, "count_unread_by_account", _raise)
+    resp = test_client.get(f"{_MAILBOX_URL}/{mid}/emails/unread-count?box=ALL_MAIL")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "database_query_error"
+
+
+def test_unread_count_unexpected_error_returns_500(test_client, setup_mailbox_and_account, monkeypatch):
+    # An unexpected (non-DatabaseError) failure is wrapped by the service in the
+    # typed UnreadCountError (500) — a handled ApiError, so no
+    # raise_server_exceptions toggle is needed (unlike the bare-RuntimeError
+    # escape in 3G above).
+    mid, _ = setup_mailbox_and_account(test_client)
+
+    def _raise(_account_ids, _box):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(emails_service.email_metadata_store, "count_unread_by_account", _raise)
+    resp = test_client.get(f"{_MAILBOX_URL}/{mid}/emails/unread-count?box=ALL_MAIL")
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "unread_count_error"
+
+
 def test_delete_mailbox_database_query_error(test_client, monkeypatch):
     mb = test_client.post(_MAILBOX_URL, json={"display_name": "To Delete"})
     mid = mb.json()["mailbox_id"]

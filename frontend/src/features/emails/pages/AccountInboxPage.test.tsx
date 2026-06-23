@@ -590,3 +590,37 @@ describe('AccountInboxPage — refresh control', () => {
     expect(seenSyncs[seenSyncs.length - 1]).toBe('mb_1/a_1');
   });
 });
+
+// Unread badge on the account tabs. The page feeds AccountTabs the per-account
+// counts from useAccountUnreadCounts, which extracts this account's entry from
+// the mailbox-wide breakdown returned by /emails/unread-count.
+describe('AccountInboxPage — account tab unread badge', () => {
+  it('shows the inbox tab badge with this account unread total', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeMessage('m1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.get(`${API_BASE}/mailboxes/mb_1/emails/unread-count`, ({ request }) => {
+        const box = new URL(request.url).searchParams.get('box') ?? 'ALL_MAIL';
+        // 3 unread in ALL_MAIL for this account, none in SPAM.
+        const total = box === 'SPAM' ? 0 : 3;
+        return HttpResponse.json({
+          mailbox_id: 'mb_1',
+          box,
+          total,
+          accounts: [{ account_id: 'a_1', unread: total }],
+        });
+      }),
+    );
+
+    renderAccountInbox();
+
+    // The inbox tab carries the badge "3 sin leer"; spam (0) shows none.
+    const badge = await screen.findByLabelText('3 sin leer');
+    expect(badge).toHaveTextContent('3');
+    expect(screen.queryByLabelText('0 sin leer')).not.toBeInTheDocument();
+    // The badge belongs to the inbox tab (the link to this account's inbox).
+    expect(badge.closest('a')).toHaveAttribute('href', '/m/mb_1/account/a_1/inbox');
+  });
+});
