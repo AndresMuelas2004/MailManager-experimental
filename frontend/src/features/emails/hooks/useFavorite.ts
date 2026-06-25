@@ -73,7 +73,13 @@ function applyFavoriteToEmailPages(
     queryKey: [prefix],
   }) as EmailPageSnapshot;
   snapshot.forEach(([key, data]) => {
-    if (!data) return;
+    // The ``['emails']`` prefix is shared on purpose: the unread-count badge
+    // queries are keyed ``['emails', mailbox, 'unread-count', box]`` so they
+    // inherit this hook's blanket invalidation (see ``useAccountUnreadCounts``).
+    // Those entries are ``UnreadCount`` envelopes, not ``EmailPage`` listings, so
+    // they carry no ``items`` array — skip them rather than calling ``.map`` on
+    // ``undefined`` (which aborts the whole optimistic update in ``onMutate``).
+    if (!data || !Array.isArray(data.items)) return;
     queryClient.setQueryData<EmailPage>(key, {
       ...data,
       items: data.items.map((email) =>
