@@ -65,6 +65,8 @@ Además, si el borrador es una respuesta o un reenvío, guarda en silencio la in
 
 Al hacer clic en un borrador de la lista, el composer se abre **prerrellenado** con todo su contenido (destinatarios, asunto, cuerpo) y sus adjuntos como chips ya cargados. A partir de ahí el usuario edita y vuelve a guardar.
 
+> **La firma no se reinserta al editar un borrador existente.** El cuerpo se muestra **tal cual se guardó** (incluida la firma que llevara al crearse); reabrirlo no añade una firma encima. Esto evita duplicarla cada vez que se reabre el borrador. La firma sí se inserta al **crear** correos/borradores nuevos y al responder/reenviar — ver [firma.md](firma.md).
+
 ### 3.1 Guardar es un reemplazo completo, no un parche
 
 Cuando el usuario guarda un borrador existente, la app **sustituye el borrador entero** por la versión actual del composer: manda todos los campos y el proveedor sobrescribe el borrador con exactamente esos valores. No es una actualización campo a campo. Si el usuario borró el asunto, el borrador se queda sin asunto. Esto vale para los dos proveedores.

@@ -74,6 +74,8 @@ Un matiz importante y poco obvio: aunque la cita se muestra **con formato**, el 
 
 El cursor queda **encima** de la cita, sobre dos líneas en blanco, para que el usuario escriba su mensaje sin pisar lo citado.
 
+> **Si la cuenta de origen tiene firma**, esa firma se intercala **entre** la zona donde escribe el usuario y la cita: el cuerpo arranca con la línea en blanco arriba, luego la firma, y debajo la atribución + cita. La firma es editable y borrable en esa respuesta sin afectar a la guardada. El comportamiento de la firma vive en [firma.md](firma.md).
+
 - **Responder / Responder a todos**: una línea de atribución del tipo *"El 23 de mayo de 2026 a las 14:32, Ana López &lt;ana@example.com&gt; escribió:"* y, debajo, el cuerpo original dentro del recuadro de cita.
 - **Reenviar**: un bloque *"---------- Mensaje reenviado ----------"* con las líneas *De / Fecha / Asunto / Para / Cc* y, debajo, el cuerpo original dentro del recuadro de cita.
 

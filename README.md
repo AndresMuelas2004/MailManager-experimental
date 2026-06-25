@@ -28,6 +28,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
 - Primary recipient ("Para"): the first `To` recipient (`to_email` / `to_name`) is stored and shown in the listing.
 - Recipient autocomplete in the composer: suggests known addresses (from synced received senders + sent recipients across all the user's accounts) as you type, built entirely from local metadata — no provider/address-book call.
+- Per-account email signature (rich-text HTML): set one signature per connected account in Settings; it is auto-inserted when composing a new email, replying, or forwarding (never when reopening an existing draft). Stored locally only — no provider signature import — and inlined into the body, so it ships through the same outbound sanitiser as the rest of the message.
 - In-app Settings area (identity, connected accounts, mailbox rename/delete, account-label editing, "sync everything", account deletion) and an interface-language switch (Spanish / English). The language is a browser-local preference (localStorage) — it is not persisted server-side.
 - Responsive layout for phone-sized viewports: the side navigation collapses behind a hamburger drawer, a floating button opens the composer, viewers and the composer go full-screen, and the email listing renders as cards instead of table columns. Pure client-side presentation — same endpoints and page size as desktop.
 - Login with Google or Microsoft (both OIDC `id_token` verification → server-side session cookie). Each provider creates its own user; there is no account-linking. Microsoft login is optional per deploy (disabled button when `MICROSOFT_CLIENT_ID` / `VITE_MICROSOFT_CLIENT_ID` are unset).
@@ -271,7 +272,7 @@ Accounts:
 - `GET /mailboxes/{mailbox_id}/accounts`
 - `POST /mailboxes/{mailbox_id}/accounts`
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}`
-- `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}`
+- `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}` — Update `display_label`, `config`, and/or `signature_html` (per-account email signature, HTML, ≤10,000 chars; sanitised on save; `""` clears it, an omitted field is left untouched). `AccountOut` returns `signature_html`.
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}`
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/connect` — starts the interactive OAuth flow; returns `{authorization_url, state}` for the browser popup.
 
