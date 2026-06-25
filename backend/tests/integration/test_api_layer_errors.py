@@ -416,6 +416,76 @@ def test_restore_from_spam_empty_items_422(test_client, setup_mailbox_and_accoun
     assert resp.status_code == 422
 
 
+def test_archive_empty_items_422(test_client, setup_mailbox_and_account):
+    mid, _ = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/archive",
+        json={"items": []},
+    )
+    assert resp.status_code == 422
+
+
+def test_restore_from_archive_empty_items_422(test_client, setup_mailbox_and_account):
+    mid, _ = setup_mailbox_and_account(test_client)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/restore-from-archive",
+        json={"items": []},
+    )
+    assert resp.status_code == 422
+
+
+def test_archive_nonexistent_account_404(test_client, setup_mailbox_and_account):
+    mid, _ = setup_mailbox_and_account(test_client)
+    fake_account_id = "00000000-0000-4000-a000-000000000099"
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/archive",
+        json={"items": [{"account_id": fake_account_id, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "account_not_found"
+
+
+def test_archive_nonexistent_mailbox_404(test_client):
+    fake_mailbox_id = "00000000-0000-4000-a000-000000000099"
+    fake_account_id = "00000000-0000-4000-a000-000000000098"
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{fake_mailbox_id}/emails/archive",
+        json={"items": [{"account_id": fake_account_id, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "mailbox_not_found"
+
+
+def test_restore_from_archive_nonexistent_account_404(test_client, setup_mailbox_and_account):
+    mid, _ = setup_mailbox_and_account(test_client)
+    fake_account_id = "00000000-0000-4000-a000-000000000099"
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/restore-from-archive",
+        json={"items": [{"account_id": fake_account_id, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "account_not_found"
+
+
+def test_archive_database_error_returns_503(test_client, setup_mailbox_and_account, monkeypatch):
+    # POST /emails/archive: a DatabaseError from the account-listing store call
+    # inside the shared box-move engine (_execute_box_move_operation) must
+    # translate to 503 database_query_error — the same DB-error contract the
+    # other surfaces have, pinned here for the archive endpoint.
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    def _raise(_mailbox_id):
+        raise QueryError("list fail")
+
+    monkeypatch.setattr(emails_service.account_store, "list_by_mailbox", _raise)
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/archive",
+        json={"items": [{"account_id": aid, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "database_query_error"
+
+
 def test_read_status_missing_fields_422(test_client, setup_mailbox_and_account):
     mid, _ = setup_mailbox_and_account(test_client)
     resp = test_client.patch(

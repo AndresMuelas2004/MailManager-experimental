@@ -32,7 +32,14 @@ from api.errors.exceptions import (
     TrashOperationError,
     UnreadCountError,
 )
-from api.schemas.email import ReadStatusItem, ReadStatusRequest, SpamItem, SpamRequest
+from api.schemas.email import (
+    ArchiveItem,
+    ArchiveRequest,
+    ReadStatusItem,
+    ReadStatusRequest,
+    SpamItem,
+    SpamRequest,
+)
 # Note: EmailExternalAPIError maps to ExternalAPIError via _CORE_TO_API_MAP,
 # while generic (non-CoreError) exceptions fall back to the caller-specified fallback.
 from api.services import emails_service
@@ -1246,6 +1253,137 @@ class TestRestoreFromSpam:
         )
         payload = _spam_payload([(_ACCOUNT_ID, "m1")])
         emails_service.restore_from_spam(_MAILBOX_ID, payload, _USER_ID)
+        assert len(db_calls) == 1
+        assert db_calls[0][2] == "ALL_MAIL"
+
+
+# ==================================================================
+# move_to_archive / restore_from_archive
+# ==================================================================
+#
+# Archive shares the generic ``_execute_box_move_operation`` engine and the
+# ``update_email_spam_status_batch`` persistence helper with spam, so the
+# spam patch helper (`_patch_spam`) is reused verbatim. The archive-specific
+# coverage pins: the response wraps the ArchiveResponse/AccountArchiveDetail
+# schema, the persistence box is ARCHIVE (move) / ALL_MAIL (restore), and
+# errors translate via the dedicated fallbacks.
+
+
+def _archive_payload(items):
+    return ArchiveRequest(
+        items=[ArchiveItem(account_id=aid, provider_message_id=mid)
+               for aid, mid in items],
+    )
+
+
+class TestMoveToArchive:
+
+    def test_happy_path_single_account(self, monkeypatch):
+        _patch_spam(monkeypatch)
+        payload = _archive_payload([(_ACCOUNT_ID, "m1"), (_ACCOUNT_ID, "m2")])
+        result = emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+        assert result.moved_count == 2
+        assert len(result.accounts) == 1
+        assert result.accounts[0].account_id == _ACCOUNT_ID
+        assert result.accounts[0].moved == 2
+
+    def test_happy_path_multi_account(self, monkeypatch):
+        accounts = [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)]
+        _patch_spam(monkeypatch, accounts=accounts)
+        payload = _archive_payload([(_ACCOUNT_ID, "m1"), (_ACCOUNT_ID_2, "m2")])
+        result = emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+        assert result.moved_count == 2
+        assert len(result.accounts) == 2
+
+    def test_account_not_in_mailbox_raises_not_found(self, monkeypatch):
+        _patch_spam(monkeypatch)
+        payload = _archive_payload([("nonexistent", "m1")])
+        with pytest.raises(AccountNotFound):
+            emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_auth_error_raises_not_connected(self, monkeypatch):
+        _patch_spam(monkeypatch, fake_client_kwargs={
+            "auth_silent_exc": EmailAuthError("expired"),
+        })
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        with pytest.raises(AccountNotConnected):
+            emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_core_error_translates_via_mapping(self, monkeypatch):
+        _patch_spam(monkeypatch, fake_client_kwargs={
+            "move_to_archive_exc": EmailExternalAPIError("API fail"),
+        })
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        with pytest.raises(ExternalAPIError):
+            emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_unexpected_error_raises_external_api_error(self, monkeypatch):
+        # A RuntimeError from the client is wrapped by EmailManager into
+        # EmailExternalAPIError (a CoreError), which the engine translates to
+        # ExternalAPIError — mirroring the spam path exactly.
+        _patch_spam(monkeypatch, fake_client_kwargs={
+            "move_to_archive_exc": RuntimeError("unexpected"),
+        })
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        with pytest.raises(ExternalAPIError):
+            emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_db_helper_called_with_archive_box(self, monkeypatch):
+        _patch_spam(monkeypatch)
+        db_calls: list[tuple] = []
+        monkeypatch.setattr(
+            emails_service, "update_email_spam_status_batch",
+            lambda aid, results, box, **_kw: (db_calls.append((aid, results, box)), len(results))[1],
+        )
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        emails_service.move_to_archive(_MAILBOX_ID, payload, _USER_ID)
+        assert len(db_calls) == 1
+        assert db_calls[0][2] == "ARCHIVE"
+
+
+class TestRestoreFromArchive:
+
+    def test_happy_path_single_account(self, monkeypatch):
+        _patch_spam(monkeypatch)
+        payload = _archive_payload([(_ACCOUNT_ID, "m1"), (_ACCOUNT_ID, "m2")])
+        result = emails_service.restore_from_archive(_MAILBOX_ID, payload, _USER_ID)
+        assert result.moved_count == 2
+        assert len(result.accounts) == 1
+        assert result.accounts[0].account_id == _ACCOUNT_ID
+        assert result.accounts[0].moved == 2
+
+    def test_account_not_in_mailbox_raises_not_found(self, monkeypatch):
+        _patch_spam(monkeypatch)
+        payload = _archive_payload([("nonexistent", "m1")])
+        with pytest.raises(AccountNotFound):
+            emails_service.restore_from_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_core_error_translates_via_mapping(self, monkeypatch):
+        _patch_spam(monkeypatch, fake_client_kwargs={
+            "restore_from_archive_exc": EmailExternalAPIError("API fail"),
+        })
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        with pytest.raises(ExternalAPIError):
+            emails_service.restore_from_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_unexpected_error_raises_external_api_error(self, monkeypatch):
+        _patch_spam(monkeypatch, fake_client_kwargs={
+            "restore_from_archive_exc": RuntimeError("unexpected"),
+        })
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        with pytest.raises(ExternalAPIError):
+            emails_service.restore_from_archive(_MAILBOX_ID, payload, _USER_ID)
+
+    def test_db_helper_called_with_all_mail_box(self, monkeypatch):
+        # Unarchiving restores the message to the real inbox (ALL_MAIL).
+        _patch_spam(monkeypatch)
+        db_calls: list[tuple] = []
+        monkeypatch.setattr(
+            emails_service, "update_email_spam_status_batch",
+            lambda aid, results, box, **_kw: (db_calls.append((aid, results, box)), len(results))[1],
+        )
+        payload = _archive_payload([(_ACCOUNT_ID, "m1")])
+        emails_service.restore_from_archive(_MAILBOX_ID, payload, _USER_ID)
         assert len(db_calls) == 1
         assert db_calls[0][2] == "ALL_MAIL"
 

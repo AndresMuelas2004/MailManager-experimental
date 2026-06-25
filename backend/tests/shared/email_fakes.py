@@ -108,6 +108,8 @@ class FakeEmailClient(EmailClient):
         update_read_status_exc: Exception | None = None,
         move_to_spam_exc: Exception | None = None,
         restore_from_spam_exc: Exception | None = None,
+        move_to_archive_exc: Exception | None = None,
+        restore_from_archive_exc: Exception | None = None,
         fetch_content_exc: Exception | None = None,
         create_draft_exc: Exception | None = None,
         update_draft_exc: Exception | None = None,
@@ -138,6 +140,7 @@ class FakeEmailClient(EmailClient):
         delete_return: list[str] | None = None,
         restore_return: dict[str, str] | None = None,
         move_to_trash_return: dict[str, str] | None = None,
+        move_to_archive_return: list[SpamMoveResult] | None = None,
         fetch_messages_metadata_return: list[EmailMetadata] | None = None,
         email_content: EmailContent | None = None,
         create_draft_return: DraftMetadata | None = None,
@@ -158,6 +161,8 @@ class FakeEmailClient(EmailClient):
         self._update_read_status_exc = update_read_status_exc
         self._move_to_spam_exc = move_to_spam_exc
         self._restore_from_spam_exc = restore_from_spam_exc
+        self._move_to_archive_exc = move_to_archive_exc
+        self._restore_from_archive_exc = restore_from_archive_exc
         self._fetch_content_exc = fetch_content_exc
         self._email_content = email_content or EmailContent(html_body=None, text_body=None)
         self._create_draft_exc = create_draft_exc
@@ -193,6 +198,7 @@ class FakeEmailClient(EmailClient):
         self._delete_return = delete_return
         self._restore_return = restore_return
         self._move_to_trash_return = move_to_trash_return
+        self._move_to_archive_return = move_to_archive_return
         self._fetch_messages_metadata_return = fetch_messages_metadata_return
         self.begin_interactive_auth_calls = 0
         self.complete_interactive_auth_calls = 0
@@ -207,6 +213,8 @@ class FakeEmailClient(EmailClient):
         self.update_read_status_calls: list[tuple[list[str], bool]] = []
         self.move_to_spam_calls: list[list[str]] = []
         self.restore_from_spam_calls: list[list[str]] = []
+        self.move_to_archive_calls: list[list[str]] = []
+        self.restore_from_archive_calls: list[list[str]] = []
         self.sent_emails: list[tuple[str, str, list[str]]] = []
         self.create_draft_calls: list[tuple[list[str], list[str], list[str], str, str]] = []
         self.update_draft_calls: list[tuple[str, list[str], list[str], list[str], str, str]] = []
@@ -345,6 +353,20 @@ class FakeEmailClient(EmailClient):
         self.restore_from_spam_calls.append(list(message_ids))
         if self._restore_from_spam_exc:
             raise self._restore_from_spam_exc
+        return [SpamMoveResult(old_id=mid, new_id=mid) for mid in message_ids]
+
+    def move_to_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        self.move_to_archive_calls.append(list(message_ids))
+        if self._move_to_archive_exc:
+            raise self._move_to_archive_exc
+        if self._move_to_archive_return is not None:
+            return list(self._move_to_archive_return)
+        return [SpamMoveResult(old_id=mid, new_id=mid) for mid in message_ids]
+
+    def restore_from_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        self.restore_from_archive_calls.append(list(message_ids))
+        if self._restore_from_archive_exc:
+            raise self._restore_from_archive_exc
         return [SpamMoveResult(old_id=mid, new_id=mid) for mid in message_ids]
 
     def send_email(self, subject: str, body: str, recipients: list[str]) -> EmailMetadata:

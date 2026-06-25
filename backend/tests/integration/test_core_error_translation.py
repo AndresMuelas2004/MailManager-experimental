@@ -373,6 +373,42 @@ def test_spam_restore_core_error_returns_502(failing_test_client, setup_mailbox_
     assert resp.status_code == 502
 
 
+@pytest.mark.parametrize(
+    "failing_test_client",
+    [{"move_to_archive_exc": EmailExternalAPIError("API timeout.")}],
+    indirect=True,
+)
+def test_archive_core_error_returns_502(failing_test_client, setup_mailbox_and_account):
+    """EmailExternalAPIError during move_to_archive -> 502.
+
+    Archive reuses the spam box-move engine; this pins the archive endpoint's
+    wiring (manager_method + fallback class) to the 502 translation path.
+    """
+    mid, aid = setup_mailbox_and_account(failing_test_client)
+    failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    resp = failing_test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/archive",
+        json={"items": [{"account_id": aid, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "failing_test_client",
+    [{"restore_from_archive_exc": EmailExternalAPIError("API timeout.")}],
+    indirect=True,
+)
+def test_archive_restore_core_error_returns_502(failing_test_client, setup_mailbox_and_account):
+    """EmailExternalAPIError during restore_from_archive -> 502."""
+    mid, aid = setup_mailbox_and_account(failing_test_client)
+    failing_test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    resp = failing_test_client.post(
+        f"{_MAILBOX_URL}/{mid}/emails/restore-from-archive",
+        json={"items": [{"account_id": aid, "provider_message_id": "m1"}]},
+    )
+    assert resp.status_code == 502
+
+
 # ==================================================================
 # Silent auth failure for read-status, spam, restore-from-spam
 # ==================================================================

@@ -256,6 +256,18 @@ class TestParseMetadataResponse:
         result = GmailClient._parse_metadata_response(msg)
         assert result.box == "TRASH"
 
+    def test_archive_box(self):
+        # Received message synced without INBOX → archived in Gmail.
+        msg = {
+            "id": "msg4b",
+            "threadId": "t4b",
+            "internalDate": "1700000000000",
+            "labelIds": ["IMPORTANT"],
+            "payload": {"headers": []},
+        }
+        result = GmailClient._parse_metadata_response(msg)
+        assert result.box == "ARCHIVE"
+
     def test_bare_email_address(self):
         msg = {
             "id": "msg5",
@@ -297,10 +309,25 @@ class TestResolveLabels:
         assert is_read is False
         assert box == "TRASH"
 
-    def test_empty_labels(self):
+    def test_empty_labels_is_archived(self):
+        # A received message with NO INBOX label (and not SPAM/TRASH/SENT)
+        # is what "archived in Gmail" means: it lives in All Mail without the
+        # INBOX label. Empty labels therefore classify as ARCHIVE, not ALL_MAIL.
         is_read, box = GmailClient._resolve_labels([])
         assert is_read is True
+        assert box == "ARCHIVE"
+
+    def test_inbox_label_keeps_all_mail(self):
+        # Regression for the central classification change: a message that
+        # STILL carries INBOX must stay in ALL_MAIL — only the absence of
+        # INBOX flips it to ARCHIVE.
+        _, box = GmailClient._resolve_labels(["INBOX"])
         assert box == "ALL_MAIL"
+
+    def test_archived_when_inbox_removed(self):
+        # Labels present but no INBOX/SPAM/TRASH/SENT among them → archived.
+        _, box = GmailClient._resolve_labels(["IMPORTANT", "CATEGORY_UPDATES"])
+        assert box == "ARCHIVE"
 
     def test_sent(self):
         is_read, box = GmailClient._resolve_labels(["SENT"])
@@ -1673,6 +1700,47 @@ class TestRestoreFromSpam:
         mock_modify.assert_called_once_with(
             ["m1"], remove_labels=["SPAM"], add_labels=["INBOX"],
         )
+        assert result == [SpamMoveResult(old_id="m1", new_id="m1")]
+
+
+# ── move_to_archive ──────────────────────────────────────────────
+
+
+class TestMoveToArchive:
+    def test_not_authenticated_raises(self, client: GmailClient):
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.move_to_archive(["m1"])
+
+    def test_empty_returns_empty(self, client: GmailClient):
+        client.service = MagicMock()
+        assert client.move_to_archive([]) == []
+
+    def test_removes_inbox_label(self, client: GmailClient):
+        client.service = MagicMock()
+        with patch.object(client, "_batch_modify_labels", return_value=["m1"]) as mock_modify:
+            result = client.move_to_archive(["m1"])
+        mock_modify.assert_called_once_with(["m1"], remove_labels=["INBOX"])
+        # Gmail keeps the same id on a label change.
+        assert result == [SpamMoveResult(old_id="m1", new_id="m1")]
+
+
+# ── restore_from_archive ─────────────────────────────────────────
+
+
+class TestRestoreFromArchive:
+    def test_not_authenticated_raises(self, client: GmailClient):
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.restore_from_archive(["m1"])
+
+    def test_empty_returns_empty(self, client: GmailClient):
+        client.service = MagicMock()
+        assert client.restore_from_archive([]) == []
+
+    def test_adds_inbox_label(self, client: GmailClient):
+        client.service = MagicMock()
+        with patch.object(client, "_batch_modify_labels", return_value=["m1"]) as mock_modify:
+            result = client.restore_from_archive(["m1"])
+        mock_modify.assert_called_once_with(["m1"], add_labels=["INBOX"])
         assert result == [SpamMoveResult(old_id="m1", new_id="m1")]
 
 
