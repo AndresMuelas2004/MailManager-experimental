@@ -139,6 +139,14 @@ class SpamRestoreError(ApiError):
     code = "spam_restore_error"
 
 
+class ArchiveMoveError(ApiError):
+    code = "archive_move_error"
+
+
+class ArchiveRestoreError(ApiError):
+    code = "archive_restore_error"
+
+
 class EmailContentFetchError(ApiError):
     code = "email_content_fetch_error"
 

@@ -877,6 +877,7 @@ _IN_VALUES: dict[str, str] = {
     "sent": "SENT",
     "spam": "SPAM",
     "trash": "TRASH",
+    "archive": "ARCHIVE",
 }
 
 _SEARCH_TIMEZONE = ZoneInfo("Europe/Madrid")

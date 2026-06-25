@@ -277,10 +277,13 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
     """Translate ``filter_payload`` into args for ``list_filtered``.
 
     Returns ``(box, box_not_in, extra_filters)``. Box selection follows
-    the same default-exclude-trash-and-spam rule as the favourites
-    view (and the spec for fake mailboxes): when the user did not set
-    a ``box`` explicitly, TRASH and SPAM are excluded unless an
-    explicit ``box_not_in`` override is provided.
+    the same default-exclude rule as the favourites view (and the spec
+    for fake mailboxes): when the user did not set a ``box`` explicitly,
+    TRASH, SPAM and ARCHIVE are excluded unless an explicit ``box_not_in``
+    override is provided. ARCHIVE is excluded only by DEFAULT (not forced
+    onto an override nor the ``box_not_in: []`` opt-in) — archived mail
+    stays out of a fake mailbox by default but is rescued by ``in:archive``
+    in the listing.
 
     ``DELETED`` is excluded on TOP of that rule in every ``box_not_in``
     branch (default, custom override, and the ``box_not_in: []`` opt-in):
@@ -294,7 +297,7 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
     box_not_in: list[str] | None = None
 
     if not isinstance(filter_payload, dict):
-        return None, ["TRASH", "SPAM", "DELETED"], {}
+        return None, ["TRASH", "SPAM", "ARCHIVE", "DELETED"], {}
 
     box_value = filter_payload.get("box")
     box_not_in_value = filter_payload.get("box_not_in")
@@ -302,11 +305,18 @@ def _build_filter_args(filter_payload: dict[str, Any]) -> tuple[
         box = str(box_value)
     elif box_not_in_value is not None:
         # ``[]`` means "do not exclude anything" — caller explicitly asks
-        # to include TRASH/SPAM. Truthiness would collapse the empty list
-        # to the default exclusion and reverse the intent.
+        # to include TRASH/SPAM (and ARCHIVE). Truthiness would collapse the
+        # empty list to the default exclusion and reverse the intent.
         box_not_in = [str(v) for v in box_not_in_value]
     else:
-        box_not_in = ["TRASH", "SPAM"]
+        # ``ARCHIVE`` joins TRASH/SPAM in the DEFAULT exclusion only — like
+        # them, archived mail stays out of a fake mailbox by default. Unlike
+        # ``DELETED`` (appended to EVERY branch below), it is NOT forced onto
+        # the ``box_not_in: []`` opt-in nor onto a non-empty override: a caller
+        # asking to see everything, or pinning its own exclusion list, is
+        # honoured literally. ARCHIVE stays reachable via ``in:archive`` (the
+        # rescue in ``list_emails_for_virtual_mailbox``).
+        box_not_in = ["TRASH", "SPAM", "ARCHIVE"]
 
     # ``DELETED`` is a local hard-delete state with NO product surface (it is
     # not a member of ``FilterBox``), so it must never appear in a virtual
@@ -377,18 +387,31 @@ def list_emails_for_virtual_mailbox(
                 return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
         elif box_not_in:
             # Fake mailbox carries exclusions: the default
-            # ``["TRASH","SPAM","DELETED"]``, an explicit non-empty list
-            # (always with ``DELETED`` appended), or the ``box_not_in: []``
+            # ``["TRASH","SPAM","ARCHIVE","DELETED"]``, an explicit non-empty
+            # list (always with ``DELETED`` appended), or the ``box_not_in: []``
             # opt-in which ``_build_filter_args`` returns as ``["DELETED"]``.
-            # ``in:`` of an excluded box is empty; otherwise it narrows to
-            # that single box. ``DELETED`` is never a legal ``in:`` value
-            # (no ``in:deleted``; ``in:trash`` maps to ``TRASH``), so the
+            # ``in:`` of an excluded box is normally empty; otherwise it
+            # narrows to that single box. ``DELETED`` is never a legal ``in:``
+            # value (no ``in:deleted``; ``in:trash`` maps to ``TRASH``), so the
             # ever-present ``DELETED`` entry can never block a legitimate
             # ``in:`` here.
-            if ov in box_not_in:
+            #
+            # ``ARCHIVE`` is the ONE exception: it is excluded by default (so it
+            # is in ``box_not_in``), yet — unlike TRASH/SPAM/DELETED — an
+            # explicit ``in:archive`` is allowed to RESCUE it, because the
+            # product requires archived mail to be reachable inside a fake
+            # mailbox via the lupa. It is the only default-excluded box that is
+            # also a legal ``in:`` value, so it is the only one we narrow
+            # instead of short-circuiting. ``in:trash`` / ``in:spam`` over a
+            # default fake mailbox still collapse to an empty page.
+            if ov == "ARCHIVE":
+                box = ov
+                box_not_in = None
+            elif ov in box_not_in:
                 return EmailPageOut(items=[], total=0, limit=limit, offset=offset)
-            box = ov
-            box_not_in = None
+            else:
+                box = ov
+                box_not_in = None
         else:
             # ``box`` is None AND ``box_not_in`` is falsy. After the DELETED
             # sanitisation in ``_build_filter_args`` this branch is no longer

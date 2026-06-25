@@ -22,6 +22,8 @@ _PREFETCH_LIMIT = 50
 from api.errors.exceptions import (
     AccountNotFound,
     ApiError,
+    ArchiveMoveError,
+    ArchiveRestoreError,
     ConversationFetchError,
     EmailContentFetchError,
     EmailFetchError,
@@ -53,10 +55,13 @@ from core.email import (
     validate_reply_threading_coherence,
 )
 from api.schemas.email import (
+    AccountArchiveDetail,
     AccountReadStatusDetail,
     AccountSpamDetail,
     AccountSyncDetail,
     AccountUnreadDetail,
+    ArchiveRequest,
+    ArchiveResponse,
     ConversationOut,
     EmailContentOut,
     EmailMetadataOut,
@@ -70,6 +75,7 @@ from api.schemas.email import (
     ReadStatusRequest,
     ReadStatusResponse,
     ReplyContextOut,
+    SpamItem,
     SpamRequest,
     SpamResponse,
     SyncResultOut,
@@ -782,12 +788,16 @@ def move_to_spam(
     user_id: str,
 ) -> SpamResponse:
     """Move emails to spam across accounts in a mailbox."""
-    return _execute_spam_operation(
-        mailbox_id, payload, user_id,
+    moved_count, details = _execute_box_move_operation(
+        mailbox_id, payload.items, user_id,
         manager_method="move_to_spam",
         target_box="SPAM",
         fallback_error=SpamMoveError,
         operation_label="spam move",
+    )
+    return SpamResponse(
+        moved_count=moved_count,
+        accounts=[AccountSpamDetail(account_id=a, moved=m) for a, m in details],
     )
 
 
@@ -797,30 +807,82 @@ def restore_from_spam(
     user_id: str,
 ) -> SpamResponse:
     """Restore emails from spam across accounts in a mailbox."""
-    return _execute_spam_operation(
-        mailbox_id, payload, user_id,
+    moved_count, details = _execute_box_move_operation(
+        mailbox_id, payload.items, user_id,
         manager_method="restore_from_spam",
         target_box="ALL_MAIL",
         fallback_error=SpamRestoreError,
         operation_label="spam restore",
     )
+    return SpamResponse(
+        moved_count=moved_count,
+        accounts=[AccountSpamDetail(account_id=a, moved=m) for a, m in details],
+    )
 
 
-def _execute_spam_operation(
+def move_to_archive(
     mailbox_id: str,
-    payload: SpamRequest,
+    payload: ArchiveRequest,
+    user_id: str,
+) -> ArchiveResponse:
+    """Archive emails across accounts in a mailbox (Provider-First)."""
+    moved_count, details = _execute_box_move_operation(
+        mailbox_id, payload.items, user_id,
+        manager_method="move_to_archive",
+        target_box="ARCHIVE",
+        fallback_error=ArchiveMoveError,
+        operation_label="archive move",
+    )
+    return ArchiveResponse(
+        moved_count=moved_count,
+        accounts=[AccountArchiveDetail(account_id=a, moved=m) for a, m in details],
+    )
+
+
+def restore_from_archive(
+    mailbox_id: str,
+    payload: ArchiveRequest,
+    user_id: str,
+) -> ArchiveResponse:
+    """Unarchive emails across accounts in a mailbox (back to the inbox)."""
+    moved_count, details = _execute_box_move_operation(
+        mailbox_id, payload.items, user_id,
+        manager_method="restore_from_archive",
+        target_box="ALL_MAIL",
+        fallback_error=ArchiveRestoreError,
+        operation_label="archive restore",
+    )
+    return ArchiveResponse(
+        moved_count=moved_count,
+        accounts=[AccountArchiveDetail(account_id=a, moved=m) for a, m in details],
+    )
+
+
+def _execute_box_move_operation(
+    mailbox_id: str,
+    items: list[SpamItem],
     user_id: str,
     *,
     manager_method: str,
     target_box: str,
     fallback_error: type[ApiError],
     operation_label: str,
-) -> SpamResponse:
-    """Shared implementation for move-to-spam and restore-from-spam."""
+) -> tuple[int, list[tuple[str, int]]]:
+    """Shared engine for provider box-move operations (spam / archive).
+
+    Groups ``items`` by account, validates ``account ∈ mailbox``, runs the
+    silent-auth sequence, calls ``manager.<manager_method>`` per account,
+    translates errors and persists the box move (old→new id rewrite +
+    ``box = target_box``) via ``update_email_spam_status_batch``. Returns a
+    schema-neutral ``(moved_count, [(account_id, moved), ...])`` so each
+    public wrapper can build its own response schema. ``items`` is typed as
+    ``list[SpamItem]`` because ``SpamItem`` / ``ArchiveItem`` are structurally
+    identical (``account_id`` / ``provider_message_id``).
+    """
     ensure_mailbox_access(mailbox_id, user_id)
 
     items_by_account: dict[str, list[str]] = {}
-    for item in payload.items:
+    for item in items:
         items_by_account.setdefault(item.account_id, []).append(item.provider_message_id)
 
     try:
@@ -857,7 +919,7 @@ def _execute_spam_operation(
             manager.get_last_errors(), fallback=fallback_error,
         )
 
-        account_details: list[AccountSpamDetail] = []
+        account_details: list[tuple[str, int]] = []
         total_moved = 0
 
         for aid, message_ids in items_by_account.items():
@@ -882,16 +944,10 @@ def _execute_spam_operation(
             if results:
                 update_email_spam_status_batch(aid, results, target_box, fallback=fallback_error)
 
-            account_details.append(AccountSpamDetail(
-                account_id=aid,
-                moved=len(results),
-            ))
+            account_details.append((aid, len(results)))
             total_moved += len(results)
 
-        return SpamResponse(
-            moved_count=total_moved,
-            accounts=account_details,
-        )
+        return total_moved, account_details
     except ApiError:
         raise
     except Exception as exc:

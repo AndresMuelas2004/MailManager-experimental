@@ -10,6 +10,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from api.routers.routers_helpers import rate_limit_by_user, require_session
 from api.schemas.email import (
+    ArchiveRequest,
+    ArchiveResponse,
     ConversationOut,
     EmailContentOut,
     EmailPageOut,
@@ -38,7 +40,7 @@ router = APIRouter(prefix="/mailboxes/{mailbox_id}/emails", tags=["emails"])
 @router.get("", response_model=EmailPageOut)
 def list_emails(
     mailbox_id: str,
-    box: Literal["ALL_MAIL", "SENT", "SPAM", "TRASH"] = Query(...),
+    box: Literal["ALL_MAIL", "SENT", "SPAM", "TRASH", "ARCHIVE"] = Query(...),
     account_id: str | None = Query(default=None),
     q: str | None = Query(
         default=None,
@@ -49,7 +51,7 @@ def list_emails(
             "(accent/case-insensitive). Also supports Gmail-style operators "
             "combined with AND: from:, to:, subject:, has:attachment, "
             "before:/after: (AAAA/MM/DD or AAAA-MM-DD, Europe/Madrid), "
-            "is:read|unread|favorite (alias is:starred), in:inbox|sent|spam|trash. "
+            "is:read|unread|favorite (alias is:starred), in:inbox|sent|spam|trash|archive. "
             "Quote phrases with double quotes. Unknown operators are treated as "
             "literal text; unsupported operator values are ignored. Whitespace-only "
             "is treated as no search; free-text tokens and operator clauses are each "
@@ -209,6 +211,30 @@ def restore_from_spam(
     Restore emails from spam across accounts in a mailbox.
     """
     return emails_service.restore_from_spam(mailbox_id, payload, user_id)
+
+
+@router.post("/archive", response_model=ArchiveResponse)
+def move_to_archive(
+    mailbox_id: str,
+    payload: ArchiveRequest,
+    user_id: str = Depends(require_session),
+) -> ArchiveResponse:
+    """
+    Archive emails across accounts in a mailbox (Provider-First).
+    """
+    return emails_service.move_to_archive(mailbox_id, payload, user_id)
+
+
+@router.post("/restore-from-archive", response_model=ArchiveResponse)
+def restore_from_archive(
+    mailbox_id: str,
+    payload: ArchiveRequest,
+    user_id: str = Depends(require_session),
+) -> ArchiveResponse:
+    """
+    Unarchive emails across accounts in a mailbox (back to the inbox).
+    """
+    return emails_service.restore_from_archive(mailbox_id, payload, user_id)
 
 
 @router.get(
