@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 
-import { htmlIsEmpty, normalizeEmpty } from '../../../lib/richText';
+import { normalizeEmpty } from '../../../lib/richText';
 import type { DraftOut, ReplyKindDto } from '../../../api/types/dto';
 
 export type ComposerSnapshot = {
@@ -63,6 +63,11 @@ export type UseComposerFormReturn = {
   setReplyMetadata: (next: ReplyMetadata) => void;
   reset: () => void;
   seedFromDraft: (draft: DraftOut) => void;
+  // Seeds a blank compose (new email / new draft): empty recipients & subject,
+  // ``body`` already composed with the account signature, and FIXES the
+  // snapshot so an untouched auto-signature reads as "not dirty" (closing the
+  // composer then skips the save dialog).
+  seedForNew: (args: { accountId: string; body: string }) => void;
   seedForReply: (args: {
     accountId: string;
     to: string[];
@@ -74,7 +79,6 @@ export type UseComposerFormReturn = {
   getSnapshot: () => ComposerSnapshot;
   hasSavedSnapshot: () => boolean;
   isDirty: () => boolean;
-  hasAnyContent: () => boolean;
   buildDraftPayload: () => DraftPayload;
   parseRecipients: (value: string) => string[];
   hasInvalidRecipients: (value: string) => boolean;
@@ -173,6 +177,27 @@ export default function useComposerForm(): UseComposerFormReturn {
     };
   }, []);
 
+  const seedForNew = useCallback((args: { accountId: string; body: string }) => {
+    setAccountId(args.accountId);
+    setTo('');
+    setCc('');
+    setBcc('');
+    setSubject('');
+    setBody(args.body);
+    setReplyMetadata(EMPTY_REPLY_METADATA);
+    snapshotRef.current = {
+      accountId: args.accountId,
+      to: '',
+      cc: '',
+      bcc: '',
+      subject: '',
+      // Normalised to match the editor's post-seed serialisation (same reason
+      // as ``seedForReply`` / ``seedFromDraft``): an untouched auto-signature
+      // body must equal the baseline so ``isDirty()`` stays false.
+      body: normalizeEmpty(args.body),
+    };
+  }, []);
+
   const seedForReply = useCallback(
     (args: {
       accountId: string;
@@ -218,18 +243,6 @@ export default function useComposerForm(): UseComposerFormReturn {
     return snapshotsDiffer(getSnapshot(), snap);
   }, [getSnapshot]);
 
-  const hasAnyContent = useCallback(
-    () =>
-      to.trim().length > 0 ||
-      cc.trim().length > 0 ||
-      bcc.trim().length > 0 ||
-      subject.trim().length > 0 ||
-      // ``body`` is HTML: a lone ``<p></p>`` / ``<br>`` must NOT count as
-      // content (otherwise the close dialog fires on an untouched composer).
-      !htmlIsEmpty(body),
-    [to, cc, bcc, subject, body],
-  );
-
   const buildDraftPayload = useCallback(
     (): DraftPayload => ({
       to_recipients: parseRecipientsImpl(to),
@@ -258,11 +271,11 @@ export default function useComposerForm(): UseComposerFormReturn {
     setReplyMetadata,
     reset,
     seedFromDraft,
+    seedForNew,
     seedForReply,
     getSnapshot,
     hasSavedSnapshot,
     isDirty,
-    hasAnyContent,
     buildDraftPayload,
     parseRecipients: parseRecipientsImpl,
     hasInvalidRecipients: hasInvalidRecipientsImpl,

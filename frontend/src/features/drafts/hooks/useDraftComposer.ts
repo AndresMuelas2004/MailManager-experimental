@@ -4,6 +4,7 @@ import { listAccounts } from '../../../api/endpoints/accounts';
 import { getReplyContext } from '../../../api/endpoints/emails';
 import { copyAttachmentsFromEmail, createDraft } from '../../../api/endpoints/drafts';
 import { toUiError } from '../../../api/client/errors';
+import { composeBodyWithSignature } from '../../../lib/richText';
 import { useTranslation } from '../../../lib/i18n';
 import type {
   AccountOut,
@@ -176,7 +177,11 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     setMode('new_email');
     loadAccountsIfNeeded().then((accs) => {
       if (accs.length > 0 && !form.accountId) {
-        form.setAccountId(accs[0].account_id);
+        const acc = accs[0];
+        form.seedForNew({
+          accountId: acc.account_id,
+          body: composeBodyWithSignature('', acc.signature_html),
+        });
       }
     });
   }, [form, loadAccountsIfNeeded, mailboxId, resetAll]);
@@ -188,10 +193,15 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       setMode('new_draft');
       const preset = args?.accountId;
       loadAccountsIfNeeded().then((accs) => {
-        if (preset && accs.some((a) => a.account_id === preset)) {
-          form.setAccountId(preset);
-        } else if (accs.length > 0) {
-          form.setAccountId(accs[0].account_id);
+        const chosen =
+          preset && accs.some((a) => a.account_id === preset)
+            ? accs.find((a) => a.account_id === preset)!
+            : accs[0];
+        if (chosen) {
+          form.seedForNew({
+            accountId: chosen.account_id,
+            body: composeBodyWithSignature('', chosen.signature_html),
+          });
         }
       });
     },
@@ -250,6 +260,13 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
           return;
         }
 
+        // Account signature of the sender, inserted ABOVE the quoted reply /
+        // forward body (empty line → signature → attribution → blockquote).
+        // Seeded into BOTH the provider draft and the local form (and the
+        // snapshot) so the threading and the signature stay consistent.
+        const signatureHtml =
+          accountsList.find((a) => a.account_id === accountId)?.signature_html ?? '';
+
         // 1. Fetch reply context (recipients, subject, quoted body,
         //    threading metadata). ~200ms typical — spinner UI is on.
         const context = await getReplyContext(
@@ -258,6 +275,8 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
           email.provider_message_id,
           action as ReplyKindDto,
         );
+
+        const seededBody = composeBodyWithSignature(context.body, signatureHtml);
 
         const replyMetadata: ReplyMetadata = {
           replyKind: context.reply_kind,
@@ -277,7 +296,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
           cc_recipients: context.cc_recipients,
           bcc_recipients: context.bcc_recipients,
           subject: context.subject,
-          body: context.body,
+          body: seededBody,
           reply_kind: context.reply_kind,
           reply_to_message_id: context.reply_to_message_id,
           reply_to_account_id: accountId,
@@ -294,7 +313,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
           to: context.to_recipients,
           cc: context.cc_recipients,
           subject: context.subject,
-          body: context.body,
+          body: seededBody,
           replyMetadata,
         });
         attachments.seedFromDraft(created.attachments);
@@ -343,6 +362,27 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
   const openForForward = useCallback(
     (email: EmailMetadataOut) => openForReplyKind(email, 'forward'),
     [openForReplyKind],
+  );
+
+  // Account selector change. In a pristine new_email / new_draft (no provider
+  // draft yet, nothing typed since the seed) switching account replaces the
+  // auto-signature with the new account's one. Once the user has edited the
+  // body — or in any mode with a provider draft / locked selector — it falls
+  // back to a plain ``setAccountId`` so we never clobber the user's content.
+  const handleAccountChange = useCallback(
+    (id: string) => {
+      const canSwap =
+        (mode === 'new_email' || mode === 'new_draft') &&
+        providerDraftId === null &&
+        !form.isDirty();
+      if (canSwap) {
+        const nextSig = accounts.find((a) => a.account_id === id)?.signature_html ?? '';
+        form.seedForNew({ accountId: id, body: composeBodyWithSignature('', nextSig) });
+      } else {
+        form.setAccountId(id);
+      }
+    },
+    [accounts, form, mode, providerDraftId],
   );
 
   const close = useCallback(() => {
@@ -476,15 +516,19 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     // (R-07 created it eagerly), so the dialog runs the same flow as
     // edit_draft — the user picks Save (persist) or Discard (delete
     // the provider draft).
+    // Every content mode now uses ``isDirty()`` against the snapshot fixed at
+    // seed time: ``seedForNew`` fixes a baseline for new_email / new_draft, so
+    // an auto-inserted signature the user has NOT touched reads as not dirty
+    // and closing does not pop the save dialog.
     const dirtyForm =
-      currentMode === 'new_email' || currentMode === 'new_draft'
-        ? form.hasAnyContent()
-        : currentMode === 'edit_draft' ||
-            currentMode === 'reply' ||
-            currentMode === 'reply_all' ||
-            currentMode === 'forward'
-          ? form.isDirty()
-          : false;
+      currentMode === 'new_email' ||
+      currentMode === 'new_draft' ||
+      currentMode === 'edit_draft' ||
+      currentMode === 'reply' ||
+      currentMode === 'reply_all' ||
+      currentMode === 'forward'
+        ? form.isDirty()
+        : false;
     const dirtyAttachments =
       attachments.chips.length > 0 && (currentMode !== 'new_email' || providerDraftId !== null);
 
@@ -665,7 +709,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     mode,
     accounts,
     accountId: form.accountId,
-    setAccountId: form.setAccountId,
+    setAccountId: handleAccountChange,
     to: form.to,
     setTo: form.setTo,
     cc: form.cc,
