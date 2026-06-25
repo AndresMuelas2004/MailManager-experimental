@@ -118,9 +118,9 @@ _DDL_STATEMENTS = [
         received_at          TIMESTAMPTZ  NOT NULL,
         is_read              BOOLEAN      NOT NULL DEFAULT FALSE,
         box                  VARCHAR(20)  NOT NULL DEFAULT 'ALL_MAIL'
-                             CHECK (box IN ('ALL_MAIL', 'SPAM', 'TRASH', 'SENT', 'DELETED')),
+                             CHECK (box IN ('ALL_MAIL', 'SPAM', 'TRASH', 'SENT', 'DELETED', 'ARCHIVE')),
         previous_box         VARCHAR(20)  DEFAULT NULL
-                             CHECK (previous_box IS NULL OR previous_box IN ('ALL_MAIL', 'SENT', 'SPAM')),
+                             CHECK (previous_box IS NULL OR previous_box IN ('ALL_MAIL', 'SENT', 'SPAM', 'ARCHIVE')),
         PRIMARY KEY (provider_message_id, account_id)
     );
     """,
@@ -496,6 +496,19 @@ _DDL_STATEMENTS = [
     # schema change itself is applied above (fresh CREATE TABLE shape + the
     # gated DO-block upgrade for pre-existing databases); this is the stamp only.
     "UPDATE alembic_version SET version_num = '0037_generalize_users_auth_provider';",
+    # Migration 0038: add ARCHIVE to the box and previous_box CHECK constraints.
+    # The CREATE TABLE above already carries the final form for fresh bootstraps;
+    # these DROP/ADD cover incremental upgrades of an existing table. Both
+    # constraints must move: box gains the new 'ARCHIVE' location, and
+    # previous_box gains it so trashing an archived message (MOVE_TO_TRASH_BATCH
+    # copies box → previous_box) is not rejected.
+    "ALTER TABLE email_metadata DROP CONSTRAINT IF EXISTS email_metadata_box_check;",
+    "ALTER TABLE email_metadata ADD CONSTRAINT email_metadata_box_check "
+    "CHECK (box IN ('ALL_MAIL', 'SPAM', 'TRASH', 'SENT', 'DELETED', 'ARCHIVE'));",
+    "ALTER TABLE email_metadata DROP CONSTRAINT IF EXISTS email_metadata_previous_box_check;",
+    "ALTER TABLE email_metadata ADD CONSTRAINT email_metadata_previous_box_check "
+    "CHECK (previous_box IS NULL OR previous_box IN ('ALL_MAIL', 'SENT', 'SPAM', 'ARCHIVE'));",
+    "UPDATE alembic_version SET version_num = '0038_add_archive_box_value';",
 ]
 
 
