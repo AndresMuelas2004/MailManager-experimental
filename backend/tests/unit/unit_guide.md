@@ -32,6 +32,11 @@ Service-layer tests use inline `FakeStore` classes combined with `monkeypatch.se
 
 **Phase 2.6 trap — `_patch_attachment_common`'s `next_position_value` kwarg is silently ignored.** The kwarg survived the API but Phase 2.6 collapsed the position read+write into the INSERT itself (`COALESCE((SELECT MAX(position)+1 …), 0)` inside `INSERT_DRAFT_ATTACHMENT`). Passing `next_position_value=N` does nothing — the test gets whatever the SQL computes from the seeded fake state. To force a specific position in the fake's response, use `inserted_overrides={"position": N}` instead.
 
+### `test_accounts_service.py` — the real sanitiser runs, and the OAuth error is security-sanitised
+
+- **The `signature_html` tests run the REAL outbound sanitiser un-mocked.** It is a pure function (no external boundary), so per `CLAUDE.md` §3 it must not be faked — a `<script>` is actually stripped while the visible text survives. Mocking it "to isolate the service" silently deletes the only coverage proving the sanitiser is wired into the write path. The PATCH "clear vs leave-untouched" distinction is only testable from a non-null starting value: with a `None` seed both `""` and a missing key end at `None`, so `test_update_signature_html_none_leaves_existing` seeds `"<p>old</p>"` to make the difference observable.
+- **`complete_account_connect` security-sanitises the provider's `error` / `error_description`.** These arrive straight from the OAuth callback URL (attacker-controllable); the service maps unrecognised codes to a literal `"unknown_error"` and never reflects the raw value into the page message. The invariant is invisible from the service signature — any refactor of the error-message path must keep the raw params out of the response.
+
 ### `test_emails_service.py` — patch helpers are independent, not layered
 
 `_patch_read_status` and `_patch_spam` are **not** extensions of `_patch_common`. They apply a narrower patch set: they omit `account_store.get` and the metadata persistence helpers (read-status and spam don't need single-account lookup or metadata persistence), and add `update_email_read_status_batch` / `update_email_spam_status_batch` respectively. Treat them as independent helpers — extending them from `_patch_common` will over-patch.

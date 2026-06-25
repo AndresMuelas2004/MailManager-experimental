@@ -29,6 +29,7 @@ from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
     load_wrapped_app_credentials,
+    sanitize_outbound_html,
     translate_connect_error,
     translate_database_error,
     unwrap_secret,
@@ -118,6 +119,12 @@ def update_account(mailbox_id: str, account_id: str, payload: AccountUpdate, use
         record["display_label"] = payload.display_label
     if payload.config is not None:
         record["config"] = payload.config
+    if payload.signature_html is not None:
+        # Sanitise on persist (defence in depth): the signature is composed in
+        # the same restricted rich-text editor as the body and is inserted into
+        # the body at compose time, so it goes through the outbound allowlist
+        # again on send. "" sanitises to "" (clears the signature).
+        record["signature_html"] = sanitize_outbound_html(payload.signature_html)
 
     try:
         updated = account_store.upsert(record)

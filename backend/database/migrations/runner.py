@@ -509,6 +509,13 @@ _DDL_STATEMENTS = [
     "ALTER TABLE email_metadata ADD CONSTRAINT email_metadata_previous_box_check "
     "CHECK (previous_box IS NULL OR previous_box IN ('ALL_MAIL', 'SENT', 'SPAM', 'ARCHIVE'));",
     "UPDATE alembic_version SET version_num = '0038_add_archive_box_value';",
+    # Migration 0039: signature_html column on accounts (per-account email
+    # signature, local-only). Pure ADD COLUMN, nullable, no cache invalidation.
+    # Renumbered from 0038 → 0039 because migration 0038 was taken by the
+    # archive-box change above (both features landed independently); chained
+    # after it to keep the runner stamp order aligned with the Alembic chain.
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS signature_html TEXT DEFAULT NULL;",
+    "UPDATE alembic_version SET version_num = '0039_add_signature_html_to_accounts';",
 ]
 
 

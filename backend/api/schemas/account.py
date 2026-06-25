@@ -34,6 +34,11 @@ class AccountUpdate(BaseModel):
         max_length=120,
     )
     config: dict[str, Any] | None = None
+    # Per-account email signature (HTML). No ``min_length``: an empty string is
+    # a valid value meaning "clear the signature" (distinct from absence/None,
+    # which leaves it untouched). Sanitised with the outbound HTML pipeline in
+    # the service before persisting.
+    signature_html: str | None = Field(default=None, max_length=10_000)
 
 
 class AccountOut(BaseModel):
@@ -47,6 +52,7 @@ class AccountOut(BaseModel):
     display_label: str
     config: dict[str, Any]
     email_address: str | None = None
+    signature_html: str | None = None
 
 
 class AccountConnectStartResponse(BaseModel):

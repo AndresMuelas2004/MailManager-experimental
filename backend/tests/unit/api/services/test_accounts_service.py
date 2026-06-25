@@ -33,6 +33,7 @@ _FAKE_RECORD = {
     "provider": "gmail",
     "display_label": "my-gmail",
     "config": {},
+    "signature_html": None,
 }
 
 
@@ -258,6 +259,58 @@ class TestUpdateAccount:
         payload = AccountUpdate(display_label="x")
         with pytest.raises(ApiError, match="Failed to look up account"):
             accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+
+    def test_update_signature_html_persists(self, monkeypatch):
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(get_return=_FAKE_RECORD)
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        payload = AccountUpdate(signature_html="<p>Firma</p>")
+        result = accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+        assert result.signature_html == "<p>Firma</p>"
+
+    def test_update_signature_html_empty_clears(self, monkeypatch):
+        # An explicit "" is a valid value meaning "clear the signature":
+        # sanitize_outbound_html("") returns "" (no error), so the field is set
+        # to "" rather than being treated as absent.
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(get_return={**_FAKE_RECORD, "signature_html": "<p>old</p>"})
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        payload = AccountUpdate(signature_html="")
+        result = accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+        assert result.signature_html == ""
+
+    def test_update_signature_html_none_leaves_existing(self, monkeypatch):
+        # PATCH semantics: an absent signature_html (None) must NOT touch the
+        # stored value — the ``is not None`` branch is skipped and the existing
+        # signature is preserved.
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(get_return={**_FAKE_RECORD, "signature_html": "<p>old</p>"})
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        payload = AccountUpdate(display_label="renamed")
+        result = accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+        assert result.signature_html == "<p>old</p>"
+        assert result.display_label == "renamed"
+
+    def test_update_signature_html_and_label_together(self, monkeypatch):
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(get_return=_FAKE_RECORD)
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        payload = AccountUpdate(display_label="renamed", signature_html="<p>Firma</p>")
+        result = accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+        assert result.display_label == "renamed"
+        assert result.signature_html == "<p>Firma</p>"
+
+    def test_update_signature_html_is_sanitised(self, monkeypatch):
+        # The real outbound sanitiser (bleach) is a pure function with no
+        # external boundary, so it runs for real — a <script> is stripped while
+        # the visible text survives.
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(get_return=_FAKE_RECORD)
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        payload = AccountUpdate(signature_html="<p>hola<script>alert(1)</script></p>")
+        result = accounts_service.update_account("mb-1", "acc-1", payload, "user-1")
+        assert "<script>" not in result.signature_html
+        assert "hola" in result.signature_html
 
 
 # ------------------------------------------------------------------
