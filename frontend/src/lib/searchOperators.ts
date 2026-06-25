@@ -11,6 +11,7 @@ const IN_MAP: Record<string, EmailBox> = {
   sent: 'SENT',
   spam: 'SPAM',
   trash: 'TRASH',
+  archive: 'ARCHIVE',
 };
 
 // Returns the box requested by the LAST valid in: in the string, or null.

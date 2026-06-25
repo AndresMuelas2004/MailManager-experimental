@@ -398,6 +398,8 @@ class TestParseGraphMessage:
         assert OutlookClient._parse_graph_message(msg, "TRASH").box == "TRASH"
         assert OutlookClient._parse_graph_message(msg, "ALL_MAIL").box == "ALL_MAIL"
         assert OutlookClient._parse_graph_message(msg, "SENT").box == "SENT"
+        # ARCHIVE is the new box, classified when parentFolderId == archive.
+        assert OutlookClient._parse_graph_message(msg, "ARCHIVE").box == "ARCHIVE"
 
 
 # ── fetch_email_metadata routing ────────────────────────────────────
@@ -444,7 +446,7 @@ class TestFetchEmailMetadata:
 class TestResolveSpecialFolderIds:
     """Tests for _resolve_special_folder_ids — maps well-known folder names to Graph IDs."""
 
-    def test_resolves_all_three_folders(self):
+    def test_resolves_all_special_folders(self):
         client = _make_authenticated_client()
 
         def mock_graph(method, url, body=None):
@@ -454,12 +456,22 @@ class TestResolveSpecialFolderIds:
                 return {"id": "id-trash"}
             if "/mailFolders/junkemail?" in url:
                 return {"id": "id-spam"}
+            if "/mailFolders/archive?" in url:
+                return {"id": "id-archive"}
             raise AssertionError(f"Unexpected URL: {url}")
 
         with patch.object(client, "_graph_request", side_effect=mock_graph):
             result = client._resolve_special_folder_ids()
 
-        assert result == {"id-sent": "SENT", "id-trash": "TRASH", "id-spam": "SPAM"}
+        # The well-known ``archive`` folder is now resolved alongside the other
+        # three so messages in it classify as ARCHIVE (driven dynamically by
+        # _FOLDER_TO_BOX).
+        assert result == {
+            "id-sent": "SENT",
+            "id-trash": "TRASH",
+            "id-spam": "SPAM",
+            "id-archive": "ARCHIVE",
+        }
 
     def test_partial_failure_returns_resolved_only(self):
         client = _make_authenticated_client()
@@ -471,13 +483,15 @@ class TestResolveSpecialFolderIds:
                 return {"id": "id-trash"}
             if "/mailFolders/junkemail?" in url:
                 return {"id": "id-spam"}
+            if "/mailFolders/archive?" in url:
+                return {"id": "id-archive"}
             raise AssertionError(f"Unexpected URL: {url}")
 
         with patch.object(client, "_graph_request", side_effect=mock_graph):
             result = client._resolve_special_folder_ids()
 
         assert "SENT" not in result.values()
-        assert result == {"id-trash": "TRASH", "id-spam": "SPAM"}
+        assert result == {"id-trash": "TRASH", "id-spam": "SPAM", "id-archive": "ARCHIVE"}
 
     def test_all_fail_returns_empty(self):
         client = _make_authenticated_client()
@@ -549,13 +563,18 @@ class TestBootstrapEmailMetadata:
     _SENT_ID = "folder-id-sent"
     _TRASH_ID = "folder-id-trash"
     _SPAM_ID = "folder-id-spam"
+    _ARCHIVE_ID = "folder-id-archive"
 
     def _make_bootstrap_mock(self, messages, *, fail_folders=None):
         """Return a side_effect for _graph_request that handles all bootstrap phases."""
+        # ``archive`` joins the special folders resolved on bootstrap so a
+        # message whose parentFolderId is the archive folder classifies as
+        # ARCHIVE (the same dynamic _FOLDER_TO_BOX iteration as the others).
         folder_ids = {
             "sentitems": self._SENT_ID,
             "deleteditems": self._TRASH_ID,
             "junkemail": self._SPAM_ID,
+            "archive": self._ARCHIVE_ID,
         }
         fail_folders = fail_folders or set()
 
@@ -592,6 +611,7 @@ class TestBootstrapEmailMetadata:
             _make_graph_message(msg_id="sent-msg", parent_folder_id=self._SENT_ID),
             _make_graph_message(msg_id="trash-msg", parent_folder_id=self._TRASH_ID),
             _make_graph_message(msg_id="spam-msg", parent_folder_id=self._SPAM_ID),
+            _make_graph_message(msg_id="archive-msg", parent_folder_id=self._ARCHIVE_ID),
             _make_graph_message(msg_id="custom-msg", parent_folder_id="folder-custom"),
         ]
         mock = self._make_bootstrap_mock(messages)
@@ -603,6 +623,7 @@ class TestBootstrapEmailMetadata:
         assert by_id["sent-msg"].box == "SENT"
         assert by_id["trash-msg"].box == "TRASH"
         assert by_id["spam-msg"].box == "SPAM"
+        assert by_id["archive-msg"].box == "ARCHIVE"
         assert by_id["custom-msg"].box == "ALL_MAIL"
 
     def test_max_total_limit(self):
@@ -799,7 +820,7 @@ class TestIncrementalEmailMetadata:
                 client._incremental_email_metadata(cursor)
 
     def test_box_mapping_from_folder_name(self):
-        """Messages from deleteditems→TRASH, junkemail→SPAM, sentitems→SENT, others→ALL_MAIL."""
+        """deleteditems→TRASH, junkemail→SPAM, sentitems→SENT, archive→ARCHIVE, others→ALL_MAIL."""
         client = _make_authenticated_client()
         cursor = _make_folder_cursor()
 
@@ -821,7 +842,9 @@ class TestIncrementalEmailMetadata:
         assert by_id["msg-inbox"].box == "ALL_MAIL"
         assert by_id["msg-sentitems"].box == "SENT"
         assert by_id["msg-drafts"].box == "ALL_MAIL"
-        assert by_id["msg-archive"].box == "ALL_MAIL"
+        # The archive folder delta now classifies into ARCHIVE (out-of-band
+        # archives surface on the next sync).
+        assert by_id["msg-archive"].box == "ARCHIVE"
 
     def test_partial_delta_emits_label_update(self):
         """Delta returning a partial message (no 'from') populates label_updates, not upserts."""
@@ -1358,10 +1381,12 @@ class TestBootstrapIsFullSync:
         _SENT_ID = "folder-id-sent"
         _TRASH_ID = "folder-id-trash"
         _SPAM_ID = "folder-id-spam"
+        _ARCHIVE_ID = "folder-id-archive"
         folder_ids = {
             "sentitems": _SENT_ID,
             "deleteditems": _TRASH_ID,
             "junkemail": _SPAM_ID,
+            "archive": _ARCHIVE_ID,
         }
 
         def mock_graph(method, url, body=None):
@@ -1612,11 +1637,15 @@ class TestFetchMessagesMetadata:
 
     def test_happy_path_resolves_box(self, client: OutlookClient):
         client._access_token = "tok"
-        folder_responses = [
-            {"id": "folder-trash"},
-            {"id": "folder-spam"},
-            {"id": "folder-sent"},
-        ]
+        # Folder ids resolved per well-known name (URL-driven, not by call
+        # order) so adding ``archive`` to _FOLDER_TO_BOX cannot misalign the
+        # mapping. The message lives in sentitems → SENT.
+        folder_ids = {
+            "deleteditems": "folder-trash",
+            "junkemail": "folder-spam",
+            "sentitems": "folder-sent",
+            "archive": "folder-archive",
+        }
         message_response = {
             "id": "m1",
             "conversationId": "c1",
@@ -1627,13 +1656,12 @@ class TestFetchMessagesMetadata:
             "parentFolderId": "folder-sent",
         }
 
-        call_count = [0]
         def mock_graph(method, url, body=None):
-            nonlocal call_count
-            call_count[0] += 1
             if "mailFolders" in url:
-                idx = min(call_count[0] - 1, len(folder_responses) - 1)
-                return folder_responses[idx]
+                for name, fid in folder_ids.items():
+                    if f"/mailFolders/{name}?" in url:
+                        return {"id": fid}
+                raise AssertionError(f"Unexpected folder URL: {url}")
             return message_response
 
         with patch.object(client, "_graph_request", side_effect=mock_graph):
@@ -1642,6 +1670,38 @@ class TestFetchMessagesMetadata:
         assert len(result) == 1
         assert result[0].box == "SENT"
         assert result[0].provider_message_id == "m1"
+
+    def test_resolves_archive_box(self, client: OutlookClient):
+        client._access_token = "tok"
+        folder_ids = {
+            "deleteditems": "folder-trash",
+            "junkemail": "folder-spam",
+            "sentitems": "folder-sent",
+            "archive": "folder-archive",
+        }
+        message_response = {
+            "id": "m2",
+            "conversationId": "c2",
+            "from": {"emailAddress": {"address": "x@test.com", "name": "X"}},
+            "subject": "Archived",
+            "receivedDateTime": "2024-01-01T12:00:00Z",
+            "isRead": True,
+            "parentFolderId": "folder-archive",
+        }
+
+        def mock_graph(method, url, body=None):
+            if "mailFolders" in url:
+                for name, fid in folder_ids.items():
+                    if f"/mailFolders/{name}?" in url:
+                        return {"id": fid}
+                raise AssertionError(f"Unexpected folder URL: {url}")
+            return message_response
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client.fetch_messages_metadata(["m2"])
+
+        assert len(result) == 1
+        assert result[0].box == "ARCHIVE"
 
     def test_failed_message_silently_skipped(self, client: OutlookClient):
         client._access_token = "tok"
@@ -1820,6 +1880,71 @@ class TestRestoreFromSpam:
 
         with patch.object(client, "_graph_request", side_effect=mock_graph):
             result = client.restore_from_spam(["m1"])
+
+        assert len(graph_calls) == 1
+        method, url, body = graph_calls[0]
+        assert method == "POST"
+        assert f"{GRAPH_BASE_URL}/me/messages/m1/move" == url
+        assert body == {"destinationId": "inbox"}
+        assert result == [SpamMoveResult(old_id="m1", new_id="new_m1")]
+
+
+# ── move_to_archive ──────────────────────────────────────────────
+
+
+class TestMoveToArchive:
+    def test_not_authenticated_raises(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.move_to_archive(["m1"])
+
+    def test_empty_returns_empty(self):
+        client = _make_authenticated_client()
+        assert client.move_to_archive([]) == []
+
+    def test_happy_path_posts_move_to_archive_and_rewrites_id(self):
+        client = _make_authenticated_client()
+        graph_calls: list[tuple[str, str, dict | None]] = []
+
+        def mock_graph(method, url, body=None):
+            graph_calls.append((method, url, body))
+            return {"id": "new_m1"}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client.move_to_archive(["m1"])
+
+        assert len(graph_calls) == 1
+        method, url, body = graph_calls[0]
+        assert method == "POST"
+        assert f"{GRAPH_BASE_URL}/me/messages/m1/move" == url
+        assert body == {"destinationId": "archive"}
+        # Outlook rewrites the id on every move (default ids, old→new).
+        assert result == [SpamMoveResult(old_id="m1", new_id="new_m1")]
+
+
+# ── restore_from_archive ─────────────────────────────────────────
+
+
+class TestRestoreFromArchive:
+    def test_not_authenticated_raises(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.restore_from_archive(["m1"])
+
+    def test_empty_returns_empty(self):
+        client = _make_authenticated_client()
+        assert client.restore_from_archive([]) == []
+
+    def test_happy_path_posts_move_to_inbox_and_rewrites_id(self):
+        client = _make_authenticated_client()
+        graph_calls: list[tuple[str, str, dict | None]] = []
+
+        def mock_graph(method, url, body=None):
+            graph_calls.append((method, url, body))
+            return {"id": "new_m1"}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client.restore_from_archive(["m1"])
 
         assert len(graph_calls) == 1
         method, url, body = graph_calls[0]

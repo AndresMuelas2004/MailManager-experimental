@@ -271,6 +271,7 @@ def configurable_test_client(test_client_base, sample_metadata, monkeypatch):
         "delete_return": None,
         "restore_return": None,
         "move_to_trash_return": None,
+        "move_to_archive_return": None,
         "fetch_messages_metadata_return": None,
     }
 
@@ -291,6 +292,7 @@ def configurable_test_client(test_client_base, sample_metadata, monkeypatch):
                 delete_return=config["delete_return"],
                 restore_return=config["restore_return"],
                 move_to_trash_return=config["move_to_trash_return"],
+                move_to_archive_return=config["move_to_archive_return"],
                 fetch_messages_metadata_return=config["fetch_messages_metadata_return"],
                 auth_return={"access_token": "tok", "refresh_token": "ref"},
             ))

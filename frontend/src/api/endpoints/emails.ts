@@ -1,6 +1,7 @@
 import { request } from '../client/http';
 import { EMAILS_PAGE_SIZE } from '../../lib/constants';
 import {
+  archiveResponseSchema,
   conversationOutSchema,
   emailContentOutSchema,
   emailPageSchema,
@@ -14,6 +15,7 @@ import {
   syncResultOutSchema,
   trashActionResultSchema,
   unreadCountSchema,
+  type ArchiveResponse,
   type ConversationOut,
   type EmailContentOut,
   type EmailItemRef,
@@ -208,5 +210,24 @@ export function restoreFromSpam(mailboxId: string, items: EmailItemRef[]): Promi
     method: 'POST',
     body: { items },
     schema: spamResponseSchema,
+  });
+}
+
+export function archiveEmails(mailboxId: string, items: EmailItemRef[]): Promise<ArchiveResponse> {
+  return request(`/mailboxes/${mailboxId}/emails/archive`, {
+    method: 'POST',
+    body: { items },
+    schema: archiveResponseSchema,
+  });
+}
+
+export function unarchiveEmails(
+  mailboxId: string,
+  items: EmailItemRef[],
+): Promise<ArchiveResponse> {
+  return request(`/mailboxes/${mailboxId}/emails/restore-from-archive`, {
+    method: 'POST',
+    body: { items },
+    schema: archiveResponseSchema,
   });
 }

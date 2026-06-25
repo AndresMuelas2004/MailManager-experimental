@@ -21,7 +21,7 @@ Esta separación es la razón de que abrir el inbox sea instantáneo y de que la
 
 ### Qué es "metadata" y qué no lo es
 
-Lo que la sincronización baja de cada correo es su **cabecera**: asunto, remitente (email y nombre), primer destinatario, fecha de recepción, si está leído, y en qué bandeja vive (principal, enviados, spam o papelera). Eso es suficiente para pintar una fila del listado.
+Lo que la sincronización baja de cada correo es su **cabecera**: asunto, remitente (email y nombre), primer destinatario, fecha de recepción, si está leído, y en qué bandeja vive (principal, enviados, archivados, spam o papelera). Eso es suficiente para pintar una fila del listado.
 
 Lo que la sincronización **nunca** baja es el **cuerpo** del correo ni sus adjuntos. Esos se descargan solo cuando el usuario abre el correo (cuerpo) o clica un adjunto (binario), y se cachean a partir de ese momento. Por eso sincronizar diez mil cabeceras es barato y rápido, mientras que abrir un correo pesado tiene su pequeño coste la primera vez.
 

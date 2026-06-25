@@ -53,7 +53,7 @@ Dentro del **mismo campo**, el usuario puede acotar con operadores `clave:valor`
 - `before:` / `after:` — recibidos **antes** / **desde** una fecha. `before:2026/01/01`, `after:2025/12/01` (ver sección 2-ter).
 - `is:unread` / `is:read` — **no leídos** / **leídos**. `is:unread`.
 - `is:favorite` (alias `is:starred`) — **favoritos**. `is:favorite`.
-- `in:` — restringe la **bandeja** en la que se busca: `in:inbox`, `in:sent`, `in:spam`, `in:trash` (ver sección 2-quáter, su comportamiento depende de dónde estés).
+- `in:` — restringe la **bandeja** en la que se busca: `in:inbox`, `in:sent`, `in:archive`, `in:spam`, `in:trash` (ver sección 2-quáter, su comportamiento depende de dónde estés). `in:archive` busca entre los **archivados** (ver [acciones-sobre-correos.md](acciones-sobre-correos.md)).
 
 ### Cómo se combinan
 
@@ -68,7 +68,7 @@ La lupa **nunca da error** por lo que se escriba en el campo; ante algo que no e
 
 - **Operador desconocido** (`foo:bar`): se trata como **texto literal** y se busca tal cual (incluidos los dos puntos), como una palabra más de texto libre.
 - **Fecha mal escrita** (`before:ayer`, `before:31/13/2026`): ese filtro de fecha **se ignora en silencio**; el resto de la búsqueda sigue. Solo se aceptan los formatos de fecha de la sección 2-ter.
-- **Valor no soportado** en `is:` / `has:` / `in:` (`is:importante`, `has:drive`, `in:archivados`): ese operador **se ignora** (no aporta filtro), el resto sigue.
+- **Valor no soportado** en `is:` / `has:` / `in:` (`is:importante`, `has:drive`, `in:archivados` —el valor válido es el inglés `in:archive`): ese operador **se ignora** (no aporta filtro), el resto sigue.
 - **Criterios contradictorios** dan **cero resultados** de forma natural, sin aviso especial: `is:read is:unread`, un rango de fechas imposible (`after:2026/02/01 before:2026/01/01`), o pedir `in:` de una bandeja que la bandeja ficticia en la que estás excluye. Se muestra el mensaje habitual de "No se encontraron correos para tu búsqueda".
 
 > La razón de esta tolerancia es de experiencia: la lupa se dispara mientras el usuario teclea (ver sección 3), así que abortar con un error a mitad de escritura sería molesto y constante. Es preferible ignorar lo que no se entiende y devolver los resultados de lo que sí.
@@ -91,9 +91,9 @@ Los formatos de fecha aceptados (`AAAA/MM/DD` y `AAAA-MM-DD`) y qué cuenta como
 
 `in:` decide **en qué bandeja se busca**, y se comporta de forma distinta según la vista en la que esté el usuario:
 
-- **En una bandeja normal o en la vista unificada** (Recibidos, Enviados, Spam, Papelera): `in:` **cambia** la bandeja en la que buscas, ganando a la bandeja en la que estabas. Estando en "Recibidos", `in:sent oferta` busca "oferta" en Enviados. Los resultados se muestran con las **columnas correctas** ("De" / "Para") para la bandeja pedida, no para la de origen.
+- **En una bandeja normal o en la vista unificada** (Recibidos, Enviados, Archivados, Spam, Papelera): `in:` **cambia** la bandeja en la que buscas, ganando a la bandeja en la que estabas. Estando en "Recibidos", `in:sent oferta` busca "oferta" en Enviados; `in:archive` busca entre los archivados. Los resultados se muestran con las **columnas correctas** ("De" / "Para") para la bandeja pedida, no para la de origen.
 - **En Favoritos**: sigues viendo **solo favoritos**; `in:sent` los restringe a los favoritos que están en Enviados. Es decir, `in:` afina dentro de los favoritos, no los sustituye.
-- **Dentro de una bandeja ficticia**: `in:` **se suma** (AND) a lo que la bandeja ficticia ya define. Si la ficticia incluye una bandeja, `in:` puede afinar dentro de ella; si pides una bandeja que la ficticia **excluye** (p. ej. la ficticia es "todo menos papelera" y escribes `in:trash`), el resultado es **vacío**, de forma natural.
+- **Dentro de una bandeja ficticia**: `in:` **se suma** (AND) a lo que la bandeja ficticia ya define. Si la ficticia incluye una bandeja, `in:` puede afinar dentro de ella; si pides una bandeja que la ficticia **excluye** (p. ej. la ficticia es "todo menos papelera" y escribes `in:trash`), el resultado es **vacío**, de forma natural. **`in:archive` es la excepción**: aunque los archivados quedan fuera de una bandeja ficticia por defecto, escribir `in:archive` los **rescata** dentro de la ficticia (es el único box excluido por defecto que `in:` puede recuperar — ver [bandejas-ficticias.md](bandejas-ficticias.md)).
 
 > Las columnas "De" / "Para" de la tabla siguen a la **bandeja efectiva**: cuando un `in:` válido cambia la bandeja, todos los correos devueltos pertenecen a esa bandeja, así que la tabla repinta sus columnas para tener sentido (en Enviados importa "Para", en Recibidos importa "De"). Es un ajuste **solo visual**: el filtrado real lo aplica el servidor a partir de lo que el usuario escribió.
 
@@ -229,4 +229,4 @@ Si llega la respuesta de una búsqueda antigua justo cuando el usuario ya estaba
 
 ## 8. Resumen en una frase
 
-> La lupa es un filtro **local, sobre el buzón y la cuenta que se están viendo**, que combina **texto libre** (literal, sin tildes ni mayúsculas que importen, todas las palabras en asunto/remitente) con **operadores estilo Gmail** (`from: to: subject: has:attachment before: after: is:unread/read is:favorite in:`) unidos con "Y", admite comillas para frases, interpreta las fechas en hora de Madrid, es **tolerante** ante errores (operador desconocido → texto, fecha/valor inválidos → se ignoran, contradicción → cero resultados), hace que `in:` sea sensible a la vista (cambia la bandeja en una vista normal, afina dentro de Favoritos y de una bandeja ficticia) y ofrece una ayuda mínima ("?") para descubrir los operadores — todo **sin cambiar el campo, el disparo, el orden, la paginación ni la persistencia en la URL**; las cifras exactas, el catálogo cerrado de operadores y todo lo que deliberadamente no soporta viven en [../limits/lupa.md](../limits/lupa.md).
+> La lupa es un filtro **local, sobre el buzón y la cuenta que se están viendo**, que combina **texto libre** (literal, sin tildes ni mayúsculas que importen, todas las palabras en asunto/remitente) con **operadores estilo Gmail** (`from: to: subject: has:attachment before: after: is:unread/read is:favorite in:inbox|sent|archive|spam|trash`) unidos con "Y", admite comillas para frases, interpreta las fechas en hora de Madrid, es **tolerante** ante errores (operador desconocido → texto, fecha/valor inválidos → se ignoran, contradicción → cero resultados), hace que `in:` sea sensible a la vista (cambia la bandeja en una vista normal, afina dentro de Favoritos y de una bandeja ficticia, donde `in:archive` además rescata los archivados excluidos por defecto) y ofrece una ayuda mínima ("?") para descubrir los operadores — todo **sin cambiar el campo, el disparo, el orden, la paginación ni la persistencia en la URL**; las cifras exactas, el catálogo cerrado de operadores y todo lo que deliberadamente no soporta viven en [../limits/lupa.md](../limits/lupa.md).

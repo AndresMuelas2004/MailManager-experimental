@@ -38,6 +38,7 @@ export const es = {
     inbox: 'Bandeja unificada',
     sent: 'Enviados',
     favorites: 'Favoritos',
+    archive: 'Archivados',
     virtualMailboxes: 'Bandejas ficticias',
     spam: 'Spam',
     drafts: 'Borradores',
@@ -116,6 +117,8 @@ export const es = {
     spamSubtitle: 'Correos no deseados de tus cuentas conectadas.',
     trashTitle: 'Papelera de reciclaje',
     trashSubtitle: 'Correos eliminados de tus cuentas conectadas.',
+    archiveTitle: 'Archivados',
+    archiveSubtitle: 'Correos archivados de tus cuentas conectadas.',
   },
 
   emailTable: {
@@ -144,6 +147,8 @@ export const es = {
     markSpam: 'Marcar como spam',
     restoreFromSpam: 'Restaurar de spam',
     restore: 'Restaurar',
+    archive: 'Archivar',
+    unarchive: 'Desarchivar',
     deletePermanently: 'Eliminar',
     confirmDeleteOne: '¿Eliminar permanentemente este correo? Esta acción no se puede deshacer.',
     confirmDeleteMany:
@@ -171,7 +176,7 @@ export const es = {
     opAfter: 'desde una fecha (incluida)',
     opIsReadUnread: 'no leídos / leídos',
     opIsFavorite: 'favoritos (alias is:starred)',
-    opIn: 'restringe a una bandeja: inbox, sent, spam, trash',
+    opIn: 'restringe a una bandeja: inbox, sent, spam, trash, archive',
     combineHint: 'Se combinan con espacios (Y); usa comillas para frases:',
   },
 
@@ -286,12 +291,15 @@ export const es = {
     markUnread: 'Marcar como no leído',
     markSpam: 'Marcar como spam',
     moveToTrash: 'Mover a la papelera',
+    archive: 'Archivar',
+    unarchive: 'Desarchivar',
     spam: 'Spam',
     trash: 'Papelera',
     notRead: 'No leído',
     boxSent: 'Enviado',
     boxSpam: 'Spam',
     boxTrash: 'Papelera',
+    boxArchive: 'Archivado',
   },
 
   attachments: {

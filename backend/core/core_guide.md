@@ -59,7 +59,7 @@ Provider clients leave `EmailMetadata.account_id` as `""`. The service layer sta
 
 ## Email metadata sync — invariants
 
-- **Box mapping priority** inside each client is `TRASH > SPAM > SENT > otherwise ALL_MAIL`. Any new Gmail label or Outlook folder must be threaded through this priority (`_FOLDER_TO_BOX` on Outlook, label check on Gmail); **do not introduce a new `box` value without also updating the DB CHECK constraint**.
+- **Box mapping priority** inside each client is `TRASH > SPAM > SENT > INBOX-present → ALL_MAIL > ARCHIVE`. Any new Gmail label or Outlook folder must be threaded through this priority (`_FOLDER_TO_BOX` on Outlook, label check on Gmail); **do not introduce a new `box` value without also updating the DB CHECK constraint**. ⚠️ **Gmail's fall-through changed (silent-trap):** a received message with the `INBOX` label gone (and not SPAM/TRASH/SENT) now classifies as `ARCHIVE`, not `ALL_MAIL` — that absence is exactly what "archived in Gmail" means (the message lives in All Mail without `INBOX`). The `_resolve_labels` `else` is no longer the catch-all for ALL_MAIL; ALL_MAIL now requires `INBOX` to be present. Outlook classifies `parentFolderId == archive` → `ARCHIVE` via `_FOLDER_TO_BOX` (the resolved special-folder set is driven by that dict, so the archive folder is fetched alongside sent/trash/spam). Consequence: out-of-band archives at the provider surface as `ARCHIVE` on the next sync, no backfill needed.
 - **Gmail bootstrap captures `historyId` *before* listing messages.** Any emails arriving during the list window are thus replayed on the next incremental sync. Do not reorder the two calls.
 - **Gmail incremental falls back to bootstrap when event count > `_INCREMENTAL_EVENT_THRESHOLD = 100`.** Batch-fetching thousands of accumulated events costs more than a full re-sync.
 - **Outlook delta is per-folder.** Microsoft Graph v1.0 does not support delta at the mailbox level, so the client iterates `_DELTA_FOLDERS` (`inbox`, `sentitems`, `drafts`, `deleteditems`, `junkemail`, `archive`) and stores a versioned JSON cursor `{"v": 1, "folders": {"inbox": "<deltaLink>", …}}`. A non-JSON / unversioned cursor (legacy single-URL format) decodes to `None` and triggers `EmailExternalAPIError → bootstrap fallback`.
@@ -76,6 +76,10 @@ Both Gmail and Outlook use a **no-op** approach for `delete_messages`: the provi
 ## Outlook — folder moves always rewrite the ID
 
 `POST /me/messages/{id}/move` returns a new message object with a new `id`. Any code that moves a message between folders (spam, trash, any future operation) **must** capture the new ID from the response and propagate it to the service layer for DB persistence. Do not assume `new_id == old_id` on Outlook — that assumption is true only on Gmail.
+
+## Archive — Gmail is a label change (id stable), Outlook is a folder move (id rewritten)
+
+`move_to_archive` / `restore_from_archive` are NOT symmetric across providers and reuse the spam-move machinery, so the id-rewrite asymmetry is the trap. Gmail archives by removing the `INBOX` label (unarchive adds it) via `_batch_modify_labels`, so the id never changes — both return `SpamMoveResult(mid, mid)`, like Gmail's spam moves. Outlook moves the message to/from the well-known `archive` folder via `_move_messages` (the same helper spam/trash use), so Graph returns a **new** id captured in `SpamMoveResult(old_id, new_id)` and persisted by the old→new rewrite (same rule as "Outlook — folder moves always rewrite the ID"). Restore target is the inbox (`destinationId: "inbox"` → `ALL_MAIL`), mirroring `restore_from_spam`.
 
 ## Send retry — back-off shape and the Gmail vs Outlook asymmetry
 

@@ -1,4 +1,4 @@
-export type EmailBox = 'ALL_MAIL' | 'SENT' | 'SPAM' | 'TRASH';
+export type EmailBox = 'ALL_MAIL' | 'SENT' | 'SPAM' | 'TRASH' | 'ARCHIVE';
 
 export type ComposerMode =
   | 'new_email'

@@ -264,6 +264,118 @@ def test_restore_from_spam_unexpected_exception_wraps(
 
 
 # ------------------------------------------------------------------
+# move_to_archive
+# ------------------------------------------------------------------
+
+
+def test_move_to_archive_delegates_to_correct_client(
+    manager: EmailManager, fake_client_factory
+):
+    """move_to_archive forwards message_ids to the right client and returns results."""
+    from core.email.email_client import SpamMoveResult
+
+    client = fake_client_factory("acct1")
+    manager.add_client(client)
+
+    result = manager.move_to_archive("acct1", ["m1", "m2"])
+
+    assert len(result) == 2
+    assert all(isinstance(r, SpamMoveResult) for r in result)
+    assert result[0].old_id == "m1"
+    assert len(client.move_to_archive_calls) == 1
+    assert client.move_to_archive_calls[0] == ["m1", "m2"]
+
+
+def test_move_to_archive_account_not_found_raises(
+    manager: EmailManager,
+):
+    """Calling move_to_archive with a non-existent label raises EmailAccountNotFoundError."""
+    from core.email.errors import EmailAccountNotFoundError
+
+    with pytest.raises(EmailAccountNotFoundError):
+        manager.move_to_archive("nonexistent", ["m1"])
+
+
+def test_move_to_archive_core_error_propagates(
+    manager: EmailManager, fake_client_factory
+):
+    """A CoreError subclass raised by the client propagates unchanged."""
+    exc = EmailExternalAPIError("archive API error")
+    client = fake_client_factory("acct1", move_to_archive_exc=exc)
+    manager.add_client(client)
+
+    with pytest.raises(EmailExternalAPIError, match="archive API error"):
+        manager.move_to_archive("acct1", ["m1"])
+
+
+def test_move_to_archive_unexpected_exception_wraps(
+    manager: EmailManager, fake_client_factory
+):
+    """A RuntimeError from the client is wrapped in EmailExternalAPIError."""
+    client = fake_client_factory("acct1", move_to_archive_exc=RuntimeError("boom-archive"))
+    manager.add_client(client)
+
+    with pytest.raises(EmailExternalAPIError, match="boom-archive"):
+        manager.move_to_archive("acct1", ["m1"])
+
+
+# ------------------------------------------------------------------
+# restore_from_archive
+# ------------------------------------------------------------------
+
+
+def test_restore_from_archive_delegates_to_correct_client(
+    manager: EmailManager, fake_client_factory
+):
+    """restore_from_archive forwards message_ids to the right client and returns results."""
+    from core.email.email_client import SpamMoveResult
+
+    client = fake_client_factory("acct1")
+    manager.add_client(client)
+
+    result = manager.restore_from_archive("acct1", ["m1", "m2"])
+
+    assert len(result) == 2
+    assert all(isinstance(r, SpamMoveResult) for r in result)
+    assert result[0].old_id == "m1"
+    assert len(client.restore_from_archive_calls) == 1
+    assert client.restore_from_archive_calls[0] == ["m1", "m2"]
+
+
+def test_restore_from_archive_account_not_found_raises(
+    manager: EmailManager,
+):
+    """Calling restore_from_archive with a non-existent label raises EmailAccountNotFoundError."""
+    from core.email.errors import EmailAccountNotFoundError
+
+    with pytest.raises(EmailAccountNotFoundError):
+        manager.restore_from_archive("nonexistent", ["m1"])
+
+
+def test_restore_from_archive_core_error_propagates(
+    manager: EmailManager, fake_client_factory
+):
+    """A CoreError subclass raised by the client propagates unchanged."""
+    exc = EmailExternalAPIError("unarchive API error")
+    client = fake_client_factory("acct1", restore_from_archive_exc=exc)
+    manager.add_client(client)
+
+    with pytest.raises(EmailExternalAPIError, match="unarchive API error"):
+        manager.restore_from_archive("acct1", ["m1"])
+
+
+def test_restore_from_archive_unexpected_exception_wraps(
+    manager: EmailManager, fake_client_factory
+):
+    """A RuntimeError from the client is wrapped in EmailExternalAPIError."""
+    client = fake_client_factory("acct1", restore_from_archive_exc=RuntimeError("kaboom-archive"))
+    manager.add_client(client)
+
+    with pytest.raises(EmailExternalAPIError, match="kaboom-archive"):
+        manager.restore_from_archive("acct1", ["m1"])
+
+
+# ------------------------------------------------------------------
 # fetch_content_with_attachments
 # ------------------------------------------------------------------
 

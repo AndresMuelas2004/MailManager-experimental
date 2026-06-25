@@ -4,6 +4,8 @@ export type BulkAction =
   | 'mark_spam'
   | 'restore_from_spam'
   | 'delete_permanently'
-  | 'restore_from_trash';
+  | 'restore_from_trash'
+  | 'archive'
+  | 'unarchive';
 
 export type ReadToggleTarget = 'mark_read' | 'mark_unread';

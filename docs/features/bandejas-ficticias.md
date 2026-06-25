@@ -88,19 +88,21 @@ Una bandeja ficticia puede combinar varios criterios. Todos son opcionales y, cu
 
 El filtro de carpeta tiene un comportamiento con matiz importante:
 
-- **Si no se elige carpeta** (lo más común): la bandeja muestra los correos de las cuentas seleccionadas **excluyendo papelera y spam**. Es el mismo criterio "flujo activo" que usa la vista de Favoritos — el usuario casi nunca quiere ver basura y spam mezclados con lo relevante.
+- **Si no se elige carpeta** (lo más común): la bandeja muestra los correos de las cuentas seleccionadas **excluyendo papelera, spam y archivados**. Es el mismo criterio "flujo activo" que usa la vista de Favoritos — el usuario casi nunca quiere ver basura, spam ni lo ya archivado mezclados con lo relevante.
 - **Si se elige una carpeta concreta** (Enviados, Spam o Papelera): la bandeja muestra **solo** esa carpeta, ignorando la exclusión por defecto. Es decir, una bandeja "Papelera de estas cuentas" sí enseña la papelera.
 - **Si se pide explícitamente "no excluir nada"**: existe una forma de ver papelera y spam **junto con** el resto. No es un botón evidente en el formulario actual; es una capacidad del filtro pensada para vistas que quieran abarcarlo todo.
 
-> Los correos **borrados de forma definitiva** (el estado interno "DELETED" en el que queda un correo tras vaciarlo) **nunca aparecen** en una bandeja ficticia, ni siquiera con "no excluir nada". No es una carpeta que el usuario pueda pedir (no está entre las opciones de carpeta seleccionables), así que se oculta siempre, igual que ya está oculto en el resto de la app. La exclusión de papelera y spam es opcional; la de los borrados es permanente.
+> Los **archivados** son una asimetría deliberada respecto a papelera y spam. Se excluyen **solo por defecto** (cuando no se fija carpeta): a diferencia de papelera y spam, **no** se vuelven a excluir cuando el usuario pide "no excluir nada" ni cuando fija su propia lista de exclusión — ahí se respeta literalmente lo pedido. Y además, aunque queden fuera por defecto, escribir `in:archive` en la lupa los **rescata** dentro de la ficticia (§ 5). Es el único box excluido por defecto que la lupa puede recuperar así; `in:trash` / `in:spam` sobre una ficticia por defecto siguen dando vacío.
+
+> Los correos **borrados de forma definitiva** (el estado interno "DELETED" en el que queda un correo tras vaciarlo) **nunca aparecen** en una bandeja ficticia, ni siquiera con "no excluir nada". No es una carpeta que el usuario pueda pedir (no está entre las opciones de carpeta seleccionables), así que se oculta siempre, igual que ya está oculto en el resto de la app. La exclusión de papelera, spam y archivados es **opcional** (se puede revertir pidiendo "no excluir nada" o fijando la propia lista de exclusión; los archivados además se rescatan con `in:archive`); la de los borrados es **permanente**.
 
 Hay una regla de coherencia: **no se puede pedir a la vez "solo esta carpeta" y "todo excepto estas carpetas"**. Son criterios contradictorios; la app rechaza esa combinación con un error de validación en lugar de aplicar las dos cosas y devolver una bandeja perpetuamente vacía (que el usuario confundiría con "no hay correos").
 
 #### Ejemplo
 
-> - Bandeja sin carpeta → ve INBOX/ALL_MAIL y Enviados de las cuentas, pero **no** Papelera ni Spam.
+> - Bandeja sin carpeta → ve INBOX/ALL_MAIL y Enviados de las cuentas, pero **no** Papelera, Spam ni Archivados.
 > - Bandeja con carpeta = "Papelera" → ve **solo** la papelera de esas cuentas.
-> - Bandeja con "excluir solo Spam" → ve todo (incluida la **papelera**) menos el spam.
+> - Bandeja con "excluir solo Spam" → ve todo (incluida la **papelera** y los **archivados**) menos el spam.
 
 ### 4.2 Remitente exacto
 
@@ -138,6 +140,8 @@ Todos los criterios rellenados se exigen **simultáneamente**, y además se cruz
 La pantalla de una bandeja ficticia incluye la **misma lupa de búsqueda** que el resto de buzones. Funciona igual que en [lupa.md](lupa.md): es una búsqueda local, literal, sobre asunto + email del remitente + nombre del remitente, que normaliza mayúsculas y tildes y exige que **todas** las palabras aparezcan en algún campo.
 
 La diferencia clave es el **alcance**: aquí la lupa busca dentro del **resultado ya filtrado** de la bandeja ficticia, es decir, dentro de las cuentas seleccionadas y respetando los filtros guardados. La búsqueda **se suma** a los filtros, no los sustituye. El término de búsqueda vive en la URL, igual que en los buzones normales, así que recargar la página o compartir el enlace conserva la búsqueda.
+
+> **Una excepción con `in:archive`.** Los archivados quedan fuera de una bandeja ficticia por defecto (§ 4.1), pero escribir `in:archive` en la lupa los **rescata** dentro de la ficticia, sin tener que editar sus filtros guardados. Es el único box excluido por defecto que la lupa puede recuperar así (`in:trash` / `in:spam` sobre una ficticia por defecto siguen dando vacío). El detalle del operador está en [lupa.md](lupa.md).
 
 > Esta lupa de texto libre y los filtros guardados de la bandeja ficticia son **mecanismos distintos** que conviven: los filtros definen la bandeja; la lupa es un recorte temporal sobre lo que la bandeja ya muestra.
 
@@ -217,6 +221,7 @@ Una bandeja ficticia pertenece a su creador. Intentar acceder a la de otro usuar
 Para fijar expectativas (la lista completa con el porqué de cada límite está en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md)):
 
 - **El listado, por sí mismo, no importa metadata nueva**: la consulta que pinta la tabla lee solo de la base de datos local. Lo que sí ocurre es que **al abrir la vista se dispara una sincronización** de las cuentas implicadas (como en una bandeja real, ver § 6.4) antes de mostrar; el límite que queda es que el propio listado no va al proveedor — es el paso de apertura el que sincroniza, no la consulta del listado.
+- **No muestra archivados por defecto**, igual que tampoco papelera ni spam (§ 4.1): salen de la vista "activa" al archivarse. A diferencia de papelera/spam, su exclusión es **solo** por defecto y un `in:archive` en la lupa los rescata (§ 5).
 - **Nunca muestra correos borrados** (estado "DELETED"): un correo eliminado de forma definitiva no aparece bajo ningún filtro, ni siquiera con "no excluir nada", porque no es una carpeta solicitable (§ 4.1).
 - **No es una carpeta real**: no existe en Gmail/Outlook, no se puede mover un correo "a" una bandeja ficticia.
 - **No autoexpande** la lista de cuentas al conectar cuentas nuevas (§ 3.1).
@@ -227,4 +232,4 @@ Para fijar expectativas (la lista completa con el porqué de cada límite está 
 
 ## Resumen en una frase
 
-> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que **sincroniza primero las cuentas implicadas al abrirse** (como una bandeja real) y junta en una sola pantalla los correos de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera y spam excluidos por defecto, y los borrados «DELETED» ocultos **siempre**—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas (antes de paginar, para no descuadrar páginas ni el total), se navega por páginas numeradas igual que cualquier bandeja, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).
+> Una bandeja ficticia es una vista guardada, de solo lectura y calculada al vuelo, que **sincroniza primero las cuentas implicadas al abrirse** (como una bandeja real) y junta en una sola pantalla los correos de una lista fija de cuentas (elegidas a mano, sin autoexpansión) recortados por filtros opcionales que se aplican todos a la vez (carpeta —con papelera, spam y archivados excluidos por defecto, los archivados rescatables con `in:archive` en la lupa, y los borrados «DELETED» ocultos **siempre**—, remitente exacto, asunto contiene, leído y favorito), excluye `box` y `box_not_in` como mutuamente contradictorios, deduplica el mismo mensaje cuando llega por dos cuentas (antes de paginar, para no descuadrar páginas ni el total), se navega por páginas numeradas igual que cualquier bandeja, dirige cada acción a la cuenta real de cada correo aunque viva en otra bandeja, revalida la propiedad de las cuentas en cada apertura quedándose con el subconjunto superviviente, y nunca toca el correo real al crearse, editarse o borrarse; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/bandejas-ficticias.md](../limits/bandejas-ficticias.md).

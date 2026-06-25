@@ -243,6 +243,20 @@ export const spamResponseSchema = z.object({
 });
 export type SpamResponse = z.infer<typeof spamResponseSchema>;
 
+// Archive / unarchive move responses. Structurally identical to the spam
+// move response (``moved_count`` + per-account ``moved`` breakdown); kept as
+// its own schema so the contract stays self-documenting if the two diverge.
+export const archiveResponseSchema = z.object({
+  moved_count: z.number(),
+  accounts: z.array(
+    z.object({
+      account_id: z.string(),
+      moved: z.number(),
+    }),
+  ),
+});
+export type ArchiveResponse = z.infer<typeof archiveResponseSchema>;
+
 // Unread-count response of ``GET /mailboxes/{mid}/emails/unread-count?box=...``.
 // ``total`` is the sum of unread messages of the mailbox in that box; ``accounts``
 // is the per-account breakdown including accounts with 0 unread. ``box`` is a

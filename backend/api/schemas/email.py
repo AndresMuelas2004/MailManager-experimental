@@ -121,6 +121,33 @@ class SpamResponse(BaseModel):
     accounts: list[AccountSpamDetail]
 
 
+class ArchiveItem(BaseModel):
+    """Single item in an archive/unarchive request."""
+
+    account_id: str = Field(..., min_length=1)
+    provider_message_id: str = Field(..., min_length=1)
+
+
+class ArchiveRequest(BaseModel):
+    """Request to batch archive/unarchive emails."""
+
+    items: list[ArchiveItem] = Field(..., min_length=1)
+
+
+class AccountArchiveDetail(BaseModel):
+    """Per-account result of an archive/unarchive operation."""
+
+    account_id: str
+    moved: int
+
+
+class ArchiveResponse(BaseModel):
+    """Response for archive/unarchive endpoints."""
+
+    moved_count: int
+    accounts: list[AccountArchiveDetail]
+
+
 class EmailContentOut(BaseModel):
     """Full email body content + downloadable attachment metadata.
 

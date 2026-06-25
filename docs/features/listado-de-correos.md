@@ -11,11 +11,11 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 - Las **acciones por correo y en bloque** (marcar leído, mover a papelera, spam, restaurar) se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md).
 - **Abrir un correo** y ver su cuerpo se documenta en [visualizacion-de-correos.md](visualizacion-de-correos.md).
 - Las **bandejas ficticias** (vistas curadas por criterios) se documentan en [bandejas-ficticias.md](bandejas-ficticias.md).
-- La **agrupación por conversación** (que es como se presentan hoy las filas en las cuatro bandejas reales y en la unificada) se documenta en [conversaciones.md](conversaciones.md).
+- La **agrupación por conversación** (que es como se presentan hoy las filas en las bandejas reales y en la unificada) se documenta en [conversaciones.md](conversaciones.md).
 
 Este documento se centra en el esqueleto: **la tabla de correos de una bandeja real**.
 
-> **Importante — cómo leer este documento hoy.** En las cuatro bandejas reales y en la unificada, las filas se presentan **agrupadas por conversación**: cada fila es un **hilo** (no un mensaje suelto), es de **solo lectura** y su única acción es **abrir** la conversación. Eso cambia tres cosas que este documento describe en su forma "clásica" (un mensaje por fila): la fila **ya no** tiene casilla de selección, **ni** estrella clicable, **ni** barra de acciones masivas, y el total "X–Y de Z" cuenta **hilos**, no mensajes. Todo eso —y el visor que enseña la cadena completa— vive en [conversaciones.md](conversaciones.md). El esqueleto que sí sigue vigente tal cual (de dónde salen los correos, las cuatro bandejas, el orden, la paginación numerada, el enrutado de cada acción al buzón real) se describe aquí. La **única** superficie que conserva la fila clásica con selección, acciones masivas y estrella clicable es la pestaña de **Favoritos** ([favoritos.md](favoritos.md)), que no agrupa.
+> **Importante — cómo leer este documento hoy.** En las bandejas reales y en la unificada, las filas se presentan **agrupadas por conversación**: cada fila es un **hilo** (no un mensaje suelto), es de **solo lectura** y su única acción es **abrir** la conversación. Eso cambia tres cosas que este documento describe en su forma "clásica" (un mensaje por fila): la fila **ya no** tiene casilla de selección, **ni** estrella clicable, **ni** barra de acciones masivas, y el total "X–Y de Z" cuenta **hilos**, no mensajes. Todo eso —y el visor que enseña la cadena completa— vive en [conversaciones.md](conversaciones.md). El esqueleto que sí sigue vigente tal cual (de dónde salen los correos, las bandejas reales, el orden, la paginación numerada, el enrutado de cada acción al buzón real) se describe aquí. La **única** superficie que conserva la fila clásica con selección, acciones masivas y estrella clicable es la pestaña de **Favoritos** ([favoritos.md](favoritos.md)), que no agrupa.
 
 ---
 
@@ -31,30 +31,37 @@ Quién mete correos en esa base de datos local es la **sincronización de metada
 
 ---
 
-## 2. Las cuatro bandejas reales
+## 2. Las bandejas reales navegables
 
-Cada correo está clasificado en exactamente **una** bandeja. El listado siempre se mira "a través de" una de estas cuatro:
+Cada correo está clasificado en exactamente **una** bandeja. El listado siempre se mira "a través de" una de estas:
 
-- **Bandeja principal** — todo lo que no es enviados, spam ni papelera. Es la bandeja por defecto y la más usada.
+- **Bandeja principal** — la bandeja de entrada real: lo recibido que sigue en la bandeja de entrada del proveedor y no es enviados, spam ni papelera. Es la bandeja por defecto y la más usada.
 - **Enviados** — los correos que el usuario mandó desde sus cuentas.
+- **Archivados** — correos sacados de la bandeja de entrada sin borrarlos (ver [acciones-sobre-correos.md](acciones-sobre-correos.md) § 6-bis). Es la bandeja más nueva.
 - **Spam** — correo no deseado.
 - **Papelera** — correos eliminados (movidos a la papelera, todavía recuperables).
 
-Esta clasificación la decide la sincronización al traer cada correo, aplicando una **prioridad fija**: si un correo está en la papelera cuenta como papelera; si no, si está en spam cuenta como spam; si no, si es un enviado cuenta como enviado; en cualquier otro caso cae en la bandeja principal. Esta prioridad existe porque un mismo correo puede llevar varias etiquetas en Gmail a la vez (un enviado también marcado como spam, por ejemplo) y la app necesita asignarle **una sola** bandeja sin ambigüedad.
+Esta clasificación la decide la sincronización al traer cada correo, aplicando una **prioridad fija**: si un correo está en la papelera cuenta como papelera; si no, si está en spam cuenta como spam; si no, si es un enviado cuenta como enviado; si no, si **sigue en la bandeja de entrada** del proveedor cuenta como bandeja principal; y si un correo recibido **ya no está en la bandeja de entrada** del proveedor (pero tampoco en spam/papelera/enviados), cuenta como **archivado**. Esta prioridad existe porque un mismo correo puede llevar varias etiquetas en Gmail a la vez (un enviado también marcado como spam, por ejemplo) y la app necesita asignarle **una sola** bandeja sin ambigüedad.
 
 ### 2.1 Un correo nunca está en dos bandejas a la vez en la lista
 
-Como la clasificación es excluyente, mirar "Enviados" no muestra correos que estén en la papelera aunque originalmente se enviaran. Mover un correo a la papelera lo saca de su bandeja anterior en la lista (su bandeja original se recuerda para poder restaurarlo, pero deja de aparecer donde estaba). Esto coincide con la intuición del usuario de Gmail y Outlook: la papelera "se lleva" el correo de donde estuviera.
+Como la clasificación es excluyente, mirar "Enviados" no muestra correos que estén en la papelera aunque originalmente se enviaran. Mover un correo a la papelera —o archivarlo— lo saca de su bandeja anterior en la lista (la papelera recuerda la bandeja original para poder restaurarlo, pero el correo deja de aparecer donde estaba). Esto coincide con la intuición del usuario de Gmail y Outlook: la papelera "se lleva" el correo de donde estuviera, y archivar lo saca de la bandeja de entrada.
 
-### 2.2 Los correos borrados de verdad no aparecen en ninguna lista
+### 2.2 La bandeja principal ahora muestra solo la bandeja de entrada real
 
-Cuando un correo se elimina **permanentemente** desde la papelera, internamente no se borra de la base de datos de golpe: se marca como definitivamente eliminado. Ese estado **no es una de las cuatro bandejas navegables**, así que esos correos no aparecen en ningún listado — ni siquiera en la papelera. Para el usuario, han desaparecido. (El porqué de conservar la fila marcada en lugar de borrarla está ligado al manejo de papelera y se documenta en [acciones-sobre-correos.md](acciones-sobre-correos.md).)
+Al llegar la nueva clasificación, la bandeja principal cambia de comportamiento de forma visible. **Antes**, mostraba todo el correo recibido que no estuviera en enviados, spam ni papelera; eso incluía, sin querer, los correos que el usuario **ya había archivado directamente en Gmail / Outlook** —se "colaban" en la bandeja principal—. **Ahora** la bandeja principal muestra **solo la bandeja de entrada real**: los correos archivados en el proveedor pasan a la nueva vista "Archivados".
+
+Es un cambio deseable (la bandeja de entrada pasa a ser de verdad la bandeja de entrada, como en Gmail/Outlook) pero visible: un usuario con correo archivado previo verá su bandeja principal "encoger" hacia su inbox real, con el resto reubicado en "Archivados". El cambio es **gradual por cuenta**: ocurre a medida que cada cuenta se sincroniza, porque la reclasificación la hace la sincronización al volver a traer cada correo.
+
+### 2.3 Los correos borrados de verdad no aparecen en ninguna lista
+
+Cuando un correo se elimina **permanentemente** desde la papelera, internamente no se borra de la base de datos de golpe: se marca como definitivamente eliminado. Ese estado **no es una de las bandejas navegables**, así que esos correos no aparecen en ningún listado — ni siquiera en la papelera. Para el usuario, han desaparecido. (El porqué de conservar la fila marcada en lugar de borrarla está ligado al manejo de papelera y se documenta en [acciones-sobre-correos.md](acciones-sobre-correos.md).)
 
 ---
 
 ## 3. Vista de una cuenta vs. vista unificada
 
-MailManager agrupa varias cuentas de correo bajo un mismo **mailbox**. El listado se puede mirar de dos formas, y cada bandeja (principal, enviados, spam, papelera) existe en ambas:
+MailManager agrupa varias cuentas de correo bajo un mismo **mailbox**. El listado se puede mirar de dos formas, y cada bandeja (principal, enviados, archivados, spam, papelera) existe en ambas:
 
 - **Vista unificada del mailbox**: muestra los correos de **todas** las cuentas conectadas de ese mailbox, mezclados en una sola lista ordenada por fecha. Es la vista por defecto cuando el usuario entra al mailbox.
 - **Vista de una cuenta concreta**: el usuario selecciona una de sus cuentas (mediante las pestañas de cuenta) y la lista se restringe **solo a esa cuenta**.
@@ -69,7 +76,7 @@ Si un mailbox no tiene ninguna cuenta conectada, la vista unificada devuelve una
 
 ## 4. Cómo se ve cada fila
 
-> Esta sección describe la fila **clásica** (un mensaje por fila), que hoy aplica tal cual a la pestaña de **Favoritos**. En las cuatro bandejas reales y en la unificada, las filas se agrupan por conversación: **conservan la casilla de selección** (que actúa sobre el mensaje más reciente del hilo) pero la **estrella** pasa a ser un indicador agregado de solo lectura — ver [conversaciones.md](conversaciones.md). El resto de lo que aquí se cuenta (proveedor, columnas "Para"/"De", clip de adjunto, fecha, los tres indicadores de estado) **sí** sigue aplicando a la fila-conversación, solo que con los indicadores **agregados** sobre el hilo en lugar de un único mensaje.
+> Esta sección describe la fila **clásica** (un mensaje por fila), que hoy aplica tal cual a la pestaña de **Favoritos**. En las bandejas reales y en la unificada, las filas se agrupan por conversación: **conservan la casilla de selección** (que actúa sobre el mensaje más reciente del hilo) pero la **estrella** pasa a ser un indicador agregado de solo lectura — ver [conversaciones.md](conversaciones.md). El resto de lo que aquí se cuenta (proveedor, columnas "Para"/"De", clip de adjunto, fecha, los tres indicadores de estado) **sí** sigue aplicando a la fila-conversación, solo que con los indicadores **agregados** sobre el hilo en lugar de un único mensaje.
 
 Cada correo es una fila. De izquierda a derecha el usuario ve: una casilla de selección, una estrella de favorito, el **proveedor** del que viene (un nombre amigable tipo "Gmail" / "Outlook"), una o dos columnas de personas ("Para" / "De"), el **asunto** (con un clip delante si trae adjuntos) y la **fecha**.
 
@@ -106,7 +113,7 @@ La columna de fecha muestra **la hora** (HH:MM) si el correo llegó hoy, y **el 
 
 ## 5. El orden de la lista
 
-Los correos se muestran **ordenados por fecha de recepción, de más reciente a más antiguo**. Es el orden natural de una bandeja: lo último que llegó, arriba. Este orden es el mismo en las cuatro bandejas, en ambas vistas (cuenta y unificada), y también cuando hay una búsqueda activa (la lupa respeta este mismo orden — ver [lupa.md](lupa.md)).
+Los correos se muestran **ordenados por fecha de recepción, de más reciente a más antiguo**. Es el orden natural de una bandeja: lo último que llegó, arriba. Este orden es el mismo en todas las bandejas, en ambas vistas (cuenta y unificada), y también cuando hay una búsqueda activa (la lupa respeta este mismo orden — ver [lupa.md](lupa.md)).
 
 **No hay ordenación por relevancia ni ningún otro criterio**: solo la fecha decide. No se puede reordenar por remitente, por asunto ni por tamaño.
 
@@ -188,4 +195,4 @@ Lo mismo aplica a las **acciones en bloque**: si el usuario selecciona correos d
 
 ## 10. Resumen en una frase
 
-> El listado es la tabla de una bandeja real (principal, enviados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena siempre por fecha de recepción descendente con un desempate estable, marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, se navega **por páginas numeradas** con barra "Anterior/Siguiente" e indicador "X–Y de Z" (total exacto de lo **sincronizado**, no del proveedor en vivo) reiniciando a la página 1 al cambiar de contexto y reencuadrando a la última página válida si el total encoge, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).
+> El listado es la tabla de una bandeja real (principal, enviados, archivados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena siempre por fecha de recepción descendente con un desempate estable, marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, se navega **por páginas numeradas** con barra "Anterior/Siguiente" e indicador "X–Y de Z" (total exacto de lo **sincronizado**, no del proveedor en vivo) reiniciando a la página 1 al cambiar de contexto y reencuadrando a la última página válida si el total encoge, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).

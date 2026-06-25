@@ -542,6 +542,128 @@ def test_emails_for_vmbox_in_excluded_box_returns_empty(test_client, isolated_db
     assert body["total"] == 0
 
 
+def test_emails_for_vmbox_default_excludes_archive(test_client, isolated_db):
+    # ARCHIVE joins TRASH/SPAM in the DEFAULT exclusion of a fake mailbox: a
+    # seeded archived row must NOT surface in a default (no explicit box)
+    # listing. A unique subject_contains isolates the assertion so total is
+    # exact.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('archive-default-001', %s, NULL, 'a@x.com', 'A',
+                    'zzz unique archived subject', '2026-05-10T10:00:00+00:00',
+                    FALSE, 'ARCHIVE', '', '')
+            """,
+            (_SEEDED_GMAIL_ACCOUNT,),
+        )
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Default excludes archive",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"subject_contains": "zzz unique archived subject"},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    body = test_client.get(f"{VMB_URL}/{vmb_id}/emails").json()
+    ids = {r["provider_message_id"] for r in body["items"]}
+    assert "archive-default-001" not in ids
+    assert body["total"] == 0
+
+
+def test_emails_for_vmbox_in_archive_rescues_archived_rows(test_client, isolated_db):
+    # ARCHIVE is excluded by default, BUT ``in:archive`` RESCUES it — the one
+    # exception that distinguishes ARCHIVE from TRASH/SPAM/DELETED. Without the
+    # rescue branch in ``list_emails_for_virtual_mailbox`` this would return an
+    # empty page (the in: box is in box_not_in).
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, to_email, to_name)
+            VALUES ('archive-rescue-001', %s, NULL, 'a@x.com', 'A',
+                    'archived for rescue', '2026-05-10T10:00:00+00:00',
+                    FALSE, 'ARCHIVE', '', '')
+            """,
+            (_SEEDED_GMAIL_ACCOUNT,),
+        )
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Archive via lupa",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "in:archive"})
+    assert resp.status_code == 200
+    rows = resp.json()["items"]
+    assert rows, "in:archive must rescue the archived rows excluded by default"
+    assert all(r["box"] == "ARCHIVE" for r in rows)
+    assert "archive-rescue-001" in {r["provider_message_id"] for r in rows}
+
+
+def test_emails_for_vmbox_in_archive_on_pinned_box_returns_empty(test_client, isolated_db):
+    # The in:archive rescue is scoped to DEFAULT-exclusion vmboxes. A vmbox
+    # pinned to a different box (box="SENT") takes the ``box is not None`` branch:
+    # in:archive is incompatible with the pinned SENT box, so the page is empty.
+    # Guards against a refactor that lets the ARCHIVE rescue leak archived rows
+    # into a box-pinned vmbox.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    create = test_client.post(VMB_URL, json={
+        "display_name": "Sent only",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box": "SENT"},
+    })
+    vmb_id = create.json()["virtual_mailbox_id"]
+    resp = test_client.get(f"{VMB_URL}/{vmb_id}/emails", params={"q": "in:archive"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+def test_create_rejects_box_archive_filter(test_client, isolated_db):
+    # Opción A: ARCHIVE is NOT offered as a saved vmbox filter. ``FilterBox``
+    # stays ["ALL_MAIL","SENT","SPAM","TRASH"], so box:"ARCHIVE" in a saved
+    # filter is rejected at the schema boundary (422) before reaching the
+    # service. Archived mail is reachable inside a vmbox ONLY via in:archive.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    resp = test_client.post(VMB_URL, json={
+        "display_name": "Archived vmbox",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box": "ARCHIVE"},
+    })
+    assert resp.status_code == 422
+
+
+def test_create_rejects_box_not_in_archive_filter(test_client, isolated_db):
+    # Symmetric to test_create_rejects_box_archive_filter: ``FilterBox`` governs
+    # BOTH ``box`` and ``box_not_in``, and ARCHIVE is not a FilterBox member — so
+    # box_not_in:["ARCHIVE"] is also a 422 at the schema boundary. Guards against
+    # a refactor that widens only one of the two fields.
+    from tests.integration.conftest import TEST_USER_ID
+    _reparent_seeded_user(isolated_db, TEST_USER_ID)
+
+    resp = test_client.post(VMB_URL, json={
+        "display_name": "Archived not-in vmbox",
+        "account_ids": [_SEEDED_GMAIL_ACCOUNT],
+        "filter_payload": {"box_not_in": ["ARCHIVE"]},
+    })
+    assert resp.status_code == 422
+
+
 def test_emails_for_vmbox_saved_is_read_contradicts_lupa_is_unread(test_client, isolated_db):
     # Saved is_read=True contradicts q is:unread → two incompatible AND clauses
     # → empty page. (Seed sprint rows: 019 read, 020 unread; the saved filter

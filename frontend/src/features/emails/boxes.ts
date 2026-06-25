@@ -13,7 +13,7 @@ export const EMAIL_BOX_CONFIG: Record<EmailBox, EmailBoxConfig> = {
   ALL_MAIL: {
     titleKey: 'boxes.allMailTitle',
     subtitleKey: 'boxes.allMailSubtitle',
-    allowedBulkActions: ['toggle_read', 'move_to_trash', 'mark_spam'],
+    allowedBulkActions: ['toggle_read', 'archive', 'move_to_trash', 'mark_spam'],
   },
   SENT: {
     titleKey: 'boxes.sentTitle',
@@ -29,5 +29,10 @@ export const EMAIL_BOX_CONFIG: Record<EmailBox, EmailBoxConfig> = {
     titleKey: 'boxes.trashTitle',
     subtitleKey: 'boxes.trashSubtitle',
     allowedBulkActions: ['toggle_read', 'restore_from_trash', 'delete_permanently'],
+  },
+  ARCHIVE: {
+    titleKey: 'boxes.archiveTitle',
+    subtitleKey: 'boxes.archiveSubtitle',
+    allowedBulkActions: ['toggle_read', 'unarchive', 'move_to_trash'],
   },
 };

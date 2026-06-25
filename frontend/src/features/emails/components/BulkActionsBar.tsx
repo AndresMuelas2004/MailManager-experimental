@@ -1,4 +1,14 @@
-import { X, Trash2, Mail, MailOpen, ShieldAlert, ArchiveRestore, Flame } from 'lucide-react';
+import {
+  X,
+  Trash2,
+  Mail,
+  MailOpen,
+  ShieldAlert,
+  ArchiveRestore,
+  Archive,
+  Inbox,
+  Flame,
+} from 'lucide-react';
 
 import { useTranslation } from '../../../lib/i18n';
 import type { Translate } from '../../../lib/i18n';
@@ -92,6 +102,24 @@ export default function BulkActionsBar({
           icon={readIcon}
           label={readLabel(t, readToggleTarget, selectedCount)}
           onClick={() => onAction('toggle_read')}
+          disabled={disabled}
+        />
+      )}
+
+      {allows('archive') && (
+        <ActionButton
+          icon={Archive}
+          label={t('bulk.archive')}
+          onClick={() => onAction('archive')}
+          disabled={disabled}
+        />
+      )}
+
+      {allows('unarchive') && (
+        <ActionButton
+          icon={Inbox}
+          label={t('bulk.unarchive')}
+          onClick={() => onAction('unarchive')}
           disabled={disabled}
         />
       )}

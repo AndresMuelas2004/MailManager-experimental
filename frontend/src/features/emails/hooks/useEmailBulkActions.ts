@@ -2,10 +2,12 @@ import { useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
+  archiveEmails,
   markAsSpam,
   moveToTrash,
   restoreFromSpam,
   trashAction,
+  unarchiveEmails,
   updateReadStatus,
 } from '../../../api/endpoints/emails';
 import { toUiError } from '../../../api/client/errors';
@@ -25,6 +27,8 @@ export type UseEmailBulkActionsReturn = {
   spamItems: (emails: EmailMetadataOut[]) => Promise<void>;
   restoreFromSpamItems: (emails: EmailMetadataOut[]) => Promise<void>;
   trashActionItems: (emails: EmailMetadataOut[], action: 'delete' | 'restore') => Promise<void>;
+  archiveItems: (emails: EmailMetadataOut[]) => Promise<void>;
+  unarchiveItems: (emails: EmailMetadataOut[]) => Promise<void>;
 };
 
 // Bulk operations are scoped to ONE mailbox at a time in the backend
@@ -115,19 +119,39 @@ export default function useEmailBulkActions({
     onSuccess: sharedOnSuccess,
   });
 
+  const archiveMut = useMutation({
+    mutationFn: async (emails: EmailMetadataOut[]) => {
+      const groups = groupByMailbox(emails);
+      await Promise.all([...groups].map(([mid, items]) => archiveEmails(mid, items)));
+    },
+    onSuccess: sharedOnSuccess,
+  });
+
+  const unarchiveMut = useMutation({
+    mutationFn: async (emails: EmailMetadataOut[]) => {
+      const groups = groupByMailbox(emails);
+      await Promise.all([...groups].map(([mid, items]) => unarchiveEmails(mid, items)));
+    },
+    onSuccess: sharedOnSuccess,
+  });
+
   const loading =
     moveToTrashMut.isPending ||
     readStatusMut.isPending ||
     spamMut.isPending ||
     restoreSpamMut.isPending ||
-    trashActionMut.isPending;
+    trashActionMut.isPending ||
+    archiveMut.isPending ||
+    unarchiveMut.isPending;
 
   const firstError =
     moveToTrashMut.error ||
     readStatusMut.error ||
     spamMut.error ||
     restoreSpamMut.error ||
-    trashActionMut.error;
+    trashActionMut.error ||
+    archiveMut.error ||
+    unarchiveMut.error;
   const error = firstError ? toUiError(firstError) : null;
 
   const moveToTrashItems = useCallback(
@@ -165,6 +189,20 @@ export default function useEmailBulkActions({
     [trashActionMut],
   );
 
+  const archiveItems = useCallback(
+    async (emails: EmailMetadataOut[]) => {
+      await archiveMut.mutateAsync(emails).catch(() => undefined);
+    },
+    [archiveMut],
+  );
+
+  const unarchiveItems = useCallback(
+    async (emails: EmailMetadataOut[]) => {
+      await unarchiveMut.mutateAsync(emails).catch(() => undefined);
+    },
+    [unarchiveMut],
+  );
+
   return {
     loading,
     error,
@@ -173,5 +211,7 @@ export default function useEmailBulkActions({
     spamItems,
     restoreFromSpamItems,
     trashActionItems,
+    archiveItems,
+    unarchiveItems,
   };
 }

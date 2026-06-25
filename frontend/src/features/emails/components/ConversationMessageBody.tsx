@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { MailMinus, Star, Trash2, Ban } from 'lucide-react';
+import { MailMinus, Star, Trash2, Ban, Archive, Inbox } from 'lucide-react';
 
 import Spinner from '../../../components/common/Spinner';
 import AttachmentsList from './AttachmentsList';
@@ -71,6 +71,14 @@ export default function ConversationMessageBody({ message }: Props) {
     void bulk.setReadStatusItems([message], false);
   }, [bulk, message]);
 
+  const handleArchive = useCallback(() => {
+    void bulk.archiveItems([message]);
+  }, [bulk, message]);
+
+  const handleUnarchive = useCallback(() => {
+    void bulk.unarchiveItems([message]);
+  }, [bulk, message]);
+
   let bodyFrame: React.ReactNode;
   if (loading) {
     bodyFrame = (
@@ -136,6 +144,30 @@ export default function ConversationMessageBody({ message }: Props) {
           <MailMinus style={{ width: 14, height: 14 }} strokeWidth={1.75} />
           {t('conversation.notRead')}
         </button>
+        {message.box === 'ALL_MAIL' && (
+          <button
+            type="button"
+            onClick={handleArchive}
+            disabled={bulk.loading}
+            aria-label={t('conversation.archive')}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Archive style={{ width: 14, height: 14 }} strokeWidth={1.75} />
+            {t('conversation.archive')}
+          </button>
+        )}
+        {message.box === 'ARCHIVE' && (
+          <button
+            type="button"
+            onClick={handleUnarchive}
+            disabled={bulk.loading}
+            aria-label={t('conversation.unarchive')}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Inbox style={{ width: 14, height: 14 }} strokeWidth={1.75} />
+            {t('conversation.unarchive')}
+          </button>
+        )}
         <button
           type="button"
           onClick={handleSpam}

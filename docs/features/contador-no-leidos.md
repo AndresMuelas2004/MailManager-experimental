@@ -26,7 +26,7 @@ El contador se muestra en **cuatro superficies dentro de la app** más el **tít
 
 1. **Menú lateral — «Bandeja unificada».** Total de sin leer de la **bandeja de entrada**, sumando **todas las cuentas** del buzón actual.
 2. **Menú lateral — «Spam».** Total de sin leer en la **carpeta de spam**, sumando todas las cuentas del buzón actual.
-3. **Pestañas de una cuenta concreta.** Al abrir una cuenta individual (desde Ajustes › Cuentas conectadas), las pestañas **«Bandeja»** y **«Spam»** muestran los sin leer **de esa cuenta** en cada carpeta. Las demás pestañas de la cuenta (Enviados, Favoritos, Borradores, Papelera) **no** llevan badge, pero sí muestran los de Bandeja/Spam mientras se está en ellas (el badge cuelga de la pestaña, no de la página abierta).
+3. **Pestañas de una cuenta concreta.** Al abrir una cuenta individual (desde Ajustes › Cuentas conectadas), las pestañas **«Bandeja»** y **«Spam»** muestran los sin leer **de esa cuenta** en cada carpeta. Las demás pestañas de la cuenta (Enviados, Favoritos, Archivados, Borradores, Papelera) **no** llevan badge, pero sí muestran los de Bandeja/Spam mientras se está en ellas (el badge cuelga de la pestaña, no de la página abierta).
 4. **Ajustes › Cuentas conectadas — tarjeta de cada cuenta.** Cada tarjeta muestra los sin leer de la **bandeja de entrada** de esa cuenta (la tarjeta no muestra el de spam).
 5. **Título de la pestaña del navegador.** El título refleja el total de sin leer de la **bandeja de entrada del buzón actual**, con el formato **«(N) MailManager»**. Cuando no hay sin leer, vuelve a ser **«MailManager»**. El número exacto que muestra el título (incluido su tope) está en el gemelo de límites.
 
@@ -75,7 +75,7 @@ El **título de la pestaña del navegador** se actualiza con los mismos cambios 
 Resumen de las fronteras (el catálogo completo, con el porqué de cada una, está en [../limits/contador-no-leidos.md](../limits/contador-no-leidos.md)):
 
 - **No marca correos como leídos por sí solo.** Solo refleja el estado real; quien cambia «leído/no leído» son las acciones que ya existían.
-- **No añade contadores** a Enviados, Favoritos, Bandejas ficticias, Borradores ni Papelera (sección 2).
+- **No añade contadores** a Enviados, Favoritos, Archivados, Bandejas ficticias, Borradores ni Papelera (sección 2).
 - **No añade sonidos, notificaciones del sistema ni notificaciones push.** Eso pertenece a la funcionalidad de **Notificaciones** (una feature aparte), con la que el título de la pestaña del navegador se coordina.
 - **No cambia el orden ni el contenido** de los listados de correo.
 - **No persiste ninguna preferencia nueva** del usuario ni añade ajustes configurables.

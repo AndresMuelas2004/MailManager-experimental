@@ -361,10 +361,12 @@ class TestListEmailsForVirtualMailbox:
         captured = self._patch_listing(monkeypatch, record=record)
         virtual_mailboxes_service.list_emails_for_virtual_mailbox("vmb-1", _USER_ID)
         assert captured["account_ids"] == [_ACCOUNT_ID]
-        # Default: exclude trash/spam when no explicit box. DELETED is always
-        # appended on top — it has no FilterBox membership and must never be
-        # visible in a virtual mailbox.
-        assert captured["box_not_in"] == ["TRASH", "SPAM", "DELETED"]
+        # Default: exclude trash/spam/archive when no explicit box. DELETED is
+        # always appended on top — it has no FilterBox membership and must
+        # never be visible in a virtual mailbox. ARCHIVE joins the default
+        # exclusion (archived mail stays out of a fake mailbox by default) but
+        # is rescuable via ``in:archive`` (covered separately below).
+        assert captured["box_not_in"] == ["TRASH", "SPAM", "ARCHIVE", "DELETED"]
 
     def test_listing_silently_drops_revoked_accounts(self, monkeypatch):
         # Vmbox persisted two account ids but the user only owns one
@@ -424,12 +426,14 @@ class TestListEmailsForVirtualMailbox:
 
     def test_build_filter_args_non_dict_fallback_excludes_deleted(self):
         # Pure-function guard: a non-dict ``filter_payload`` falls back to
-        # the default exclusion, which must also carry DELETED.
+        # the default exclusion, which must carry both ARCHIVE and DELETED.
+        # ARCHIVE was added to BOTH defaults (the else-branch AND this non-dict
+        # early-return) so a non-dict payload cannot leak archived mail.
         box, box_not_in, extra_filters = virtual_mailboxes_service._build_filter_args(
             "not a dict",
         )
         assert box is None
-        assert box_not_in == ["TRASH", "SPAM", "DELETED"]
+        assert box_not_in == ["TRASH", "SPAM", "ARCHIVE", "DELETED"]
         assert extra_filters == {}
 
     def test_build_filter_args_does_not_duplicate_preincluded_deleted(self):
@@ -584,6 +588,33 @@ class TestListEmailsForVirtualMailbox:
         assert result.items == []
         assert result.total == 0
         # Neither store was called — captured stays empty.
+        assert captured == {}
+
+    def test_in_archive_rescues_default_excluded_archive(self, monkeypatch):
+        # ARCHIVE is in the DEFAULT box_not_in (["TRASH","SPAM","ARCHIVE",
+        # "DELETED"]) yet ``in:archive`` must RESCUE it: unlike in:trash /
+        # in:spam (which short-circuit to empty), in:archive narrows to
+        # box="ARCHIVE" with box_not_in cleared. This is the only
+        # default-excluded box that is also a legal in: value.
+        record = _fake_record()
+        captured = self._patch_listing(monkeypatch, record=record)
+        virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:archive",
+        )
+        assert captured["box"] == "ARCHIVE"
+        assert captured["box_not_in"] is None
+
+    def test_in_trash_not_rescued_unlike_archive(self, monkeypatch):
+        # Control for the archive rescue: in:trash over the default exclusion
+        # still collapses to an empty page (the rescue is ARCHIVE-only) — no
+        # DB call.
+        record = _fake_record()
+        captured = self._patch_listing(monkeypatch, record=record)
+        result = virtual_mailboxes_service.list_emails_for_virtual_mailbox(
+            "vmb-1", _USER_ID, q="in:trash",
+        )
+        assert result.items == []
+        assert result.total == 0
         assert captured == {}
 
     def test_in_different_from_pinned_box_returns_empty_without_query(self, monkeypatch):

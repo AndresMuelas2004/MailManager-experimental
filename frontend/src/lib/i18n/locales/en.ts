@@ -36,6 +36,7 @@ export const en: EsDictionary = {
     inbox: 'Unified inbox',
     sent: 'Sent',
     favorites: 'Favorites',
+    archive: 'Archive',
     virtualMailboxes: 'Virtual mailboxes',
     spam: 'Spam',
     drafts: 'Drafts',
@@ -114,6 +115,8 @@ export const en: EsDictionary = {
     spamSubtitle: 'Unwanted email from your connected accounts.',
     trashTitle: 'Trash',
     trashSubtitle: 'Deleted email from your connected accounts.',
+    archiveTitle: 'Archive',
+    archiveSubtitle: 'Archived email from your connected accounts.',
   },
 
   emailTable: {
@@ -142,6 +145,8 @@ export const en: EsDictionary = {
     markSpam: 'Mark as spam',
     restoreFromSpam: 'Restore from spam',
     restore: 'Restore',
+    archive: 'Archive',
+    unarchive: 'Unarchive',
     deletePermanently: 'Delete',
     confirmDeleteOne: 'Permanently delete this email? This action cannot be undone.',
     confirmDeleteMany: 'Permanently delete {count} emails? This action cannot be undone.',
@@ -168,7 +173,7 @@ export const en: EsDictionary = {
     opAfter: 'from a date (inclusive)',
     opIsReadUnread: 'unread / read',
     opIsFavorite: 'favorites (alias is:starred)',
-    opIn: 'restrict to a mailbox: inbox, sent, spam, trash',
+    opIn: 'restrict to a mailbox: inbox, sent, spam, trash, archive',
     combineHint: 'Combine them with spaces (AND); use quotes for phrases:',
   },
 
@@ -283,12 +288,15 @@ export const en: EsDictionary = {
     markUnread: 'Mark as unread',
     markSpam: 'Mark as spam',
     moveToTrash: 'Move to trash',
+    archive: 'Archive',
+    unarchive: 'Unarchive',
     spam: 'Spam',
     trash: 'Trash',
     notRead: 'Unread',
     boxSent: 'Sent',
     boxSpam: 'Spam',
     boxTrash: 'Trash',
+    boxArchive: 'Archived',
   },
 
   attachments: {

@@ -22,7 +22,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [favoritos.md](favoritos.md) — Topes y asimetrías de conteo de la sincronización de favoritos.
 
 ### Organizar
-- [acciones-sobre-correos.md](acciones-sobre-correos.md) — Tope de selección, lotes, política de reintentos y el alcance exacto del borrado (no-op).
+- [acciones-sobre-correos.md](acciones-sobre-correos.md) — Tope de selección, lotes, política de reintentos (incluido archivar/desarchivar), códigos de error y el alcance exacto del borrado (no-op).
 - [bandejas-ficticias.md](bandejas-ficticias.md) — Criterios de filtro admitidos, validaciones y límites de la vista virtual.
 
 ### Escribir y enviar
