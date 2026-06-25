@@ -21,7 +21,7 @@ El usuario no tiene que saber nada de esto: marca la estrella en MailManager y e
 
 Esta es la decisión de diseño más importante de la feature, y conviene entenderla bien.
 
-Cada correo tiene una **ubicación** (`box`): bandeja de entrada, enviados, spam o papelera. El estado de favorito es **independiente** de esa ubicación. Un correo puede estar a la vez en la papelera y marcado como favorito; puede moverse de la bandeja de entrada a spam sin perder la estrella.
+Cada correo tiene una **ubicación** (`box`): bandeja de entrada, enviados, archivados, spam o papelera. El estado de favorito es **independiente** de esa ubicación. Un correo puede estar a la vez en la papelera y marcado como favorito; puede moverse de la bandeja de entrada a spam, o **archivarse**, sin perder la estrella (un favorito archivado sigue apareciendo en Favoritos — ver [acciones-sobre-correos.md](acciones-sobre-correos.md) § 6-bis).
 
 Esto se hizo así porque **los dos proveedores lo modelan exactamente igual**:
 
@@ -95,11 +95,11 @@ Como la pestaña mezcla correos recibidos y enviados, **cada fila resuelve por s
 
 ### 4.2 Spam y papelera quedan fuera por defecto
 
-La bandeja de Favoritos **excluye** los correos que están en spam o en la papelera, aunque sigan marcados como favoritos.
+La bandeja de Favoritos **excluye** los correos que están en spam o en la papelera, aunque sigan marcados como favoritos. **Los archivados sí se muestran**: un favorito archivado sigue apareciendo en Favoritos (como en Gmail, un correo destacado y archivado sigue en "Destacados"). Es una asimetría deliberada — archivar no saca al correo del "flujo de favoritos" igual que sí lo hace mandarlo a spam o a la papelera.
 
 **Por qué**: cuando el usuario manda un favorito a la papelera, implícitamente está diciendo "esto ya no está en mi flujo activo". La vista de Favoritos respeta esa decisión y no se los vuelve a poner delante. La estrella se conserva (no se pierde el favorito), simplemente no se lista aquí.
 
-Esta exclusión también aplica a las **bandejas ficticias** cuyo filtro no especifica explícitamente una ubicación.
+Una matización: las **bandejas ficticias** cuyo filtro no especifica ubicación excluyen por defecto spam, papelera **y archivados** — un superconjunto de la exclusión de Favoritos, que **no** descarta los archivados. Ver [bandejas-ficticias.md](bandejas-ficticias.md).
 
 **Cómo verlos igualmente**: si el usuario quiere ver los favoritos que están en spam o en la papelera, tiene que pedir explícitamente esa ubicación. El listado solo trae favoritos de spam/papelera cuando se selecciona esa caja de forma explícita; en cualquier otro caso se queda en "todo menos spam y papelera".
 

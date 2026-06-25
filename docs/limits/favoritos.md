@@ -33,8 +33,9 @@ Catálogo de topes, cuotas y comportamientos cuantitativos de la feature de favo
 |---|---|
 | Spam | Excluido de la vista de Favoritos salvo que se seleccione la caja `SPAM` explícitamente. |
 | Papelera | Excluida de la vista de Favoritos salvo que se seleccione la caja `TRASH` explícitamente. |
-| Ancla por defecto | "Todo menos spam y papelera". Cualquier otra caja explícita (`SENT`) se respeta tal cual, sin colar favoritos de otras cajas. |
-| Bandejas ficticias | Misma exclusión de spam/papelera cuando su filtro no especifica caja. |
+| Archivados | **NO se excluyen**: un favorito archivado (`box = ARCHIVE`) sigue apareciendo en Favoritos. El ancla por defecto solo descarta `TRASH`/`SPAM`, no `ARCHIVE` (asimetría deliberada con las bandejas ficticias). |
+| Ancla por defecto | "Todo menos spam y papelera" (`box_not_in = ["TRASH","SPAM"]`, sin `ARCHIVE`). Cualquier otra caja explícita (`SENT`) se respeta tal cual, sin colar favoritos de otras cajas. |
+| Bandejas ficticias | Exclusión por defecto **más amplia**: spam, papelera **y archivados** cuando su filtro no especifica caja (los archivados rescatables con `in:archive`). Es un superconjunto de la exclusión de Favoritos. Ver [bandejas-ficticias.md](bandejas-ficticias.md). |
 
 ---
 

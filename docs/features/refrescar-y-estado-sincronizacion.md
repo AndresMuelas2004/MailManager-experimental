@@ -91,7 +91,7 @@ La marca de "última actualización" se guarda **en el propio navegador**, no en
 
 ### 6.1 La marca es independiente de la caja
 
-Dentro de la bandeja unificada, cambiar entre **Recibidos / Enviados / Spam / Papelera** muestra la **misma** "última actualización". No es un descuido: una sola sincronización trae el correo de **todas** esas cajas a la vez (la sincronización es por cuenta y abarca todas las bandejas — ver [sincronizacion.md](sincronizacion.md) § 3), así que tiene sentido que las cuatro cajas compartan la misma marca de frescura. Lo mismo aplica a la búsqueda, la paginación o el filtro de favoritos: ninguno de esos cambia el ámbito de la marca, que depende solo del buzón (y, en su caso, de la cuenta) o de la bandeja ficticia.
+Dentro de la bandeja unificada, cambiar entre **Recibidos / Enviados / Archivados / Spam / Papelera** muestra la **misma** "última actualización". No es un descuido: una sola sincronización trae el correo de **todas** esas cajas a la vez (la sincronización es por cuenta y abarca todas las bandejas — ver [sincronizacion.md](sincronizacion.md) § 3), así que tiene sentido que todas las cajas compartan la misma marca de frescura. Lo mismo aplica a la búsqueda, la paginación o el filtro de favoritos: ninguno de esos cambia el ámbito de la marca, que depende solo del buzón (y, en su caso, de la cuenta) o de la bandeja ficticia.
 
 ---
 

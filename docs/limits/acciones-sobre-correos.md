@@ -1,10 +1,10 @@
 # Acciones sobre correos — límites y alcance
 
-Catálogo de los topes, asimetrías y limitaciones deliberadas de las acciones sobre correos (leído·no leído, papelera, spam, borrado y acciones masivas). El **comportamiento** (flujos, UX, casos borde y el porqué de las decisiones) vive en **[../features/acciones-sobre-correos.md](../features/acciones-sobre-correos.md)**; aquí solo están las cifras y los "hasta dónde llega".
+Catálogo de los topes, asimetrías y limitaciones deliberadas de las acciones sobre correos (leído·no leído, papelera, spam, **archivar/desarchivar**, borrado y acciones masivas). El **comportamiento** (flujos, UX, casos borde y el porqué de las decisiones) vive en **[../features/acciones-sobre-correos.md](../features/acciones-sobre-correos.md)**; aquí solo están las cifras y los "hasta dónde llega".
 
 El toggle de favorito tiene su propio catálogo: ver [favoritos.md](favoritos.md).
 
-> **Nota — modo conversación.** Las cifras de **selección** y la **barra de acciones masivas** de este documento aplican hoy **solo a la pestaña de Favoritos** (la única que no agrupa por conversación). En las cuatro bandejas reales, la unificada y las ficticias, las acciones se disparan **por mensaje** desde el visor de la conversación, sin selección múltiple ni barra masiva (ver [conversaciones.md](conversaciones.md)). El resto de cifras (troceo, reintentos, asimetrías de proveedor, alcance del borrado, códigos de error) **no cambian**: la acción subyacente es la misma venga de la barra masiva o del botón por mensaje.
+> **Nota — modo conversación.** Las cifras de **selección** y la **barra de acciones masivas** de este documento aplican hoy **solo a la pestaña de Favoritos** (la única que no agrupa por conversación). En las bandejas reales, la unificada y las ficticias, las acciones se disparan **por mensaje** desde el visor de la conversación, sin selección múltiple ni barra masiva (ver [conversaciones.md](conversaciones.md)). El resto de cifras (troceo, reintentos, asimetrías de proveedor, alcance del borrado, códigos de error) **no cambian**: la acción subyacente es la misma venga de la barra masiva o del botón por mensaje.
 
 ---
 
@@ -32,9 +32,11 @@ Asimetría clave dentro de Gmail: las operaciones que solo cambian etiquetas (le
 |---|---|
 | Marcar leído / no leído (Gmail) | **Reintenta** hasta 5 intentos por lote (modificación de etiqueta idempotente: reaplicar una etiqueta ya puesta es un no-op) |
 | Marcar spam / restaurar de spam (Gmail) | **Reintenta** hasta 5 intentos por lote (mismo motivo: cambio de etiqueta idempotente) |
+| Archivar / desarchivar (Gmail) | **Reintenta** hasta 5 intentos por lote (es un cambio de etiqueta idempotente —quitar/poner la etiqueta de bandeja de entrada—, mismo helper de etiquetas que spam) |
 | Mover a papelera (Gmail) | **NO reintenta** (helper sin bucle de reintento; un fallo por mensaje se registra y se salta) |
 | Restaurar de papelera (Gmail) | **NO reintenta** (mismo helper que "mover a papelera"; un fallo por mensaje se registra y se salta) |
 | Operaciones por mensaje (Outlook) | Best-effort por correo: un identificador inválido (borrado en el servidor, etc.) se registra y se salta, sin abortar el resto del lote |
+| Archivar / desarchivar (Outlook) | Best-effort por correo (mismo helper de movimiento de carpeta que spam/papelera): un fallo de movimiento se registra y ese correo se omite |
 | Restaurar de papelera (Outlook) | Best-effort por correo: un fallo de movimiento se registra y ese correo se omite |
 
 El conteo exacto de reintentos de los lotes de etiqueta (Gmail) está en § 1. En todos los casos, un fallo en un correo concreto **no aborta** los demás de la misma operación: el resultado puede ser **parcial** y la respuesta indica cuántos correos se vieron afectados de verdad.
@@ -46,6 +48,7 @@ El conteo exacto de reintentos de los lotes de etiqueta (Gmail) está en § 1. E
 | Aspecto | Gmail | Outlook |
 |---|---|---|
 | Mover a papelera / spam | Cambio de etiqueta; el **ID del correo no cambia** | Movimiento de carpeta; **Graph reescribe el ID** y la app debe capturar y propagar el nuevo |
+| Archivar / desarchivar | Cambio de etiqueta (quitar/poner la etiqueta de bandeja de entrada); el **ID no cambia** | Movimiento a/desde la carpeta "Archivo"; **Graph reescribe el ID** (misma regla que papelera/spam) |
 | Idempotencia de "papelera" | Idempotente: re-papelerizar un correo ya en papelera es un no-op (la UPDATE local solo toca filas con `box NOT IN ('TRASH','DELETED')`) | Idempotente vía movimiento de carpeta (best-effort por correo) |
 | Scope OAuth en uso | `gmail.modify` (no incluye borrado permanente) | `Mail.ReadWrite` (mover entre carpetas) |
 | Borrado permanente real | Imposible con el permiso actual (`gmail.modify`); requeriría el scope restringido `mail.google.com` | Técnicamente posible, pero **no se usa** por uniformidad |
@@ -82,7 +85,7 @@ El conteo exacto de reintentos de los lotes de etiqueta (Gmail) está en § 1. E
 
 ## 6. Códigos de error HTTP
 
-Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (delete / restore), `PATCH .../emails/read-status`, `POST .../emails/spam`, `POST .../emails/restore-from-spam`.
+Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (delete / restore), `PATCH .../emails/read-status`, `POST .../emails/spam`, `POST .../emails/restore-from-spam`, `POST .../emails/archive`, `POST .../emails/restore-from-archive`.
 
 | Situación | Status | `code` |
 |---|---|---|
@@ -96,7 +99,11 @@ Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (
 | Fallo del proveedor al marcar leído/no leído | 502 | `read_status_update_error` |
 | Fallo del proveedor al marcar spam | 502 | `spam_move_error` |
 | Fallo del proveedor al restaurar de spam | 502 | `spam_restore_error` |
+| Fallo del proveedor al archivar | 502 | `archive_move_error` |
+| Fallo del proveedor al desarchivar | 502 | `archive_restore_error` |
 | Fallo del proveedor durante restaurar de papelera | 500 | `trash_operation_error` |
+
+> **Archivar / desarchivar comparten el mismo motor que spam** (agrupar por cuenta → validar `cuenta ∈ mailbox` → Provider-First → persistir el movimiento de buzón). Cada `items[]` exige `min_length=1` (lista vacía → 422). **Desarchivar siempre devuelve el correo a la bandeja de entrada (`ALL_MAIL`)**, nunca a la carpeta original concreta — igual que "restaurar de spam".
 
 > El borrado definitivo (`action=delete`) **no** llama al proveedor (§ 4), así que su único fallo posible de proveedor sería en la fase de autenticación previa; la operación de marcado local no produce un 502 propio.
 
@@ -109,14 +116,15 @@ Endpoints implicados: `POST .../emails/move-to-trash`, `POST .../emails/trash` (
 - **Restaurar de spam no devuelve a la carpeta original concreta**, siempre a la bandeja principal. Solo la papelera recuerda el origen exacto.
 - **No hay papelera "real" propia de MailManager ni purga manual de correos.** La papelera de la app es un reflejo de la del proveedor; la limpieza definitiva la hace el proveedor por retención. (La purga manual existe solo para los **binarios de adjuntos** cacheados — ver [../limits/adjuntos.md](../limits/adjuntos.md) — no para correos.)
 - **No hay un "seleccionar toda la bandeja" de un clic.** La casilla de cabecera abarca como mucho la **página actual** (50 correos); no existe un "seleccionar los 5.000 correos del buzón" en una sola acción. Sí se puede acumular una selección mayor marcando correos a mano en varias páginas (la selección persiste entre páginas), pero no con una única pulsación de "seleccionar todo".
-- **No hay acción por fila independiente en el listado** para papelera / spam / borrado: todo pasa por la **barra de selección** (una selección de un solo correo usa la misma barra). Aplica a Favoritos y, desde la restauración de la selección, también a las bandejas de cuenta y a la unificada agrupadas (la acción toca el mensaje más reciente del hilo). Las **bandejas ficticias** no tienen selección: allí esas acciones se ofrecen **por mensaje dentro del visor de la conversación** (Spam / Papelera / No leído / Favorito — ver [conversaciones.md](conversaciones.md)). El **borrado definitivo** no se ofrece en el visor (sigue siendo exclusivo de la barra de la papelera). La única acción automática al abrir es marcar como leído (toda la conversación de golpe).
-- **No hay archivado, ni etiquetas/categorías personalizadas, ni mover a carpetas arbitrarias.** El conjunto de destinos se limita a las bandejas modeladas (principal, enviados, spam, papelera). Fuera del MVP.
+- **No hay acción por fila independiente en el listado** para papelera / spam / archivar / borrado: todo pasa por la **barra de selección** (una selección de un solo correo usa la misma barra). Aplica a Favoritos y, desde la restauración de la selección, también a las bandejas de cuenta y a la unificada agrupadas (la acción toca el mensaje más reciente del hilo). Las **bandejas ficticias** no tienen selección: allí esas acciones se ofrecen **por mensaje dentro del visor de la conversación** (Spam / Papelera / No leído / Favorito / Archivar o Desarchivar — ver [conversaciones.md](conversaciones.md)). El **borrado definitivo** no se ofrece en el visor (sigue siendo exclusivo de la barra de la papelera). La única acción automática al abrir es marcar como leído (toda la conversación de golpe).
+- **No hay etiquetas/categorías personalizadas ni mover a carpetas arbitrarias.** El conjunto de destinos se limita a las bandejas modeladas (principal, archivados, enviados, spam, papelera). Crear etiquetas propias o mover a una carpeta cualquiera del proveedor queda fuera del MVP.
+- **Desarchivar no recuerda la carpeta de origen.** Siempre devuelve el correo a la bandeja de entrada (`ALL_MAIL`), no "a la carpeta exacta de la que vino" — *por qué:* archivar solo se hace desde la bandeja de entrada, así que el origen siempre es ese (misma simplificación que "restaurar de spam"; solo la papelera recuerda el origen exacto).
 - **No hay reversión atómica de operaciones parciales.** Si una acción masiva falla a medias, los correos que sí se procesaron quedan procesados; no se revierten. La respuesta reporta el recuento real de afectados.
 
 ---
 
 ## Resumen de topes en una frase
 
-> Cada "seleccionar todo" abarca **50** correos (la página actual), pero la selección **persiste entre páginas** y puede acumular más marcando a mano; Gmail trocea en lotes de **100** y reintenta lo idempotente (leído, spam) pero **no** la papelera; Outlook va best-effort por correo; las acciones masivas hacen **una llamada por cada mailbox real** de la selección; y el "borrado definitivo" es un **no-op uniforme** que nunca toca el proveedor —el correo sobrevive en su papelera—, irreversible desde la app y recuperable solo desde el cliente original.
+> Cada "seleccionar todo" abarca **50** correos (la página actual), pero la selección **persiste entre páginas** y puede acumular más marcando a mano; Gmail trocea en lotes de **100** y reintenta lo idempotente (leído, spam, **archivar/desarchivar** — todos cambios de etiqueta) pero **no** la papelera; Outlook va best-effort por correo (archivar es un movimiento de carpeta que reescribe el ID, como spam); **archivar/desarchivar** comparten el motor de spam (Provider-First, parcial, `archive_move_error`/`archive_restore_error` 502) y **desarchivar siempre vuelve a la bandeja de entrada**; las acciones masivas hacen **una llamada por cada mailbox real** de la selección; y el "borrado definitivo" es un **no-op uniforme** que nunca toca el proveedor —el correo sobrevive en su papelera—, irreversible desde la app y recuperable solo desde el cliente original.
 
 Volver al comportamiento: **[../features/acciones-sobre-correos.md](../features/acciones-sobre-correos.md)**.

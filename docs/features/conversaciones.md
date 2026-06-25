@@ -10,7 +10,7 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 
 - El **listado** en el que se montan las filas-conversación (orden, paginación, columnas "Para"/"De", enrutado de acciones al buzón real) se documenta en [listado-de-correos.md](listado-de-correos.md).
 - El **render del cuerpo** de cada mensaje del hilo (HTML saneado, imágenes embebidas, caché) es exactamente el mismo de siempre y se documenta en [visualizacion-de-correos.md](visualizacion-de-correos.md).
-- Las **acciones por mensaje** (favorito, papelera, spam, leído/no leído) se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md) y [favoritos.md](favoritos.md); aquí solo se explica **desde dónde** se disparan ahora (dentro del visor).
+- Las **acciones por mensaje** (favorito, papelera, spam, archivar/desarchivar, leído/no leído) se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md) y [favoritos.md](favoritos.md); aquí solo se explica **desde dónde** se disparan ahora (dentro del visor).
 - **Responder / Responder a todos / Reenviar** sobre el hilo se apoyan en [responder-y-reenviar.md](responder-y-reenviar.md).
 
 ---
@@ -61,7 +61,7 @@ Al abrir una fila-conversación, el visor deja de mostrar un único mensaje y pa
 - Los mensajes se presentan en **orden cronológico ascendente**: el **más antiguo arriba**, el **más reciente abajo** (estilo Gmail).
 - El **mensaje más reciente aparece expandido** (con su cuerpo visible); los **anteriores aparecen colapsados** (solo su cabecera) y se expanden al pulsar sobre ellos. El usuario puede colapsar/expandir cualquier mensaje libremente.
 - La **cabecera del modal** muestra el asunto base del hilo y los botones **Responder / Responder a todos / Reenviar**, que operan sobre el mensaje más reciente (§ 7).
-- Cada mensaje colapsado muestra en su cabecera el **remitente** (De), la **fecha**, su estado de no leído (un punto), su estrella si es favorito y, cuando el mensaje vive **fuera** de la bandeja de entrada, una pequeña etiqueta de ubicación ("Enviado", "Spam", "Papelera"). Al expandirse añade el destinatario ("Para"), su **cuerpo** renderizado y sus **adjuntos descargables**.
+- Cada mensaje colapsado muestra en su cabecera el **remitente** (De), la **fecha**, su estado de no leído (un punto), su estrella si es favorito y, cuando el mensaje vive **fuera** de la bandeja de entrada, una pequeña etiqueta de ubicación ("Enviado", "Archivado", "Spam", "Papelera"). Al expandirse añade el destinatario ("Para"), su **cuerpo** renderizado y sus **adjuntos descargables**.
 
 ### 3.1 El cuerpo se carga al expandir (carga perezosa)
 
@@ -71,7 +71,7 @@ El cuerpo de cada mensaje **no** se descarga al abrir la conversación: se carga
 
 ### 3.2 Las acciones por mensaje viven dentro de cada mensaje expandido
 
-Cada mensaje expandido de la cadena trae sus **propios** controles de acción, justo encima de su cuerpo: **Favorito**, **No leído**, **Spam** y **Papelera**. Son las mismas acciones de siempre ([acciones-sobre-correos.md](acciones-sobre-correos.md), [favoritos.md](favoritos.md)), pero aplicadas **a ese mensaje concreto**, no al hilo entero. No hay "marcar como leído": abrir la conversación ya marca todo el hilo como leído (§ 7), así que el botón ofrecido es el inverso, "No leído".
+Cada mensaje expandido de la cadena trae sus **propios** controles de acción, justo encima de su cuerpo: **Favorito**, **No leído**, **Spam**, **Papelera** y —según dónde esté el mensaje— **Archivar** (solo si está en la bandeja de entrada) o **Desarchivar** (solo si ya está archivado). Son las mismas acciones de siempre ([acciones-sobre-correos.md](acciones-sobre-correos.md), [favoritos.md](favoritos.md)), pero aplicadas **a ese mensaje concreto**, no al hilo entero. Este visor por mensaje es además la **única** vía para archivar/desarchivar desde una bandeja ficticia. No hay "marcar como leído": abrir la conversación ya marca todo el hilo como leído (§ 7), así que el botón ofrecido es el inverso, "No leído".
 
 Cada acción se enruta al **buzón y la cuenta reales de ese mensaje** (que la conversación lleva consigo en cada elemento de la cadena), nunca al buzón de la URL. Esto importa porque una conversación abierta desde una **bandeja ficticia multi-buzón** puede contener mensajes que viven en **mailboxes distintos**; usar el buzón de la pantalla fallaría con "cuenta no encontrada". Es la misma garantía de "cada acción al buzón real" del listado ([listado-de-correos.md](listado-de-correos.md) § 8), trasladada a la cadena del visor.
 
@@ -132,7 +132,7 @@ Por eso, tras abrir una conversación, la app **refresca los listados** en segun
 
 - **Marcar como leído al abrir.** Al abrir una conversación, **todos** sus mensajes no leídos se marcan como leídos (como Gmail), de una sola vez, de modo que la fila deja de estar en negrita de inmediato. Si el hilo ya estaba todo leído, no se hace ninguna llamada. El marcado se enruta al buzón real de cada mensaje (un hilo de una bandeja ficticia puede cruzar varios mailboxes), agrupando por buzón.
 - **Responder / Responder a todos / Reenviar.** Operan, por defecto, sobre el **mensaje más reciente** del hilo (continuar la conversación), y se lanzan desde los botones de la cabecera del visor. El threading y la herencia de adjuntos son los de [responder-y-reenviar.md](responder-y-reenviar.md).
-- **Favorito, mover a papelera, mover a spam, marcar no leído, descargar adjuntos.** Se realizan **por mensaje, dentro del visor** (§ 3.2): cada mensaje de la cadena mantiene sus acciones individuales.
+- **Favorito, mover a papelera, mover a spam, archivar/desarchivar, marcar no leído, descargar adjuntos.** Se realizan **por mensaje, dentro del visor** (§ 3.2): cada mensaje de la cadena mantiene sus acciones individuales.
 
 En esta primera versión **no** existen acciones que afecten a la conversación **entera** de una sola vez (marcar todo el hilo desde un botón, borrar la conversación completa): eso queda **fuera del alcance inicial**. La única acción que sí abarca todo el hilo es el marcado automático de "leído" al abrir.
 

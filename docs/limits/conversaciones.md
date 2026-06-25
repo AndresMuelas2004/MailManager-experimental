@@ -86,7 +86,7 @@ En las bandejas que agrupan, la fila-conversación informa y **abre** el visor, 
 
 > La bandeja ficticia es **totalmente de solo lectura** (reúne cuentas de varios buzones sin una caja única a la que dirigir el lote — ver [bandejas-ficticias.md](bandejas-ficticias.md)). La pestaña de **Favoritos** no agrupa y conserva además la **estrella clicable**.
 
-Acciones disponibles **dentro** del visor de la conversación: en la cabecera, **Responder / Responder a todos / Reenviar** (sobre el mensaje más reciente); por cada mensaje expandido, **Favorito**, **No leído**, **Spam**, **Papelera** y la **descarga de sus adjuntos**. No hay botón "marcar leído" (abrir ya marca todo el hilo como leído).
+Acciones disponibles **dentro** del visor de la conversación: en la cabecera, **Responder / Responder a todos / Reenviar** (sobre el mensaje más reciente); por cada mensaje expandido, **Favorito**, **No leído**, **Spam**, **Papelera**, **Archivar** (solo si el mensaje está en la bandeja de entrada) o **Desarchivar** (solo si está archivado), y la **descarga de sus adjuntos**. No hay botón "marcar leído" (abrir ya marca todo el hilo como leído).
 
 ---
 
