@@ -145,6 +145,14 @@ MOVE_TO_TRASH_BATCH = """
 # trusted ORDER BY body built by ``_build_order_by`` from the closed
 # ``_SORT_EXPRESSIONS`` whitelist — never raw user text.
 #
+# A FIFTH slot, {match_predicate}, exists ONLY in the *grouped* templates
+# (LIST_/COUNT_GROUPED_BY_THREAD[_DISTINCT]). It carries the SAME
+# search+extra/operator conditions as a single boolean EXPRESSION (no
+# leading " AND ", defaulting to the literal ``TRUE``) so a thread can be
+# surfaced when ANY of its messages matches — see the MATCH-SURFACING note
+# on those templates. The flat (non-grouped) templates here do NOT carry it;
+# str.format() simply ignores the unused keyword.
+#
 # Single query backs BOTH the regular box listing (one box, mandatory)
 # and the virtual-mailbox listing (zero, one or many boxes derived from
 # the stored filter_payload). The caller passes the right slot text in
@@ -335,6 +343,30 @@ LIST_FILTERED_DISTINCT = """
 # picks the most-recent message of each (account_id, thread_key) as the
 # row representative; window aggregates are evaluated BEFORE the DISTINCT ON
 # so the representative already carries the whole-thread aggregates.
+#
+# MATCH-SURFACING (the search/chip slots are NOT in the inner WHERE here):
+# this REGULAR grouped template backs the regular ``GET /emails`` listing,
+# whose free-text search + quick-filter chips / lupa operators must surface a
+# thread when ANY of its messages matches, while keeping the representative as
+# the thread's most-recent message and ``thread_message_count`` as the whole
+# thread present in the box (docs/features/ordenar-y-filtrar-listado.md § 5,
+# conversaciones.md, repository_guide.md § 2.6). So ONLY the ``{box_predicate}``
+# stays in the inner WHERE (it defines which messages belong to the
+# thread-in-this-box and hence the count); the search + extra clauses are
+# folded into the ``{match_predicate}`` boolean expression (``TRUE`` when there
+# is no search/chip), windowed with ``bool_or`` over the partition, and the
+# outer wrapper keeps only threads where that OR is true. A row-level WHERE on
+# those predicates (the pre-fix behaviour) silently dropped non-matching
+# siblings from the partition, corrupting both the representative (it became
+# the most-recent *matching* row) and the count.
+#
+# ⚠️ ASYMMETRY with the *_DISTINCT (virtual-mailbox) sibling: the vmbox
+# listing does the OPPOSITE — its saved filter_payload + q operators DEFINE
+# the bandeja's content and filter message-by-message BEFORE grouping (no
+# match-surfacing), so that template keeps the search/extra clauses in the
+# inner WHERE and has no ``{match_predicate}`` slot. The chips/sort feature
+# explicitly does not touch the fake bandejas (ordenar-y-filtrar-listado.md
+# § 2). Do NOT unify the two templates — the difference is the contract.
 LIST_GROUPED_BY_THREAD = """
     SELECT * FROM (
         SELECT DISTINCT ON (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))
@@ -345,18 +377,18 @@ LIST_GROUPED_BY_THREAD = """
                bool_or(em.has_attachments) OVER w AS has_attachments,
                bool_or(em.is_favorite)     OVER w AS is_favorite,
                em.to_email, em.to_name, a.mailbox_id,
-               count(*)                    OVER w AS thread_message_count
+               count(*)                    OVER w AS thread_message_count,
+               bool_or({match_predicate})  OVER w AS thread_matches
         FROM email_metadata AS em
         JOIN accounts AS a USING (account_id)
         WHERE em.account_id = ANY(%(account_ids)s::uuid[])
           {box_predicate}
-          {search_predicate}
-          {extra_predicate}
         WINDOW w AS (PARTITION BY em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))
         ORDER BY em.account_id,
                  COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id),
                  em.received_at DESC, em.provider_message_id
     ) AS d
+    WHERE d.thread_matches
     ORDER BY {order_by}
     LIMIT %(limit)s
     OFFSET %(offset)s
@@ -370,6 +402,18 @@ LIST_GROUPED_BY_THREAD = """
 # by thread_key alone (no account_id) is what collapses one provider account
 # connected under two mailboxes — exactly the dedup intent of the virtual
 # listing.
+#
+# NO MATCH-SURFACING here (asymmetry vs ``LIST_GROUPED_BY_THREAD``): the
+# virtual-mailbox listing is the surface where the search ``q`` / lupa
+# operators AND the saved ``filter_payload`` extra-filters DEFINE which
+# messages belong to the fake bandeja, so they filter message-by-message
+# BEFORE grouping (the representative is the matching message). This is the
+# established vmbox behaviour (docs/features/bandejas-ficticias.md) and is
+# deliberately different from the regular ``GET /emails`` listing, whose
+# chips/search surface whole threads (ordenar-y-filtrar-listado.md § 5 —
+# that feature explicitly does NOT touch the fake bandejas). Hence the
+# search/extra clauses stay in the inner ``d1`` WHERE and there is no
+# ``{match_predicate}`` slot in this template.
 LIST_GROUPED_BY_THREAD_DISTINCT = """
     SELECT * FROM (
         SELECT DISTINCT ON (d1.thread_key)
@@ -414,14 +458,29 @@ LIST_GROUPED_BY_THREAD_DISTINCT = """
 # thread_key is never NULL (the COALESCE guarantees it), so no thread is
 # dropped from the total. The COALESCE is mandatory: ``COUNT(DISTINCT
 # thread_id)`` alone would skip every threadless ('' / NULL) message.
+#
+# MATCH-SURFACING (mirrors ``LIST_GROUPED_BY_THREAD``): the search + chip
+# clauses do NOT filter rows in the inner WHERE — they would drop the whole
+# thread when only some of its messages match. Only ``{box_predicate}``
+# scopes the inner rows; the ``{match_predicate}`` boolean is OR'd over the
+# (account_id, thread_key) window and the outer query counts only threads
+# with at least one match, so ``total`` counts EXACTLY the threads the LIST
+# surfaces. When there is no search/chip ``{match_predicate}`` is ``TRUE``,
+# so ``thread_matches`` is true for every thread and the count reduces to
+# the pre-fix DISTINCT-pair total.
 COUNT_GROUPED_BY_THREAD = """
-    SELECT COUNT(DISTINCT (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))) AS total
-    FROM email_metadata AS em
-    JOIN accounts AS a USING (account_id)
-    WHERE em.account_id = ANY(%(account_ids)s::uuid[])
-      {box_predicate}
-      {search_predicate}
-      {extra_predicate}
+    SELECT COUNT(*) AS total FROM (
+        SELECT DISTINCT ON (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))
+               bool_or({match_predicate}) OVER (
+                   PARTITION BY em.account_id,
+                                COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)
+               ) AS thread_matches
+        FROM email_metadata AS em
+        JOIN accounts AS a USING (account_id)
+        WHERE em.account_id = ANY(%(account_ids)s::uuid[])
+          {box_predicate}
+    ) AS t
+    WHERE t.thread_matches
 """
 
 # Thread count for the VIRTUAL grouped listing — counts DISTINCT thread_key,
@@ -431,6 +490,8 @@ COUNT_GROUPED_BY_THREAD = """
 # thread_key (shared thread_id, or shared provider_message_id when
 # threadless), so ``COUNT(DISTINCT thread_key)`` collapses it exactly as the
 # LIST does. The COALESCE is mandatory for the same threadless reason above.
+# Like its LIST sibling, this surface filters message-by-message BEFORE
+# grouping (no match-surfacing) — see the LIST header for the asymmetry.
 COUNT_GROUPED_BY_THREAD_DISTINCT = """
     SELECT COUNT(DISTINCT COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)) AS total
     FROM email_metadata AS em

@@ -175,6 +175,41 @@ def test_grouped_listing_chip_surfaces_thread_when_any_message_matches(
     assert rows[0]["thread_message_count"] == 3
 
 
+def test_grouped_listing_search_surfaces_thread_when_any_message_matches(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    # Free-text search behaves like the chips (and like the lupa): a thread
+    # surfaces if ANY of its messages matches, the representative stays the
+    # thread's most-recent message overall (not the matching one), and the
+    # count covers the whole thread present in the box. Only the MIDDLE
+    # message carries the searched subject; the newest does not.
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="s1",
+                  thread_id="sthr", received_at="2026-05-01T09:00:00+00:00",
+                  subject="hello world")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="s2",
+                  thread_id="sthr", received_at="2026-05-01T10:00:00+00:00",
+                  subject="invoice march")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="s3",
+                  thread_id="sthr", received_at="2026-05-01T11:00:00+00:00",
+                  subject="hello world")
+    # A thread with no matching message must NOT surface.
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="n1",
+                  thread_id="nthr", received_at="2026-05-02T09:00:00+00:00",
+                  subject="nothing here")
+
+    body = _list_grouped(test_client, mailbox_id, account_id, q="invoice").json()
+    rows = body["items"]
+    assert body["total"] == 1
+    assert len(rows) == 1
+    assert rows[0]["thread_id"] == "sthr"
+    # Representative is the newest message (11:00), even though it does NOT
+    # match the search; the matching message was the 10:00 one.
+    assert rows[0]["provider_message_id"] == "s3"
+    # The whole thread is present in the box → count is the full 3.
+    assert rows[0]["thread_message_count"] == 3
+
+
 def test_grouped_listing_sort_subject_orders_thread_representatives(
     test_client, setup_mailbox_and_account, isolated_db,
 ):

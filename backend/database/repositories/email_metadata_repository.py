@@ -498,9 +498,10 @@ class PgEmailMetadataStore(EmailMetadataStore):
         box_in: list[str] | None,
         box_not_in: list[str] | None,
         operator_clauses: list[tuple[str, Any]] | None = None,
-    ) -> tuple[str, str, str, dict[str, Any]]:
-        """Build the ``{box_predicate}``/``{search_predicate}``/``{extra_predicate}``
-        slots and the named params shared by every filtered query.
+    ) -> tuple[str, str, str, str, dict[str, Any]]:
+        """Build the ``{box_predicate}``/``{search_predicate}``/``{extra_predicate}``/
+        ``{match_predicate}`` slots and the named params shared by every
+        filtered query.
 
         Single source of truth so ``list_filtered`` (SELECT) and
         ``count_filtered`` (COUNT) stay in lockstep — a new filter
@@ -523,6 +524,21 @@ class PgEmailMetadataStore(EmailMetadataStore):
         operator that touches the same column as a saved filter just
         AND-s a second clause. When ``operator_clauses`` is empty the
         emitted SQL is byte-for-byte identical to the pre-operator query.
+
+        ``match_predicate`` is the SAME search + extra/operator conditions
+        re-expressed as a single boolean EXPRESSION (the AND of every
+        clause, or the literal ``TRUE`` when there is none) — i.e. the
+        ``{search_predicate}`` + ``{extra_predicate}`` bodies with their
+        leading ``AND `` stripped and re-joined by ``AND``. It is consumed
+        ONLY by the REGULAR grouped templates (``LIST_/COUNT_GROUPED_BY_THREAD``):
+        they OR it over the thread window so a thread surfaces when ANY of its
+        messages matches, WITHOUT dropping the non-matching siblings from the
+        representative/count (regular ``GET /emails`` thread-surfacing — see
+        the template header). The flat templates and the *_DISTINCT (vmbox)
+        templates ignore it and keep filtering in their WHERE via the
+        ``AND``-prefixed predicate slots — the vmbox deliberately filters
+        message-by-message BEFORE grouping. It reuses the exact same clauses
+        and params, so the surfaces can never drift.
         """
         params: dict[str, Any] = {"account_ids": account_ids}
 
@@ -545,19 +561,19 @@ class PgEmailMetadataStore(EmailMetadataStore):
         else:
             box_predicate = ""
 
+        search_clauses: list[str] = []
         if tokens:
-            clauses: list[str] = []
             for i, token in enumerate(tokens):
                 key = f"tok{i}"
                 params[key] = f"%{_escape_like(token)}%"
-                clauses.append(
+                search_clauses.append(
                     f"(unaccent(lower(coalesce(subject, ''))) ILIKE unaccent(lower(%({key})s))"
                     f" OR unaccent(lower(coalesce(from_email, ''))) ILIKE unaccent(lower(%({key})s))"
                     f" OR unaccent(lower(coalesce(from_name, ''))) ILIKE unaccent(lower(%({key})s)))"
                 )
-            search_predicate = "AND " + " AND ".join(clauses)
-        else:
-            search_predicate = ""
+        search_predicate = (
+            "AND " + " AND ".join(search_clauses) if search_clauses else ""
+        )
 
         extra_clauses: list[str] = []
         if extra_filters:
@@ -580,7 +596,26 @@ class PgEmailMetadataStore(EmailMetadataStore):
             "AND " + " AND ".join(extra_clauses) if extra_clauses else ""
         )
 
-        return box_predicate, search_predicate, extra_predicate, params
+        # The grouped templates surface a thread when ANY of its messages
+        # matches the search + chip/operator conditions, so those conditions
+        # must NOT filter rows in the inner WHERE (that would drop the
+        # non-matching siblings and corrupt the representative + count).
+        # Re-express the SAME clauses as one boolean expression OR-ed over the
+        # thread window. ``TRUE`` when there is nothing to match, which makes
+        # the grouped query collapse to its pre-feature "every thread surfaces"
+        # behaviour. The box predicate is deliberately excluded — it scopes
+        # which messages belong to the thread-in-this-box (and hence the
+        # count), so it stays in the inner WHERE.
+        match_clauses = search_clauses + extra_clauses
+        match_predicate = " AND ".join(match_clauses) if match_clauses else "TRUE"
+
+        return (
+            box_predicate,
+            search_predicate,
+            extra_predicate,
+            match_predicate,
+            params,
+        )
 
     def list_filtered(
         self,
@@ -602,7 +637,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         if not account_ids:
             return []
         try:
-            box_predicate, search_predicate, extra_predicate, params = (
+            box_predicate, search_predicate, extra_predicate, match_predicate, params = (
                 self._build_filter_predicates(
                     account_ids, box, tokens,
                     extra_filters=extra_filters,
@@ -617,10 +652,17 @@ class PgEmailMetadataStore(EmailMetadataStore):
             template = _select_list_template(
                 group_by_thread, distinct_provider_message_id,
             )
+            # All templates share the same param dict; only the consumed slots
+            # differ. The flat + vmbox (*_DISTINCT) templates carry
+            # {search_predicate}/{extra_predicate} in their WHERE; only the
+            # REGULAR grouped template carries {match_predicate} (search+extra
+            # OR-ed over the thread window). str.format ignores the slots a
+            # given template does not reference.
             sql = template.format(
                 box_predicate=box_predicate,
                 search_predicate=search_predicate,
                 extra_predicate=extra_predicate,
+                match_predicate=match_predicate,
                 order_by=_build_order_by(sort, sort_dir),
             )
             with connection.get_connection() as conn:
@@ -657,7 +699,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         if not account_ids:
             return 0
         try:
-            box_predicate, search_predicate, extra_predicate, params = (
+            box_predicate, search_predicate, extra_predicate, match_predicate, params = (
                 self._build_filter_predicates(
                     account_ids, box, tokens,
                     extra_filters=extra_filters,
@@ -673,6 +715,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 box_predicate=box_predicate,
                 search_predicate=search_predicate,
                 extra_predicate=extra_predicate,
+                match_predicate=match_predicate,
             )
             with connection.get_connection() as conn:
                 with conn.cursor() as cur:

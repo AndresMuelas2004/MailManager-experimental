@@ -1554,6 +1554,50 @@ def test_list_filtered_grouped_virtual_dedups_then_partitions_by_thread_key(monk
     assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
 
 
+def test_list_filtered_grouped_chip_surfaces_thread_via_window_or_not_where(monkeypatch):
+    # A quick-filter chip (here is:unread) must NOT land in the inner WHERE of
+    # the grouped template — that would drop the thread's non-matching siblings
+    # from the partition and corrupt the representative + count. Instead the
+    # clause rides the {match_predicate} slot, OR-ed over the thread window
+    # (bool_or(...) OVER w AS thread_matches), and the outer wrapper keeps only
+    # surfacing threads (WHERE d.thread_matches). The box predicate stays in
+    # the inner WHERE. Mirrors docs/features/ordenar-y-filtrar-listado.md § 5.
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=3)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0,
+        group_by_thread=True,
+        operator_clauses=[("is_read_op", False)],
+    )
+    sql, params = cursor.executed[0]
+    # The chip becomes the windowed match-OR, not a row-level filter.
+    assert "bool_or(is_read = %(op0)s)  OVER w AS thread_matches" in sql
+    assert "WHERE d.thread_matches" in sql
+    assert params["op0"] is False
+    # Only the box predicate filters rows inside the inner WHERE; the chip
+    # clause is NOT ANDed there (it only appears inside the bool_or SELECT
+    # expression). Isolate the WHERE body (between the account_ids predicate
+    # and the WINDOW clause).
+    inner_where = sql.split("WHERE em.account_id")[1].split("WINDOW w")[0]
+    assert "AND box = %(box)s" in inner_where
+    assert "is_read = %(op0)s" not in inner_where
+
+
+def test_list_filtered_grouped_no_search_or_chip_match_predicate_is_true(monkeypatch):
+    # With neither search tokens nor chips/operators, the {match_predicate}
+    # collapses to the literal TRUE so every thread surfaces (pre-feature
+    # behaviour) — the windowed OR is a tautology, never an empty result.
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=2)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0, group_by_thread=True,
+    )
+    sql, _ = cursor.executed[0]
+    assert "bool_or(TRUE)  OVER w AS thread_matches" in sql
+
+
 def test_count_filtered_grouped_regular_counts_distinct_account_thread(monkeypatch):
     cursor = FakeCursor(fetchone_results=[(4,)])
     patch_connection(monkeypatch, em_module, [cursor])
@@ -1564,8 +1608,13 @@ def test_count_filtered_grouped_regular_counts_distinct_account_thread(monkeypat
     assert total == 4
     sql, _ = cursor.executed[0]
     # group_by_thread=True + distinct=False → COUNT_GROUPED_BY_THREAD: counts
-    # DISTINCT (account_id, thread_key) pairs, mirroring the LIST partition.
-    assert "COUNT(DISTINCT (em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)))" in sql
+    # threads (DISTINCT ON (account_id, thread_key)) that SURFACE — i.e. whose
+    # match-OR over the partition is true — mirroring the LIST partition. With
+    # no search/chip the match predicate is TRUE so every thread is counted.
+    assert "COUNT(*)" in sql
+    assert ("DISTINCT ON (em.account_id, COALESCE(NULLIF(em.thread_id, ''), "
+            "em.provider_message_id))") in sql
+    assert "WHERE t.thread_matches" in sql
 
 
 def test_count_filtered_grouped_virtual_counts_distinct_thread_key(monkeypatch):
@@ -1581,7 +1630,9 @@ def test_count_filtered_grouped_virtual_counts_distinct_thread_key(monkeypatch):
     assert total == 2
     sql, _ = cursor.executed[0]
     # group_by_thread=True + distinct=True → COUNT_GROUPED_BY_THREAD_DISTINCT:
-    # counts DISTINCT thread_key (account_id dropped), mirroring the LIST.
+    # counts DISTINCT thread_key (account_id dropped), mirroring the LIST. The
+    # vmbox surface filters message-by-message BEFORE grouping (no match
+    # surfacing), so this template keeps the plain COUNT(DISTINCT thread_key).
     assert "COUNT(DISTINCT COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id))" in sql
     assert "em.account_id," not in sql.split("COUNT(DISTINCT")[1].split(")")[0]
 
