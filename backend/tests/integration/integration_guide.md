@@ -138,6 +138,12 @@ It covers two invariants the plain drafts tests do not: the `COALESCE(EXCLUDED.c
 
 The seeded happy-path assertions pin exact unread counts from the migration-0010 Gmail seed (a single account) — a seed change shifts them and they break with no other signal. `box` is a router `Literal["ALL_MAIL","SPAM"]`, so TRASH/SENT collapse to 422 (FastAPI) without reaching the service. The load-bearing invariant — `COUNT_UNREAD_BY_ACCOUNT`'s GROUP BY emits no row for a zero-unread account, and the service back-fills it as `unread:0` while summing `total` in Python — CANNOT be exercised by the single-account seed, so the two multi-account tests are the documented exception to "use seeded data, not ephemeral" below: they create a second account via the API and insert controlled `email_metadata` through `isolated_db` (`_insert_unread_rows`). A single-account-only suite stays green even if the back-fill or the Python sum regresses.
 
+### Trap — lupa operator tests seed ephemeral rows (the SECOND exception to "use seeded data"), and `in:` overrides the route `box`
+
+The `test_list_emails_operator_*` family + `_insert_operator_fixture_rows` are the second documented exception to "use seeded data, not ephemeral" (after `unread-count` above): the migration-0010 seed cannot exercise operators — it predates migration 0031 (empty `to_email`, so `to:` never matches), never writes `has_attachments`/`is_favorite` (the B.lazy sync path leaves them false, so `has:attachment` / `is:favorite` need direct-SQL rows), and its dates are years in the past (so `before:`/`after:` are unprobeable). The fixture inserts three controlled rows through `isolated_db` and sets those flags via direct SQL.
+
+`in:` **overrides** the route `box`: `test_list_emails_operator_in_overrides_box_to_sent` sends `box=ALL_MAIL` with `q="in:sent"` and asserts ONLY the SENT row (`total == 1`). A new operator test that passes `box=ALL_MAIL` expecting ALL_MAIL semantics under an `in:` clause asserts the wrong set — the asymmetry is invisible from the test body.
+
 ### Trap — `signature_html` PATCH: `""` clears, the cap 422 is FastAPI-shaped, and an unrelated PATCH must not wipe it
 
 - **`signature_html=""` is a valid PATCH that CLEARS the signature (200), not a 422** — asymmetric with `display_label` on the SAME endpoint, which carries `min_length=1` and rejects `""`. Clear a signature with `""`; leave it untouched by OMITTING the key (the service's `is not None` guard).
