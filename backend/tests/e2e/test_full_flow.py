@@ -11,7 +11,6 @@ Run with: python -m pytest backend/tests/e2e -v --tb=short
 from __future__ import annotations
 
 import os
-import unicodedata
 from datetime import datetime, timezone
 
 import psycopg2
@@ -32,17 +31,50 @@ def _assert_ok(response, *, expected: int = 200) -> None:
     assert response.status_code == expected, response.text
 
 
-def _normalise_subject_for_sort(subject: str) -> str:
-    """Mirror the backend's ``lower(unaccent(coalesce(subject, '')))`` sort key.
+def _subject_sort_ranks_via_db(subjects: list[str]) -> list[int]:
+    """Rank each subject by the EXACT order PostgreSQL gives the backend.
 
-    Python ``str.lower()`` alone keeps accents and compares by Unicode code
-    point (e.g. 'á' U+00E1 sorts AFTER 'z'), whereas the backend strips accents
-    before lowercasing. Comparing the page against a code-point sort would make
-    this test red for an accented subject even when the backend ordered
-    correctly, so the test side must apply the same accent-folding."""
-    decomposed = unicodedata.normalize("NFKD", subject)
-    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return stripped.lower()
+    The backend orders ``subject`` by ``lower(unaccent(coalesce(subject, '')))``
+    (``_SORT_EXPRESSIONS['subject']``). Two things make a pure-Python mirror
+    wrong, so we ask the DB itself for the order instead of reimplementing it:
+
+    1. **Accent folding** — ``unaccent`` strips diacritics before lowercasing.
+    2. **Collation** — once transformed, PostgreSQL compares the text under the
+       DATABASE collation (``en_US.utf8`` here), NOT by Unicode code point.
+       These disagree on space/punctuation-vs-digit ordering: under
+       ``en_US.utf8`` the space is low-weight, so ``'10 €'`` sorts BEFORE
+       ``'1 oferta'``, whereas a code-point ``sorted()`` puts ``'1 oferta'``
+       first (space 0x20 < '0' 0x30). The old helper folded accents but then
+       relied on Python's code-point ``sorted()``, which is NOT the backend's
+       order — this test was asserting against the wrong comparator.
+
+    Returns, for each input subject (positionally), a non-negative integer
+    rank such that ``rank[i] <= rank[j]`` iff PostgreSQL orders subject *i* at
+    or before subject *j* under the backend's sort key. Ties (equal sort keys)
+    share the same rank, so a page in correct order yields a NON-DECREASING
+    rank sequence regardless of how the backend breaks ties
+    (``account_id, provider_message_id``)."""
+    if not subjects:
+        return []
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            # DENSE_RANK over the distinct sort keys gives every subject sharing
+            # a key the SAME rank; ``WITH ORDINALITY`` preserves the input order
+            # so the result maps back positionally to ``subjects``.
+            cur.execute(
+                """
+                SELECT dense_rank() OVER (
+                           ORDER BY lower(unaccent(coalesce(s, '')))
+                       )
+                FROM unnest(%s::text[]) WITH ORDINALITY AS u(s, ord)
+                ORDER BY u.ord
+                """,
+                (subjects,),
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 def _require(flow_state: dict, *keys: str) -> None:
@@ -1519,10 +1551,14 @@ def test_38x_list_emails_sort_and_filter(e2e_client):
     )
     _assert_ok(sorted_resp)
     sorted_body = sorted_resp.json()
-    subjects = [_normalise_subject_for_sort(e.get("subject") or "") for e in sorted_body["items"]]
-    assert subjects == sorted(subjects), (
+    subjects = [e.get("subject") or "" for e in sorted_body["items"]]
+    # Rank each subject by the backend's actual collation (ask the DB — a
+    # Python code-point sort is NOT the same order under en_US.utf8). A
+    # correctly ordered ascending page yields a non-decreasing rank sequence.
+    ranks = _subject_sort_ranks_via_db(subjects)
+    assert ranks == sorted(ranks), (
         "sort=subject&sort_dir=asc did not return rows in non-decreasing "
-        "normalised-subject order."
+        "subject order under the database collation."
     )
     assert sorted_body["total"] >= len(sorted_body["items"])
 
