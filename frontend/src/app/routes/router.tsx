@@ -54,6 +54,7 @@ const router = createBrowserRouter([
                 children: [
                   { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
                   { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
+                  { path: 'archive', element: <UnifiedInboxPage box="ARCHIVE" /> },
                   { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
                   { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
                   { path: 'drafts', element: <DraftsPage /> },
@@ -70,6 +71,7 @@ const router = createBrowserRouter([
                       { path: 'inbox', element: <AccountInboxPage box="ALL_MAIL" /> },
                       { path: 'sent', element: <AccountInboxPage box="SENT" /> },
                       { path: 'favorites', element: <AccountFavoritesPage /> },
+                      { path: 'archive', element: <AccountInboxPage box="ARCHIVE" /> },
                       { path: 'spam', element: <AccountInboxPage box="SPAM" /> },
                       { path: 'trash', element: <AccountInboxPage box="TRASH" /> },
                       { path: 'drafts', element: <AccountDraftsPage /> },

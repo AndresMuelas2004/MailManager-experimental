@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
-import { Filter, FileEdit, Inbox, Menu, Send, ShieldAlert, Star, Trash2 } from 'lucide-react';
+import {
+  Archive,
+  Filter,
+  FileEdit,
+  Inbox,
+  Menu,
+  Send,
+  ShieldAlert,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
@@ -20,6 +30,7 @@ const MAILBOX_NAV_ITEMS: Array<{
   { icon: Inbox, labelKey: 'nav.inbox', path: 'inbox' },
   { icon: Send, labelKey: 'nav.sent', path: 'sent' },
   { icon: Star, labelKey: 'nav.favorites', path: 'favorites' },
+  { icon: Archive, labelKey: 'nav.archive', path: 'archive' },
   { icon: Filter, labelKey: 'nav.virtualMailboxes', path: 'virtual-mailboxes' },
   { icon: ShieldAlert, labelKey: 'nav.spam', path: 'spam' },
   { icon: FileEdit, labelKey: 'nav.drafts', path: 'drafts' },

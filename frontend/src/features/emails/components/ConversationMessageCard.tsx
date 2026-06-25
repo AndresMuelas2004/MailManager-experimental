@@ -4,6 +4,7 @@ import ConversationMessageBody from './ConversationMessageBody';
 import { formatDate } from '../../../lib/formatters';
 import { useTranslation } from '../../../lib/i18n';
 import type { EmailMetadataOut } from '../../../api/types/dto';
+import type { EmailBox } from '../../../lib/types';
 
 type Props = {
   message: EmailMetadataOut;
@@ -14,10 +15,11 @@ type Props = {
 // Maps the message's box to a short folder-label i18n key. ALL_MAIL (the
 // normal inbox location) gets no label — only the "elsewhere" boxes are worth
 // flagging in a chain that crosses folders.
-const BOX_LABEL_KEYS: Record<string, string> = {
+const BOX_LABEL_KEYS: Partial<Record<EmailBox, string>> = {
   SENT: 'conversation.boxSent',
   SPAM: 'conversation.boxSpam',
   TRASH: 'conversation.boxTrash',
+  ARCHIVE: 'conversation.boxArchive',
 };
 
 // Presentational card for one message of the conversation chain. The header
@@ -36,7 +38,7 @@ export default function ConversationMessageCard({ message, expanded, onToggle }:
     ? `${message.from_name} <${message.from_email}>`
     : message.from_email;
   const unread = !message.is_read;
-  const folderLabelKey = BOX_LABEL_KEYS[message.box];
+  const folderLabelKey = BOX_LABEL_KEYS[message.box as EmailBox];
 
   return (
     <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white">

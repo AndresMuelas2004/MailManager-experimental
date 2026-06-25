@@ -139,6 +139,10 @@ export default function useBulkBar({ box, refresh, searchKey }: UseBulkBarArgs):
           return bulk.trashActionItems(selected, 'delete');
         case 'restore_from_trash':
           return bulk.trashActionItems(selected, 'restore');
+        case 'archive':
+          return bulk.archiveItems(selected);
+        case 'unarchive':
+          return bulk.unarchiveItems(selected);
       }
     },
     [bulk, selected, readToggleTarget],
