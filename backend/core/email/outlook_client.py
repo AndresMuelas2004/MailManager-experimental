@@ -118,12 +118,14 @@ _FOLDER_TO_BOX: dict[str, str] = {
     "deleteditems": "TRASH",
     "junkemail": "SPAM",
     "sentitems": "SENT",
+    "archive": "ARCHIVE",
 }
 
 _BOX_TO_FOLDER: dict[str, str] = {
     "ALL_MAIL": "inbox",
     "SENT": "sentitems",
     "SPAM": "junkemail",
+    "ARCHIVE": "archive",
 }
 
 
@@ -595,11 +597,12 @@ class OutlookClient(EmailClient):
             url = next_link
 
     def _resolve_special_folder_ids(self) -> dict[str, str]:
-        """Fetch Graph IDs for sentitems, deleteditems and junkemail.
+        """Fetch Graph IDs for sentitems, deleteditems, junkemail and archive.
 
         Returns a mapping {folder_id: box} so that each message's
-        parentFolderId can be classified into SENT, TRASH or SPAM.
-        Any folder not in this mapping defaults to ALL_MAIL.
+        parentFolderId can be classified into SENT, TRASH, SPAM or ARCHIVE.
+        Any folder not in this mapping defaults to ALL_MAIL. The set of
+        folders resolved is driven dynamically by ``_FOLDER_TO_BOX``.
         """
         folder_id_to_box: dict[str, str] = {}
         for folder_name, box in _FOLDER_TO_BOX.items():
@@ -1514,6 +1517,18 @@ class OutlookClient(EmailClient):
     def restore_from_spam(self, message_ids: list[str]) -> list[SpamMoveResult]:
         """Restore messages from spam via Microsoft Graph API. Returns results for successfully restored messages."""
         return self._move_messages(message_ids, "inbox", "restore_from_spam")
+
+    # ------------------------------------------------------------------
+    # Archive operations
+    # ------------------------------------------------------------------
+
+    def move_to_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Archive messages by moving them to the well-known 'archive' folder. The id changes (default ids + old→new rewrite). Returns results for successfully archived messages."""
+        return self._move_messages(message_ids, "archive", "move_to_archive")
+
+    def restore_from_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Unarchive messages by moving them back to the inbox. The id changes (default ids + old→new rewrite). Returns results for successfully restored messages."""
+        return self._move_messages(message_ids, "inbox", "restore_from_archive")
 
     def _move_messages(
         self,

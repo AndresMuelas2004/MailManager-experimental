@@ -498,6 +498,38 @@ class EmailManager:
                 f"Unexpected restore_from_spam error ({type(exc).__name__}): {exc}"
             ) from exc
 
+    def move_to_archive(
+        self,
+        account_label: str,
+        message_ids: list[str],
+    ) -> list[SpamMoveResult]:
+        """Archive messages for the given account. Returns results for successfully archived messages."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.move_to_archive(message_ids)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected move_to_archive error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def restore_from_archive(
+        self,
+        account_label: str,
+        message_ids: list[str],
+    ) -> list[SpamMoveResult]:
+        """Unarchive messages for the given account. Returns results for successfully restored messages."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.restore_from_archive(message_ids)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected restore_from_archive error ({type(exc).__name__}): {exc}"
+            ) from exc
+
     def fetch_content_with_attachments(
         self, account_label: str, provider_message_id: str,
     ) -> tuple[EmailContent, list[AttachmentMetadata], dict[str, str]]:

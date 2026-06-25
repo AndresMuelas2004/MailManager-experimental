@@ -926,8 +926,13 @@ class GmailClient(EmailClient):
             box = "SPAM"
         elif "SENT" in labels:
             box = "SENT"
-        else:
+        elif "INBOX" in labels:
             box = "ALL_MAIL"
+        else:
+            # Received message with INBOX removed (and not SPAM/TRASH/SENT):
+            # this is what "archived in Gmail" means — the message lives in
+            # All Mail without the INBOX label.
+            box = "ARCHIVE"
         return is_read, box
 
     @staticmethod
@@ -1932,6 +1937,28 @@ class GmailClient(EmailClient):
         updated_ids = self._batch_modify_labels(
             message_ids, remove_labels=["SPAM"], add_labels=["INBOX"],
         )
+        return [SpamMoveResult(old_id=mid, new_id=mid) for mid in updated_ids]
+
+    # ------------------------------------------------------------------
+    # Archive operations
+    # ------------------------------------------------------------------
+
+    def move_to_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Archive messages via Gmail label modification (remove INBOX). The id does not change. Returns results for successfully archived messages."""
+        if self.service is None:
+            raise EmailNotAuthenticatedError("Gmail move_to_archive requires authentication.")
+        if not message_ids:
+            return []
+        updated_ids = self._batch_modify_labels(message_ids, remove_labels=["INBOX"])
+        return [SpamMoveResult(old_id=mid, new_id=mid) for mid in updated_ids]
+
+    def restore_from_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Unarchive messages via Gmail label modification (add INBOX). The id does not change. Returns results for successfully restored messages."""
+        if self.service is None:
+            raise EmailNotAuthenticatedError("Gmail restore_from_archive requires authentication.")
+        if not message_ids:
+            return []
+        updated_ids = self._batch_modify_labels(message_ids, add_labels=["INBOX"])
         return [SpamMoveResult(old_id=mid, new_id=mid) for mid in updated_ids]
 
     # ------------------------------------------------------------------

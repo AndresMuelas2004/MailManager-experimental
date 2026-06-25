@@ -26,7 +26,7 @@ class EmailMetadata:
     subject: str
     received_at: datetime
     is_read: bool
-    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED"
+    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
     to_email: str = ""
     to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
@@ -37,7 +37,7 @@ class LabelUpdate:
     """Partial update carrying only label-derived fields for an existing message."""
     provider_message_id: str
     is_read: bool
-    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED"
+    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
 
 
 @dataclass
@@ -100,9 +100,9 @@ class ReplyContext:
       already stripped by the client). Used to build ``In-Reply-To``.
     - ``references`` — raw ``References`` header value (or ``""``).
     - ``box`` — provider-side folder (``ALL_MAIL`` / ``SENT`` /
-      ``SPAM`` / ``TRASH``). Drives the self-reply override (when
-      replying to your own SENT message, the To becomes the original
-      To).
+      ``SPAM`` / ``TRASH`` / ``ARCHIVE``). Drives the self-reply
+      override (when replying to your own SENT message, the To becomes
+      the original To).
     """
     provider_message_id: str
     thread_id: str
@@ -152,7 +152,7 @@ class ConversationMessage:
     received_at: datetime
     is_read: bool
     is_favorite: bool
-    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH"
+    box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "ARCHIVE"
     to_email: str = ""
     to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
@@ -454,7 +454,7 @@ class EmailClient(ABC):
     @abstractmethod
     def restore_from_trash(self, items: dict[str, str | None]) -> dict[str, str]:
         """Restore messages from trash at the provider.
-        items maps provider_message_id → destination_box ('ALL_MAIL', 'SENT', 'SPAM')
+        items maps provider_message_id → destination_box ('ALL_MAIL', 'SENT', 'SPAM', 'ARCHIVE')
         or None when the original box is unknown.
         Returns dict mapping original_id → new_id for successfully restored messages.
         For providers where the ID doesn't change on restore, original_id == new_id."""
@@ -507,6 +507,14 @@ class EmailClient(ABC):
     @abstractmethod
     def restore_from_spam(self, message_ids: list[str]) -> list[SpamMoveResult]:
         """Restore messages from spam at the provider. Returns results for successfully restored messages."""
+
+    @abstractmethod
+    def move_to_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Archive messages at the provider (Gmail: remove INBOX label; Outlook: move to 'archive'). Returns results for successfully archived messages."""
+
+    @abstractmethod
+    def restore_from_archive(self, message_ids: list[str]) -> list[SpamMoveResult]:
+        """Unarchive messages (Gmail: add INBOX label; Outlook: move to 'inbox'). Returns results for successfully restored messages."""
 
     @abstractmethod
     def fetch_content_with_attachments(
