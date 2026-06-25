@@ -93,9 +93,14 @@ export default function AuthProvider({ children }: Props) {
     setError(null);
     try {
       await apiLogout();
-      setUser(null);
     } catch (err) {
       setError(toUiError(err));
+    } finally {
+      // Always clear the local session, even if the server call failed: a
+      // logout must never leave the client believing it is still
+      // authenticated. Clearing `user` is what drives the declarative redirect
+      // to /login through RequireAuth (see SettingsAccountPage.handleLogout).
+      setUser(null);
     }
   }, []);
 

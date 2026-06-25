@@ -59,6 +59,12 @@ The interface-language provider (`frontend/src/lib/i18n/I18nProvider.tsx`) is mo
 
 The exception is deliberate: `AuthProvider` is the session-bootstrap provider, and the session calls cannot be delegated to a feature hook — `features/` may not hold global auth state (`frontend/CLAUDE.md` §5), and moving them into a feature would invert the `app/ → features/` arrow. Keeping the auth endpoint calls in the provider is the only home that satisfies every rule, and is the symmetric counterpart to the §1.1 host bridge (which exists so `app/providers/` never imports `features/`). The alternative — a thin re-export at the `api/` boundary — was considered and rejected as indirection without benefit. The architecture-compliance reviewer flags this on every run; it is an accepted exception, not a regression.
 
+### 1.9 Logout redirects through the auth guard, never by imperative navigation
+
+The logout / delete-account actions in `features/settings/pages/SettingsAccountPage.tsx` deliberately do **not** call `navigate('/login')`. Redirection is declarative: `AuthProvider.logout` clears `user` in a `finally` — so the local session is dropped **even when the server `/auth/logout` call fails** — and `RequireAuth` (wrapping the whole authenticated area) renders `<Navigate to="/login">` the instant `user` is null.
+
+Both halves are load-bearing, and each guards a distinct failure mode that silently lands logout on **`/create-mailbox`** instead of the login screen. (a) An imperative `navigate('/login')` reintroduces a race: the router's location store (`useSyncExternalStore`) and React's `user` state commit at different times, so the app briefly routes with `user` still truthy → `LoginPage` bounces the "authenticated" visitor to `/` → `MailboxGatewayPage` runs `listMailboxes()`, which 401s on the already-cleared cookie → empty list → `/create-mailbox`. (b) Moving `setUser(null)` back inside the `try` (skipped when logout 401/500s) strands the client believing it is authenticated, so `RequireAuth` never fires. Regression coverage lives in `SettingsAccountPage.test.tsx`, whose fixture mounts the real `RequireAuth` plus faithful `LoginPage`/gateway stubs; the case "still lands on /login when the server logout call fails" fails deterministically if either half regresses.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The eight namespaces in active use:

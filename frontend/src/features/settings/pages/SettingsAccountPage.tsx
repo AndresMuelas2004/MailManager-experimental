@@ -1,5 +1,4 @@
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { LogOut, Trash2 } from 'lucide-react';
 
 import { useAuth } from '../../../app/providers/AuthContext';
@@ -8,29 +7,29 @@ import IdentityHeader from '../components/IdentityHeader';
 import DeleteUserDialog from '../components/DeleteUserDialog';
 
 export default function SettingsAccountPage() {
-  const navigate = useNavigate();
   const { t } = useTranslation();
   const { user, logout, deleteCurrentUser } = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Logging out must always land on /login (never "create mailbox") — the
-  // destination that the previous SettingsDropdown flow guaranteed and that
-  // this section preserves.
+  // Logging out clears `user`, and RequireAuth (which wraps the whole
+  // authenticated area) declaratively redirects to /login. Do NOT navigate
+  // imperatively here: an explicit navigate('/login') races the auth-state
+  // update — the router's location store and React's `user` state commit at
+  // different times, so the app could route through "/" while still
+  // "authenticated", hit MailboxGateway, and land on /create-mailbox.
   const handleLogout = useCallback(async () => {
     await logout();
-    navigate('/login', { replace: true });
-  }, [logout, navigate]);
+  }, [logout]);
 
   const handleConfirmDelete = useCallback(async () => {
     setDeleting(true);
-    // Parity with the previous flow: delete then log out then go to /login.
-    // The boolean from deleteCurrentUser is intentionally not branched on — the
-    // session is cleared and the user returns to login regardless.
+    // Delete then log out; clearing the session drives the redirect to /login
+    // through RequireAuth. The boolean from deleteCurrentUser is intentionally
+    // not branched on — the user returns to login regardless.
     await deleteCurrentUser();
     await logout();
-    navigate('/login', { replace: true });
-  }, [deleteCurrentUser, logout, navigate]);
+  }, [deleteCurrentUser, logout]);
 
   if (!user) return null;
 
