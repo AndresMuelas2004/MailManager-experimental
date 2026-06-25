@@ -5,14 +5,14 @@ Account SQL statements.
 from __future__ import annotations
 
 LIST_ACCOUNTS_BY_MAILBOX = """
-    SELECT account_id, mailbox_id, provider, display_label, config, email_address, created_at
+    SELECT account_id, mailbox_id, provider, display_label, config, email_address, signature_html, created_at
     FROM accounts
     WHERE mailbox_id = %(mailbox_id)s
     ORDER BY created_at
 """
 
 GET_ACCOUNT = """
-    SELECT account_id, mailbox_id, provider, display_label, config, email_address, created_at
+    SELECT account_id, mailbox_id, provider, display_label, config, email_address, signature_html, created_at
     FROM accounts
     WHERE mailbox_id = %(mailbox_id)s AND account_id = %(account_id)s
 """
@@ -29,7 +29,7 @@ GET_ACCOUNT = """
 # the email-attachments ownership chain.
 GET_ACCOUNT_BY_ID_FOR_USER = """
     SELECT a.account_id, a.mailbox_id, a.provider, a.display_label,
-           a.config, a.email_address, a.created_at,
+           a.config, a.email_address, a.signature_html, a.created_at,
            m.owner_user_id
     FROM accounts a
     INNER JOIN mailboxes m ON m.mailbox_id = a.mailbox_id
@@ -51,12 +51,13 @@ LIST_ACCOUNT_IDS_BY_USER = """
 """
 
 UPSERT_ACCOUNT = """
-    INSERT INTO accounts (account_id, mailbox_id, provider, display_label, config)
-    VALUES (%(account_id)s, %(mailbox_id)s, %(provider)s, %(display_label)s, %(config)s::jsonb)
+    INSERT INTO accounts (account_id, mailbox_id, provider, display_label, config, signature_html)
+    VALUES (%(account_id)s, %(mailbox_id)s, %(provider)s, %(display_label)s, %(config)s::jsonb, %(signature_html)s)
     ON CONFLICT (account_id) DO UPDATE SET
         display_label = EXCLUDED.display_label,
-        config = EXCLUDED.config
-    RETURNING account_id, mailbox_id, provider, display_label, config, email_address, created_at
+        config = EXCLUDED.config,
+        signature_html = EXCLUDED.signature_html
+    RETURNING account_id, mailbox_id, provider, display_label, config, email_address, signature_html, created_at
 """
 
 DELETE_ACCOUNT = """

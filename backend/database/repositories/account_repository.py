@@ -234,6 +234,9 @@ class PgAccountStore(AccountStore):
             params["config"] = json.dumps(params["config"])
         elif params.get("config") is None:
             params["config"] = "{}"
+        # UPSERT_ACCOUNT always binds %(signature_html)s (INSERT + VALUES);
+        # create_account's record omits the key, so default it to NULL here.
+        params.setdefault("signature_html", None)
 
         try:
             with connection.get_connection() as conn:

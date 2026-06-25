@@ -22,12 +22,29 @@ export function normalizeEmpty(html: string): string {
 }
 
 // True when the HTML has no visible text once tags and space entities
-// are removed. Used by ``hasAnyContent`` so that a ``<p></p>`` or a lone
-// ``<br>`` does not count as "the user wrote something".
+// are removed, so a ``<p></p>`` or a lone ``<br>`` does not count as real
+// content. Used by ``composeBodyWithSignature`` to skip inserting an
+// effectively-empty signature.
 export function htmlIsEmpty(html: string): boolean {
   const text = html
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .trim();
   return text.length === 0;
+}
+
+// Builds the editor body for a fresh compose: an empty editable paragraph
+// on top (where the cursor lands / the user types), the account signature
+// below it, then whatever existing content follows (the reply/forward quote,
+// or '' for a brand-new email). Returns ``existingBody`` unchanged when there
+// is no usable signature. Pure string composition — the result is re-sanitised
+// in the backend on persist/send, and the signature only uses the composer's
+// own tag vocabulary, so no HTML parsing is needed here.
+export function composeBodyWithSignature(
+  existingBody: string,
+  signatureHtml: string | null | undefined,
+): string {
+  const sig = (signatureHtml ?? '').trim();
+  if (sig.length === 0 || htmlIsEmpty(sig)) return existingBody;
+  return `<p></p>${sig}${existingBody}`;
 }

@@ -55,6 +55,9 @@ function gmailAccountFixture(accountId = 'acc_1') {
     display_label: 'Gmail',
     config: {},
     email_address: 'tester@example.com',
+    // Widen from the literal ``null`` so signature-insertion specs can build a
+    // signed variant (``signedAccount``) without TS pinning the field to null.
+    signature_html: null as string | null,
   };
 }
 
@@ -611,8 +614,8 @@ describe('useDraftComposer — bootstrap failure path', () => {
   });
 });
 
-describe('useDraftComposer — HTML emptiness drives content/dirty checks', () => {
-  it('treats a lone empty paragraph as no content (closeWithX closes immediately)', async () => {
+describe('useDraftComposer — emptiness drives the dirty/close check', () => {
+  it('treats a lone empty paragraph as not dirty (closeWithX closes immediately)', async () => {
     installBootstrapHandlers();
 
     const { result } = renderHook(() => useDraftComposer('mb_1'));
@@ -622,8 +625,9 @@ describe('useDraftComposer — HTML emptiness drives content/dirty checks', () =
     });
     await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
 
-    // A residual ``<p></p>`` is "visually empty": hasAnyContent (via
-    // htmlIsEmpty) must NOT count it, so closeWithX closes without a dialog.
+    // ``seedForNew`` fixed the snapshot baseline to '' (no signature on this
+    // fixture), and ``isDirty`` normalises both sides, so a residual ``<p></p>``
+    // equals the baseline → not dirty → closeWithX closes without a dialog.
     act(() => {
       result.current.setBody('<p></p>');
     });
@@ -644,8 +648,8 @@ describe('useDraftComposer — HTML emptiness drives content/dirty checks', () =
     });
     await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
 
-    // A paragraph with text counts as content, so the close confirmation
-    // dialog must appear instead of silently discarding the draft.
+    // A paragraph with text differs from the '' baseline → dirty, so the close
+    // confirmation dialog must appear instead of silently discarding the draft.
     act(() => {
       result.current.setBody('<p>texto</p>');
     });
@@ -721,6 +725,212 @@ describe('useDraftComposer — body size gating', () => {
     expect(result.current.bodyError).not.toBeNull();
     expect(result.current.canSaveDraft).toBe(false);
     expect(result.current.canSendDraft).toBe(false);
+  });
+});
+
+describe('useDraftComposer — account signature insertion', () => {
+  const SIG = '<p>Jane Doe — Acme</p>';
+
+  function signedAccount(accountId = 'acc_1') {
+    return { ...gmailAccountFixture(accountId), signature_html: SIG };
+  }
+
+  it('inserts the account signature into the body in new_email', async () => {
+    installBootstrapHandlers({ accounts: [signedAccount()] });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // Brand-new email: empty paragraph on top + the signature below it.
+    await waitFor(() => expect(result.current.body).toBe(`<p></p>${SIG}`));
+  });
+
+  it('inserts the preset account signature in new_draft', async () => {
+    installBootstrapHandlers({
+      accounts: [gmailAccountFixture('acc_1'), signedAccount('acc_2')],
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewDraft({ accountId: 'acc_2' });
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_2'));
+    await waitFor(() => expect(result.current.body).toBe(`<p></p>${SIG}`));
+  });
+
+  it('leaves the body empty when the chosen account has no signature', async () => {
+    installBootstrapHandlers({ accounts: [gmailAccountFixture()] });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // signature_html: null ⇒ composeBodyWithSignature returns '' unchanged.
+    expect(result.current.body).toBe('');
+  });
+
+  it('places the signature above the quote on reply, in body and persisted draft', async () => {
+    const counters = { createDraft: 0 };
+    const captured: { createDraftBodies: Record<string, unknown>[] } = { createDraftBodies: [] };
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([signedAccount()])),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/emails/:pmid/reply-context`, () =>
+        HttpResponse.json(replyContextFixture('reply')),
+      ),
+      http.post(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts`, async ({ request }) => {
+        counters.createDraft += 1;
+        captured.createDraftBodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({
+          provider_draft_id: 'drf_sig_reply',
+          account_id: 'acc_1',
+          to_recipients: [],
+          cc_recipients: [],
+          bcc_recipients: [],
+          subject: '',
+          body: '',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          attachments: [],
+        });
+      }),
+    );
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForReply(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    await waitFor(() => expect(result.current.mode).toBe('reply'));
+
+    // The seeded form body carries the signature before the quoted blockquote.
+    expect(result.current.body).toContain(SIG);
+    expect(result.current.body.indexOf(SIG)).toBeLessThan(
+      result.current.body.indexOf('<blockquote'),
+    );
+    // The SAME signed body is sent to the provider on createDraft (so the
+    // provider draft and the local form stay consistent).
+    const sentBody = captured.createDraftBodies[0].body as string;
+    expect(sentBody).toContain(SIG);
+    expect(sentBody.indexOf(SIG)).toBeLessThan(sentBody.indexOf('<blockquote'));
+  });
+
+  it('places the signature above the forwarded block on forward', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([signedAccount()])),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/emails/:pmid/reply-context`, () =>
+        HttpResponse.json(replyContextFixture('forward')),
+      ),
+      http.post(`${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts`, () =>
+        HttpResponse.json({
+          provider_draft_id: 'drf_sig_fwd',
+          account_id: 'acc_1',
+          to_recipients: [],
+          cc_recipients: [],
+          bcc_recipients: [],
+          subject: '',
+          body: '',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          attachments: [],
+        }),
+      ),
+      http.post(
+        `${API_BASE}/mailboxes/mb_1/accounts/:accountId/drafts/:draftId/attachments/copy-from-email`,
+        () => HttpResponse.json({ copied_count: 0, skipped: [], attachments: [] }),
+      ),
+    );
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    await act(async () => {
+      await result.current.openForForward(emailMetadataFixture('pmid_1', 'acc_1'));
+    });
+
+    await waitFor(() => expect(result.current.mode).toBe('forward'));
+    expect(result.current.body).toContain(SIG);
+    expect(result.current.body.indexOf(SIG)).toBeLessThan(
+      result.current.body.indexOf('Mensaje reenviado'),
+    );
+  });
+
+  it('does NOT re-inject the signature when editing an existing draft', async () => {
+    installBootstrapHandlers({ accounts: [signedAccount()] });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    // A draft saved earlier (its body already had whatever the user wanted).
+    // Reopening it must show that body verbatim — no extra signature appended.
+    act(() => {
+      result.current.openForEditDraft({
+        provider_draft_id: 'drf_existing',
+        account_id: 'acc_1',
+        to_recipients: ['someone@example.com'],
+        cc_recipients: [],
+        bcc_recipients: [],
+        subject: 'Existing',
+        body: '<p>existing body</p>',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        attachments: [],
+      });
+    });
+
+    await waitFor(() => expect(result.current.mode).toBe('edit_draft'));
+    expect(result.current.body).toBe('<p>existing body</p>');
+    expect(result.current.body).not.toContain(SIG);
+  });
+
+  it('swaps the signature when the account changes on a pristine new_email', async () => {
+    installBootstrapHandlers({
+      accounts: [signedAccount('acc_1'), gmailAccountFixture('acc_2')],
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.body).toBe(`<p></p>${SIG}`));
+
+    // Switch to the account with no signature: the pristine body is replaced.
+    act(() => {
+      result.current.setAccountId('acc_2');
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_2'));
+    expect(result.current.body).toBe('');
+  });
+
+  it('keeps the typed body when the account changes after the user edited it', async () => {
+    installBootstrapHandlers({
+      accounts: [gmailAccountFixture('acc_1'), signedAccount('acc_2')],
+    });
+
+    const { result } = renderHook(() => useDraftComposer('mb_1'));
+
+    act(() => {
+      result.current.openForNewEmail();
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_1'));
+
+    // The user typed something → the compose is no longer pristine.
+    act(() => {
+      result.current.setBody('<p>my own text</p>');
+    });
+    // Switching account now must NOT clobber the typed body with acc_2's sig.
+    act(() => {
+      result.current.setAccountId('acc_2');
+    });
+    await waitFor(() => expect(result.current.accountId).toBe('acc_2'));
+    expect(result.current.body).toBe('<p>my own text</p>');
   });
 });
 

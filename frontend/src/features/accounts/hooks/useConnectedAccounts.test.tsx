@@ -38,6 +38,7 @@ const EXISTING_ACCOUNT = {
   display_label: 'Gmail',
   config: {},
   email_address: 'old@example.com',
+  signature_html: null,
 };
 
 type FakePopup = {
@@ -178,6 +179,7 @@ describe('useConnectedAccounts.addAccount — interactive OAuth flow', () => {
           display_label: 'Gmail',
           config: {},
           email_address: null,
+          signature_html: null,
         }),
       ),
       http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () => {
@@ -219,6 +221,7 @@ describe('useConnectedAccounts.addAccount — interactive OAuth flow', () => {
           display_label: 'Gmail',
           config: {},
           email_address: null,
+          signature_html: null,
         });
       }),
     );

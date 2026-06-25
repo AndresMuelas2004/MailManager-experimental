@@ -72,6 +72,7 @@ export const handlers = [
       display_label: 'Gmail',
       config: {},
       email_address: null,
+      signature_html: null,
     }),
   ),
   http.get(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, ({ params }) =>
@@ -82,7 +83,30 @@ export const handlers = [
       display_label: 'Gmail',
       config: {},
       email_address: 'connected@example.com',
+      signature_html: null,
     }),
+  ),
+  // Account update (rename, config, signature). Echoes ``signature_html`` /
+  // ``display_label`` from the body so signature-save specs can assert the
+  // captured request; ``signature_html`` defaults to null when the body
+  // omits it (mirrors the backend always serialising the key).
+  http.patch(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`,
+    async ({ params, request }) => {
+      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+      return HttpResponse.json({
+        account_id: String(params.accountId),
+        mailbox_id: String(params.mailboxId),
+        provider: 'gmail',
+        display_label: typeof body.display_label === 'string' ? body.display_label : 'Gmail',
+        config:
+          body.config && typeof body.config === 'object'
+            ? (body.config as Record<string, unknown>)
+            : {},
+        email_address: 'connected@example.com',
+        signature_html: typeof body.signature_html === 'string' ? body.signature_html : null,
+      });
+    },
   ),
   http.delete(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId`, () =>
     HttpResponse.json({ status: 'deleted' }),

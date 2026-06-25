@@ -85,7 +85,9 @@ El renombrado de bandeja estrena un endpoint `PATCH` sobre la bandeja (el único
 
 | No soporta | Porqué breve |
 |---|---|
-| **Preferencias de producto configurables** | Fuera del MVP: firma de correo, tema claro/oscuro, notificaciones de correo nuevo, agrupar por conversación configurable, nº de correos por página, vista de inicio configurable, marcar leído automático configurable y liberar espacio / limpiar caché manual. El panel hoy cubre identidad, cuentas, bandejas, idioma, sincronizar y "acerca de", y nada más. |
+| **Preferencias de producto configurables** | Fuera del MVP: tema claro/oscuro, notificaciones de correo nuevo, agrupar por conversación configurable, nº de correos por página, vista de inicio configurable, marcar leído automático configurable y liberar espacio / limpiar caché manual. El panel hoy cubre identidad, cuentas, **firma**, bandejas, idioma, sincronizar y "acerca de", y nada más. |
+
+> La **firma de correo** ya **no** está en esta lista: estrena su propia sección "Firma" en el panel (ver [../features/ajustes.md](../features/ajustes.md) § 1.5). Su comportamiento y sus cifras viven en [../features/firma.md](../features/firma.md) / [firma.md](firma.md).
 
 ---
 

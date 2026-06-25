@@ -402,6 +402,7 @@ export const en: EsDictionary = {
     title: 'Settings',
     navAccount: 'Your account',
     navConnectedAccounts: 'Connected accounts',
+    navSignature: 'Signature',
     navMailboxes: 'Mailboxes',
     navLanguage: 'Language',
     navData: 'Data',
@@ -421,6 +422,20 @@ export const en: EsDictionary = {
       deleteConfirmPrompt: 'To confirm, type your email ({email}) below:',
       deleteConfirmPlaceholder: 'Type your email',
       deleteConfirmButton: 'Delete my account',
+    },
+
+    signature: {
+      title: 'Email signature',
+      subtitle:
+        'Set a signature per account. It is inserted automatically when composing, replying and forwarding.',
+      empty: 'You have no connected accounts in this mailbox.',
+      placeholder: 'Type your signature (name, role, phone, website…)',
+      editorAria: 'Signature editor',
+      save: 'Save',
+      saving: 'Saving…',
+      saved: 'Signature saved.',
+      tooLong: 'The signature is too long.',
+      error: 'Could not save the signature: {message}',
     },
 
     language: {

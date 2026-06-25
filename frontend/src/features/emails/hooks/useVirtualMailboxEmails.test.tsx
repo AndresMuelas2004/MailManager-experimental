@@ -52,6 +52,7 @@ function makeAccount(accountId: string, mailboxId: string) {
     display_label: 'Gmail',
     config: {},
     email_address: `${accountId}@example.com`,
+    signature_html: null,
   };
 }
 

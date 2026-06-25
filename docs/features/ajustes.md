@@ -2,7 +2,7 @@
 
 Este documento describe **qué es el área de Ajustes** de MailManager y **qué experimenta el usuario** dentro de ella: la identidad de su cuenta, la gestión de cuentas conectadas, el renombrado y borrado de bandejas, el selector de idioma de la interfaz, el "sincronizar todo" y el "acerca de". No entra en código: es una guía de comportamiento para el equipo y futuros mantenedores.
 
-Antes esta funcionalidad era un **menú flotante** del engranaje de la barra lateral con solo dos acciones (cerrar sesión y eliminar cuenta de usuario). Ahora ese engranaje lleva a un **área dedicada con su propia ruta** y seis secciones. Esta página documenta la zona de Ajustes como tal; las funcionalidades que **se integran** dentro de ella (conectar/editar/desconectar cuentas, crear/cambiar de bandeja) tienen sus propios documentos y aquí solo se mencionan en su papel dentro del panel — el modelo de cuentas y buzones vive en [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) y [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md).
+Antes esta funcionalidad era un **menú flotante** del engranaje de la barra lateral con solo dos acciones (cerrar sesión y eliminar cuenta de usuario). Ahora ese engranaje lleva a un **área dedicada con su propia ruta** y varias secciones. Esta página documenta la zona de Ajustes como tal; las funcionalidades que **se integran** dentro de ella (conectar/editar/desconectar cuentas, configurar la firma, crear/cambiar de bandeja) tienen sus propios documentos y aquí solo se mencionan en su papel dentro del panel — el modelo de cuentas y buzones vive en [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) y [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md), y la firma en [firma.md](firma.md).
 
 Los pocos topes numéricos (longitud del nombre de bandeja, versión de la app, clave de persistencia del idioma) y la lista de "lo que deliberadamente NO hace" viven en su gemelo: **[../limits/ajustes.md](../limits/ajustes.md)**. Aquí se mencionan de pasada y se explica el *porqué*; allí están las cifras exactas.
 
@@ -10,18 +10,23 @@ Los pocos topes numéricos (longitud del nombre de bandeja, versión de la app, 
 
 ## 1. Cómo se llega a Ajustes y cómo está organizado
 
-El icono de **engranaje** al pie de la barra lateral ya no abre un menú flotante: es un enlace que navega al área de Ajustes del buzón activo (la dirección lleva siempre el buzón actual, igual que el resto de la app). Una vez dentro, Ajustes es un **área con sub-navegación**: un menú lateral propio lista las seis secciones y cada una es una sub-pantalla dentro del panel.
+El icono de **engranaje** al pie de la barra lateral ya no abre un menú flotante: es un enlace que navega al área de Ajustes del buzón activo (la dirección lleva siempre el buzón actual, igual que el resto de la app). Una vez dentro, Ajustes es un **área con sub-navegación**: un menú lateral propio lista las secciones y cada una es una sub-pantalla dentro del panel.
 
-Las seis secciones, en orden:
+Las secciones, en orden:
 
 1. **Tu cuenta** — identidad del usuario, cerrar sesión, eliminar cuenta.
 2. **Cuentas conectadas** — gestión de las cuentas de correo (Gmail / Outlook).
-3. **Bandejas** — renombrar y eliminar bandejas.
-4. **Idioma** — selector de idioma de la interfaz (Español / English).
-5. **Datos** — "Sincronizar todo ahora".
-6. **Acerca de** — versión de la app.
+3. **Firma** — la firma por cuenta que se inserta sola al redactar (ver § 1.5 y [firma.md](firma.md)).
+4. **Bandejas** — renombrar y eliminar bandejas.
+5. **Idioma** — selector de idioma de la interfaz (Español / English).
+6. **Datos** — "Sincronizar todo ahora".
+7. **Acerca de** — versión de la app.
 
 Por qué un área propia y no un menú: el menú flotante solo cabían dos acciones. El panel reúne en un mismo sitio todo lo que es "configuración y gestión de la cuenta", incluida la pantalla de cuentas conectadas, que **antes colgaba suelta** de la barra lateral y ahora vive **integrada** dentro de Ajustes (es la misma pantalla de siempre, montada en una sub-ruta del panel). El *porqué* de reutilizar esa pantalla sin romper la frontera entre partes de la app está en el documento de frontend; a nivel de comportamiento, lo único que cambia para el usuario es **dónde** entra a gestionar sus cuentas.
+
+### 1.5 Firma
+
+La sección **"Firma"** (entre "Cuentas conectadas" y "Bandejas") permite configurar una **firma por cada cuenta conectada** de la bandeja activa: un editor con formato por cuenta, un botón "Guardar" y estados de guardando / guardado / error; vaciar el editor y guardar borra la firma de esa cuenta. La firma así guardada se inserta sola y editable en el cuerpo al redactar, responder y reenviar. Su comportamiento completo y sus cifras viven en su propio documento — **[firma.md](firma.md)** / **[../limits/firma.md](../limits/firma.md)** —; aquí solo importa su papel dentro del panel: es una sección más del área de Ajustes, enmarcada en la bandeja activa como el resto.
 
 ---
 
@@ -113,14 +118,15 @@ Muestra el nombre y el **logo** de la aplicación y su **versión**, una constan
 1. Pulsa el engranaje de la barra lateral → entra al área de Ajustes del buzón activo, en la sección "Tu cuenta".
 2. Ve su identidad (avatar/nombre/email de Google) y, debajo, los botones de cerrar sesión y eliminar cuenta.
 3. Navega por el menú lateral a "Cuentas conectadas" para añadir, reconectar, eliminar o **editar la etiqueta** de una cuenta de correo.
-4. En "Bandejas", **renombra** o **elimina** cualquiera de sus bandejas (con confirmación al borrar).
-5. En "Idioma", cambia la interfaz a Español o English al instante; la elección se recuerda en ese navegador.
-6. En "Datos", pulsa "Sincronizar todo ahora" y ve el progreso hasta que todas sus bandejas terminan.
-7. En "Acerca de", consulta la versión de la app.
-8. Al cerrar sesión o eliminar la cuenta, acaba en la pantalla de inicio de sesión.
+4. En "Firma", configura la **firma de cada cuenta** de la bandeja (ver [firma.md](firma.md)).
+5. En "Bandejas", **renombra** o **elimina** cualquiera de sus bandejas (con confirmación al borrar).
+6. En "Idioma", cambia la interfaz a Español o English al instante; la elección se recuerda en ese navegador.
+7. En "Datos", pulsa "Sincronizar todo ahora" y ve el progreso hasta que todas sus bandejas terminan.
+8. En "Acerca de", consulta la versión de la app.
+9. Al cerrar sesión o eliminar la cuenta, acaba en la pantalla de inicio de sesión.
 
 ---
 
 ## 9. Resumen en una frase
 
-> El antiguo menú del engranaje (cerrar sesión + eliminar cuenta) se convierte en un **área de Ajustes** con ruta propia y seis secciones —Tu cuenta (identidad de Google, cerrar sesión que termina siempre en login, y eliminar cuenta con un diálogo bloqueante que exige teclear el propio email), Cuentas conectadas (la gestión de siempre, ahora integrada, más la nueva acción de **editar la etiqueta** de una cuenta), Bandejas (estrenando **renombrar** y **eliminar** con su cascada y confirmación), Idioma (toda la interfaz en Español/English al instante, recordado en el navegador y solo de la interfaz —el contenido de los correos y la cabecera de cita siguen en su idioma—), Datos ("Sincronizar todo" tolerante a fallos parciales con progreso) y Acerca de (versión fija, sin enlaces aún)—; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/ajustes.md](../limits/ajustes.md).
+> El antiguo menú del engranaje (cerrar sesión + eliminar cuenta) se convierte en un **área de Ajustes** con ruta propia y varias secciones —Tu cuenta (identidad de Google, cerrar sesión que termina siempre en login, y eliminar cuenta con un diálogo bloqueante que exige teclear el propio email), Cuentas conectadas (la gestión de siempre, ahora integrada, más la nueva acción de **editar la etiqueta** de una cuenta), **Firma** (una firma por cuenta que se inserta sola al redactar; comportamiento y cifras en [firma.md](firma.md)), Bandejas (estrenando **renombrar** y **eliminar** con su cascada y confirmación), Idioma (toda la interfaz en Español/English al instante, recordado en el navegador y solo de la interfaz —el contenido de los correos y la cabecera de cita siguen en su idioma—), Datos ("Sincronizar todo" tolerante a fallos parciales con progreso) y Acerca de (versión fija, sin enlaces aún)—; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/ajustes.md](../limits/ajustes.md).

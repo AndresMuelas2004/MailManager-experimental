@@ -30,6 +30,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 - [autocompletado-destinatarios.md](autocompletado-destinatarios.md) — Sugerencias de direcciones en Para/CC/CCO a partir de la gente con la que el usuario ya se ha comunicado.
 - [borradores.md](borradores.md) — Crear, editar, listar, sincronizar, enviar y borrar borradores.
 - [responder-y-reenviar.md](responder-y-reenviar.md) — Responder / Responder a todos / Reenviar: threading y herencia de adjuntos.
+- [firma.md](firma.md) — Firma por cuenta conectada con formato (editada en Ajustes), que se inserta sola y editable en el cuerpo al redactar, responder y reenviar.
 
 ### Adjuntos
 - [adjuntos.md](adjuntos.md) — Recibir y descargar adjuntos, adjuntar al componer y heredarlos al reenviar.

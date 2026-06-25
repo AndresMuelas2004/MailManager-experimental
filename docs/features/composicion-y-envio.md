@@ -34,6 +34,8 @@ Un detalle de arquitectura visible para el usuario: el composer es **único y gl
 - El **cuerpo**, que es un **editor con formato** (negrita, cursiva, subrayado, listas y enlaces) con una barra de herramientas justo encima (ver sección 3).
 - Una barra inferior con el botón **"Adjuntar"** (clip) y el botón **"Enviar"**.
 
+> **El cuerpo puede arrancar con la firma de la cuenta.** Si la cuenta de origen tiene firma configurada, el cuerpo de un "Nuevo mensaje" no arranca vacío: aparece una línea en blanco arriba (donde se escribe) y la firma debajo, ya editable. Cambiar de cuenta de origen **antes de escribir** reemplaza esa firma por la de la nueva cuenta; en cuanto el usuario teclea, su contenido se respeta. El comportamiento completo está en [firma.md](./firma.md).
+
 ---
 
 ## 2. Destinatarios: cómo se escriben y se validan

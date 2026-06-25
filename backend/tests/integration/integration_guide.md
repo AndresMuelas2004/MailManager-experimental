@@ -138,6 +138,18 @@ It covers two invariants the plain drafts tests do not: the `COALESCE(EXCLUDED.c
 
 The seeded happy-path assertions pin exact unread counts from the migration-0010 Gmail seed (a single account) — a seed change shifts them and they break with no other signal. `box` is a router `Literal["ALL_MAIL","SPAM"]`, so TRASH/SENT collapse to 422 (FastAPI) without reaching the service. The load-bearing invariant — `COUNT_UNREAD_BY_ACCOUNT`'s GROUP BY emits no row for a zero-unread account, and the service back-fills it as `unread:0` while summing `total` in Python — CANNOT be exercised by the single-account seed, so the two multi-account tests are the documented exception to "use seeded data, not ephemeral" below: they create a second account via the API and insert controlled `email_metadata` through `isolated_db` (`_insert_unread_rows`). A single-account-only suite stays green even if the back-fill or the Python sum regresses.
 
+### Trap — lupa operator tests seed ephemeral rows (the SECOND exception to "use seeded data"), and `in:` overrides the route `box`
+
+The `test_list_emails_operator_*` family + `_insert_operator_fixture_rows` are the second documented exception to "use seeded data, not ephemeral" (after `unread-count` above): the migration-0010 seed cannot exercise operators — it predates migration 0031 (empty `to_email`, so `to:` never matches), never writes `has_attachments`/`is_favorite` (the B.lazy sync path leaves them false, so `has:attachment` / `is:favorite` need direct-SQL rows), and its dates are years in the past (so `before:`/`after:` are unprobeable). The fixture inserts three controlled rows through `isolated_db` and sets those flags via direct SQL.
+
+`in:` **overrides** the route `box`: `test_list_emails_operator_in_overrides_box_to_sent` sends `box=ALL_MAIL` with `q="in:sent"` and asserts ONLY the SENT row (`total == 1`). A new operator test that passes `box=ALL_MAIL` expecting ALL_MAIL semantics under an `in:` clause asserts the wrong set — the asymmetry is invisible from the test body.
+
+### Trap — `signature_html` PATCH: `""` clears, the cap 422 is FastAPI-shaped, and an unrelated PATCH must not wipe it
+
+- **`signature_html=""` is a valid PATCH that CLEARS the signature (200), not a 422** — asymmetric with `display_label` on the SAME endpoint, which carries `min_length=1` and rejects `""`. Clear a signature with `""`; leave it untouched by OMITTING the key (the service's `is not None` guard).
+- **The over-cap 422 uses FastAPI's `{"detail": [...]}` envelope, NOT the project's `{"error": {...}}`** — the same `RequestValidationError` subtlety already noted for the composed-body size cap above (`max_length=10_000` on `AccountUpdate.signature_html`). Assert `detail`, never `error.code`.
+- **`test_update_account_signature_html_survives_unrelated_update` is the load-bearing regression for the `UPSERT_ACCOUNT` four-clause lockstep** (`database_guide.md`): seed a signature, PATCH only `display_label`, assert it survives. Drop it and a regression that removes `signature_html` from the query's INSERT/VALUES wipes every signature on any unrelated account update while the rest of the signature suite stays green.
+
 ## GET Endpoint Testing Rules (mandatory)
 
 GET endpoints that read exclusively from the database (no provider calls) are covered by integration tests with the same fidelity as E2E. GETs with external dependencies (e.g. cache-aside with provider fallback) need their own strategy documented per-endpoint.

@@ -59,12 +59,23 @@ export const accountCreateSchema = z.object({
 });
 export type AccountCreate = z.infer<typeof accountCreateSchema>;
 
+// ``signature_html`` is the per-account email signature (HTML). The
+// ``.max(10_000)`` documents the contract and refines the inferred type only —
+// it does NOT run at runtime (``request<T>()`` validates responses, never
+// request bodies). The real client-side length guard lives in
+// ``AccountSignatureRow``; the backend's Pydantic ``max_length`` is the
+// authoritative enforcement.
 export const accountUpdateSchema = z.object({
   display_label: z.string().optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  signature_html: z.string().max(10_000).optional(),
 });
 export type AccountUpdate = z.infer<typeof accountUpdateSchema>;
 
+// ``signature_html`` is ``.nullable()`` (NOT ``.optional()``): the backend
+// always serialises the key, emitting ``null`` when the account has no
+// signature — it is never omitted. Every account fixture/handler must
+// therefore include the key or ``safeParse`` rejects the response.
 export const accountOutSchema = z.object({
   account_id: z.string(),
   mailbox_id: z.string(),
@@ -72,6 +83,7 @@ export const accountOutSchema = z.object({
   display_label: z.string(),
   config: z.record(z.string(), z.unknown()),
   email_address: z.string().nullable(),
+  signature_html: z.string().nullable(),
 });
 export type AccountOut = z.infer<typeof accountOutSchema>;
 

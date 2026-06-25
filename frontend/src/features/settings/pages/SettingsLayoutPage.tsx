@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom';
-import { Database, Info, Inbox, Languages, Link as LinkIcon, User } from 'lucide-react';
+import { Database, Info, Inbox, Languages, Link as LinkIcon, Signature, User } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { useTranslation } from '../../../lib/i18n';
@@ -16,6 +16,7 @@ type SectionDef = {
 const SECTIONS: SectionDef[] = [
   { to: '', labelKey: 'settings.navAccount', icon: User, end: true },
   { to: 'accounts', labelKey: 'settings.navConnectedAccounts', icon: LinkIcon },
+  { to: 'signature', labelKey: 'settings.navSignature', icon: Signature },
   { to: 'mailboxes', labelKey: 'settings.navMailboxes', icon: Inbox },
   { to: 'preferences', labelKey: 'settings.navLanguage', icon: Languages },
   { to: 'data', labelKey: 'settings.navData', icon: Database },

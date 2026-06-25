@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  accountOutSchema,
   attachmentMetadataSchema,
   draftAttachmentMetadataSchema,
   draftAttachmentResponseSchema,
@@ -262,6 +263,39 @@ describe('failedAttachmentSchema', () => {
       filename: 'broken.pdf',
       reason: 123,
     });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('accountOutSchema — signature_html', () => {
+  const baseAccount = {
+    account_id: 'acc_1',
+    mailbox_id: 'mb_1',
+    provider: 'gmail',
+    display_label: 'Gmail',
+    config: {},
+    email_address: 'me@example.com',
+  };
+
+  it('parses an account carrying an HTML signature', () => {
+    const parsed = accountOutSchema.parse({ ...baseAccount, signature_html: '<p>Jane</p>' });
+    expect(parsed.signature_html).toBe('<p>Jane</p>');
+  });
+
+  it('parses signature_html as null (account without a signature)', () => {
+    const parsed = accountOutSchema.parse({ ...baseAccount, signature_html: null });
+    expect(parsed.signature_html).toBeNull();
+  });
+
+  it('rejects a missing signature_html (it is .nullable(), not .optional())', () => {
+    // The backend always serialises the key; a payload that omits it is a
+    // contract drift that must fail loudly instead of deserialising silently.
+    const result = accountOutSchema.safeParse(baseAccount);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-string signature_html', () => {
+    const result = accountOutSchema.safeParse({ ...baseAccount, signature_html: 123 });
     expect(result.success).toBe(false);
   });
 });

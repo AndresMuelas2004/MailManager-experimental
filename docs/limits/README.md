@@ -30,6 +30,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [autocompletado-destinatarios.md](autocompletado-destinatarios.md) — Mínimo de caracteres, debounce, número de sugerencias, exclusiones y qué NO soporta.
 - [borradores.md](borradores.md) — Cap de borradores por cuenta, reintentos de envío y asimetrías Gmail/Outlook.
 - [responder-y-reenviar.md](responder-y-reenviar.md) — Recorte de la cita, permisos exactos, requisitos de threading y herencia de adjuntos.
+- [firma.md](firma.md) — Tope de tamaño de la firma, almacenamiento, semántica de borrar vs. dejar intacta, reglas exactas de inserción y qué NO soporta.
 
 ### Adjuntos
 - [adjuntos.md](adjuntos.md) — Tamaños (por archivo / total), número máximo, blocklist de extensiones, TTL del caché y concurrencia.

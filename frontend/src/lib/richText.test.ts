@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { htmlIsEmpty, normalizeEmpty } from './richText';
+import { composeBodyWithSignature, htmlIsEmpty, normalizeEmpty } from './richText';
 
 describe('normalizeEmpty', () => {
   it('collapses an empty paragraph to an empty string', () => {
@@ -44,5 +44,38 @@ describe('htmlIsEmpty', () => {
 
   it('is false for a list with items', () => {
     expect(htmlIsEmpty('<ul><li>a</li></ul>')).toBe(false);
+  });
+});
+
+describe('composeBodyWithSignature', () => {
+  const SIG = '<p>Jane Doe</p>';
+
+  it('returns the existing body unchanged when the signature is null', () => {
+    expect(composeBodyWithSignature('<p>quote</p>', null)).toBe('<p>quote</p>');
+  });
+
+  it('returns the existing body unchanged when the signature is undefined', () => {
+    expect(composeBodyWithSignature('', undefined)).toBe('');
+  });
+
+  it('returns the existing body unchanged when the signature is visually empty', () => {
+    // A lone ``<p></p>`` / ``<br>`` is "no signature" — nothing is prepended.
+    expect(composeBodyWithSignature('<p>quote</p>', '<p></p>')).toBe('<p>quote</p>');
+    expect(composeBodyWithSignature('<p>quote</p>', '   ')).toBe('<p>quote</p>');
+  });
+
+  it('prepends an empty paragraph + signature for a brand-new email (empty body)', () => {
+    expect(composeBodyWithSignature('', SIG)).toBe(`<p></p>${SIG}`);
+  });
+
+  it('places the signature ABOVE the quoted reply/forward body', () => {
+    const quote =
+      '<p>El 23 de mayo, Ana escribió:</p>' +
+      '<blockquote style="border-left:2px solid #ccc"><p>Hello</p></blockquote>';
+    const result = composeBodyWithSignature(quote, SIG);
+    expect(result).toBe(`<p></p>${SIG}${quote}`);
+    // The signature comes before the blockquote, and the quote is left intact.
+    expect(result.indexOf(SIG)).toBeLessThan(result.indexOf('<blockquote'));
+    expect(result).toContain(quote);
   });
 });

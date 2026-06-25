@@ -111,12 +111,13 @@ El cuerpo es **HTML** producido por el editor (TipTap con esquema restringido). 
 | **Colores y tamaños de letra** | El editor no expone color ni tamaño y el saneador descarta `style` en todo lo que no sea `<blockquote>`; cualquier color/tamaño pegado desde otra app se limpia. Fuera del MVP. |
 | **Tablas** | Ni el editor las crea ni el saneador admite `<table>`; una tabla pegada se aplana a su texto. Fuera del MVP. |
 | **Pegar estilos complejos de Word / Excel** | Al pegar contenido con formato rico solo sobrevive el formato soportado (negrita, cursiva, subrayado, listas, enlaces); el resto se limpia en silencio (no es un error). |
-| **Firmas con formato** | El composer no añade firma; es otra funcionalidad distinta, fuera de esta. |
 | **Reintento automático del envío directo** | El envío directo es de un solo intento; ante fallo transitorio el usuario reintenta a mano. El reintento automático (3 intentos) solo existe en el camino de borrador, que permanece bajo carga más tiempo. |
 | **Validación de forma de email en el backend** | La forma de cada dirección se valida solo en el cliente; el backend confía en esa validación y solo comprueba que la lista no esté vacía. Un cliente manipulado recibiría el error del proveedor traducido. |
 | **Tope propio de número de destinatarios** | La app no impone un máximo de destinatarios por mensaje; se delega en los límites del proveedor (Gmail/Outlook por mensaje y por día). |
 | **Programar envío (send later)** | No hay envío diferido ni programado; "Enviar" manda de inmediato. |
 | **Acuse de recibo / confirmación de lectura** | No se solicitan ni se gestionan cabeceras de read-receipt. |
-| **Firmas automáticas, plantillas, autoguardado periódico** | El composer no añade firma ni autoguarda cada N segundos; guardar el borrador es una acción explícita del usuario. |
+| **Plantillas y autoguardado periódico** | El composer no ofrece plantillas reutilizables ni autoguarda cada N segundos; guardar el borrador es una acción explícita del usuario. (La **firma por cuenta** sí existe y se inserta sola — es funcionalidad propia, ver abajo.) |
+
+> **Firmas: ahora SÍ.** El composer **sí inserta una firma por cuenta** al redactar/responder/reenviar (con el mismo vocabulario de formato y saneador de esta página). Es una funcionalidad propia, documentada aparte en [../features/firma.md](../features/firma.md) / [firma.md](./firma.md); este catálogo solo describe el editor y el envío del cuerpo.
 
 Si los usuarios reportan necesitar algo de lo anterior, hay un plan de fases futuras para añadirlo.
