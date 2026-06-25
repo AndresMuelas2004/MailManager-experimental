@@ -20,8 +20,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import useEmailList from './useEmailList';
 import { readLastSyncedAt } from '../../../lib/lastSync';
+import { DEFAULT_LIST_CONTROLS } from '../../../lib/listControls';
 import { createTestQueryClient } from '../../../test/renderWithProviders';
 import { server } from '../../../test/msw/server';
+import type { ListControlsState } from '../../../lib/listControls';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -168,6 +170,104 @@ describe('useEmailList — pagination', () => {
     // Once the new page resolves the data swaps and the flag clears.
     await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('p2'));
     expect(result.current.isPlaceholder).toBe(false);
+  });
+});
+
+describe('useEmailList — sort + quick-filter controls', () => {
+  it('omits sort/filter params on the wire for the default controls', async () => {
+    let seenUrl: URL | null = null;
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenUrl = new URL(request.url);
+        return HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 });
+      }),
+    );
+
+    const { result } = renderHook(
+      () =>
+        useEmailList(
+          'mb_1',
+          'ALL_MAIL',
+          undefined,
+          undefined,
+          undefined,
+          1,
+          false,
+          DEFAULT_LIST_CONTROLS,
+        ),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.emails).toHaveLength(1));
+    const params = seenUrl!.searchParams;
+    // The default (date/desc, all chips off) must produce a byte-identical URL
+    // to the pre-feature one: none of the new keys are present.
+    for (const key of ['sort', 'sort_dir', 'unread', 'has_attachment', 'favorite_only']) {
+      expect(params.get(key)).toBeNull();
+    }
+  });
+
+  it('sends the wire-named params for a non-default sort and the chips', async () => {
+    let seenUrl: URL | null = null;
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        seenUrl = new URL(request.url);
+        return HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 });
+      }),
+    );
+
+    const controls: ListControlsState = {
+      sort: 'subject',
+      dir: 'asc',
+      unread: true,
+      hasAttachment: true,
+      favorite: true,
+    };
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1, false, controls),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.emails).toHaveLength(1));
+    const params = seenUrl!.searchParams;
+    // Internal control names map to the documented wire names.
+    expect(params.get('sort')).toBe('subject');
+    expect(params.get('sort_dir')).toBe('asc');
+    expect(params.get('unread')).toBe('true');
+    expect(params.get('has_attachment')).toBe('true');
+    expect(params.get('favorite_only')).toBe('true');
+  });
+
+  it('caches two distinct control states under separate query keys', async () => {
+    const seenSorts: (string | null)[] = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        const url = new URL(request.url);
+        seenSorts.push(url.searchParams.get('sort'));
+        // Echo a row whose id reflects the sort so we can tell the caches apart.
+        const sort = url.searchParams.get('sort') ?? 'date';
+        return HttpResponse.json({ items: [makeEmail(sort)], total: 1, limit: 50, offset: 0 });
+      }),
+    );
+
+    const dateControls: ListControlsState = { ...DEFAULT_LIST_CONTROLS };
+    const subjectControls: ListControlsState = { ...DEFAULT_LIST_CONTROLS, sort: 'subject' };
+
+    const { result, rerender } = renderHook(
+      ({ controls }: { controls: ListControlsState }) =>
+        useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1, false, controls),
+      { wrapper, initialProps: { controls: dateControls } },
+    );
+
+    await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('date'));
+
+    // Switching the control dimension issues a new request (different key) and
+    // resolves to the subject-sorted row — not served from the date cache.
+    rerender({ controls: subjectControls });
+    await waitFor(() => expect(result.current.emails[0]?.provider_message_id).toBe('subject'));
+    // Both sort values reached the wire — proof the keys did not collapse.
+    expect(seenSorts).toContain(null); // date default omits ``sort``
+    expect(seenSorts).toContain('subject');
   });
 });
 

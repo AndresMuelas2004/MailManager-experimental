@@ -104,6 +104,19 @@ export const en: EsDictionary = {
     inboxLabelPrefix: '{label} mailbox',
     emptyDefault: 'No email in this mailbox',
     emptySearch: 'No email found for your search.',
+    emptyFiltered: 'No emails match the filters',
+  },
+
+  listControls: {
+    sortLabel: 'Sort by',
+    sortDate: 'Date',
+    sortSender: 'Sender',
+    sortSubject: 'Subject',
+    dirAsc: 'Ascending',
+    dirDesc: 'Descending',
+    filterUnread: 'Unread',
+    filterAttachment: 'With attachments',
+    filterFavorite: 'Starred',
   },
 
   boxes: {

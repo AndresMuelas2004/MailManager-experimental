@@ -592,6 +592,112 @@ describe('AccountInboxPage — refresh control', () => {
   });
 });
 
+// Sort + quick-filter controls. The account header mounts ListControls; the
+// page reads/writes the control state to the URL and feeds it to useEmailList.
+// We assert what travels on the wire (the real endpoint runs through MSW), the
+// page-reset side effect, and the filtered-empty message.
+describe('AccountInboxPage — sort + quick-filter controls', () => {
+  function stubInbox(onListRequest?: (url: URL) => void) {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        if (onListRequest) onListRequest(new URL(request.url));
+        return HttpResponse.json({
+          items: [makeMessage('rep', { subject: 'Controls thread' })],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+  }
+
+  it('changing the sort to Asunto sends sort=subject on the next request', async () => {
+    const seenSorts: (string | null)[] = [];
+    stubInbox((url) => seenSorts.push(url.searchParams.get('sort')));
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('Controls thread')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox'), 'subject');
+
+    await waitFor(() => expect(seenSorts).toContain('subject'));
+    // The default-sorted first load must NOT have sent the param.
+    expect(seenSorts[0]).toBeNull();
+  });
+
+  it('toggling the direction sends sort_dir=asc', async () => {
+    const seenDirs: (string | null)[] = [];
+    stubInbox((url) => seenDirs.push(url.searchParams.get('sort_dir')));
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('Controls thread')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    // Default is desc → the button is labelled "Descendente".
+    await user.click(screen.getByRole('button', { name: 'Descendente' }));
+
+    await waitFor(() => expect(seenDirs).toContain('asc'));
+  });
+
+  it('pressing a chip adds its wire param and resets page to 1 (offset back to 0)', async () => {
+    const seen: Array<{ unread: string | null; offset: string | null }> = [];
+    stubInbox((url) =>
+      seen.push({
+        unread: url.searchParams.get('unread'),
+        offset: url.searchParams.get('offset'),
+      }),
+    );
+    // Start on page 3 so the reset to page 1 is observable on the wire.
+    renderAccountInbox(noopComposer(), '/m/mb_1/account/a_1/inbox?page=3');
+    await waitFor(() => expect(screen.getByText('Controls thread')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'No leídos' }));
+
+    // After the chip press the request carries unread=true AND offset=0 (the
+    // control change dropped ``page`` from the URL → first page).
+    await waitFor(() =>
+      expect(seen.some((s) => s.unread === 'true' && s.offset === '0')).toBe(true),
+    );
+  });
+
+  it('multiple chips travel together in one request', async () => {
+    const seen: Array<Record<string, string | null>> = [];
+    stubInbox((url) =>
+      seen.push({
+        unread: url.searchParams.get('unread'),
+        has_attachment: url.searchParams.get('has_attachment'),
+      }),
+    );
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('Controls thread')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'No leídos' }));
+    await user.click(screen.getByRole('button', { name: 'Con adjuntos' }));
+
+    await waitFor(() =>
+      expect(seen.some((s) => s.unread === 'true' && s.has_attachment === 'true')).toBe(true),
+    );
+  });
+
+  it('shows the filtered-empty message (not the default one) when a filter yields nothing', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+    // A chip is active from the URL → the empty state must read "filtered".
+    renderAccountInbox(noopComposer(), '/m/mb_1/account/a_1/inbox?unread=1');
+
+    await waitFor(() =>
+      expect(screen.getByText('No hay correos que coincidan con los filtros')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('No hay correos en esta bandeja')).not.toBeInTheDocument();
+  });
+});
+
 // Unread badge on the account tabs. The page feeds AccountTabs the per-account
 // counts from useAccountUnreadCounts, which extracts this account's entry from
 // the mailbox-wide breakdown returned by /emails/unread-count.

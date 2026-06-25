@@ -1,5 +1,6 @@
 import { request } from '../client/http';
 import { EMAILS_PAGE_SIZE } from '../../lib/constants';
+import type { SortKey, SortDir } from '../../lib/listControls';
 import {
   archiveResponseSchema,
   conversationOutSchema,
@@ -36,9 +37,17 @@ import {
 
 export type ListEmailsOptions = {
   q?: string;
-  favorite?: boolean;
+  favorite?: boolean; // anchor (Favoritos) — distinct from the favoriteOnly chip
   page?: number;
   groupByThread?: boolean;
+  // Sort + quick filters. Internal frontend names; some are translated to the
+  // wire names below (``dir``→``sort_dir``, ``hasAttachment``→``has_attachment``,
+  // ``favoriteOnly``→``favorite_only``); ``sort`` and ``unread`` match the wire.
+  sort?: SortKey;
+  dir?: SortDir;
+  unread?: boolean;
+  hasAttachment?: boolean;
+  favoriteOnly?: boolean;
   signal?: AbortSignal;
 };
 
@@ -55,6 +64,13 @@ export function listEmails(
   // Only send group_by_thread when truthy — the backend treats its absence as
   // default=False, mirroring how ``favorite`` is omitted when undefined.
   if (options.groupByThread) params.set('group_by_thread', 'true');
+  // Sort: only when it differs from the default (clean URLs / stable cache).
+  if (options.sort && options.sort !== 'date') params.set('sort', options.sort);
+  if (options.dir === 'asc') params.set('sort_dir', 'asc');
+  // Quick filters: only when active. Frontend name -> wire name mapping.
+  if (options.unread) params.set('unread', 'true');
+  if (options.hasAttachment) params.set('has_attachment', 'true');
+  if (options.favoriteOnly) params.set('favorite_only', 'true');
   const limit = EMAILS_PAGE_SIZE;
   const offset = ((options.page ?? 1) - 1) * limit;
   params.set('limit', String(limit));

@@ -106,6 +106,19 @@ export const es = {
     inboxLabelPrefix: 'Bandeja {label}',
     emptyDefault: 'No hay correos en esta bandeja',
     emptySearch: 'No se encontraron correos para tu búsqueda.',
+    emptyFiltered: 'No hay correos que coincidan con los filtros',
+  },
+
+  listControls: {
+    sortLabel: 'Ordenar por',
+    sortDate: 'Fecha',
+    sortSender: 'Remitente',
+    sortSubject: 'Asunto',
+    dirAsc: 'Ascendente',
+    dirDesc: 'Descendente',
+    filterUnread: 'No leídos',
+    filterAttachment: 'Con adjuntos',
+    filterFavorite: 'Destacados',
   },
 
   boxes: {
