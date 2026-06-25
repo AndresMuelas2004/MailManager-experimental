@@ -83,14 +83,19 @@ function renderFavorites() {
 }
 
 describe('FavoritesPage', () => {
-  it('lists with favorite=true and without group_by_thread', async () => {
-    const seen: Array<{ favorite: string | null; group: string | null }> = [];
+  it('lists with favorite=true, without group_by_thread, and without any sort/filter param', async () => {
+    const seen: Array<Record<string, string | null>> = [];
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
         const params = new URL(request.url).searchParams;
         seen.push({
           favorite: params.get('favorite'),
           group: params.get('group_by_thread'),
+          sort: params.get('sort'),
+          sort_dir: params.get('sort_dir'),
+          unread: params.get('unread'),
+          has_attachment: params.get('has_attachment'),
+          favorite_only: params.get('favorite_only'),
         });
         return HttpResponse.json({
           items: [makeFavorite('f1')],
@@ -109,6 +114,14 @@ describe('FavoritesPage', () => {
     // Favourites filter on, conversation grouping off (omitted from the wire).
     expect(seen.every((s) => s.favorite === 'true')).toBe(true);
     expect(seen.every((s) => s.group === null)).toBe(true);
+    // FavoritesPage is out of scope for the sort/quick-filter feature: it does
+    // NOT pass the 8th ``controls`` arg to useEmailList, so the listing request
+    // must carry NONE of the new keys (the wire stays byte-identical to before
+    // the feature). A regression that leaked the controls into this page would
+    // surface here.
+    for (const key of ['sort', 'sort_dir', 'unread', 'has_attachment', 'favorite_only'] as const) {
+      expect(seen.every((s) => s[key] === null)).toBe(true);
+    }
   });
 
   it('keeps bulk selection (not mounted in conversation mode)', async () => {

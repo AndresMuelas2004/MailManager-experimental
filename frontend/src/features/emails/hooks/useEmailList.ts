@@ -6,9 +6,11 @@ import { listAccounts } from '../../../api/endpoints/accounts';
 import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
+import { DEFAULT_LIST_CONTROLS } from '../../../lib/listControls';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailBox } from '../../../lib/types';
+import type { ListControlsState } from '../../../lib/listControls';
 
 type UseEmailListReturn = {
   emails: EmailMetadataOut[];
@@ -37,6 +39,7 @@ export default function useEmailList(
   favorite?: boolean,
   page = 1,
   groupByThread = false,
+  controls: ListControlsState = DEFAULT_LIST_CONTROLS,
 ): UseEmailListReturn {
   const queryClient = useQueryClient();
   // The underlying sync is per mailbox/account (all boxes at once), so the
@@ -49,6 +52,9 @@ export default function useEmailList(
   // ``groupByThread`` is a non-nullable boolean → it goes straight into the
   // key (no ``?? null``). It namespaces the grouped (conversation) cache
   // apart from the non-grouped (favourites) cache so the two never collide.
+  // ``controls`` is rebuilt on every render (parseListControls returns a fresh
+  // object), so its primitive fields go into the key individually — each
+  // sort/filter combination caches under its own entry.
   const emailsKey = [
     'emails',
     mailboxId,
@@ -58,6 +64,11 @@ export default function useEmailList(
     favorite ?? null,
     groupByThread,
     page,
+    controls.sort,
+    controls.dir,
+    controls.unread,
+    controls.hasAttachment,
+    controls.favorite,
   ] as const;
   const accountsKey = ['accounts', mailboxId] as const;
 
@@ -69,6 +80,11 @@ export default function useEmailList(
         favorite,
         page,
         groupByThread,
+        sort: controls.sort,
+        dir: controls.dir,
+        unread: controls.unread,
+        hasAttachment: controls.hasAttachment,
+        favoriteOnly: controls.favorite,
         signal,
       }),
     enabled: mailboxId.length > 0,
@@ -126,8 +142,25 @@ export default function useEmailList(
 
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: emailsKey });
+    // ``controls`` is decomposed into primitives here (not passed as the object)
+    // because parseListControls returns a fresh object each render, which would
+    // recreate ``refresh`` on every render and break its stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryClient, mailboxId, box, accountId, effectiveQ, favorite, groupByThread, page]);
+  }, [
+    queryClient,
+    mailboxId,
+    box,
+    accountId,
+    effectiveQ,
+    favorite,
+    groupByThread,
+    page,
+    controls.sort,
+    controls.dir,
+    controls.unread,
+    controls.hasAttachment,
+    controls.favorite,
+  ]);
 
   const error = emailsQuery.error
     ? toUiError(emailsQuery.error)

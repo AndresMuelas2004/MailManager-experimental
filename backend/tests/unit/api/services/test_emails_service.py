@@ -1452,7 +1452,7 @@ def _patch_list_emails(
         account_ids, box, tokens, limit, offset,
         *, extra_filters=None, box_in=None, box_not_in=None,
         distinct_provider_message_id=False, group_by_thread=False,
-        operator_clauses=None,
+        operator_clauses=None, sort=None, sort_dir=None,
     ):
         if list_filtered_calls is not None:
             list_filtered_calls.append({
@@ -1467,6 +1467,8 @@ def _patch_list_emails(
                 "distinct_provider_message_id": distinct_provider_message_id,
                 "group_by_thread": group_by_thread,
                 "operator_clauses": operator_clauses,
+                "sort": sort,
+                "sort_dir": sort_dir,
             })
         return result_rows
 
@@ -1855,6 +1857,121 @@ class TestListEmailsPagination:
         assert list_calls[0]["operator_clauses"] is None
         # Free-text semantics are untouched by the richer parser.
         assert list_calls[0]["tokens"] == ["foo", "bar"]
+
+    def test_unread_chip_maps_to_is_read_false_operator(self, monkeypatch):
+        # The quick-filter chips reuse the SAME operator-clause kinds the lupa
+        # uses; ``unread`` → ``is:unread`` semantics (is_read = False).
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, unread=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [("is_read_op", False)]
+
+    def test_has_attachment_chip_maps_to_has_attachments_operator(self, monkeypatch):
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, has_attachment=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [("has_attachments", True)]
+
+    def test_favorite_only_chip_maps_to_is_favorite_operator(self, monkeypatch):
+        # ``favorite_only`` is a plain AND filter on the current box — distinct
+        # from the ``favorite`` anchor param (which excludes TRASH/SPAM). It
+        # rides the ``is_favorite_op`` operator, NOT the is_favorite extra
+        # filter, so no box override happens.
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID, favorite_only=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [("is_favorite_op", True)]
+        # The anchor path is untouched: box stays ALL_MAIL, no TRASH/SPAM
+        # exclusion, and no is_favorite extra filter (the service passes
+        # ``extra_filters or None`` → None when the dict is empty, unlike the
+        # ``favorite`` anchor which would have set ``{"is_favorite": True}``).
+        assert list_calls[0]["box"] == "ALL_MAIL"
+        assert list_calls[0]["extra_filters"] is None
+
+    def test_all_three_chips_emit_all_three_operator_clauses(self, monkeypatch):
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            unread=True, has_attachment=True, favorite_only=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [
+            ("is_read_op", False),
+            ("has_attachments", True),
+            ("is_favorite_op", True),
+        ]
+
+    def test_chips_append_after_lupa_operators(self, monkeypatch):
+        # A chip concatenates AFTER any q-derived operator clauses (the op{idx}
+        # numbering continues without collision, same as a repeated operator).
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            q="from:linkedin", unread=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [
+            ("from_contains", "linkedin"),
+            ("is_read_op", False),
+        ]
+
+    def test_chip_operator_clauses_passed_identically_to_list_and_count(self, monkeypatch):
+        # The chips must reach BOTH list_filtered and count_filtered unchanged,
+        # protecting the "total cuadra con la página" invariant — same guard as
+        # the lupa-operator parity test above, now via chips.
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            unread=True, favorite_only=True,
+        )
+        assert list_calls[0]["operator_clauses"] == [
+            ("is_read_op", False),
+            ("is_favorite_op", True),
+        ]
+        assert count_calls[0]["operator_clauses"] == list_calls[0]["operator_clauses"]
+
+    def test_sort_forwarded_only_to_list_filtered_not_count(self, monkeypatch):
+        # sort / sort_dir reach list_filtered (the SELECT orders) but NOT
+        # count_filtered (a COUNT does not order). The _count stub deliberately
+        # rejects sort kwargs, so a regression that forwarded them would crash
+        # this test with TypeError rather than passing silently.
+        list_calls: list = []
+        count_calls: list = []
+        _patch_list_emails(
+            monkeypatch,
+            list_filtered_calls=list_calls,
+            count_filtered_calls=count_calls,
+        )
+        emails_service.list_emails(
+            _MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID,
+            sort="subject", sort_dir="asc",
+        )
+        assert list_calls[0]["sort"] == "subject"
+        assert list_calls[0]["sort_dir"] == "asc"
+        assert "sort" not in count_calls[0]
+        assert "sort_dir" not in count_calls[0]
+
+    def test_sort_defaults_to_date_desc_and_no_chip_operator_clauses(self, monkeypatch):
+        # With no new params the defaults reproduce the pre-feature behaviour:
+        # sort=date / dir=desc and operator_clauses still None (no q, no chips).
+        list_calls: list = []
+        _patch_list_emails(monkeypatch, list_filtered_calls=list_calls)
+        emails_service.list_emails(_MAILBOX_ID, "ALL_MAIL", _USER_ID, _ACCOUNT_ID)
+        assert list_calls[0]["sort"] == "date"
+        assert list_calls[0]["sort_dir"] == "desc"
+        assert list_calls[0]["operator_clauses"] is None
 
     def test_db_error_on_count_filtered_translated(self, monkeypatch):
         from api.errors.exceptions import DatabaseQueryError

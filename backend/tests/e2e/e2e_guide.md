@@ -96,7 +96,7 @@ The `created_resources` fixture tracks temp mailbox IDs and session IDs. On tear
 
 Runs Alembic migrations against the real E2E database once per session using `backend/database/alembic.ini`. If the database exists but has no `alembic_version` row, it stamps the existing tables as `0001_initial_schema` before upgrading to `head`. This keeps the suite idempotent across cold starts and post-migration runs.
 
-## Search endpoint coverage — `test_38a`–`test_38g`
+## Search endpoint coverage — `test_38a`–`test_38x`
 
 `GET /mailboxes/{mailbox_id}/emails?q=…` (free text + Gmail-style operators) and its pagination envelope are exercised by the `test_38*` block. Why the dedicated mention here — each test is the executable spec for a contract not visible from the router signature alone:
 
@@ -106,6 +106,7 @@ Runs Alembic migrations against the real E2E database once per session using `ba
 - `test_38e` pins the **asymmetry** of `in:`: with `box=ALL_MAIL&q=in:sent` every row is in `SENT`, and `total` equals a direct `box=SENT` query — so the override reaches the COUNT predicate, not only the listing. A regression that applied `in:` to the page but not the count would pass a bare status check.
 - `test_38f` pins two things about ANDed operators: contradictory ones (`is:read is:unread`) resolve to **zero rows in SQL** (`items == []`, `total == 0`), never a 422 (the executable counterpart to the `repository_guide.md` "contradictions resolve in SQL, not via code" note); AND, against an `is:read`-only baseline measured first in the same test, that combining operators **narrows, never widens** (`total <= base_total`).
 - `test_38g` is the only place that proves the deployed runtime carries the IANA tz database (`tzdata`): `before:`/`after:` parse the date as midnight in `Europe/Madrid`, so a missing `tzdata` would 500 these requests — a failure neither unit nor integration can catch (they share the interpreter; only E2E exercises the real runtime). Fixed far-past/far-future boundaries keep it deterministic against a live inbox.
+- `test_38x` extends the block to the **sort + quick-filter chip** axis of the same `GET /emails` endpoint: `sort`/`sort_dir` (the page is non-decreasing in the backend's accent-folded subject order — the test folds accents the same way so an accented subject does not red it falsely) and the `unread` / `favorite_only` chips (every returned row satisfies the chip). Assertions are over invariant properties, not fixed id sets, like `test_38a`; the `has_attachment` chip is deliberately not exercised, with the rationale living in the test's own docstring so it cannot drift.
 
 ## Email-content cache-aside coverage — `test_46a`–`test_46d`
 

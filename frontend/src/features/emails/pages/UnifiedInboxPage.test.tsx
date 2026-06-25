@@ -192,7 +192,11 @@ describe('UnifiedInboxPage', () => {
     expect(seenQueries[seenQueries.length - 1]).toBe('receipt');
   });
 
-  it('shows the search-empty message when the active search returns no rows', async () => {
+  it('shows the filtered-empty message when the active search returns no rows', async () => {
+    // The sort/quick-filter feature unified the search-empty and filter-empty
+    // states under a single ``inbox.emptyFiltered`` message: an active search
+    // (``isSearching``) now shares the same "no matches" copy as an active
+    // chip, replacing the former search-specific ``inbox.emptySearch``.
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
         const q = new URL(request.url).searchParams.get('q');
@@ -211,7 +215,7 @@ describe('UnifiedInboxPage', () => {
     await user.type(screen.getByRole('searchbox'), 'nope');
 
     await waitFor(() => {
-      expect(screen.getByText('No se encontraron correos para tu búsqueda.')).toBeInTheDocument();
+      expect(screen.getByText('No hay correos que coincidan con los filtros')).toBeInTheDocument();
     });
   });
 
@@ -418,11 +422,13 @@ describe('UnifiedInboxPage', () => {
     });
     expect(screen.queryByRole('button', { name: 'Página siguiente' })).not.toBeInTheDocument();
 
-    // Now an active search that also yields nothing: distinct message, still no bar.
+    // Now an active search that also yields nothing: the unified filtered-empty
+    // message (search shares it with the chips since the sort/filter feature),
+    // still no bar.
     const user = userEvent.setup();
     await user.type(screen.getByRole('searchbox'), 'zzz');
     await waitFor(() => {
-      expect(screen.getByText('No se encontraron correos para tu búsqueda.')).toBeInTheDocument();
+      expect(screen.getByText('No hay correos que coincidan con los filtros')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Página siguiente' })).not.toBeInTheDocument();
   });
@@ -512,6 +518,91 @@ describe('UnifiedInboxPage', () => {
     await waitFor(() => {
       expect(seenQueries[seenQueries.length - 1]).toBe('from:linkedin');
     });
+  });
+});
+
+// Sort + quick-filter controls. The unified header mounts ListControls; the
+// page round-trips the control state through the URL and into useEmailList.
+// Assertions are on the wire params (real endpoint through MSW), the page
+// reset, and the filtered-empty copy.
+describe('UnifiedInboxPage — sort + quick-filter controls', () => {
+  function stubInbox(onListRequest?: (url: URL) => void) {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        if (onListRequest) onListRequest(new URL(request.url));
+        return HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+  }
+
+  it('changing the sort sends sort=sender on the next request', async () => {
+    const seenSorts: (string | null)[] = [];
+    stubInbox((url) => seenSorts.push(url.searchParams.get('sort')));
+    renderInboxAtMailbox();
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox'), 'sender');
+
+    await waitFor(() => expect(seenSorts).toContain('sender'));
+    expect(seenSorts[0]).toBeNull(); // default first load omits the param
+  });
+
+  it('pressing a chip adds its wire param and drops ?page from the URL', async () => {
+    const seenFav: (string | null)[] = [];
+    stubInbox((url) => seenFav.push(url.searchParams.get('favorite_only')));
+    // Start on page 2 so the reset is observable both on the URL and the wire.
+    renderInboxAtMailbox('/m/mb_1/inbox?page=2');
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Destacados' }));
+
+    await waitFor(() => expect(seenFav).toContain('true'));
+    // The control change resets pagination: ?page is gone from the URL.
+    expect(locationSearch()).not.toContain('page=');
+  });
+
+  it('multiple chips travel together in one request', async () => {
+    const seen: Array<Record<string, string | null>> = [];
+    stubInbox((url) =>
+      seen.push({
+        unread: url.searchParams.get('unread'),
+        favorite_only: url.searchParams.get('favorite_only'),
+      }),
+    );
+    renderInboxAtMailbox();
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'No leídos' }));
+    await user.click(screen.getByRole('button', { name: 'Destacados' }));
+
+    await waitFor(() =>
+      expect(seen.some((s) => s.unread === 'true' && s.favorite_only === 'true')).toBe(true),
+    );
+  });
+
+  it('shows the filtered-empty message when an active filter yields nothing', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+    renderInboxAtMailbox('/m/mb_1/inbox?attachment=1');
+
+    await waitFor(() =>
+      expect(screen.getByText('No hay correos que coincidan con los filtros')).toBeInTheDocument(),
+    );
+    // Not the plain empty-inbox copy.
+    expect(screen.queryByText('No hay correos en esta bandeja')).not.toBeInTheDocument();
   });
 });
 

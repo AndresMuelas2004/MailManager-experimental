@@ -11,6 +11,7 @@ Run with: python -m pytest backend/tests/e2e -v --tb=short
 from __future__ import annotations
 
 import os
+import unicodedata
 from datetime import datetime, timezone
 
 import psycopg2
@@ -29,6 +30,19 @@ from .e2e_config import (
 
 def _assert_ok(response, *, expected: int = 200) -> None:
     assert response.status_code == expected, response.text
+
+
+def _normalise_subject_for_sort(subject: str) -> str:
+    """Mirror the backend's ``lower(unaccent(coalesce(subject, '')))`` sort key.
+
+    Python ``str.lower()`` alone keeps accents and compares by Unicode code
+    point (e.g. 'á' U+00E1 sorts AFTER 'z'), whereas the backend strips accents
+    before lowercasing. Comparing the page against a code-point sort would make
+    this test red for an accented subject even when the backend ordered
+    correctly, so the test side must apply the same accent-folding."""
+    decomposed = unicodedata.normalize("NFKD", subject)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return stripped.lower()
 
 
 def _require(flow_state: dict, *keys: str) -> None:
@@ -1472,6 +1486,71 @@ def test_38g_search_operator_before_after(e2e_client):
     before_past_body = before_past.json()
     assert before_past_body["items"] == []
     assert before_past_body["total"] == 0
+
+
+def test_38x_list_emails_sort_and_filter(e2e_client):
+    """Sort + quick-filter chips against the real Gmail account.
+
+    Sort and chips are properties of the SAME listing endpoint already covered
+    above, so per ``common_mistakes.md`` § 1 their assertions stay in one test
+    rather than one function per property. The assertions are over invariant
+    PROPERTIES (ordering is non-decreasing; every returned row satisfies the
+    chip), never over fixed ``provider_message_id`` sets — the live inbox is
+    mutable, matching the ``test_38a`` style. The ``has_attachment`` chip is
+    deliberately NOT exercised here: ``has_attachments`` is B.lazy (stays FALSE
+    until a body is opened), so it is not deterministic at sync time — see the
+    note in the backend implementation doc; ``unread`` / ``favorite_only`` are
+    DB-faithful right after sync."""
+    sync_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+    )
+    _assert_ok(sync_resp)
+
+    # sort=subject&sort_dir=asc: the sequence of normalised subjects must be
+    # non-decreasing across the page, and total must be at least the page size.
+    sorted_resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={
+            "box": "ALL_MAIL",
+            "account_id": GMAIL_ACCOUNT_ID,
+            "sort": "subject",
+            "sort_dir": "asc",
+        },
+    )
+    _assert_ok(sorted_resp)
+    sorted_body = sorted_resp.json()
+    subjects = [_normalise_subject_for_sort(e.get("subject") or "") for e in sorted_body["items"]]
+    assert subjects == sorted(subjects), (
+        "sort=subject&sort_dir=asc did not return rows in non-decreasing "
+        "normalised-subject order."
+    )
+    assert sorted_body["total"] >= len(sorted_body["items"])
+
+    # unread chip: every returned row is unread.
+    unread_resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "unread": "true"},
+    )
+    _assert_ok(unread_resp)
+    unread_body = unread_resp.json()
+    for e in unread_body["items"]:
+        assert e["is_read"] is False, (
+            f"unread chip returned read row {e.get('provider_message_id')}"
+        )
+    assert unread_body["total"] >= len(unread_body["items"])
+
+    # favorite_only chip: every returned row is a favourite.
+    fav_resp = e2e_client.get(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+        params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "favorite_only": "true"},
+    )
+    _assert_ok(fav_resp)
+    fav_body = fav_resp.json()
+    for e in fav_body["items"]:
+        assert e["is_favorite"] is True, (
+            f"favorite_only chip returned non-favourite row {e.get('provider_message_id')}"
+        )
+    assert fav_body["total"] >= len(fav_body["items"])
 
 
 def test_39_get_email_content_gmail(e2e_client):

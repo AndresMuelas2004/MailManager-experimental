@@ -78,6 +78,43 @@ def list_emails(
     ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    sort: Literal["date", "sender", "subject"] = Query(
+        default="date",
+        description=(
+            "Sort column for the listing. 'date' = received_at (default), "
+            "'sender' = sender display name (falls back to email, "
+            "accent/case-insensitive), 'subject'. The order always ends "
+            "with received_at DESC plus a stable PK tie-break, so paging is "
+            "deterministic."
+        ),
+    ),
+    sort_dir: Literal["asc", "desc"] = Query(
+        default="desc",
+        description="Sort direction: 'desc' (newest / Z->A, default) or 'asc'.",
+    ),
+    unread: bool = Query(
+        default=False,
+        description="When true, restrict to unread messages (is_read = FALSE).",
+    ),
+    has_attachment: bool = Query(
+        default=False,
+        description=(
+            "When true, restrict to messages with downloadable attachments "
+            "(has_attachments = TRUE). NOTE: has_attachments follows the "
+            "B.lazy strategy — it stays FALSE until a message body is opened, "
+            "so freshly-synced unopened mail with attachments is not matched "
+            "yet (same limitation as the lupa's has:attachment operator)."
+        ),
+    ),
+    favorite_only: bool = Query(
+        default=False,
+        description=(
+            "When true, restrict to favourite messages (is_favorite = TRUE) "
+            "on the current box. This is a plain AND filter; it is distinct "
+            "from the 'favorite' anchor param (which excludes TRASH/SPAM and "
+            "powers the dedicated Favourites view)."
+        ),
+    ),
     user_id: str = Depends(require_session),
 ) -> EmailPageOut:
     """
@@ -87,11 +124,16 @@ def list_emails(
     the filtered set + applied ``limit`` / ``offset``) so the client can
     render numbered pagination. Optionally filter to a single account,
     by free text, or by favourite status, or collapse threads into
-    conversation rows via ``group_by_thread``.
+    conversation rows via ``group_by_thread``. The listing can be ordered
+    by ``sort`` / ``sort_dir`` and narrowed with the quick-filter chips
+    ``unread`` / ``has_attachment`` / ``favorite_only`` (combinable AND
+    filters, independent of ``q``).
     """
     return emails_service.list_emails(
         mailbox_id, box, user_id, account_id, q, limit, offset, favorite,
         group_by_thread,
+        sort=sort, sort_dir=sort_dir,
+        unread=unread, has_attachment=has_attachment, favorite_only=favorite_only,
     )
 
 

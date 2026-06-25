@@ -143,6 +143,58 @@ def test_grouped_listing_aggregates_read_attachments_favorite(
     assert row["thread_message_count"] == 3
 
 
+def test_grouped_listing_chip_surfaces_thread_when_any_message_matches(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    # Quick-filter chips apply at the MESSAGE level, then grouping collapses.
+    # A thread surfaces if ANY of its messages matches the chip, and its
+    # representative is the most-recent message overall (not the most-recent
+    # matching one — the aggregation keeps the thread's newest row as the
+    # representative). Here only the middle message is unread; the unread chip
+    # still surfaces the thread, represented by its newest message.
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="u1",
+                  thread_id="uthr", received_at="2026-05-01T09:00:00+00:00", is_read=True)
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="u2",
+                  thread_id="uthr", received_at="2026-05-01T10:00:00+00:00", is_read=False)
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="u3",
+                  thread_id="uthr", received_at="2026-05-01T11:00:00+00:00", is_read=True)
+    # A fully-read thread that must NOT surface under the unread chip.
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="r1",
+                  thread_id="rthr", received_at="2026-05-02T09:00:00+00:00", is_read=True)
+
+    body = _list_grouped(test_client, mailbox_id, account_id, unread="true").json()
+    rows = body["items"]
+    assert body["total"] == 1
+    assert len(rows) == 1
+    assert rows[0]["thread_id"] == "uthr"
+    # Representative is the thread's most-recent message (11:00), even though
+    # the matching message was the 10:00 one.
+    assert rows[0]["provider_message_id"] == "u3"
+    # The whole thread is present in the box, so the count is the full 3.
+    assert rows[0]["thread_message_count"] == 3
+
+
+def test_grouped_listing_sort_subject_orders_thread_representatives(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    # sort applies to the collapsed thread rows (their representatives). Two
+    # single-message threads ordered by subject asc: "alpha" < "omega".
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="z-rep",
+                  thread_id="z", received_at="2026-05-02T09:00:00+00:00", subject="omega")
+    _insert_email(isolated_db, account_id=account_id, provider_message_id="a-rep",
+                  thread_id="a", received_at="2026-05-01T09:00:00+00:00", subject="alpha")
+
+    body = _list_grouped(
+        test_client, mailbox_id, account_id, sort="subject", sort_dir="asc",
+    ).json()
+    # Without the sort the default (date desc) would put z-rep first; subject
+    # asc flips it to a-rep ("alpha") then z-rep ("omega").
+    assert [r["provider_message_id"] for r in body["items"]] == ["a-rep", "z-rep"]
+    assert body["total"] == 2
+
+
 def test_grouped_listing_threadless_messages_stay_individual(
     test_client, setup_mailbox_and_account, isolated_db,
 ):

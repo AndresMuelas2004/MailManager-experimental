@@ -12,6 +12,7 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 - **Abrir un correo** y ver su cuerpo se documenta en [visualizacion-de-correos.md](visualizacion-de-correos.md).
 - Las **bandejas ficticias** (vistas curadas por criterios) se documentan en [bandejas-ficticias.md](bandejas-ficticias.md).
 - La **agrupación por conversación** (que es como se presentan hoy las filas en las bandejas reales y en la unificada) se documenta en [conversaciones.md](conversaciones.md).
+- **Ordenar** (por fecha / remitente / asunto, ascendente o descendente) y **filtrar de un clic** (no leídos / con adjuntos / destacados) la bandeja real que se está mirando se documenta en [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md).
 
 Este documento se centra en el esqueleto: **la tabla de correos de una bandeja real**.
 
@@ -113,9 +114,11 @@ La columna de fecha muestra **la hora** (HH:MM) si el correo llegó hoy, y **el 
 
 ## 5. El orden de la lista
 
-Los correos se muestran **ordenados por fecha de recepción, de más reciente a más antiguo**. Es el orden natural de una bandeja: lo último que llegó, arriba. Este orden es el mismo en todas las bandejas, en ambas vistas (cuenta y unificada), y también cuando hay una búsqueda activa (la lupa respeta este mismo orden — ver [lupa.md](lupa.md)).
+**Por defecto**, los correos se muestran **ordenados por fecha de recepción, de más reciente a más antiguo**. Es el orden natural de una bandeja: lo último que llegó, arriba. Este es el orden de arranque en todas las bandejas reales, en ambas vistas (cuenta y unificada), y también cuando hay una búsqueda activa (la lupa respeta este mismo orden por defecto — ver [lupa.md](lupa.md)).
 
-**No hay ordenación por relevancia ni ningún otro criterio**: solo la fecha decide. No se puede reordenar por remitente, por asunto ni por tamaño.
+En las bandejas reales (unificada y por cuenta) el usuario **puede cambiar este orden**: ordenar por **fecha, remitente o asunto** en sentido **ascendente o descendente**, y filtrar de un clic por **no leídos / con adjuntos / destacados**, desde una barra de controles junto a la lupa. Ese comportamiento se documenta aparte, en [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md); aquí basta con saber que **el valor por defecto sigue siendo fecha descendente** y que la pestaña de **Favoritos** y las **bandejas ficticias** quedan fuera de esa funcionalidad (no muestran esos controles).
+
+**No hay ordenación por relevancia ni por tamaño**: ni siquiera con búsqueda activa, la relevancia decide; y el tamaño del correo no es un criterio de orden.
 
 ### 5.1 Por qué el orden es estable incluso con fechas empatadas
 
@@ -187,7 +190,7 @@ Lo mismo aplica a las **acciones en bloque**: si el usuario selecciona correos d
 - **Cargando (primera vez):** mientras llega la primera carga, se muestra un spinner centrado en lugar de la tabla.
 - **Sincronizando (en segundo plano):** la lista ya visible se mantiene intacta y usable; el refresco con el proveedor ocurre de forma silenciosa, sin indicador visible en estas bandejas. Cuando la sincronización termina, la lista se reemplaza sola con los correos nuevos.
 - **Bandeja vacía:** si no hay correos, se muestra "No hay correos en esta bandeja" y **sin barra de paginación** (no tiene sentido paginar cero correos).
-- **Búsqueda sin resultados:** si hay una búsqueda activa y no casa nada, el mensaje es **distinto** — "No se encontraron correos para tu búsqueda" — para que el usuario distinga "no hay nada que coincida" de "la bandeja está vacía", y tampoco hay barra de paginación. (La lupa: [lupa.md](lupa.md).)
+- **Búsqueda o filtro sin resultados:** si hay una búsqueda activa o algún chip de filtro activo y no casa nada, el mensaje es **distinto** del de bandeja vacía — "No hay correos que coincidan con los filtros" — para que el usuario distinga "no hay nada que coincida" de "la bandeja está vacía", y tampoco hay barra de paginación. Este mensaje unifica los casos "sin resultados de búsqueda" y "sin resultados de filtro" en las bandejas reales; los chips se documentan en [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md) y la lupa en [lupa.md](lupa.md). (Favoritos y las bandejas ficticias conservan su propio texto específico de "búsqueda sin resultados".)
 - **Una sola página:** si todos los correos caben en una página, la barra muestra el rango ("1–37 de 37") pero "Anterior/Siguiente" quedan deshabilitados; no hay nada a lo que saltar.
 - **Error:** si la carga falla, se muestra un mensaje de error legible en lugar de una pantalla rota; la lista no se pinta a medias y la barra de paginación no aparece.
 
@@ -195,4 +198,4 @@ Lo mismo aplica a las **acciones en bloque**: si el usuario selecciona correos d
 
 ## 10. Resumen en una frase
 
-> El listado es la tabla de una bandeja real (principal, enviados, archivados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena siempre por fecha de recepción descendente con un desempate estable, marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, se navega **por páginas numeradas** con barra "Anterior/Siguiente" e indicador "X–Y de Z" (total exacto de lo **sincronizado**, no del proveedor en vivo) reiniciando a la página 1 al cambiar de contexto y reencuadrando a la última página válida si el total encoge, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).
+> El listado es la tabla de una bandeja real (principal, enviados, archivados, spam o papelera) que lee **solo de la base de datos local** —instantánea y resistente a caídas del proveedor—, mezcla todas las cuentas en vista unificada o se restringe a una en vista de cuenta, ordena por defecto por fecha de recepción descendente con un desempate estable (orden y filtros rápidos alternativos en [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md)), marca por fila lo no leído, los adjuntos descargables y los favoritos, adapta las columnas "Para"/"De" al contexto para no repetir el correo propio del usuario, sincroniza en segundo plano al entrar, se navega **por páginas numeradas** con barra "Anterior/Siguiente" e indicador "X–Y de Z" (total exacto de lo **sincronizado**, no del proveedor en vivo) reiniciando a la página 1 al cambiar de contexto y reencuadrando a la última página válida si el total encoge, y enruta cada acción al mailbox **real** de cada correo para acertar siempre el buzón incluso cuando una vista mezcla varios; las cifras exactas y todo lo que deliberadamente no soporta viven en [../limits/listado-de-correos.md](../limits/listado-de-correos.md).

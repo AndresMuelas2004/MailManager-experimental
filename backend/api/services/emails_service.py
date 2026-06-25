@@ -968,18 +968,34 @@ def list_emails(
     offset: int = 0,
     favorite: bool | None = None,
     group_by_thread: bool = False,
+    *,
+    sort: str = "date",
+    sort_dir: str = "desc",
+    unread: bool = False,
+    has_attachment: bool = False,
+    favorite_only: bool = False,
 ) -> EmailPageOut:
     """List a page of email metadata for a mailbox, with the exact total.
 
     Returns an :class:`EmailPageOut` envelope: the requested page of
     rows plus ``total`` — the count of the WHOLE filtered set (same
-    ``box`` / ``q`` / ``favorite`` / accounts), used by the frontend to
-    render numbered pagination. ``total`` reflects only the locally
-    synced copy, never the provider's live mailbox size.
+    ``box`` / ``q`` / ``favorite`` / chips / accounts), used by the
+    frontend to render numbered pagination. ``total`` reflects only the
+    locally synced copy, never the provider's live mailbox size.
 
     When ``favorite=True``, the listing only returns favourite messages
     and TRASH / SPAM are excluded by default (matching the dedicated
     Favourites view documented in ``Ignore/Favoritos-Funcionalidad.md``).
+
+    ``sort`` / ``sort_dir`` choose the ordering (``date`` / ``sender`` /
+    ``subject`` × ``asc`` / ``desc``); the defaults (``date`` / ``desc``)
+    reproduce the historical fixed ordering. The quick-filter chips
+    (``unread`` / ``has_attachment`` / ``favorite_only``) are plain AND
+    filters on the current box, translated into the SAME operator clauses
+    the lupa uses (``is:unread`` / ``has:attachment`` / ``is:favorite``);
+    they combine with each other, with any ``q`` operators, and with free
+    text. The chips are keyword-only with defaults that reproduce the
+    pre-feature behaviour, so existing positional callers are unaffected.
     """
     ensure_mailbox_access(mailbox_id, user_id)
 
@@ -1027,7 +1043,28 @@ def list_emails(
     # CLAUDE.md §7).
     parsed = parse_search_query(q)
     tokens = parsed.tokens
-    operator_clauses = parsed.operator_clauses
+    # Copy to a fresh list before appending: ``ParsedSearchQuery`` is a
+    # frozen dataclass, but ``frozen=True`` only blocks reassigning the
+    # attribute — the list object it points to is still mutable, so
+    # appending to ``parsed.operator_clauses`` directly would mutate the
+    # dataclass's internal list in place. The copy keeps the parsed result
+    # pristine and disjoint from the chip clauses we add below.
+    operator_clauses = list(parsed.operator_clauses)
+
+    # Quick-filter chips → reuse the SAME operator-clause builders the lupa
+    # uses (``is_read_op`` / ``has_attachments`` / ``is_favorite_op`` are
+    # already in ``_OPERATOR_CLAUSE_BUILDERS``); no new SQL surface. They
+    # AND with any ``q``-derived operator clauses and with each other, and
+    # are independent of the ``favorite`` anchor param below (a chip filters
+    # the current box; the anchor powers the dedicated Favourites view).
+    # Appending after the lupa clauses continues the ``op{idx}`` numbering
+    # without collision (same mechanics as a repeated ``from:`` operator).
+    if unread:
+        operator_clauses.append(("is_read_op", False))
+    if has_attachment:
+        operator_clauses.append(("has_attachments", True))
+    if favorite_only:
+        operator_clauses.append(("is_favorite_op", True))
 
     extra_filters: dict[str, Any] = {}
     box_arg: str | None = box
@@ -1060,6 +1097,7 @@ def list_emails(
             box_not_in=box_not_in,
             group_by_thread=group_by_thread,
             operator_clauses=operator_clauses or None,
+            sort=sort, sort_dir=sort_dir,
         )
     except DatabaseError as exc:
         raise translate_database_error(exc) from exc

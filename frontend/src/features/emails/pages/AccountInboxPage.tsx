@@ -11,14 +11,17 @@ import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import RefreshControl from '../components/RefreshControl';
+import ListControls from '../components/ListControls';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import { isGenericLabel } from '../../../lib/providers';
 import { parsePageParam } from '../../../lib/pagination';
 import { parseInOperator } from '../../../lib/searchOperators';
+import { parseListControls, writeListControls, isAnyFilterActive } from '../../../lib/listControls';
 import { useTranslation } from '../../../lib/i18n';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import type { EmailBox } from '../../../lib/types';
 import type { EmailMetadataOut } from '../../../api/types/dto';
+import type { ListControlsState } from '../../../lib/listControls';
 
 type Props = {
   box: EmailBox;
@@ -37,6 +40,7 @@ export default function AccountInboxPage({ box }: Props) {
   const rawQ = searchParams.get('q') ?? '';
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
   const page = parsePageParam(searchParams);
+  const controls = parseListControls(searchParams);
 
   // Conversation mode groups the listing by thread (``groupByThread=true``,
   // 7th positional arg): one row per thread, collapsed to its most-recent
@@ -57,7 +61,7 @@ export default function AccountInboxPage({ box }: Props) {
     syncing,
     lastSyncedAt,
     syncError,
-  } = useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page, true);
+  } = useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page, true, controls);
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
@@ -120,8 +124,19 @@ export default function AccountInboxPage({ box }: Props) {
     setSearchParams(params, { replace: true });
   };
 
+  const handleControlsChange = (next: ListControlsState) => {
+    const params = new URLSearchParams(searchParams);
+    // writeListControls also deletes ``page`` so a control change resets to
+    // page 1 in the same URL update, mirroring handleSearchChange. Uses
+    // ``replace: true`` so browser Back does not unwind filter-by-filter.
+    writeListControls(params, next);
+    setSearchParams(params, { replace: true });
+  };
+
   const isSearching = debouncedQ.trim().length >= MIN_SEARCH_LENGTH;
-  const emptyMessage = isSearching ? t('inbox.emptySearch') : t('inbox.emptyDefault');
+  const isFiltering = isAnyFilterActive(controls);
+  const emptyMessage =
+    isSearching || isFiltering ? t('inbox.emptyFiltered') : t('inbox.emptyDefault');
 
   // Columns follow the EFFECTIVE box: when q carries a valid in:, every
   // returned row shares that box, so the single individual-view column must
@@ -133,7 +148,9 @@ export default function AccountInboxPage({ box }: Props) {
     <div className="flex h-full flex-col">
       <div className="flex items-start justify-between gap-4 px-4 pt-6 pb-2 lg:px-8 lg:pt-8">
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">{title}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
+            {title}
+          </h1>
           <p className="text-[15px] leading-[1.5] text-zinc-500">
             {t('inbox.accountSubtitle', { title })}
           </p>
@@ -156,6 +173,10 @@ export default function AccountInboxPage({ box }: Props) {
       <div className="flex items-center gap-2 px-4 pt-4 lg:px-8">
         <SearchInput value={rawQ} onChange={handleSearchChange} />
         <SearchHelpPopover />
+      </div>
+
+      <div className="px-4 pt-3 lg:px-8">
+        <ListControls value={controls} onChange={handleControlsChange} />
       </div>
 
       {combinedError && (
