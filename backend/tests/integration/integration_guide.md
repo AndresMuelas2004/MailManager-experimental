@@ -110,6 +110,10 @@ Race window between the ownership pre-check and the mutating SQL: on UPDATE the 
 
 `list_emails_for_virtual_mailbox` hardcodes `group_by_thread=True`, and filters (`is_favorite`, etc.) apply at the message level BEFORE grouping — two favourite messages sharing a `thread_id` collapse into one thread row. Tests asserting item count / `total` under a filter must expect thread counts, not message counts (e.g. two seeded favourites in one thread → one row, `total == 1`).
 
+### Trap — regular grouped listing keys threads by `(account_id, thread_key)`; the virtual listing keys by `thread_key` alone
+
+`GET /emails?group_by_thread=true` (the regular listing) partitions threads by `(account_id, thread_key)`, so two DISTINCT accounts that happen to share a `thread_id` string stay as SEPARATE thread rows — never fused. The virtual listing instead partitions by `thread_key` alone (after the cross-account `provider_message_id` dedup) and DOES collapse them. `test_grouped_listing_does_not_merge_distinct_accounts_sharing_thread_id` pins the regular side; a regression that dropped `account_id` from the regular grouping key would silently merge two accounts' unrelated conversations that happen to share a provider thread string.
+
 ### Trap — `test_dev_login.py`: the TestClient host is `testclient`
 
 Starlette's `TestClient` presents client host `testclient`, not `127.0.0.1`/`localhost`. To exercise the dev-login happy path the test sets `DEV_LOGIN_TRUSTED_HOSTS=testclient`; otherwise every call 403s `dev_login_not_localhost`. The happy path also **removes** the standard `require_session` auth override (which injects a fixed user) and relies on the cookie the endpoint itself sets, restoring the override in a `finally` — dev-login is one of the few endpoints whose entire purpose is to mint the session the override otherwise fakes.
