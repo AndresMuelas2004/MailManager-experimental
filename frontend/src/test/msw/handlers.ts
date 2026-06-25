@@ -140,6 +140,12 @@ export const handlers = [
   http.post(`${API_BASE}/mailboxes/:mailboxId/emails/restore-from-spam`, () =>
     HttpResponse.json({ moved_count: 0, accounts: [] }),
   ),
+  http.post(`${API_BASE}/mailboxes/:mailboxId/emails/archive`, () =>
+    HttpResponse.json({ moved_count: 0, accounts: [] }),
+  ),
+  http.post(`${API_BASE}/mailboxes/:mailboxId/emails/restore-from-archive`, () =>
+    HttpResponse.json({ moved_count: 0, accounts: [] }),
+  ),
   http.patch(`${API_BASE}/mailboxes/:mailboxId/emails/read-status`, () =>
     HttpResponse.json({ updated_count: 0, accounts: [] }),
   ),

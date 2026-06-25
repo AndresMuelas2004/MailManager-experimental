@@ -49,6 +49,7 @@ const HAMBURGER = 'Abrir menú'; // nav.openMenu
 const CLOSE = 'Cerrar'; // common.close — drawer X (and, once open, the composer X)
 const COMPOSE = 'Redactar'; // sidebar.compose — BOTH the FAB and the sidebar's round button
 const INBOX_LINK = 'Bandeja unificada'; // nav.inbox — a drawer NavLink
+const ARCHIVE_LINK = 'Archivados'; // nav.archive — the new "Archived" NavLink
 const COMPOSER_TITLE = 'Nuevo mensaje'; // composer.titleNewEmail
 
 const mailboxFixture = {
@@ -108,6 +109,16 @@ describe('MailboxLayoutPage — mobile shell', () => {
     // Two ``Redactar`` buttons exist (sidebar + FAB); the FAB is the one
     // outside the aside.
     expect(getFab()).toBeInTheDocument();
+  });
+
+  it('renders the "Archivados" sidebar nav link pointing at the archive route', () => {
+    stubMailboxes();
+    renderShell();
+
+    const link = screen.getByRole('link', { name: ARCHIVE_LINK });
+    expect(link).toBeInTheDocument();
+    // The NavLink resolves ``path: 'archive'`` relative to /m/:mailboxId.
+    expect(link).toHaveAttribute('href', '/m/mb_1/archive');
   });
 
   it('opening the hamburger expands it and reveals the drawer close button', async () => {

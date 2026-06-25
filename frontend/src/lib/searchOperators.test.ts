@@ -9,6 +9,7 @@ describe('parseInOperator', () => {
     expect(parseInOperator('in:allmail')).toBe('ALL_MAIL');
     expect(parseInOperator('in:trash')).toBe('TRASH');
     expect(parseInOperator('in:spam')).toBe('SPAM');
+    expect(parseInOperator('in:archive')).toBe('ARCHIVE');
   });
 
   it('accepts a double-quoted value', () => {

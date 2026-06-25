@@ -454,6 +454,36 @@ describe('UnifiedInboxPage', () => {
     expect(seenQueries[seenQueries.length - 1]).toBe('in:sent');
   });
 
+  it('renders the Archive view title and subtitle when mounted with box=ARCHIVE', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, ({ request }) => {
+        // The archive view lists with box=ARCHIVE; assert the param travels.
+        expect(new URL(request.url).searchParams.get('box')).toBe('ARCHIVE');
+        return HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        });
+      }),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/m/:mailboxId/archive" element={<UnifiedInboxPage box="ARCHIVE" />} />
+      </Routes>,
+      { initialEntries: ['/m/mb_1/archive'] },
+    );
+
+    // Title + subtitle come from EMAIL_BOX_CONFIG.ARCHIVE (boxes.archive*).
+    await waitFor(() => {
+      expect(screen.getByText('Archivados')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Correos archivados de tus cuentas conectadas.')).toBeInTheDocument();
+    expect(screen.getByText('Welcome to the platform')).toBeInTheDocument();
+  });
+
   it('forwards an operator query (from:linkedin) literally without rewriting it', async () => {
     const seenQueries: (string | null)[] = [];
     server.use(

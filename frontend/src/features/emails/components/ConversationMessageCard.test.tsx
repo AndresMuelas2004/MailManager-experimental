@@ -60,6 +60,7 @@ describe('ConversationMessageCard (collapsed header)', () => {
   it.each([
     ['SPAM', 'Spam'],
     ['TRASH', 'Papelera'],
+    ['ARCHIVE', 'Archivado'],
   ])('labels a %s message as %s', (box, label) => {
     render(
       <ConversationMessageCard
