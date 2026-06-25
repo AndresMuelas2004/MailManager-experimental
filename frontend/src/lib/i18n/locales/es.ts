@@ -405,6 +405,7 @@ export const es = {
     title: 'Ajustes',
     navAccount: 'Tu cuenta',
     navConnectedAccounts: 'Cuentas conectadas',
+    navSignature: 'Firma',
     navMailboxes: 'Bandejas',
     navLanguage: 'Idioma',
     navData: 'Datos',
@@ -424,6 +425,20 @@ export const es = {
       deleteConfirmPrompt: 'Para confirmar, escribe tu email ({email}) a continuación:',
       deleteConfirmPlaceholder: 'Escribe tu email',
       deleteConfirmButton: 'Eliminar mi cuenta',
+    },
+
+    signature: {
+      title: 'Firma de correo',
+      subtitle:
+        'Configura una firma por cuenta. Se insertará automáticamente al redactar, responder y reenviar.',
+      empty: 'No tienes cuentas conectadas en esta bandeja.',
+      placeholder: 'Escribe tu firma (nombre, cargo, teléfono, web…)',
+      editorAria: 'Editor de firma',
+      save: 'Guardar',
+      saving: 'Guardando…',
+      saved: 'Firma guardada.',
+      tooLong: 'La firma es demasiado larga.',
+      error: 'No se pudo guardar la firma: {message}',
     },
 
     language: {

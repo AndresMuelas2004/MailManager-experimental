@@ -12,6 +12,9 @@ const CreateMailboxPage = lazy(() => import('../../features/mailboxes/pages/Crea
 const ConnectedAccountsPage = lazy(
   () => import('../../features/accounts/pages/ConnectedAccountsPage'),
 );
+const SignatureSettingsPage = lazy(
+  () => import('../../features/accounts/pages/SignatureSettingsPage'),
+);
 const UnifiedInboxPage = lazy(() => import('../../features/emails/pages/UnifiedInboxPage'));
 const AccountInboxPage = lazy(() => import('../../features/emails/pages/AccountInboxPage'));
 const DraftsPage = lazy(() => import('../../features/drafts/pages/DraftsPage'));
@@ -89,6 +92,7 @@ const router = createBrowserRouter([
                 children: [
                   { index: true, element: <SettingsAccountPage /> },
                   { path: 'accounts', element: <ConnectedAccountsPage /> },
+                  { path: 'signature', element: <SignatureSettingsPage /> },
                   { path: 'mailboxes', element: <MailboxesSettingsPage /> },
                   { path: 'preferences', element: <PreferencesPage /> },
                   { path: 'data', element: <DataSyncPage /> },

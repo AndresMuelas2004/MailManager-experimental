@@ -38,6 +38,7 @@ const accountFixture = {
   display_label: 'Gmail',
   config: {},
   email_address: 'alice@example.com',
+  signature_html: null,
 };
 
 const mailboxFixture = {

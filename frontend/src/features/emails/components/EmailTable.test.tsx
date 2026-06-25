@@ -31,6 +31,7 @@ const accountFixture: AccountOut = {
   display_label: 'Gmail',
   config: {},
   email_address: 'alice@example.com',
+  signature_html: null,
 };
 
 function makeEmail(overrides: Partial<EmailMetadataOut> = {}): EmailMetadataOut {

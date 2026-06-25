@@ -33,6 +33,7 @@ const accountOne = {
   display_label: 'Gmail',
   config: {},
   email_address: 'one@example.com',
+  signature_html: null,
 };
 const accountTwo = {
   account_id: 'a_2',
@@ -41,6 +42,7 @@ const accountTwo = {
   display_label: 'Outlook',
   config: {},
   email_address: 'two@example.com',
+  signature_html: null,
 };
 
 function renderConnectedAccounts() {

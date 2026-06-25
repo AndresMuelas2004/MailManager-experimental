@@ -37,6 +37,7 @@ const accountFixture = {
   display_label: 'Gmail',
   config: {},
   email_address: 'me@example.com',
+  signature_html: null,
 };
 
 function makeFavorite(id: string) {

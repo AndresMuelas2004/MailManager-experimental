@@ -59,6 +59,7 @@ const accountFixture = {
   display_label: 'Gmail',
   config: {},
   email_address: 'alice@example.com',
+  signature_html: null,
 };
 
 // A sent email returned by an in:sent search. account_id matches
