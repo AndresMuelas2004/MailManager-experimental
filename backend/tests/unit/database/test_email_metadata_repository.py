@@ -15,6 +15,7 @@ import pytest
 
 from database.repositories import email_metadata_repository as em_module
 from database.repositories.email_metadata_repository import (
+    _build_order_by,
     _build_recipient_token_predicate,
     _escape_like,
 )
@@ -1255,6 +1256,206 @@ def test_count_filtered_operator_clauses_emit_same_predicate(monkeypatch):
     assert "COUNT(*)" in sql
 
 
+# ===== _build_order_by (pure function — the sort whitelist) =====
+# Pure helper that turns the public (sort, sort_dir) pair into the trusted
+# ORDER BY body interpolated into the {order_by} slot of the four LIST
+# templates. No mocks: input → output. The body is always UNPREFIXED so the
+# same string resolves to em.* / d.* across all four templates.
+
+
+def test_build_order_by_default_is_received_at_desc_with_pk_tiebreak():
+    # None/None reproduces the historical fixed ordering exactly.
+    assert _build_order_by(None, None) == "received_at DESC, account_id, provider_message_id"
+
+
+def test_build_order_by_date_asc_flips_only_the_primary_direction():
+    assert _build_order_by("date", "asc") == "received_at ASC, account_id, provider_message_id"
+
+
+def test_build_order_by_date_desc_matches_the_default():
+    assert _build_order_by("date", "desc") == "received_at DESC, account_id, provider_message_id"
+
+
+@pytest.mark.parametrize("sort_dir", ["asc", "desc"])
+def test_build_order_by_sender_uses_unaccent_name_then_email_fallback(sort_dir):
+    direction = sort_dir.upper()
+    result = _build_order_by("sender", sort_dir)
+    # Sender sorts on the display name, falling back to email, accent/case-
+    # insensitive (the natural order the rest of the app uses).
+    assert result.startswith(
+        f"lower(unaccent(coalesce(nullif(from_name, ''), from_email))) {direction} NULLS LAST,"
+    )
+    # A non-date sort always groups same-sender rows newest-first and ends
+    # with the PK tie-break, regardless of the primary direction.
+    assert result.endswith("received_at DESC, account_id, provider_message_id")
+
+
+@pytest.mark.parametrize("sort_dir", ["asc", "desc"])
+def test_build_order_by_subject_uses_unaccent_subject(sort_dir):
+    direction = sort_dir.upper()
+    result = _build_order_by("subject", sort_dir)
+    assert result.startswith(f"lower(unaccent(coalesce(subject, ''))) {direction} NULLS LAST,")
+    assert result.endswith("received_at DESC, account_id, provider_message_id")
+
+
+def test_build_order_by_unknown_sort_falls_back_to_date_desc():
+    # An unknown sort (reachable only via direct repository calls — the router
+    # Literal blocks it over HTTP) falls back to the default without doubling
+    # ``received_at`` and without injecting the raw value into the SQL.
+    result = _build_order_by("size", "up")
+    assert result == "received_at DESC, account_id, provider_message_id"
+    assert "size" not in result
+
+
+def test_build_order_by_unknown_sort_dir_defaults_to_desc():
+    # A junk direction with a valid sort still resolves: only "asc" yields ASC.
+    assert _build_order_by("subject", "sideways").startswith(
+        "lower(unaccent(coalesce(subject, ''))) DESC NULLS LAST,"
+    )
+
+
+def test_build_order_by_always_ends_with_pk_tiebreak():
+    # The total-ordering tie-break is non-negotiable for stable OFFSET paging
+    # in every branch of the whitelist.
+    for sort in ("date", "sender", "subject", "size"):
+        for sort_dir in ("asc", "desc"):
+            assert _build_order_by(sort, sort_dir).endswith("account_id, provider_message_id")
+
+
+# ===== list_filtered — sort / sort_dir (the {order_by} slot) =====
+# These are SQL-surface tests (FakeCursor): they assert the ORDER BY string
+# produced by _build_order_by reaches the executed SQL, in all four LIST
+# templates, and that the rest of each template (predicates, inner DISTINCT
+# ON, WINDOW, LIMIT/OFFSET) is untouched by the slot change.
+
+
+def test_list_filtered_default_sort_emits_unprefixed_received_at_order(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(["acc1"], "ALL_MAIL", [], 50, 0)
+    sql, _ = cursor.executed[0]
+    # Default (no sort args) → the historical order, UNPREFIXED in the slot.
+    assert "ORDER BY received_at DESC, account_id, provider_message_id" in sql
+    # Nothing leaked the legacy prefixed form into the regular template.
+    assert "ORDER BY em.received_at DESC" not in sql
+
+
+def test_list_filtered_sort_subject_asc_emits_subject_order(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0, sort="subject", sort_dir="asc",
+    )
+    sql, _ = cursor.executed[0]
+    assert (
+        "ORDER BY lower(unaccent(coalesce(subject, ''))) ASC NULLS LAST, "
+        "received_at DESC, account_id, provider_message_id"
+    ) in sql
+
+
+def test_list_filtered_sort_sender_desc_emits_sender_order(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0, sort="sender", sort_dir="desc",
+    )
+    sql, _ = cursor.executed[0]
+    assert (
+        "ORDER BY lower(unaccent(coalesce(nullif(from_name, ''), from_email))) DESC NULLS LAST, "
+        "received_at DESC, account_id, provider_message_id"
+    ) in sql
+
+
+def test_list_filtered_sort_reaches_distinct_template_without_breaking_inner_order(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row()]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1", "acc2"], None, [], 50, 0,
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+        sort="subject", sort_dir="asc",
+    )
+    sql, _ = cursor.executed[0]
+    # The external ORDER BY carries the chosen sort.
+    assert "ORDER BY lower(unaccent(coalesce(subject, ''))) ASC NULLS LAST," in sql
+    # The inner DISTINCT ON winner-selection ORDER BY is UNTOUCHED — sort only
+    # reorders the page, it must not change which row survives the dedup.
+    assert "DISTINCT ON (em.provider_message_id)" in sql
+    assert "btrim(coalesce(em.to_email, '')) <> ''" in sql
+    assert "em.received_at DESC NULLS LAST" in sql
+
+
+def test_list_filtered_sort_reaches_grouped_template_without_breaking_partition(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=2)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1"], "ALL_MAIL", [], 50, 0,
+        group_by_thread=True, sort="sender", sort_dir="asc",
+    )
+    sql, _ = cursor.executed[0]
+    # The external ORDER BY carries the chosen sort in the grouped template too.
+    assert "ORDER BY lower(unaccent(coalesce(nullif(from_name, ''), from_email))) ASC NULLS LAST," in sql
+    # The thread aggregation and partition key are untouched.
+    assert "thread_message_count" in sql
+    assert "PARTITION BY em.account_id, COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id)" in sql
+
+
+def test_list_filtered_sort_reaches_grouped_distinct_template(monkeypatch):
+    cursor = FakeCursor(fetchall_results=[[_row(thread_message_count=3)]])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    em_module.email_metadata_store.list_filtered(
+        ["acc1", "acc2"], None, [], 50, 0,
+        box_not_in=["TRASH", "SPAM"],
+        distinct_provider_message_id=True,
+        group_by_thread=True, sort="subject", sort_dir="desc",
+    )
+    sql, _ = cursor.executed[0]
+    assert "ORDER BY lower(unaccent(coalesce(subject, ''))) DESC NULLS LAST," in sql
+    # The inner dedup + thread-key partition stay intact.
+    assert "DISTINCT ON (em.provider_message_id)" in sql
+    assert "PARTITION BY d1.thread_key" in sql
+
+
+def test_list_filtered_chips_combined_emit_independent_op_params(monkeypatch):
+    # The three quick-filter chips arrive as plain operator clauses; combined
+    # they AND together with independent op{idx} params (no collision), exactly
+    # like a repeated lupa operator.
+    cursor = FakeCursor(fetchall_results=[[]])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.list_filtered(
+        ["acc-1"], "ALL_MAIL", [], 50, 0,
+        operator_clauses=[
+            ("is_read_op", False),
+            ("has_attachments", True),
+            ("is_favorite_op", True),
+        ],
+    )
+    sql, params = cursor.executed[0]
+    assert "is_read = %(op0)s" in sql
+    assert "has_attachments = %(op1)s" in sql
+    assert "is_favorite = %(op2)s" in sql
+    assert params["op0"] is False
+    assert params["op1"] is True
+    assert params["op2"] is True
+
+
+def test_count_filtered_has_no_order_by_slot(monkeypatch):
+    # count_filtered takes no sort params and its SQL never carries an ORDER BY
+    # (nor an unresolved {order_by} slot) — COUNT does not order.
+    cursor = FakeCursor(fetchone_results=[(7,)])
+    patch_connection(monkeypatch, em_module, [cursor])
+    em_module.email_metadata_store.count_filtered(["acc1"], "ALL_MAIL", [])
+    sql, _ = cursor.executed[0]
+    assert "ORDER BY" not in sql
+    assert "{order_by}" not in sql
+
+
 # ===== list_filtered — distinct_provider_message_id (vmbox dedup) =====
 # The Python dedup was removed; dedup now happens in SQL. These lock the
 # SQL surface of the DISTINCT variant and its tie-break parity with the
@@ -1278,8 +1479,10 @@ def test_list_filtered_distinct_uses_distinct_on_and_btrim_tiebreak(monkeypatch)
     assert "btrim(coalesce(em.to_email, '')) <> ''" in sql
     assert "btrim(coalesce(em.to_name,  '')) <> ''" in sql
     # Outer ORDER BY restores presentation order WITH the PK tie-break the
-    # Python sort lacked, so OFFSET paging is total/stable.
-    assert "ORDER BY d.received_at DESC, d.account_id, d.provider_message_id" in sql
+    # Python sort lacked, so OFFSET paging is total/stable. The {order_by}
+    # slot now carries an UNPREFIXED body (resolves to ``d.*`` through the
+    # single outer alias — see the ORDER-BY ALIAS NOTE in the queries module).
+    assert "ORDER BY received_at DESC, account_id, provider_message_id" in sql
     # Shared predicates still apply through the same helper.
     assert "NOT (box = ANY(%(box_not_in_list)s))" in sql
     assert params["box_not_in_list"] == ["TRASH", "SPAM"]

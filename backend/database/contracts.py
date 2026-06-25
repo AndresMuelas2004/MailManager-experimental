@@ -185,6 +185,8 @@ class EmailMetadataStore(ABC):
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
         operator_clauses: list[tuple[str, Any]] | None = None,
+        sort: str | None = None,
+        sort_dir: str | None = None,
     ) -> list[dict[str, Any]]:
         """List email metadata for the given accounts, optionally filtered.
 
@@ -237,6 +239,18 @@ class EmailMetadataStore(ABC):
         it is applied by the service as a box override. Unknown kinds are
         ignored. ``None`` / empty means "no operator clauses" and the
         emitted SQL is identical to the pre-operator query.
+
+        ``sort`` / ``sort_dir``: optional ordering for the external
+        ``ORDER BY`` of the LIST templates. ``sort`` is one of ``date``
+        (``received_at``, the default), ``sender`` (display name with
+        email fallback, accent-/case-insensitive) or ``subject``;
+        ``sort_dir`` is ``asc`` or ``desc`` (default). Both resolve
+        against a closed whitelist in the repository — an unknown/``None``
+        value falls back to ``date`` / ``desc``, which reproduces the
+        previous fixed ordering. The total-ordering PK tie-break
+        (``account_id, provider_message_id``) is always appended so OFFSET
+        paging stays stable. Only the SELECT carries an ``ORDER BY``, so
+        ``count_filtered`` takes NO equivalent parameters.
         """
         raise NotImplementedError
 

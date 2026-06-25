@@ -168,6 +168,60 @@ _OPERATOR_CLAUSE_BUILDERS: dict[str, Callable[[Any, int], tuple[str, dict[str, A
 }
 
 
+# Closed whitelist of sort expressions for the LIST templates' external
+# ORDER BY. The KEY is the public ``sort`` value (validated at the API
+# boundary as a Literal); the VALUE is a TRUSTED, hardcoded SQL column
+# expression. Column references are UNPREFIXED on purpose — they resolve
+# to ``em.*`` in LIST_FILTERED (the JOINed ``accounts`` has none of these
+# columns; ``account_id`` is the USING-merged column) and to ``d.*`` in
+# the three subquery-based templates (the outer FROM is the single alias
+# ``d``, which projects every sort column). See the ORDER-BY ALIAS NOTE in
+# ``database/queries/email_metadata.py``. NEVER interpolate the raw
+# ``sort`` value into SQL — only these fixed fragments may reach a query,
+# the same anti-injection discipline as ``_EXTRA_FILTER_BUILDERS`` /
+# ``_OPERATOR_CLAUSE_BUILDERS``.
+_SORT_EXPRESSIONS: dict[str, str] = {
+    "date": "received_at",
+    # Sort by sender: display name, falling back to email when the name is
+    # empty/NULL; accent/case-insensitive so the order is the natural one
+    # (matches how the rest of the app normalises text — unaccent+lower).
+    "sender": "lower(unaccent(coalesce(nullif(from_name, ''), from_email)))",
+    "subject": "lower(unaccent(coalesce(subject, '')))",
+}
+
+
+def _build_order_by(sort: str | None, sort_dir: str | None) -> str:
+    """Build the trusted ``ORDER BY`` body for the four LIST templates.
+
+    Returns ONLY the expression list (no leading ``ORDER BY`` keyword), to
+    be interpolated into the ``{order_by}`` slot of the LIST templates.
+
+    Always ends with the total-ordering tie-break ``account_id,
+    provider_message_id`` so OFFSET paging stays stable (the identical
+    guarantee the previous hardcoded ORDER BY provided). For non-date
+    sorts a secondary ``received_at DESC`` groups same-sender /
+    same-subject rows newest-first regardless of the primary direction.
+    Unknown/empty values fall back to the default (date desc) so a bad
+    value can never break the query nor inject — the router's ``Literal``
+    already blocks junk over HTTP; this defends direct repository calls
+    (e.g. tests).
+    """
+    # Resolve against the whitelist first: an unknown/empty ``sort`` (only
+    # reachable via direct repository calls — the router's Literal blocks
+    # it over HTTP) falls back to the ``date`` KEY, so the date branch
+    # below fires and we never emit the doubled ``received_at`` a raw-value
+    # check would produce.
+    key = sort if sort in _SORT_EXPRESSIONS else "date"
+    direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
+    if key == "date":
+        return f"received_at {direction}, account_id, provider_message_id"
+    # NULLS LAST is harmless (coalesce removes NULLs) but documents intent.
+    return (
+        f"{_SORT_EXPRESSIONS[key]} {direction} NULLS LAST, "
+        f"received_at DESC, account_id, provider_message_id"
+    )
+
+
 def _build_recipient_token_predicate(
     tokens: list[str],
     email_col: str,
@@ -542,6 +596,8 @@ class PgEmailMetadataStore(EmailMetadataStore):
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
         operator_clauses: list[tuple[str, Any]] | None = None,
+        sort: str | None = None,
+        sort_dir: str | None = None,
     ) -> list[dict[str, Any]]:
         if not account_ids:
             return []
@@ -565,6 +621,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 box_predicate=box_predicate,
                 search_predicate=search_predicate,
                 extra_predicate=extra_predicate,
+                order_by=_build_order_by(sort, sort_dir),
             )
             with connection.get_connection() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

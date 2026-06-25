@@ -137,10 +137,13 @@ MOVE_TO_TRASH_BATCH = """
       AND em.box NOT IN ('TRASH', 'DELETED')
 """
 
-# {box_predicate}, {search_predicate} and {extra_predicate} are Python
-# str.format() slots populated by PgEmailMetadataStore.list_filtered.
-# Each one expands to either an empty string or " AND (...)" — only
-# parameterised clauses (%(name)s) belong inside.
+# {box_predicate}, {search_predicate}, {extra_predicate} and {order_by}
+# are Python str.format() slots populated by
+# PgEmailMetadataStore.list_filtered. The three predicate slots each
+# expand to either an empty string or " AND (...)" — only parameterised
+# clauses (%(name)s) belong inside. The {order_by} slot expands to a
+# trusted ORDER BY body built by ``_build_order_by`` from the closed
+# ``_SORT_EXPRESSIONS`` whitelist — never raw user text.
 #
 # Single query backs BOTH the regular box listing (one box, mandatory)
 # and the virtual-mailbox listing (zero, one or many boxes derived from
@@ -154,6 +157,16 @@ MOVE_TO_TRASH_BATCH = """
 # future caller that wants a new predicate must extend the whitelist
 # there, not pass a string here. Allowing arbitrary text would be a SQL
 # injection vector.
+#
+# ORDER-BY ALIAS NOTE: the ``{order_by}`` body references columns WITHOUT
+# an alias prefix (``received_at``, ``from_name``, ``subject``, …). Here
+# the FROM is ``email_metadata AS em JOIN accounts AS a USING (account_id)``:
+# those columns exist ONLY in ``em`` (``accounts`` has none of them) and
+# ``account_id`` is the USING-merged column, so every unprefixed reference
+# resolves unambiguously to ``em.*``. The three subquery-based templates
+# below expose the same columns through their single outer alias ``d``, so
+# the SAME unprefixed body is valid there too — one ``_build_order_by``
+# serves all four templates.
 LIST_FILTERED = """
     SELECT em.provider_message_id, em.account_id, em.thread_id, em.from_email,
            em.from_name, em.subject, em.received_at, em.is_read, em.box,
@@ -165,7 +178,7 @@ LIST_FILTERED = """
       {box_predicate}
       {search_predicate}
       {extra_predicate}
-    ORDER BY em.received_at DESC, em.account_id, em.provider_message_id
+    ORDER BY {order_by}
     LIMIT %(limit)s
     OFFSET %(offset)s
 """
@@ -285,7 +298,7 @@ LIST_FILTERED_DISTINCT = """
                  (btrim(coalesce(em.to_name,  '')) <> '') DESC,
                  em.received_at DESC NULLS LAST
     ) AS d
-    ORDER BY d.received_at DESC, d.account_id, d.provider_message_id
+    ORDER BY {order_by}
     LIMIT %(limit)s
     OFFSET %(offset)s
 """
@@ -344,7 +357,7 @@ LIST_GROUPED_BY_THREAD = """
                  COALESCE(NULLIF(em.thread_id, ''), em.provider_message_id),
                  em.received_at DESC, em.provider_message_id
     ) AS d
-    ORDER BY d.received_at DESC, d.account_id, d.provider_message_id
+    ORDER BY {order_by}
     LIMIT %(limit)s
     OFFSET %(offset)s
 """
@@ -389,7 +402,7 @@ LIST_GROUPED_BY_THREAD_DISTINCT = """
         WINDOW w AS (PARTITION BY d1.thread_key)
         ORDER BY d1.thread_key, d1.received_at DESC, d1.account_id, d1.provider_message_id
     ) AS d
-    ORDER BY d.received_at DESC, d.account_id, d.provider_message_id
+    ORDER BY {order_by}
     LIMIT %(limit)s
     OFFSET %(offset)s
 """
