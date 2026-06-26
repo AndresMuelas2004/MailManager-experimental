@@ -60,6 +60,7 @@ export default function MailboxDropdown({
               if (e.key === 'Enter') handleCreate();
             }}
             placeholder={t('mailboxesSettings.renamePlaceholder')}
+            maxLength={120}
             autoFocus
             className="h-8 flex-1 rounded-lg border border-zinc-200 px-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
           />
