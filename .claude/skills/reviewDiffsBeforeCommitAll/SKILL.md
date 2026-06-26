@@ -1,7 +1,6 @@
 ---
 name: reviewDiffsBeforeCommitAll
-description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as background subagents launched in one go), waits in silence, then closes with a brief executive summary and a single overall verdict."
-disable-model-invocation: true
+description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as background subagents launched in one go), waits in silence, then closes with a brief executive summary and a single overall verdict. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
 ---
 
 Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in background subagents launched by the children; this skill only coordinates the combined launch, waits in silence, and merges the verdicts at the end.

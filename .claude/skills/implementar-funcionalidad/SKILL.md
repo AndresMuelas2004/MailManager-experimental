@@ -1,8 +1,7 @@
 ---
 name: implementar-funcionalidad
-description: "Ejecuta de forma autónoma la implementación de una funcionalidad ya planificada, a partir de los tres .md que la describen (backend, frontend y descripción general). Encadena en orden los subagentes de implementación backend-implementer y frontend-implementer, y cierra siempre, en este orden, con tests-author-from-diff, guides-updater-from-diff, docs-updater-from-diff y, como red de seguridad del entorno Python, deps-syncer-from-diff. No replanifica ni pide aprobación. Invocación manual."
+description: "Ejecuta de forma autónoma la implementación de una funcionalidad ya planificada, a partir de los tres .md que la describen (backend, frontend y descripción general). Encadena en orden los subagentes de implementación backend-implementer y frontend-implementer, y cierra siempre, en este orden, con tests-author-from-diff, guides-updater-from-diff, docs-updater-from-diff y, como red de seguridad del entorno Python, deps-syncer-from-diff. No replanifica ni pide aprobación. Claude NUNCA debe lanzar esta skill por decisión propia: se ejecuta solo cuando el usuario, otra skill o algún otro recurso la invoca de forma explícita."
 argument-hint: ruta al directorio (o a los tres archivos) con los .md de la funcionalidad — backend, frontend y general-description
-disable-model-invocation: true
 model: opus
 effort: max
 ---

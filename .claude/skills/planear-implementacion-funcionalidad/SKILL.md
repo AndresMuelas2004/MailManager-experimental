@@ -1,8 +1,7 @@
 ---
 name: planear-implementacion-funcionalidad
-description: "Fase de investigación y planificación previa a la implementación: analiza primero el código afectado, decide con ese conocimiento si hay que investigar APIs externas y sobre qué temas, resuelve contigo todas las dudas y decisiones de diseño, y genera los tres documentos .md (backend, frontend y descripción general) que dejan la funcionalidad lista para implementar. El número de iteraciones de la investigación de APIs y de la creación de los documentos es configurable desde el argumento. Invocación manual."
+description: "Fase de investigación y planificación previa a la implementación: analiza primero el código afectado, decide con ese conocimiento si hay que investigar APIs externas y sobre qué temas, resuelve contigo todas las dudas y decisiones de diseño, y genera los tres documentos .md (backend, frontend y descripción general) que dejan la funcionalidad lista para implementar. El número de iteraciones de la investigación de APIs y de la creación de los documentos es configurable desde el argumento. Claude NUNCA debe lanzar esta skill por decisión propia: se ejecuta solo cuando el usuario, otra skill o algún otro recurso la invoca de forma explícita."
 argument-hint: descripción detallada de la funcionalidad a planificar (alcance, comportamiento esperado, complejidad); opcionalmente precedida por una primera frase que fije cuántas iteraciones quieres — 1 a 3 para la investigación de APIs y 1 a 3 para la creación de los documentos (sin esa frase se usan 3 y 3)
-disable-model-invocation: true
 model: opus
 effort: max
 ---
