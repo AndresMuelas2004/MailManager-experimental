@@ -282,7 +282,15 @@ def sync_email_metadata(
         updated_tokens = manager.authenticate_all_silent(auth_payloads)
         if updated_tokens:
             _persist_refreshed_tokens(updated_tokens, label_lookup, fallback=EmailFetchError)
-        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=EmailFetchError)
+        # Collect — but do NOT yet raise on — per-account silent-auth failures.
+        # A single expired/revoked token must not abort the whole unified sync:
+        # the healthy accounts still sync and the dead one is reported at the
+        # end, instead of tumbling the batch at the first stumble
+        # (sincronizacion.md §7). Snapshot the errors now because
+        # ``fetch_all_email_metadata`` below resets the manager's error map, and
+        # the refresh error captured here ("token revoked …") is more
+        # informative than the generic "not authenticated" the fetch raises.
+        auth_errors = dict(manager.get_last_errors())
 
         sync_cursors = load_sync_cursors(label_lookup, fallback=EmailFetchError)
 
@@ -299,7 +307,11 @@ def sync_email_metadata(
                 "Unexpected failure fetching all email metadata."
             ) from exc
 
-        raise_on_silent_auth_errors(manager.get_last_errors(), fallback=EmailFetchError)
+        # Merge the per-account fetch failures with the auth failures collected
+        # above; the auth-phase error wins for an account that failed both (it
+        # names the real cause). Evaluated AFTER the healthy accounts persist —
+        # see the deferred raise past the loop.
+        sync_errors = {**manager.get_last_errors(), **auth_errors}
 
         account_details: list[AccountSyncDetail] = []
         total_synced = 0
@@ -314,6 +326,12 @@ def sync_email_metadata(
         for label, sync_result in results.items():
             ids = label_lookup.get(label)
             if not ids:
+                continue
+            if label in sync_errors:
+                # This account failed silent auth or the metadata fetch; never
+                # persist a (possibly partial) result for it nor target it for
+                # prefetch — it is reported via the deferred raise below once
+                # the healthy accounts have landed (sincronizacion.md §7).
                 continue
             mid, aid, provider = ids
             prefetch_targets.append((label, aid))
@@ -356,6 +374,16 @@ def sync_email_metadata(
                 emails_synced=count,
                 sync_cursor=sync_result.new_cursor,
             ))
+
+        # Now that every healthy account has synced and persisted, surface the
+        # per-account failures: non-auth errors translate by type, auth errors
+        # collapse to one 409 AccountNotConnected naming only the offending
+        # account(s). Raising HERE (not before the loop) is what keeps a single
+        # dead account from leaving the user without the rest (sincronizacion.md
+        # §7); the unified view still shows its "could not update" notice
+        # (refrescar-y-estado-sincronizacion.md §5.1) because the call still
+        # raises, but the healthy mail is already in the local copy.
+        raise_on_silent_auth_errors(sync_errors, fallback=EmailFetchError)
 
         # After responding (D2/D3), purge expired cached bodies and prefetch
         # recent-unread inbox content for the synced accounts, reusing the
