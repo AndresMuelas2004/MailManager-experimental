@@ -24,34 +24,34 @@
   <rect width="1520" height="2080" fill="#f8fafc"/>
 
   <text x="760" y="55" text-anchor="middle" font-size="34" font-weight="700" fill="#0f172a">/cycle-autofix-bugs</text>
-  <text x="760" y="88" text-anchor="middle" font-size="15" fill="#64748b">Bucle autónomo de detección, validación, corrección y testing de bugs en una app web</text>
+  <text x="760" y="88" text-anchor="middle" font-size="15" fill="#64748b">Validación por funcionalidad (Docs/features/): detección, validación, corrección y testing de bugs</text>
 
   <g transform="translate(180,130)" filter="url(#shadow)">
     <rect width="260" height="90" rx="12" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
     <circle cx="22" cy="26" r="7" fill="#dc2626"/>
     <text x="40" y="32" font-size="15" font-weight="700" fill="#7f1d1d">bug-detector</text>
-    <text x="22" y="58" font-size="12" fill="#991b1b">Explora la UI con Playwright</text>
-    <text x="22" y="74" font-size="12" fill="#991b1b">y reporta UN bug nuevo</text>
+    <text x="22" y="58" font-size="12" fill="#991b1b">Explora UNA funcionalidad (chrome-a11)</text>
+    <text x="22" y="74" font-size="12" fill="#991b1b">vía Dev login; reporta UN bug</text>
   </g>
   <g transform="translate(480,130)" filter="url(#shadow)">
     <rect width="260" height="90" rx="12" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
     <circle cx="22" cy="26" r="7" fill="#ca8a04"/>
     <text x="40" y="32" font-size="15" font-weight="700" fill="#713f12">bug-validador</text>
     <text x="22" y="58" font-size="12" fill="#854d0e">Filtra falsos positivos</text>
-    <text x="22" y="74" font-size="12" fill="#854d0e">leyendo CLAUDE.md y guías</text>
+    <text x="22" y="74" font-size="12" fill="#854d0e">leyendo Docs/ y guías</text>
   </g>
   <g transform="translate(780,130)" filter="url(#shadow)">
     <rect width="260" height="90" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
     <circle cx="22" cy="26" r="7" fill="#ea580c"/>
     <text x="40" y="32" font-size="15" font-weight="700" fill="#7c2d12">bug-correccion</text>
     <text x="22" y="58" font-size="12" fill="#9a3412">Aplica el fix mínimo</text>
-    <text x="22" y="74" font-size="12" fill="#9a3412">sin Playwright ni git</text>
+    <text x="22" y="74" font-size="12" fill="#9a3412">sin navegador ni git</text>
   </g>
   <g transform="translate(1080,130)" filter="url(#shadow)">
     <rect width="260" height="90" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
     <circle cx="22" cy="26" r="7" fill="#16a34a"/>
     <text x="40" y="32" font-size="15" font-weight="700" fill="#14532d">bug-tester</text>
-    <text x="22" y="58" font-size="12" fill="#166534">Reproduce con Playwright</text>
+    <text x="22" y="58" font-size="12" fill="#166534">Reproduce con chrome-a11</text>
     <text x="22" y="74" font-size="12" fill="#166534">y commitea local si pasa</text>
   </g>
 
@@ -62,8 +62,8 @@
   <g filter="url(#shadow)">
     <rect x="595" y="305" width="330" height="90" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
     <text x="760" y="338" text-anchor="middle" font-size="15" font-weight="700" fill="#1e293b">Preparación inicial</text>
-    <text x="760" y="360" text-anchor="middle" font-size="12" fill="#64748b">Crear bug-analisis/ · verificar .gitignore</text>
-    <text x="760" y="377" text-anchor="middle" font-size="12" fill="#64748b">working tree limpio · app en localhost</text>
+    <text x="760" y="360" text-anchor="middle" font-size="12" fill="#64748b">bug-analisis/ + ledger · .gitignore</text>
+    <text x="760" y="377" text-anchor="middle" font-size="12" fill="#64748b">working tree limpio · app:5173 · navegador a11</text>
   </g>
 
   <line x1="760" y1="395" x2="760" y2="485" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
@@ -77,7 +77,7 @@
     <rect x="560" y="485" width="400" height="100" rx="14" fill="#fef2f2" stroke="#dc2626" stroke-width="2.5"/>
     <text x="575" y="513" font-size="11" font-weight="700" fill="#dc2626" letter-spacing="2">FASE 1 · DETECCIÓN</text>
     <text x="575" y="545" font-size="18" font-weight="700" fill="#7f1d1d">bug-detector</text>
-    <text x="575" y="568" font-size="12" fill="#991b1b">Navega la UI buscando un fallo nuevo</text>
+    <text x="575" y="568" font-size="12" fill="#991b1b">Recorre el checklist de la funcionalidad (Docs/)</text>
   </g>
   <line x1="760" y1="585" x2="760" y2="640" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
 
@@ -96,11 +96,11 @@
   </g>
 
   <line x1="890" y1="720" x2="1060" y2="720" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-success)"/>
-  <text x="975" y="710" text-anchor="middle" font-size="11" font-weight="600" fill="#16a34a">NO_BUGS_FOUND</text>
+  <text x="975" y="710" text-anchor="middle" font-size="11" font-weight="600" fill="#16a34a">FEATURE_CLEAN</text>
   <g filter="url(#shadow)">
     <rect x="1060" y="685" width="310" height="70" rx="12" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
-    <text x="1215" y="713" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">Fin natural del ciclo</text>
-    <text x="1215" y="734" text-anchor="middle" font-size="11" fill="#15803d">no quedan bugs por reportar</text>
+    <text x="1215" y="713" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">Funcionalidad cubierta</text>
+    <text x="1215" y="734" text-anchor="middle" font-size="11" fill="#15803d">anota en ledger → siguiente (o fin si todas)</text>
   </g>
 
   <line x1="760" y1="800" x2="760" y2="855" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
@@ -158,7 +158,7 @@
     <rect x="560" y="1595" width="400" height="100" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2.5"/>
     <text x="575" y="1623" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="2">FASE 4 · TEST + COMMIT</text>
     <text x="575" y="1655" font-size="18" font-weight="700" fill="#14532d">bug-tester</text>
-    <text x="575" y="1678" font-size="12" fill="#166534">Reproduce con Playwright y commitea si pasa</text>
+    <text x="575" y="1678" font-size="12" fill="#166534">Reproduce con chrome-a11 y commitea si pasa</text>
   </g>
   <line x1="760" y1="1695" x2="760" y2="1750" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
 
@@ -212,6 +212,6 @@
     <text x="1220" y="1675" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">se anota el bug y el ciclo sigue</text>
   </g>
 
-  <text x="760" y="2025" text-anchor="middle" font-size="11" fill="#64748b">Sin sleeps · sin polling · 1 bug por iteración · ledger en bug-analisis/ (gitignored) · sin push automático</text>
+  <text x="760" y="2025" text-anchor="middle" font-size="11" fill="#64748b">Validación por funcionalidad (Docs/) · sin sleeps/polling · 1 bug/iteración · ledger en bug-analisis/ (gitignored) · sin push</text>
   <text x="760" y="2048" text-anchor="middle" font-size="11" fill="#94a3b8">Parada manual: Esc en cualquier momento durante la ejecución</text>
 </svg>
