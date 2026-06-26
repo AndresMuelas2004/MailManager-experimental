@@ -26,6 +26,8 @@ type Props = {
   navItems: NavItem[];
   onMailboxSelect: (mailboxId: string) => void;
   onMailboxCreate: (displayName: string) => void;
+  onMailboxRename: (mailboxId: string, displayName: string) => void;
+  onMailboxRequestDelete: (mailbox: MailboxItem) => void;
   onCompose: () => void;
   // Mobile drawer state, owned by MailboxShell. On desktop (lg:) the aside is a
   // static sticky column and these are inert; below lg it slides in/out.
@@ -45,6 +47,8 @@ export default function Sidebar({
   navItems,
   onMailboxSelect,
   onMailboxCreate,
+  onMailboxRename,
+  onMailboxRequestDelete,
   onCompose,
   open,
   onClose,
@@ -101,6 +105,14 @@ export default function Sidebar({
             onCreate={(name) => {
               setDropdownOpen(false);
               onMailboxCreate(name);
+            }}
+            onRename={(id, name) => {
+              setDropdownOpen(false);
+              onMailboxRename(id, name);
+            }}
+            onRequestDelete={(m) => {
+              setDropdownOpen(false);
+              onMailboxRequestDelete(m);
             }}
           />
         )}

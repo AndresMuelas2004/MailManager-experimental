@@ -16,8 +16,11 @@ import type { ComponentType } from 'react';
 import { useDraftComposerContext } from '../../../app/providers/DraftComposerContext';
 import { useTranslation } from '../../../lib/i18n';
 import Sidebar from '../../../components/ui/Sidebar';
+import ConfirmModal from '../../../components/common/ConfirmModal';
 import useMailboxList from '../hooks/useMailboxList';
 import useMailboxUnreadCounts from '../hooks/useMailboxUnreadCounts';
+import useRenameMailbox from '../hooks/useRenameMailbox';
+import useDeleteMailbox from '../hooks/useDeleteMailbox';
 
 // Inline because the array is mailbox-feature-only and the features layer's
 // "exactly three subdirs" rule (pages / hooks / components) does not allow a
@@ -48,7 +51,13 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const { t } = useTranslation();
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
   const { inboxTotal, spamTotal } = useMailboxUnreadCounts(mailboxId);
+  const { rename: renameMailbox } = useRenameMailbox();
+  const { remove: removeMailbox } = useDeleteMailbox();
   const composer = useDraftComposerContext();
+
+  // Confirmation for the header-selector delete entry point. The selector only
+  // offers delete for the active mailbox, so storing its id is enough.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   // Mobile drawer open/close — the only new JS state (legitimate UI state, not
   // server state). On lg: the Sidebar is a static column and this is inert.
@@ -77,6 +86,38 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     },
     [handleCreate, navigate, closeDrawer],
   );
+
+  const handleMailboxRename = useCallback(
+    (id: string, displayName: string) => {
+      void renameMailbox({ mailboxId: id, displayName });
+    },
+    [renameMailbox],
+  );
+
+  const handleMailboxRequestDelete = useCallback(
+    (mailbox: { mailbox_id: string }) => {
+      closeDrawer();
+      setPendingDeleteId(mailbox.mailbox_id);
+    },
+    [closeDrawer],
+  );
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteId) return;
+    const deletedId = pendingDeleteId;
+    const ok = await removeMailbox(deletedId);
+    setPendingDeleteId(null);
+    if (!ok) return;
+
+    // The selector only deletes the active mailbox, so the user is always
+    // viewing the one just removed: move them to a surviving mailbox's inbox,
+    // or to the index (which routes to "create mailbox") when none remain.
+    if (deletedId === mailboxId) {
+      const survivor = mailboxes.find((m) => m.mailbox_id !== deletedId);
+      if (survivor) navigate(`/m/${survivor.mailbox_id}/inbox`);
+      else navigate('/');
+    }
+  };
 
   const handleCompose = useCallback(() => {
     closeDrawer();
@@ -111,6 +152,8 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         navItems={navItems}
         onMailboxSelect={handleMailboxSelect}
         onMailboxCreate={handleMailboxCreate}
+        onMailboxRename={handleMailboxRename}
+        onMailboxRequestDelete={handleMailboxRequestDelete}
         onCompose={handleCompose}
         open={drawerOpen}
         onClose={closeDrawer}
@@ -160,6 +203,17 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
       >
         <Send className="h-6 w-6" />
       </button>
+
+      {pendingDeleteId && (
+        <ConfirmModal
+          title={t('mailboxesSettings.confirmDeleteTitle')}
+          description={t('mailboxesSettings.confirmDeleteDescription')}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
+          onCancel={() => setPendingDeleteId(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
     </div>
   );
 }
