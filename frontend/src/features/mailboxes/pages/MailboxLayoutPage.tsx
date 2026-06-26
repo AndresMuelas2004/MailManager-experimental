@@ -64,7 +64,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const handleMailboxSelect = useCallback(
     (id: string) => {
       closeDrawer();
-      navigate(`/m/${id}/inbox`);
+      navigate(`/m/${id}/settings/accounts`);
     },
     [navigate, closeDrawer],
   );
@@ -73,7 +73,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     async (displayName: string) => {
       closeDrawer();
       const created = await handleCreate(displayName);
-      if (created) navigate(`/m/${created.mailbox_id}/inbox`);
+      if (created) navigate(`/m/${created.mailbox_id}/settings/accounts`);
     },
     [handleCreate, navigate, closeDrawer],
   );
