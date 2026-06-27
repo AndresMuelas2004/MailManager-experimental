@@ -529,15 +529,18 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       currentMode === 'forward'
         ? form.isDirty()
         : false;
-    const dirtyAttachments =
-      attachments.chips.length > 0 && (currentMode !== 'new_email' || providerDraftId !== null);
+    // Attachments are dirty only when the live set diverges from the baseline
+    // seeded from the saved draft (``attachments.seedFromDraft``). Reopening a
+    // draft with its saved attachments untouched is therefore NOT dirty, while
+    // an added or removed attachment still is.
+    const dirtyAttachments = attachments.isDirty();
 
     if (dirtyForm || dirtyAttachments) {
       setCloseDialogOpen(true);
       return;
     }
     close();
-  }, [attachments.chips.length, close, form, mode, providerDraftId]);
+  }, [attachments, close, form, mode]);
 
   const confirmCloseSave = useCallback(async () => {
     setCloseDialogOpen(false);

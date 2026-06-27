@@ -40,6 +40,7 @@ export type UseComposerAttachmentsReturn = {
   seedFromDraft: (initial: DraftAttachmentMetadata[]) => void;
   addFiles: (files: File[], resolveTarget: () => Promise<AttachmentTarget | null>) => void;
   removeChip: (chipId: string, target: AttachmentTarget) => Promise<void>;
+  isDirty: () => boolean;
 };
 
 let nanoidCounter = 0;
@@ -61,6 +62,12 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
   useEffect(() => {
     chipsRef.current = chips;
   }, [chips]);
+  // Set of attachment ids that were already saved when the composer was seeded
+  // from an existing draft (edit_draft / inherited forward). They form the
+  // "clean" baseline: reopening a draft with its saved attachments untouched
+  // must NOT read as dirty (otherwise closing pops the unsaved-changes dialog
+  // for a draft nobody edited). Only a real add or remove diverges from it.
+  const baselineIdsRef = useRef<Set<string>>(new Set());
 
   const totalSize = chips.reduce((sum, chip) => sum + chip.size, 0);
   const count = chips.length;
@@ -82,9 +89,11 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
       }
     });
     setChips([]);
+    baselineIdsRef.current = new Set();
   }, []);
 
   const seedFromDraft = useCallback((initial: DraftAttachmentMetadata[]) => {
+    baselineIdsRef.current = new Set(initial.map((meta) => meta.draft_attachment_id));
     setChips(
       initial.map((meta) => ({
         id: meta.draft_attachment_id,
@@ -236,6 +245,17 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
     [removeChipLocal],
   );
 
+  // Dirty iff the live attachment set diverges from the seeded baseline.
+  // Transient ``failed`` chips (rejected validation / failed upload, both
+  // auto-cleared after 3s and never persisted) are excluded so they do not
+  // spuriously flag a clean composer as modified.
+  const isDirty = useCallback((): boolean => {
+    const baseline = baselineIdsRef.current;
+    const liveIds = chips.filter((c) => c.status !== 'failed').map((c) => c.id);
+    if (liveIds.length !== baseline.size) return true;
+    return liveIds.some((id) => !baseline.has(id));
+  }, [chips]);
+
   return {
     chips,
     totalSize,
@@ -246,5 +266,6 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
     seedFromDraft,
     addFiles,
     removeChip,
+    isDirty,
   };
 }
