@@ -38,6 +38,24 @@ export default function useGoogleLogin(): UseGoogleLoginReturn {
       return;
     }
 
+    let ready = false;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const renderButton = () => {
+      if (!buttonRef.current) return;
+      // The GSI widget is sized in fixed pixels (max 400); fit it to the
+      // available column width so it never overflows a narrow viewport.
+      const width = Math.min(400, buttonRef.current.offsetWidth || 400);
+      buttonRef.current.innerHTML = '';
+      google.accounts.id.renderButton(buttonRef.current, {
+        theme: 'filled_blue',
+        size: 'large',
+        shape: 'pill',
+        text: 'continue_with',
+        width,
+      });
+    };
+
     const intervalId = setInterval(() => {
       if (typeof google !== 'undefined' && google.accounts?.id && buttonRef.current) {
         clearInterval(intervalId);
@@ -47,17 +65,23 @@ export default function useGoogleLogin(): UseGoogleLoginReturn {
           callback: handleCredentialResponse,
         });
 
-        google.accounts.id.renderButton(buttonRef.current, {
-          theme: 'filled_blue',
-          size: 'large',
-          shape: 'pill',
-          text: 'continue_with',
-          width: 400,
-        });
+        renderButton();
+        ready = true;
       }
     }, 100);
 
-    return () => clearInterval(intervalId);
+    const handleResize = () => {
+      if (!ready) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(renderButton, 150);
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      clearInterval(intervalId);
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', handleResize);
+    };
   }, [handleCredentialResponse]);
 
   return { buttonRef, error, loading };
