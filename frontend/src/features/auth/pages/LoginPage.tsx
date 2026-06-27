@@ -37,6 +37,7 @@ export default function LoginPage() {
           msOnClick={msLogin.trigger}
           msLoading={msLogin.loading}
           msError={msLogin.error}
+          msConfigured={msLogin.configured}
         />
       </div>
       {import.meta.env.DEV && (

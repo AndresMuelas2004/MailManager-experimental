@@ -11,6 +11,7 @@ type Props = {
   msOnClick: () => void;
   msLoading: boolean;
   msError: UiError | null;
+  msConfigured: boolean;
 };
 
 export default function GoogleSignInButton({
@@ -20,6 +21,7 @@ export default function GoogleSignInButton({
   msOnClick,
   msLoading,
   msError,
+  msConfigured,
 }: Props) {
   const { t } = useTranslation();
   return (
@@ -45,7 +47,12 @@ export default function GoogleSignInButton({
             {error && <p className="mt-4 text-center text-sm text-red-600">{error.message}</p>}
           </div>
 
-          <MicrosoftSignInButton onClick={msOnClick} loading={msLoading} error={msError} />
+          <MicrosoftSignInButton
+            onClick={msOnClick}
+            loading={msLoading}
+            error={msError}
+            configured={msConfigured}
+          />
         </div>
 
         <div className="flex items-center gap-1.5">

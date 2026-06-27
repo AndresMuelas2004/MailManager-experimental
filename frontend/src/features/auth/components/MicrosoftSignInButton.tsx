@@ -5,6 +5,7 @@ type Props = {
   onClick: () => void;
   loading: boolean;
   error: UiError | null;
+  configured: boolean;
 };
 
 function MicrosoftLogo() {
@@ -23,14 +24,14 @@ function MicrosoftLogo() {
   );
 }
 
-export default function MicrosoftSignInButton({ onClick, loading, error }: Props) {
+export default function MicrosoftSignInButton({ onClick, loading, error, configured }: Props) {
   const { t } = useTranslation();
   return (
     <div className="w-full">
       <button
         type="button"
         onClick={onClick}
-        disabled={loading}
+        disabled={loading || !configured}
         className="flex h-[44px] w-full items-center justify-center gap-3 rounded-full border border-slate-300 bg-white text-[15px] font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <MicrosoftLogo />

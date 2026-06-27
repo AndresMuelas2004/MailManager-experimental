@@ -138,18 +138,15 @@ describe('LoginPage — Microsoft login', () => {
     vi.unstubAllEnvs();
   });
 
-  it('shows the not-configured message when VITE_MICROSOFT_CLIENT_ID is absent', async () => {
+  it('disables the Microsoft button when VITE_MICROSOFT_CLIENT_ID is absent', async () => {
     vi.stubEnv('VITE_MICROSOFT_CLIENT_ID', '');
 
     renderLoginAtRoute();
 
     const button = await screen.findByRole('button', { name: /continue with microsoft/i });
+    // Not configured ⇒ disabled, so the click is a no-op (no dead-end message).
+    expect(button).toBeDisabled();
     await userEvent.click(button);
-
-    await waitFor(() => {
-      expect(screen.getByText('Microsoft Client ID is not configured.')).toBeInTheDocument();
-    });
-    // The guard short-circuits before any SDK call.
     expect(msalMocks.loginPopup).not.toHaveBeenCalled();
   });
 

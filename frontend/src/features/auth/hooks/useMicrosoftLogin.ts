@@ -10,6 +10,7 @@ type UseMicrosoftLoginReturn = {
   trigger: () => Promise<void>;
   error: UiError | null;
   loading: boolean;
+  configured: boolean;
 };
 
 // Lazy module singleton: the MSAL instance (and its initialize() promise) are
@@ -94,5 +95,10 @@ export default function useMicrosoftLogin(): UseMicrosoftLoginReturn {
     }
   }, [loginWithMicrosoft]);
 
-  return { trigger, error, loading };
+  // Empty / absent VITE_MICROSOFT_CLIENT_ID means this deploy did not configure
+  // Microsoft login; the button must render disabled instead of leading to a
+  // dead-end click.
+  const configured = Boolean(import.meta.env.VITE_MICROSOFT_CLIENT_ID);
+
+  return { trigger, error, loading, configured };
 }
