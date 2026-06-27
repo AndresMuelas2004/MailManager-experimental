@@ -164,7 +164,7 @@ export default function EmailTable({
                   ariaLabel={t('emailTable.selectTopRecent')}
                 />
               ) : (
-                <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
+                <div className="h-[18px] w-[18px]" />
               )}
               <RefreshCw className="h-[18px] w-[18px] text-zinc-500" />
               <span className="text-[13px] font-medium text-zinc-500">{countLabel}</span>
@@ -250,7 +250,7 @@ export default function EmailTable({
                   ariaLabel={t('emailTable.selectEmail')}
                 />
               ) : (
-                <div className="h-[18px] w-[18px] rounded border-[1.5px] border-zinc-300" />
+                <div className="h-[18px] w-[18px]" />
               )}
               {onToggleFavorite ? (
                 <FavoriteButton
