@@ -18,9 +18,18 @@ import {
 // re-render the host, which would re-register, producing an infinite loop.
 export default function DraftComposerProvider({ children }: { children: ReactNode }) {
   const implRef = useRef<DraftComposerImpl | null>(null);
+  // Buffers the latest refresh callback registered by the active listing page.
+  // The content <Outlet/> commits before its sibling DraftComposerHost (single
+  // Suspense boundary in RootLayout → tree-order effects), so a page runs
+  // setRefreshCallback while implRef is still null and the callback would be
+  // silently dropped — leaving the composer unable to refetch the list, so a
+  // freshly-saved draft only shows up after a remount. Replaying the buffer
+  // when the host registers restores the wiring regardless of mount order.
+  const refreshCallbackRef = useRef<(() => void | Promise<void>) | null>(null);
 
   const register = useCallback((next: DraftComposerImpl | null) => {
     implRef.current = next;
+    if (next) next.setRefreshCallback(refreshCallbackRef.current);
   }, []);
 
   const value = useMemo<DraftComposerContextValue>(
@@ -42,7 +51,10 @@ export default function DraftComposerProvider({ children }: { children: ReactNod
         if (!implRef.current) return;
         await implRef.current.openForForward(email);
       },
-      setRefreshCallback: (fn) => implRef.current?.setRefreshCallback(fn),
+      setRefreshCallback: (fn) => {
+        refreshCallbackRef.current = fn;
+        implRef.current?.setRefreshCallback(fn);
+      },
       __register: register,
     }),
     [register],
