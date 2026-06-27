@@ -43,7 +43,7 @@ export default function AccountTabs({ basePath, inboxLabel, inboxUnread, spamUnr
   ];
 
   return (
-    <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 px-4 lg:px-8">
+    <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-zinc-200 px-4 lg:px-8">
       {tabs.map(({ to, label, icon: Icon, badge }) => (
         <NavLink
           key={to}
