@@ -41,6 +41,7 @@ export default function AccountFavoritesPage() {
     box: 'ALL_MAIL',
     refresh,
     searchKey: debouncedQ,
+    scopeKey: `${mailboxId}:${accountId}:favorites`,
   });
 
   const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);

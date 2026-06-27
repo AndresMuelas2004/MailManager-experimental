@@ -21,6 +21,13 @@ type UseBulkBarArgs = {
   // selection made before searching does not survive into a filtered
   // result that no longer shows those rows.
   searchKey?: string;
+  // Identifies the current listing scope (mailbox + account + box). The
+  // router maps several boxes (and several accounts) onto the SAME page
+  // component, changing only a prop / route param, so navigating between
+  // them does NOT unmount the page. Without this the selection would
+  // survive into the new box and stay actionable on the now-hidden emails
+  // of the previous one. Cleared whenever it changes.
+  scopeKey?: string;
 };
 
 type UseBulkBarReturn = {
@@ -29,7 +36,12 @@ type UseBulkBarReturn = {
   bulkBar: ReactNode;
 };
 
-export default function useBulkBar({ box, refresh, searchKey }: UseBulkBarArgs): UseBulkBarReturn {
+export default function useBulkBar({
+  box,
+  refresh,
+  searchKey,
+  scopeKey,
+}: UseBulkBarArgs): UseBulkBarReturn {
   const selection = useSelection<EmailMetadataOut>(emailKey);
 
   // The Set inside ``useSelection`` only stores keys, so it forgets the
@@ -95,6 +107,15 @@ export default function useBulkBar({ box, refresh, searchKey }: UseBulkBarArgs):
     wrappedClear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchKey]);
+
+  // Clear the selection when the view scope (mailbox / account / box)
+  // changes. The router reuses the same page component across boxes and
+  // accounts, so no unmount happens on those navigations and the Set/Map
+  // would otherwise carry a phantom selection into the new view.
+  useEffect(() => {
+    wrappedClear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   // The wrapped selection is what every consumer (the 4 pages, the bulk
   // actions hook, the bar) must use: the pages call ``toggle`` /

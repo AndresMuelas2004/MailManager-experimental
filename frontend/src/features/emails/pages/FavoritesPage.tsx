@@ -39,6 +39,7 @@ export default function FavoritesPage() {
     box: 'ALL_MAIL',
     refresh,
     searchKey: debouncedQ,
+    scopeKey: `${mailboxId}:favorites`,
   });
 
   const handlePageChange = (next: number) => {

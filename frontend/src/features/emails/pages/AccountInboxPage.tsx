@@ -67,6 +67,7 @@ export default function AccountInboxPage({ box }: Props) {
     box,
     refresh,
     searchKey: debouncedQ,
+    scopeKey: `${mailboxId}:${accountId}:${box}`,
   });
 
   const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);

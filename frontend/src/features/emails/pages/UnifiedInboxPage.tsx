@@ -64,6 +64,7 @@ export default function UnifiedInboxPage({ box }: Props) {
     box,
     refresh,
     searchKey: debouncedQ,
+    scopeKey: `${mailboxId}:${box}`,
   });
 
   const handlePageChange = (next: number) => {
