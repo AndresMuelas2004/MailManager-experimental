@@ -72,6 +72,15 @@ export function toUiError(error: unknown): UiError {
           : 'Demasiadas peticiones. Espera un momento e inténtalo de nuevo.',
       };
     }
+    if (error.code === 'account_not_connected') {
+      // The backend ships a developer-facing English message ("...Call /connect
+      // first."). Map the CODE to a localized, user-facing string so any surface
+      // that renders this error's message shows Spanish instead of the raw text.
+      return {
+        code: error.code,
+        message: 'Una cuenta ha perdido la conexión. Vuelve a conectarla e inténtalo de nuevo.',
+      };
+    }
     return { message: error.message, code: error.code };
   }
   if (error instanceof Error) {
