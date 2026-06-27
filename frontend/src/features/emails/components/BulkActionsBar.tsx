@@ -50,6 +50,7 @@ function ActionButton({ icon: Icon, label, onClick, disabled, danger }: ActionBt
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
       className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[13px] font-medium transition-colors disabled:opacity-50 ${color}`}
     >
       <Icon className="h-[18px] w-[18px]" />
