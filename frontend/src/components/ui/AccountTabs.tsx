@@ -1,9 +1,10 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { Inbox, Send, Star, ShieldAlert, FileEdit, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import Badge from '../common/Badge';
 import { useTranslation } from '../../lib/i18n';
+import { navSearchResettingControls } from '../../lib/listControls';
 
 type TabDef = {
   to: string;
@@ -21,6 +22,12 @@ type Props = {
 
 export default function AccountTabs({ basePath, inboxLabel, inboxUnread, spamUnread }: Props) {
   const { t } = useTranslation();
+  // Switching box section preserves the lupa ``q`` term across sections
+  // (buzones-y-vista-unificada §2.3) but resets the sort/filter controls
+  // (ordenar-y-filtrar §4.7) and pagination to page 1 (listado-de-correos
+  // §7.1), since the box context changed.
+  const { search } = useLocation();
+  const navSearch = navSearchResettingControls(search);
   const tabs: TabDef[] = [
     {
       to: `${basePath}/inbox`,
@@ -40,7 +47,7 @@ export default function AccountTabs({ basePath, inboxLabel, inboxUnread, spamUnr
       {tabs.map(({ to, label, icon: Icon, badge }) => (
         <NavLink
           key={to}
-          to={to}
+          to={{ pathname: to, search: navSearch }}
           className={({ isActive }) =>
             `flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
               isActive

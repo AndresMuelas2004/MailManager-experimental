@@ -6,6 +6,7 @@ import type { ComponentType } from 'react';
 import MailboxDropdown from './MailboxDropdown';
 import Badge from '../common/Badge';
 import { useTranslation } from '../../lib/i18n';
+import { navSearchResettingControls } from '../../lib/listControls';
 
 type MailboxItem = {
   mailbox_id: string;
@@ -58,13 +59,11 @@ export default function Sidebar({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const base = `/m/${mailboxId}`;
   const { search } = useLocation();
-  // Switching box section carries the current URL params across (notably the
-  // lupa ``q`` term — buzones-y-vista-unificada §2.3) but must reset pagination
-  // to page 1, since the box context changed (listado-de-correos §7.1). So
-  // propagate every param except ``page``.
-  const navParams = new URLSearchParams(search);
-  navParams.delete('page');
-  const navSearch = navParams.toString();
+  // Switching box section preserves the lupa ``q`` term across sections
+  // (buzones-y-vista-unificada §2.3) but resets the sort/filter controls
+  // (ordenar-y-filtrar §4.7) and pagination to page 1 (listado-de-correos
+  // §7.1), since the box context changed.
+  const navSearch = navSearchResettingControls(search);
 
   return (
     <aside

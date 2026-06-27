@@ -24,6 +24,22 @@ export const DEFAULT_LIST_CONTROLS: ListControlsState = {
 
 const SORT_KEYS: readonly SortKey[] = ['date', 'sender', 'subject'];
 
+// URL keys owned by the sort + quick-filter controls (see docs/limits §3).
+const CONTROL_URL_KEYS = ['sort', 'dir', 'unread', 'attachment', 'favorite'] as const;
+
+// Build the ``search`` a box/account navigation link should carry from the
+// current one: drops the sort/filter controls and ``page`` so switching context
+// resets the controls to their defaults (ordenar-y-filtrar §4.7) and pagination
+// to page 1 (listado §7.1), while preserving the rest of the query — notably
+// the active lupa ``q`` term (buzones-y-vista-unificada §2.3). Returned without
+// the leading "?".
+export function navSearchResettingControls(search: string): string {
+  const params = new URLSearchParams(search);
+  for (const key of CONTROL_URL_KEYS) params.delete(key);
+  params.delete('page');
+  return params.toString();
+}
+
 // Parse from the URL search params. Unknown/missing values fall back to the
 // defaults so a hand-typed or stale URL never breaks the listing.
 export function parseListControls(params: URLSearchParams): ListControlsState {
