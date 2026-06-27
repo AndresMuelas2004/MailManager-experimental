@@ -143,15 +143,22 @@ export default function AccountFavoritesPage() {
               {t('favorites.accountSubtitle', { title })}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={favorites.syncing}
-            className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${favorites.syncing ? 'animate-spin' : ''}`} />
-            {favorites.syncing ? t('favorites.syncing') : t('favorites.sync')}
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={handleSync}
+              disabled={favorites.syncing}
+              className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${favorites.syncing ? 'animate-spin' : ''}`} />
+              {favorites.syncing ? t('favorites.syncing') : t('favorites.sync')}
+            </button>
+            {favorites.syncError && (
+              <span className="text-[12px] text-red-600" aria-live="polite">
+                {t('common.syncFailed')}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

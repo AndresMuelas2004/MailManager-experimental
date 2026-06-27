@@ -40,6 +40,12 @@ type UseFavoriteReturn = {
   // what re-renders the table into the disabled state.
   isToggling: (accountId: string, providerMessageId: string) => boolean;
   error: UiError | null;
+  // The favourites SYNC error, kept apart from the toggle ``error`` so a page
+  // can surface it as a NON-blocking notice instead of replacing the whole
+  // list (a single account's auth failure must not hide the healthy accounts'
+  // favourites — mirrors how the unified inbox keeps its sync error off the
+  // table-replacing path).
+  syncError: UiError | null;
 };
 
 // Per-query snapshots kept for rollback when the toggle's network call fails.
@@ -284,11 +290,8 @@ export default function useFavorite(): UseFavoriteReturn {
     [pendingKeys],
   );
 
-  const error = toggleMutation.error
-    ? toUiError(toggleMutation.error)
-    : syncMutation.error
-      ? toUiError(syncMutation.error)
-      : null;
+  const error = toggleMutation.error ? toUiError(toggleMutation.error) : null;
+  const syncError = syncMutation.error ? toUiError(syncMutation.error) : null;
 
   return {
     toggle,
@@ -297,5 +300,6 @@ export default function useFavorite(): UseFavoriteReturn {
     syncing: syncMutation.isPending,
     isToggling,
     error,
+    syncError,
   };
 }
