@@ -140,7 +140,11 @@ export default function RecipientAutocompleteInput({
       return;
     }
     if (e.key === 'Escape') {
-      if (open) {
+      // Only swallow Escape while the dropdown UI is actually showing, so it
+      // closes just the dropdown. With nothing shown, let Escape bubble up to
+      // the composer's own close handler instead of trapping it on a focused
+      // (but collapsed) recipient field.
+      if (showDropdown || showEmptyNotice) {
         e.preventDefault();
         e.stopPropagation();
         setOpen(false);

@@ -61,6 +61,22 @@ export default function DraftComposerHost({ mailboxId }: Props) {
     composer.setRefreshCallback,
   ]);
 
+  // Esc closes the composer through the SAME flow as the ✕ button
+  // (``closeWithX`` → the unsaved-changes dialog when dirty, a direct close
+  // when clean). Registered only while the overlay is open AND no nested
+  // dialog is showing, so the close-confirmation / send-failed modals keep
+  // their own ``Modal`` Esc handling. ``defaultPrevented`` leaves the composer
+  // open when a child already consumed Escape (recipient autocomplete
+  // dropdown, link popover).
+  useEffect(() => {
+    if (!composer.open || composer.closeDialogOpen || composer.sendFailedOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) composer.closeWithX();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [composer.open, composer.closeDialogOpen, composer.sendFailedOpen, composer.closeWithX]);
+
   return (
     <>
       {composer.open && composer.mode && (
