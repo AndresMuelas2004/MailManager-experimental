@@ -685,14 +685,11 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
         pendingFilesRef.current = [...pendingFilesRef.current, ...files];
         return;
       }
-      ensureBootstrappedTarget()
-        .then((target) => {
-          if (!target) return;
-          attachments.addFiles(files, target);
-        })
-        .catch(() => {
-          // ensureProviderDraftId already routed the error to persistence.error
-        });
+      // Hand the bootstrap to ``addFiles`` as a deferred resolver: client-side
+      // validation runs first and the silent provider-draft bootstrap fires
+      // only once a file passes, so a fully-rejected drop (e.g. a blocked .exe)
+      // never creates a phantom draft nor locks the account selector.
+      attachments.addFiles(files, ensureBootstrappedTarget);
     },
     [attachments, effectiveMailboxId, ensureBootstrappedTarget, form.accountId],
   );

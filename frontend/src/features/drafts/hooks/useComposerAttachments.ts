@@ -38,7 +38,7 @@ export type UseComposerAttachmentsReturn = {
   hasFailedChips: boolean;
   reset: () => void;
   seedFromDraft: (initial: DraftAttachmentMetadata[]) => void;
-  addFiles: (files: File[], target: AttachmentTarget) => void;
+  addFiles: (files: File[], resolveTarget: () => Promise<AttachmentTarget | null>) => void;
   removeChip: (chipId: string, target: AttachmentTarget) => Promise<void>;
 };
 
@@ -99,10 +99,10 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
   }, []);
 
   const addFiles = useCallback(
-    (files: File[], target: AttachmentTarget) => {
+    (files: File[], resolveTarget: () => Promise<AttachmentTarget | null>) => {
       let runningTotal = chipsRef.current.reduce((sum, c) => sum + c.size, 0);
       let runningCount = chipsRef.current.length;
-      const accepted: { file: File; chipId: string; reservedSize: number }[] = [];
+      const accepted: File[] = [];
 
       for (const file of files) {
         const validation: ValidationResult = validateFileForUpload(
@@ -131,56 +131,71 @@ export default function useComposerAttachments(): UseComposerAttachmentsReturn {
         }
         runningTotal += file.size;
         runningCount += 1;
-        const chipId = tmpId();
-        const controller = new AbortController();
-        accepted.push({ file, chipId, reservedSize: file.size });
-        setChips((prev) => [
-          ...prev,
-          {
-            id: chipId,
-            filename: file.name,
-            mimeType: file.type || 'application/octet-stream',
-            size: file.size,
-            position: prev.length,
-            status: 'uploading',
-            progress: 0,
-            abortController: controller,
-            providerAttachmentId: null,
-          },
-        ]);
+        accepted.push(file);
       }
 
-      accepted.forEach(({ file, chipId }) => {
-        const controller = chipsRef.current.find((c) => c.id === chipId)?.abortController;
-        addDraftAttachment(target.mailboxId, target.accountId, target.providerDraftId, file, {
-          onProgress: (pct) => updateChip(chipId, { progress: pct }),
-          signal: controller?.signal,
-        })
-          .then((response) => {
-            updateChip(chipId, {
-              id: response.draft_attachment_id,
-              filename: response.filename,
-              mimeType: response.mime_type,
-              size: response.size,
-              position: response.position,
-              status: 'uploaded',
-              progress: undefined,
-              abortController: undefined,
-              providerAttachmentId: response.provider_attachment_id,
-            });
-          })
-          .catch((error) => {
-            const ui = toUiError(error);
-            const message = humaniseAttachmentError(ui.code, undefined) ?? ui.message;
-            updateChip(chipId, {
-              status: 'failed',
-              error: { message, code: ui.code },
-              progress: undefined,
-              abortController: undefined,
-            });
-            setTimeout(() => removeChipLocal(chipId), 3000);
+      // Client-side validation (above) is the first line of defence (§4.2).
+      // The provider-draft bootstrap rides on ``resolveTarget``, so it is
+      // invoked ONLY when at least one file passed validation — a drop that
+      // is fully rejected (e.g. a blocked .exe) must not create a phantom
+      // draft nor lock the account selector.
+      if (accepted.length === 0) return;
+
+      resolveTarget()
+        .then((target) => {
+          if (!target) return;
+          accepted.forEach((file) => {
+            const chipId = tmpId();
+            const controller = new AbortController();
+            setChips((prev) => [
+              ...prev,
+              {
+                id: chipId,
+                filename: file.name,
+                mimeType: file.type || 'application/octet-stream',
+                size: file.size,
+                position: prev.length,
+                status: 'uploading',
+                progress: 0,
+                abortController: controller,
+                providerAttachmentId: null,
+              },
+            ]);
+            addDraftAttachment(target.mailboxId, target.accountId, target.providerDraftId, file, {
+              onProgress: (pct) => updateChip(chipId, { progress: pct }),
+              signal: controller.signal,
+            })
+              .then((response) => {
+                updateChip(chipId, {
+                  id: response.draft_attachment_id,
+                  filename: response.filename,
+                  mimeType: response.mime_type,
+                  size: response.size,
+                  position: response.position,
+                  status: 'uploaded',
+                  progress: undefined,
+                  abortController: undefined,
+                  providerAttachmentId: response.provider_attachment_id,
+                });
+              })
+              .catch((error) => {
+                const ui = toUiError(error);
+                const message = humaniseAttachmentError(ui.code, undefined) ?? ui.message;
+                updateChip(chipId, {
+                  status: 'failed',
+                  error: { message, code: ui.code },
+                  progress: undefined,
+                  abortController: undefined,
+                });
+                setTimeout(() => removeChipLocal(chipId), 3000);
+              });
           });
-      });
+        })
+        .catch(() => {
+          // Bootstrap failed (createDraft rejected). ``ensureProviderDraftId``
+          // already routed the error to ``persistence.error``; no upload chips
+          // were created for the accepted files, so nothing to roll back.
+        });
     },
     [removeChipLocal, updateChip],
   );
