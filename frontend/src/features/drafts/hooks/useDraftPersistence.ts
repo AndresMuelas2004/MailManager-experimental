@@ -6,17 +6,42 @@ import { isApiError, toUiError } from '../../../api/client/errors';
 import type { UiError } from '../../../api/client/errors';
 import type { DraftPayload } from './useComposerForm';
 
-// Body-size 422 is a FastAPI validation error: its body is the object
+// A send/draft 422 is a FastAPI validation error: its body is the object
 // ``{ detail: [...] }`` (not the ``{ error: { code, message } }`` envelope),
-// so ``toApiError`` falls back to ``ApiError('Request failed', 'http_error',
-// 422)`` and ``toUiError`` would surface that opaque English string. This is
-// only reachable by bypassing the client-side ``bodyError`` gating (the real
-// defence). When it does happen, replace the message with a readable Spanish
-// one. ``status`` must be read off the raw ``ApiError`` because ``toUiError``
+// so ``toApiError`` falls back to ``http_error`` / 422 and stashes that payload
+// on ``ApiError.detail`` — otherwise ``toUiError`` would surface an opaque
+// English string. The two reachable validation failures need OPPOSITE messages:
+// a body OVER the size cap (``string_too_long``) reads "demasiado grande" (only
+// reachable by bypassing the client-side ``bodyError`` gate), while a missing
+// subject/body/recipients (``string_too_short`` / min length) must read as a
+// generic validation notice — never the size message, which is the opposite
+// problem. ``status`` is read off the raw ``ApiError`` because ``toUiError``
 // drops it.
+function is422BodyTooLarge(detail: Record<string, unknown> | undefined): boolean {
+  const items = detail?.detail;
+  return (
+    Array.isArray(items) &&
+    items.some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as { type?: unknown }).type === 'string_too_long',
+    )
+  );
+}
+
 function toComposerError(err: unknown): UiError {
   if (isApiError(err) && err.code === 'http_error' && err.status === 422) {
-    return { message: 'El mensaje es demasiado grande. Reduce su tamaño.', code: 'body_too_large' };
+    if (is422BodyTooLarge(err.detail)) {
+      return {
+        message: 'El mensaje es demasiado grande. Reduce su tamaño.',
+        code: 'body_too_large',
+      };
+    }
+    return {
+      message: 'Revisa que el asunto y el mensaje no estén vacíos.',
+      code: 'validation_error',
+    };
   }
   return toUiError(err);
 }

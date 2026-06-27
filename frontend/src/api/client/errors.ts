@@ -53,7 +53,12 @@ export function toApiError(status: number, payload?: unknown): ApiError {
     return new ApiError(data.error.message, data.error.code, status, data.error.detail);
   }
   const message = typeof payload === 'string' && payload.length > 0 ? payload : 'Request failed';
-  return new ApiError(message, 'http_error', status);
+  // Preserve a non-enveloped object payload (e.g. FastAPI's ``{ detail: [...] }``
+  // validation body) so callers can tell different validation failures apart;
+  // the envelope branch above already carries ``error.detail``.
+  const detail =
+    payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : undefined;
+  return new ApiError(message, 'http_error', status, detail);
 }
 
 export function toNetworkError(message: string): ApiError {
