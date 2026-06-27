@@ -24,10 +24,8 @@ export default function AccountDraftsPage() {
     accountId: string;
   }>();
   const { t } = useTranslation();
-  const { drafts, accounts, loading, syncing, error, refresh, syncAndRefresh } = useDraftsList(
-    mailboxId!,
-    accountId!,
-  );
+  const { drafts, accounts, loading, syncing, error, syncError, refresh, syncAndRefresh } =
+    useDraftsList(mailboxId!, accountId!);
 
   const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);
 
@@ -96,8 +94,16 @@ export default function AccountDraftsPage() {
         spamUnread={spamUnread}
       />
 
-      {combinedError && (
-        <div className="px-8 pt-4 text-sm text-red-600">{combinedError.message}</div>
+      {combinedError ? (
+        <div className="px-8 pt-4 text-sm text-red-600" aria-live="polite">
+          {combinedError.message}
+        </div>
+      ) : (
+        syncError && (
+          <div className="px-8 pt-4 text-sm text-red-600" aria-live="polite">
+            {t('common.syncFailed')}
+          </div>
+        )
       )}
 
       <DraftsTable

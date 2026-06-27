@@ -13,6 +13,7 @@ type UseDraftsListReturn = {
   loading: boolean;
   syncing: boolean;
   error: UiError | null;
+  syncError: UiError | null;
   refresh: () => Promise<void>;
   syncAndRefresh: () => Promise<void>;
 };
@@ -59,9 +60,13 @@ export default function useDraftsList(mailboxId: string, accountId?: string): Us
     ? toUiError(draftsQuery.error)
     : accountsQuery.error
       ? toUiError(accountsQuery.error)
-      : syncMutation.error
-        ? toUiError(syncMutation.error)
-        : null;
+      : null;
+
+  // Non-blocking sync error: surfaced as a localized inline notice, kept
+  // SEPARATE from ``error`` so a failing account (e.g. expired token) never
+  // dumps the raw backend message nor empties the already-loaded list — same
+  // split as useEmailList's ``syncError``.
+  const syncError = syncMutation.error ? toUiError(syncMutation.error) : null;
 
   return {
     drafts: draftsQuery.data ?? [],
@@ -69,6 +74,7 @@ export default function useDraftsList(mailboxId: string, accountId?: string): Us
     loading: draftsQuery.isLoading || accountsQuery.isLoading,
     syncing: syncMutation.isPending || (draftsQuery.isFetching && !draftsQuery.isLoading),
     error,
+    syncError,
     refresh,
     syncAndRefresh,
   };

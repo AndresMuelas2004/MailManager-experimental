@@ -18,9 +18,8 @@ function draftKey(d: DraftOut): string {
 export default function DraftsPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
   const { t } = useTranslation();
-  const { drafts, accounts, loading, syncing, error, refresh, syncAndRefresh } = useDraftsList(
-    mailboxId!,
-  );
+  const { drafts, accounts, loading, syncing, error, syncError, refresh, syncAndRefresh } =
+    useDraftsList(mailboxId!);
 
   const selection = useSelection<DraftOut>(draftKey);
   const composer = useDraftComposerContext();
@@ -65,8 +64,16 @@ export default function DraftsPage() {
         <p className="text-[15px] leading-[1.5] text-zinc-500">{t('drafts.subtitle')}</p>
       </div>
 
-      {combinedError && (
-        <div className="px-8 pb-2 text-sm text-red-600">{combinedError.message}</div>
+      {combinedError ? (
+        <div className="px-8 pb-2 text-sm text-red-600" aria-live="polite">
+          {combinedError.message}
+        </div>
+      ) : (
+        syncError && (
+          <div className="px-8 pb-2 text-sm text-red-600" aria-live="polite">
+            {t('common.syncFailed')}
+          </div>
+        )
       )}
 
       <DraftsTable
