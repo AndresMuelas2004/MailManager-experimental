@@ -615,6 +615,22 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
       ? { message: t('composerErrors.bodyTooLarge'), code: 'body_too_large' }
       : null;
 
+  // The "Revisa que el asunto y el mensaje no estén vacíos." warning is raised
+  // by the last send/save attempt's 422 and lives in ``persistence.error``
+  // (state), unlike ``recipientError`` / ``bodyError`` which are re-derived on
+  // every render. Resolve it reactively here — reusing the same per-render
+  // derivation as the recipient warning — the moment subject AND body are both
+  // non-empty again, so the stale notice clears live as the user fills the
+  // fields instead of lingering until the composer closes. ``length > 0``
+  // mirrors the backend's ``min_length=1`` on ``subject`` / ``body`` (an empty
+  // editor serialises to ``""``); other error codes pass through untouched.
+  const displayError: UiError | null =
+    persistence.error?.code === 'validation_error' &&
+    form.subject.length > 0 &&
+    form.body.length > 0
+      ? null
+      : persistence.error;
+
   const canSendEmail =
     mode === 'new_email' &&
     form.accountId.length > 0 &&
@@ -722,7 +738,7 @@ export default function useDraftComposer(mailboxId: string | null): UseDraftComp
     setBody: form.setBody,
     sending: persistence.sending,
     saving: persistence.saving,
-    error: persistence.error,
+    error: displayError,
     recipientError,
     bodyError,
     canSendEmail,
