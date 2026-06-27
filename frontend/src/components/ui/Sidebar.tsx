@@ -58,6 +58,13 @@ export default function Sidebar({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const base = `/m/${mailboxId}`;
   const { search } = useLocation();
+  // Switching box section carries the current URL params across (notably the
+  // lupa ``q`` term — buzones-y-vista-unificada §2.3) but must reset pagination
+  // to page 1, since the box context changed (listado-de-correos §7.1). So
+  // propagate every param except ``page``.
+  const navParams = new URLSearchParams(search);
+  navParams.delete('page');
+  const navSearch = navParams.toString();
 
   return (
     <aside
@@ -122,7 +129,7 @@ export default function Sidebar({
         {navItems.map(({ icon: Icon, label, path, badge }) => (
           <NavLink
             key={path}
-            to={{ pathname: `${base}/${path}`, search }}
+            to={{ pathname: `${base}/${path}`, search: navSearch }}
             onClick={onNavigate}
             className={({ isActive }) =>
               `flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
