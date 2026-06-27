@@ -321,9 +321,12 @@ export default function RichTextEditor({
   // ``content``/``editable`` are read only at init by ``useEditor``. Keep the
   // editor's editability in sync when ``disabled`` flips mid-send: without
   // this the toolbar greys out but the contenteditable would still accept
-  // input.
+  // input. ``emitUpdate: false`` keeps this programmatic toggle from emitting a
+  // phantom ``onChange`` — ``setEditable`` changes no content, so a consumer
+  // would otherwise mistake the flip (e.g. ``disabled`` going false after a
+  // save) for a real edit.
   useEffect(() => {
-    editor?.setEditable(!disabled);
+    editor?.setEditable(!disabled, false);
   }, [editor, disabled]);
 
   // Seed external ``value`` changes (open draft / reply / discard) without
