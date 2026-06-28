@@ -1195,6 +1195,8 @@ class GmailClient(EmailClient):
                         result.from_email = self._fetch_sender_email()
                     if not result.from_name:
                         result.from_name = result.from_email
+                    if not result.to_email and recipients:
+                        result.to_email = recipients[0]
                     return result
             except Exception as exc:
                 logger.warning(
