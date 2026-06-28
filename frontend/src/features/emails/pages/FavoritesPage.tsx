@@ -8,7 +8,7 @@ import useBulkBar from '../hooks/useBulkBar';
 import useFavorite from '../hooks/useFavorite';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
-import SearchInput from '../components/SearchInput';
+import SearchInput, { MAX_SEARCH_LENGTH } from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import useDebounce from '../../../lib/hooks/useDebounce';
 import { parsePageParam } from '../../../lib/pagination';
@@ -23,7 +23,7 @@ export default function FavoritesPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const rawQ = searchParams.get('q') ?? '';
+  const rawQ = (searchParams.get('q') ?? '').slice(0, MAX_SEARCH_LENGTH);
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
   const page = parsePageParam(searchParams);
 

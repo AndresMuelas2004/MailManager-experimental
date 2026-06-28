@@ -8,7 +8,7 @@ import useAccountUnreadCounts from '../hooks/useAccountUnreadCounts';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import AccountTabs from '../../../components/ui/AccountTabs';
-import SearchInput from '../components/SearchInput';
+import SearchInput, { MAX_SEARCH_LENGTH } from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import RefreshControl from '../components/RefreshControl';
 import ListControls from '../components/ListControls';
@@ -37,7 +37,7 @@ export default function AccountInboxPage({ box }: Props) {
   }>();
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const rawQ = searchParams.get('q') ?? '';
+  const rawQ = (searchParams.get('q') ?? '').slice(0, MAX_SEARCH_LENGTH);
   const debouncedQ = useDebounce(rawQ, SEARCH_DEBOUNCE_MS);
   const page = parsePageParam(searchParams);
   const controls = parseListControls(searchParams);
