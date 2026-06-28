@@ -13,6 +13,13 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// A body that is null, empty, or whitespace-only (a stray "\n"/"\r\n" surviving
+// sanitisation) is not usable content. Callers must fall through to the "no
+// content" notice instead of mounting an iframe around blank text.
+export function hasRenderableBody(body: string | null | undefined): body is string {
+  return body != null && body.trim() !== '';
+}
+
 export function wrapPlainText(text: string): string {
   const escaped = escapeHtml(text);
   return `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;color:#18181b"><pre style="white-space:pre-wrap;margin:0;font-family:inherit;font-size:inherit">${escaped}</pre></body></html>`;

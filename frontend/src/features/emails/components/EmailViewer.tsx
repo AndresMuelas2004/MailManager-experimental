@@ -5,7 +5,7 @@ import Spinner from '../../../components/common/Spinner';
 import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
 import type { UiError } from '../../../api/client/errors';
 import AttachmentsList from './AttachmentsList';
-import { wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
+import { hasRenderableBody, wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
 import { useTranslation } from '../../../lib/i18n';
 import type { EmailMetadataOut, AccountOut, EmailContentOut } from '../../../api/types/dto';
@@ -72,7 +72,7 @@ export default function EmailViewer({
         {error.message}
       </div>
     );
-  } else if (content?.html_body) {
+  } else if (content && hasRenderableBody(content.html_body)) {
     body = (
       <iframe
         title={t('viewer.iframeTitle')}
@@ -82,7 +82,7 @@ export default function EmailViewer({
         className="h-[70vh] w-full border-0"
       />
     );
-  } else if (content?.text_body) {
+  } else if (content && hasRenderableBody(content.text_body)) {
     body = (
       <iframe
         title={t('viewer.iframeTitle')}

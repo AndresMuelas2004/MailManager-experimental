@@ -3,7 +3,7 @@ import { MailMinus, Star, Trash2, Ban, Archive, Inbox } from 'lucide-react';
 
 import Spinner from '../../../components/common/Spinner';
 import AttachmentsList from './AttachmentsList';
-import { wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
+import { hasRenderableBody, wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
 import { useTranslation } from '../../../lib/i18n';
 import useEmailContent from '../hooks/useEmailContent';
 import useAttachmentDownloader from '../hooks/useAttachmentDownloader';
@@ -88,7 +88,7 @@ export default function ConversationMessageBody({ message }: Props) {
     );
   } else if (error) {
     bodyFrame = <div className="px-2 py-6 text-center text-sm text-red-600">{error.message}</div>;
-  } else if (content?.html_body) {
+  } else if (content && hasRenderableBody(content.html_body)) {
     bodyFrame = (
       <iframe
         title={t('viewer.iframeTitle')}
@@ -98,7 +98,7 @@ export default function ConversationMessageBody({ message }: Props) {
         className="h-[70vh] w-full border-0"
       />
     );
-  } else if (content?.text_body) {
+  } else if (content && hasRenderableBody(content.text_body)) {
     bodyFrame = (
       <iframe
         title={t('viewer.iframeTitle')}
