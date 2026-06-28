@@ -79,7 +79,7 @@ export default function MailboxDropdown({
                 placeholder={t('mailboxesSettings.renamePlaceholder')}
                 maxLength={120}
                 autoFocus
-                className="h-8 flex-1 rounded-lg border border-zinc-200 px-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
+                className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 px-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
               />
               <button
                 type="button"
