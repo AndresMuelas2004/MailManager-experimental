@@ -5,6 +5,7 @@ import { formatShortDate } from '../../../lib/formatters';
 import { getProviderMeta, isGenericLabel } from '../../../lib/providers';
 import { useTranslation } from '../../../lib/i18n';
 import Badge from '../../../components/common/Badge';
+import ConfirmModal from '../../../components/common/ConfirmModal';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import AccountCardDropdown from './AccountCardDropdown';
 
@@ -43,6 +44,7 @@ export default function AccountCard({
 
   const hasActions = !!onDelete || !!onReconnect || !!onEditLabel;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
@@ -170,10 +172,23 @@ export default function AccountCard({
                   onDelete
                     ? () => {
                         setMenuOpen(false);
-                        onDelete();
+                        setConfirmDelete(true);
                       }
                     : undefined
                 }
+              />
+            )}
+            {confirmDelete && onDelete && (
+              <ConfirmModal
+                title={t('accounts.confirmDeleteTitle')}
+                description={t('accounts.confirmDeleteDescription')}
+                confirmLabel={t('common.delete')}
+                cancelLabel={t('common.cancel')}
+                onCancel={() => setConfirmDelete(false)}
+                onConfirm={() => {
+                  setConfirmDelete(false);
+                  onDelete();
+                }}
               />
             )}
           </div>
