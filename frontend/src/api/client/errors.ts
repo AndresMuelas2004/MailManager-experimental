@@ -86,6 +86,16 @@ export function toUiError(error: unknown): UiError {
         message: 'Una cuenta ha perdido la conexión. Vuelve a conectarla e inténtalo de nuevo.',
       };
     }
+    if (error.code === 'mailbox_not_found') {
+      // The backend message leaks the internal term "Mailbox" and the raw UUID
+      // ("Mailbox '...' not found."). Map the CODE to a localized, user-facing
+      // string so any listing surface (unified/account inbox, favourites) shows
+      // Spanish instead of the raw text.
+      return {
+        code: error.code,
+        message: 'Esta bandeja no existe o ya no está disponible.',
+      };
+    }
     return { message: error.message, code: error.code };
   }
   if (error instanceof Error) {
