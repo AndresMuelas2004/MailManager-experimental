@@ -52,7 +52,12 @@ export default function useDraftsList(mailboxId: string, accountId?: string): Us
   }, [queryClient, mailboxId, accountId]);
 
   const syncAndRefresh = useCallback(async () => {
-    await syncMutation.mutateAsync();
+    // Swallow the rejection: a failed sync is already surfaced via ``syncError``
+    // and the loaded list is preserved. The button invokes this fire-and-forget
+    // (onClick), so an unhandled mutateAsync rejection would leave an "Uncaught
+    // (in promise)" in the console — same guard as FavoritesPage's handleSync
+    // and the bulk-action mutations.
+    await syncMutation.mutateAsync().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailboxId, accountId]);
 
