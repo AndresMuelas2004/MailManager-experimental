@@ -83,11 +83,11 @@
           },
           {
             "type": "command",
-            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/ruff-check.py"
+            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/memory-write-flag.py"
           },
           {
             "type": "command",
-            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/memory-write-flag.py"
+            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/tsc-flag-setter.py"
           }
         ]
       },
@@ -120,6 +120,10 @@
           {
             "type": "command",
             "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/memory-write-notify.py"
+          },
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/tsc-check-on-stop.py"
           }
         ]
       }
