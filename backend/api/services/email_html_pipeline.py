@@ -30,7 +30,11 @@ Pipeline
    included). ``<style>`` is intentionally left alone now; its content was
    sanitized in step 3 and is preserved through bleach.
 7. ``_clean_with_bleach`` — final tag/attribute/protocol allowlist. Inline
-   ``style=""`` attributes are filtered through ``CSSSanitizer``.
+   ``style=""`` attributes are filtered through ``CSSSanitizer``. The same
+   pass hardens every surviving ``<a>`` (forced ``target="_blank"`` +
+   ``rel="noopener noreferrer"``, and ``href`` dropped when its scheme is
+   ``cid:``/``data:`` — those are image-only protocols) via the shared
+   :mod:`api.services.html_link_hardening` filter.
 """
 
 from __future__ import annotations
@@ -40,8 +44,6 @@ import re
 from html import escape as html_escape
 from typing import Any
 
-import bleach
-
 logger = logging.getLogger(__name__)
 
 
@@ -49,12 +51,22 @@ logger = logging.getLogger(__name__)
 # Allowlists
 # ---------------------------------------------------------------------------
 
+# Includes the HTML5 semantic/structural wrappers (``section``, ``article``,
+# ``header``, ``footer``, ``figure``, …) and the table column machinery
+# (``caption``/``col``/``colgroup``): with ``strip=True`` bleach removes a
+# disallowed tag but keeps its children, so leaving these out silently
+# discards any ``style=""``/geometry they carry (a ``<section
+# style="background:…">`` loses its background) even though the text
+# survives. All of them are inert containers — no scripting, no navigation.
 _ALLOWED_TAGS: list[str] = [
-    "a", "abbr", "b", "blockquote", "br", "center", "code", "dd", "del",
-    "div", "dl", "dt", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6",
-    "hr", "i", "img", "ins", "li", "mark", "ol", "p", "pre", "q", "s",
-    "small", "span", "strong", "style", "sub", "sup", "table", "tbody",
-    "td", "tfoot", "th", "thead", "tr", "u", "ul", "wbr",
+    "a", "abbr", "address", "article", "aside", "b", "big", "blockquote",
+    "br", "caption", "center", "cite", "code", "col", "colgroup", "dd",
+    "del", "dfn", "div", "dl", "dt", "em", "figcaption", "figure", "font",
+    "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "i",
+    "img", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p", "pre",
+    "q", "s", "samp", "section", "small", "span", "strike", "strong",
+    "style", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead",
+    "time", "tr", "tt", "u", "ul", "var", "wbr",
 ]
 
 # ``background`` is the legacy HTML attribute that points a table/cell at a
@@ -68,22 +80,31 @@ _ALLOWED_TAGS: list[str] = [
 _ALLOWED_ATTRIBUTES: dict[str, list[str]] = {
     "*": ["class", "id", "style", "dir", "lang", "title", "align", "valign"],
     "a": ["href", "target", "rel"],
-    "img": ["src", "alt", "width", "height", "border"],
-    "td": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background"],
-    "th": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background"],
-    "table": ["border", "cellpadding", "cellspacing", "width", "align", "bgcolor", "background"],
+    "img": ["src", "alt", "width", "height", "border", "hspace", "vspace"],
+    "td": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background", "nowrap"],
+    "th": ["colspan", "rowspan", "width", "height", "align", "valign", "bgcolor", "background", "nowrap"],
+    "tr": ["bgcolor", "height"],
+    "table": ["border", "cellpadding", "cellspacing", "width", "height", "align", "bgcolor", "background"],
+    "col": ["span", "width", "bgcolor"],
+    "colgroup": ["span", "width", "bgcolor"],
     "font": ["color", "size", "face"],
     "ol": ["start", "type"],
 }
 
-_ALLOWED_PROTOCOLS: list[str] = ["http", "https", "mailto", "cid", "data"]
+# ``tel`` covers the "call us" footer links real emails carry; it navigates
+# to the OS dialer, never executes content. ``cid``/``data`` are needed for
+# inline images (``img src`` / ``td background``) — on ``<a href>`` they are
+# stripped again by the link-hardening filter in ``_clean_with_bleach``.
+_ALLOWED_PROTOCOLS: list[str] = ["http", "https", "mailto", "tel", "cid", "data"]
 
 # CSS properties safe to keep inside ``style=""`` attributes and inside
 # ``<style>`` rules. Covers the vocabulary real email templates use (layout,
 # colors, typography, spacing, borders) without opening the door to properties
 # that pull in remote resources or execute logic.
 _ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset({
-    "align-items", "background", "background-color", "background-image",
+    "align-content", "align-items", "align-self", "background",
+    "background-attachment", "background-clip", "background-color",
+    "background-image", "background-origin",
     "background-position", "background-repeat", "background-size", "border",
     "border-bottom", "border-bottom-color", "border-bottom-left-radius",
     "border-bottom-right-radius", "border-bottom-style", "border-bottom-width",
@@ -93,18 +114,30 @@ _ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset({
     "border-spacing", "border-style", "border-top", "border-top-color",
     "border-top-left-radius", "border-top-right-radius", "border-top-style",
     "border-top-width", "border-width", "bottom", "box-shadow", "box-sizing",
-    "caption-side", "clear", "color", "display", "empty-cells", "float",
+    "caption-side", "clear", "color", "column-gap", "direction", "display",
+    "empty-cells", "flex", "flex-basis", "flex-direction", "flex-flow",
+    "flex-grow", "flex-shrink", "flex-wrap", "float",
     "font", "font-family", "font-size", "font-stretch", "font-style",
-    "font-variant", "font-weight", "gap", "height", "justify-content", "left",
-    "letter-spacing", "line-height", "list-style", "list-style-position",
-    "list-style-type", "margin", "margin-bottom", "margin-left", "margin-right",
+    "font-variant", "font-weight", "gap", "height", "inset",
+    "justify-content", "justify-items", "justify-self", "left",
+    "letter-spacing", "line-height", "list-style", "list-style-image",
+    "list-style-position",
+    "list-style-type", "margin", "margin-block", "margin-block-end",
+    "margin-block-start", "margin-bottom", "margin-inline",
+    "margin-inline-end", "margin-inline-start", "margin-left", "margin-right",
     "margin-top", "max-height", "max-width", "min-height", "min-width",
-    "mso-line-height-rule", "mso-table-lspace", "mso-table-rspace", "opacity",
+    "mso-line-height-rule", "mso-table-lspace", "mso-table-rspace",
+    "object-fit", "object-position", "opacity", "order",
     "outline", "overflow", "overflow-wrap", "overflow-x", "overflow-y",
-    "padding", "padding-bottom", "padding-left", "padding-right", "padding-top",
-    "page-break-after", "page-break-before", "position", "right", "src",
-    "table-layout", "text-align", "text-decoration", "text-indent",
-    "text-overflow", "text-shadow", "text-transform", "top", "vertical-align",
+    "padding", "padding-block", "padding-block-end", "padding-block-start",
+    "padding-bottom", "padding-inline", "padding-inline-end",
+    "padding-inline-start", "padding-left", "padding-right", "padding-top",
+    "page-break-after", "page-break-before", "position", "right", "row-gap",
+    "src", "table-layout", "text-align", "text-decoration",
+    "text-decoration-color", "text-decoration-line", "text-decoration-style",
+    "text-decoration-thickness", "text-indent",
+    "text-overflow", "text-shadow", "text-transform", "top", "unicode-bidi",
+    "vertical-align",
     "visibility", "white-space", "width", "word-break", "word-spacing",
     "word-wrap", "z-index",
 })
@@ -628,21 +661,47 @@ def _strip_script_blocks(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# The viewer iframe is sandboxed with ``allow-popups
+# allow-popups-to-escape-sandbox``: a clicked link opens a REAL tab, so every
+# ``<a>`` must carry ``noopener`` (severs ``window.opener`` — reverse
+# tabnabbing) + ``noreferrer``. ``cid:``/``data:`` are excluded from the href
+# schemes because they are image-only protocols here (kept in
+# ``_ALLOWED_PROTOCOLS`` for ``img src`` / ``td background``).
+_INBOUND_LINK_TARGET = "_blank"
+_INBOUND_LINK_REL = "noopener noreferrer"
+_ALLOWED_A_HREF_SCHEMES: frozenset[str] = frozenset({"http", "https", "mailto", "tel"})
+
+
 def _clean_with_bleach(html: str) -> str:
-    """Final allowlist pass: tags, attributes, protocols, inline CSS."""
+    """Final allowlist pass: tags, attributes, protocols, inline CSS, links.
+
+    Uses a ``Cleaner`` with the shared link-hardening filter appended so the
+    ``<a>`` rewrite happens in the same parse pass as the sanitisation.
+    """
     from bleach.css_sanitizer import CSSSanitizer  # lazy — optional dep
+    from bleach.sanitizer import Cleaner
+
+    from api.services.html_link_hardening import build_link_hardening_filter
+
     css_sanitizer = CSSSanitizer(
         allowed_css_properties=_ALLOWED_CSS_PROPERTIES,
         allowed_svg_properties=frozenset(),
     )
-    return bleach.clean(
-        html,
+    cleaner = Cleaner(
         tags=_ALLOWED_TAGS,
         attributes=_ALLOWED_ATTRIBUTES,
         protocols=_ALLOWED_PROTOCOLS,
         css_sanitizer=css_sanitizer,
         strip=True,
+        filters=[
+            build_link_hardening_filter(
+                target=_INBOUND_LINK_TARGET,
+                rel=_INBOUND_LINK_REL,
+                allowed_href_schemes=_ALLOWED_A_HREF_SCHEMES,
+            )
+        ],
     )
+    return cleaner.clean(html)
 
 
 # ---------------------------------------------------------------------------

@@ -776,3 +776,124 @@ def test_strips_javascript_background_attribute():
     html = '<table><tr><td background="javascript:alert(1)">.</td></tr></table>'
     result = sanitize_email_html(html)
     assert "javascript:" not in result
+
+
+# ---------------------------------------------------------------------------
+# Widened allowlist — legacy table/geometry attributes, semantic HTML5 tags,
+# column machinery, tel: links and modern CSS. With ``strip=True`` a missing
+# tag keeps the text but silently loses the styling it carried, so these pin
+# that the styling survives.
+# ---------------------------------------------------------------------------
+
+
+def test_preserves_tr_bgcolor_and_height():
+    html = '<table><tr bgcolor="#f4f4f4" height="40"><td>fila</td></tr></table>'
+    result = sanitize_email_html(html)
+    assert 'bgcolor="#f4f4f4"' in result
+    assert 'height="40"' in result
+
+
+def test_preserves_img_hspace_vspace():
+    html = '<img src="https://x.test/logo.png" hspace="10" vspace="5" alt="logo">'
+    result = sanitize_email_html(html)
+    assert 'hspace="10"' in result
+    assert 'vspace="5"' in result
+
+
+def test_preserves_table_height_attribute():
+    html = '<table height="300"><tr><td>x</td></tr></table>'
+    result = sanitize_email_html(html)
+    assert 'height="300"' in result
+
+
+def test_preserves_nowrap_on_td():
+    html = '<table><tr><td nowrap>sin saltos</td></tr></table>'
+    result = sanitize_email_html(html)
+    assert "nowrap" in result
+    assert "sin saltos" in result
+
+
+def test_preserves_semantic_wrapper_with_its_style():
+    """HTML5 semantic wrappers keep their tag and inline style instead of
+    being stripped to bare text (a ``<section style="background:…">`` used
+    to lose its background even though the text survived).
+    """
+    html = '<section style="background-color:#101820"><p>contenido</p></section>'
+    result = sanitize_email_html(html)
+    assert "<section" in result
+    assert "#101820" in result
+    assert "contenido" in result
+
+
+def test_preserves_colgroup_and_col_geometry():
+    html = (
+        '<table><colgroup><col span="2" width="120"></colgroup>'
+        "<tr><td>a</td><td>b</td></tr></table>"
+    )
+    result = sanitize_email_html(html)
+    assert "<col" in result
+    assert 'span="2"' in result
+    assert 'width="120"' in result
+
+
+def test_preserves_flexbox_inline_css():
+    html = '<div style="display:flex;flex-direction:column;gap:8px">x</div>'
+    result = sanitize_email_html(html)
+    normalized = result.replace(" ", "").lower()
+    assert "display:flex" in normalized
+    assert "flex-direction:column" in normalized
+    assert "gap:8px" in normalized
+
+
+def test_allows_tel_href():
+    html = '<a href="tel:+34941299799">Llámanos</a>'
+    result = sanitize_email_html(html)
+    assert 'href="tel:+34941299799"' in result
+
+
+# ---------------------------------------------------------------------------
+# Inbound link hardening — the viewer iframe is sandboxed WITH popups
+# (``allow-popups allow-popups-to-escape-sandbox``), so a clicked link opens
+# a real tab. Every <a> must sever window.opener (reverse tabnabbing) and
+# the image-only protocols (cid:/data:) must not ride on href.
+# ---------------------------------------------------------------------------
+
+
+def test_forces_target_blank_and_noopener_on_links():
+    result = sanitize_email_html('<a href="https://example.com">link</a>')
+    assert 'target="_blank"' in result
+    assert "noopener" in result
+    assert "noreferrer" in result
+
+
+def test_link_hardening_overrides_sender_target_and_rel():
+    result = sanitize_email_html(
+        '<a href="https://example.com" target="_self" rel="opener">x</a>'
+    )
+    assert 'target="_blank"' in result
+    assert 'target="_self"' not in result
+    assert 'rel="opener"' not in result
+
+
+def test_drops_data_href_on_anchor_but_keeps_data_img_src():
+    html = (
+        '<a href="data:text/html,pwned">enlace</a>'
+        '<img src="data:image/png;base64,AAA" alt="ok">'
+    )
+    result = sanitize_email_html(html)
+    assert 'href="data:' not in result
+    assert "enlace" in result  # the link text survives, only the href drops
+    assert 'src="data:image/png;base64,AAA"' in result
+
+
+def test_drops_cid_href_on_anchor():
+    result = sanitize_email_html('<a href="cid:parte-interna">ver</a>')
+    assert 'href="cid:' not in result
+    assert "ver" in result
+
+
+def test_keeps_fragment_href_on_anchor():
+    # Scheme-less hrefs (fragments / relative) carry no scheme to filter on
+    # and stay untouched.
+    result = sanitize_email_html('<a href="#seccion">ir</a>')
+    assert 'href="#seccion"' in result

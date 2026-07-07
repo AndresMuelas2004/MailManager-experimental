@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import logging
 
-import bleach
 from bleach.css_sanitizer import CSSSanitizer
+from bleach.sanitizer import Cleaner
+
+from api.services.html_link_hardening import build_link_hardening_filter
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,10 @@ def sanitize_outbound_html(html: str) -> str:
     Graph-wrapped HTML body that ever reaches this function collapses to a
     clean fragment. Inline ``style`` survives only on ``<blockquote>`` and
     only for the allowlisted CSS properties. Every ``<a>`` is hardened to
-    ``target="_blank" rel="noopener noreferrer nofollow"``.
+    ``target="_blank" rel="noopener noreferrer nofollow"`` by the shared
+    :mod:`api.services.html_link_hardening` filter, appended to the
+    ``Cleaner`` pipeline so the rewrite happens in the same parse pass as
+    the sanitisation (no second html5lib round trip).
 
     On any unexpected failure the input is returned unchanged (the caller
     treats the result as best-effort; the editor already restricts the
@@ -93,76 +98,23 @@ def sanitize_outbound_html(html: str) -> str:
             allowed_css_properties=_ALLOWED_CSS_PROPERTIES,
             allowed_svg_properties=frozenset(),
         )
-        cleaned = bleach.clean(
-            html,
+        cleaner = Cleaner(
             tags=_ALLOWED_TAGS,
             attributes=_ALLOWED_ATTRIBUTES,
             protocols=_ALLOWED_PROTOCOLS,
             css_sanitizer=css_sanitizer,
             strip=True,
+            filters=[
+                build_link_hardening_filter(
+                    target=_FORCED_LINK_TARGET,
+                    rel=_FORCED_LINK_REL,
+                )
+            ],
         )
-        return _harden_links_in_html(cleaned)
+        return cleaner.clean(html)
     except Exception as exc:
         logger.warning(
             "sanitize_outbound_html failed (%s): %s — returning input unchanged",
-            type(exc).__name__, exc,
-        )
-        return html
-
-
-def _harden_links_in_html(html: str) -> str:
-    """Force ``target="_blank"`` + ``rel`` on every ``<a>`` start tag.
-
-    Runs after bleach has already filtered tags / attributes / protocols,
-    so only allowlisted links remain. Re-runs bleach with a linkify-style
-    attribute callback is heavier than a token-stream filter; instead we
-    use bleach's own html5lib serialiser through a tiny ``Filter`` so the
-    rewrite stays robust against attribute quoting / ordering. Fail-soft:
-    on any error the already-sanitised ``html`` is returned unchanged
-    (links simply keep bleach's defaults).
-    """
-    if "<a" not in html.lower():
-        return html
-    try:
-        from bleach.html5lib_shim import (
-            BleachHTMLParser,
-            BleachHTMLSerializer,
-            Filter,
-        )
-
-        class _LinkHardeningFilter(Filter):
-            def __iter__(self):
-                for token in Filter.__iter__(self):
-                    if (
-                        token.get("type") in ("StartTag", "EmptyTag")
-                        and token.get("name") == "a"
-                    ):
-                        data = token.setdefault("data", {})
-                        data[(None, "target")] = _FORCED_LINK_TARGET
-                        data[(None, "rel")] = _FORCED_LINK_REL
-                    yield token
-
-        parser = BleachHTMLParser(
-            tags=_ALLOWED_TAGS,
-            strip=True,
-            consume_entities=False,
-            namespaceHTMLElements=False,
-        )
-        dom = parser.parseFragment(html)
-        walker = bleach.html5lib_shim.getTreeWalker("etree")
-        stream = _LinkHardeningFilter(source=walker(dom))
-        serializer = BleachHTMLSerializer(
-            quote_attr_values="always",
-            omit_optional_tags=False,
-            escape_lt_in_attrs=True,
-            resolve_entities=False,
-            sanitize=False,
-            alphabetical_attributes=False,
-        )
-        return serializer.render(stream)
-    except Exception as exc:
-        logger.warning(
-            "outbound link hardening failed (%s): %s — keeping bleach defaults",
             type(exc).__name__, exc,
         )
         return html

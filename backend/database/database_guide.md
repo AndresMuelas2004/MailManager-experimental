@@ -31,7 +31,7 @@
 - Written during `upsert_tokens`; may be `NULL` if the best-effort provider fetch during `authenticate` failed.
 - The UPSERT queries use `COALESCE(%(email_address)s, email_address)` so silent-refresh upserts (which don't carry an `email_address` — only the interactive `authenticate` flow fetches it) cannot erase a previously stored value. **Do not remove the `COALESCE` thinking it is a leftover** — it is load-bearing; without it, any refresh blanks the column.
 
-## `signature_html` column (migration 0038) — written via `UPSERT_ACCOUNT`, NOT preserved with COALESCE (unlike `email_address`)
+## `signature_html` column (migration 0039) — written via `UPSERT_ACCOUNT`, NOT preserved with COALESCE (unlike `email_address`)
 
 Per-account email signature (HTML), nullable TEXT, isomorphic to `email_address` (plain text, not a secret; `NULL`/`""` both mean "no signature"). Two non-obvious traps:
 

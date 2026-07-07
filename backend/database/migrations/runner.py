@@ -516,6 +516,14 @@ _DDL_STATEMENTS = [
     # after it to keep the runner stamp order aligned with the Alembic chain.
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS signature_html TEXT DEFAULT NULL;",
     "UPDATE alembic_version SET version_num = '0039_add_signature_html_to_accounts';",
+    # Migration 0040: invalidate email_content cache after the rendering
+    # pipeline extensions (widened tag/attribute/CSS allowlists, <a>
+    # hardening with target/rel + cid:/data: href stripping, and normalised
+    # case-/percent-tolerant cid: matching). No-op on a greenfield bootstrap
+    # (the table is already empty above); for incremental upgrades the
+    # per-migration TRUNCATE in 0040 still runs via Alembic.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = '0040_invalidate_email_content_cache_allowlist_links';",
 ]
 
 

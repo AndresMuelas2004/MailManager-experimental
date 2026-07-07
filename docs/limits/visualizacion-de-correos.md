@@ -12,17 +12,20 @@ Todas estas listas y umbrales están **hardcodeados** en el pipeline de saneamie
 
 ## 1. Protocolos permitidos en enlaces e imágenes
 
-Solo estos esquemas sobreviven en `href`, `src`, etc. Cualquier otro (`javascript:`, `vbscript:`, `file:`, `ftp:`, `tel:`…) se elimina.
+Solo estos esquemas sobreviven en `href`, `src`, etc. Cualquier otro (`javascript:`, `vbscript:`, `file:`, `ftp:`…) se elimina.
 
 | Protocolo | Para qué | 
 |-----------|----------|
 | `http` | Enlaces y recursos web normales |
 | `https` | Enlaces y recursos web seguros |
 | `mailto` | Enlaces de "enviar correo a" |
-| `cid` | Referencia interna a imágenes embebidas (se resuelven a `data:` antes de mostrarse) |
-| `data` | Imágenes embebidas ya incrustadas en el HTML |
+| `tel` | Enlaces de "llámanos" (típicos en pies de página con teléfono) |
+| `cid` | Referencia interna a imágenes embebidas (se resuelven a `data:` antes de mostrarse) — **solo en imágenes/fondos, nunca en enlaces** |
+| `data` | Imágenes embebidas ya incrustadas en el HTML — **solo en imágenes/fondos, nunca en enlaces** |
 
 > **Por qué tan corta:** cualquier esquema fuera de esta lista o bien permite ejecutar código (`javascript:`) o bien no aporta nada a la lectura de un correo. Es la postura segura.
+>
+> **Matiz sobre los enlaces:** en un `<a href="…">` solo se aceptan `http`, `https`, `mailto` y `tel` (más los `href` relativos o de fragmento, que no tienen esquema). `cid:` y `data:` son protocolos "de imagen": si llegan en el `href` de un enlace, el atributo se elimina y queda solo el texto del enlace. Además, **todo enlace superviviente se endurece**: se le fuerza `target="_blank"` y `rel="noopener noreferrer"` (ver sección 8).
 
 ---
 
@@ -46,7 +49,8 @@ El CSS de los bloques `<style>` se filtra regla a regla.
 **Propiedades CSS permitidas:** solo se conserva este vocabulario acotado de propiedades de maquetación, color, tipografía, espaciado y bordes (las que usan las plantillas reales). Cualquier propiedad fuera de esta lista —y cualquier valor que contenga `expression(…)`, `javascript:` o `vbscript:`— se elimina. Aplica tanto al CSS de los bloques `<style>` como al `style="…"` inline de cada elemento.
 
 ```
-align-items, background, background-color, background-image,
+align-content, align-items, align-self, background, background-attachment,
+background-clip, background-color, background-image, background-origin,
 background-position, background-repeat, background-size, border,
 border-bottom, border-bottom-color, border-bottom-left-radius,
 border-bottom-right-radius, border-bottom-style, border-bottom-width,
@@ -56,19 +60,25 @@ border-right-color, border-right-style, border-right-width,
 border-spacing, border-style, border-top, border-top-color,
 border-top-left-radius, border-top-right-radius, border-top-style,
 border-top-width, border-width, bottom, box-shadow, box-sizing,
-caption-side, clear, color, display, empty-cells, float,
-font, font-family, font-size, font-stretch, font-style,
-font-variant, font-weight, gap, height, justify-content, left,
-letter-spacing, line-height, list-style, list-style-position,
-list-style-type, margin, margin-bottom, margin-left, margin-right,
-margin-top, max-height, max-width, min-height, min-width,
-mso-line-height-rule, mso-table-lspace, mso-table-rspace, opacity,
-outline, overflow, overflow-wrap, overflow-x, overflow-y,
-padding, padding-bottom, padding-left, padding-right, padding-top,
-page-break-after, page-break-before, position, right, src,
-table-layout, text-align, text-decoration, text-indent,
-text-overflow, text-shadow, text-transform, top, vertical-align,
-visibility, white-space, width, word-break, word-spacing,
+caption-side, clear, color, column-gap, direction, display, empty-cells,
+flex, flex-basis, flex-direction, flex-flow, flex-grow, flex-shrink,
+flex-wrap, float, font, font-family, font-size, font-stretch, font-style,
+font-variant, font-weight, gap, height, inset, justify-content,
+justify-items, justify-self, left, letter-spacing, line-height, list-style,
+list-style-image, list-style-position, list-style-type, margin,
+margin-block, margin-block-end, margin-block-start, margin-bottom,
+margin-inline, margin-inline-end, margin-inline-start, margin-left,
+margin-right, margin-top, max-height, max-width, min-height, min-width,
+mso-line-height-rule, mso-table-lspace, mso-table-rspace, object-fit,
+object-position, opacity, order, outline, overflow, overflow-wrap,
+overflow-x, overflow-y, padding, padding-block, padding-block-end,
+padding-block-start, padding-bottom, padding-inline, padding-inline-end,
+padding-inline-start, padding-left, padding-right, padding-top,
+page-break-after, page-break-before, position, right, row-gap, src,
+table-layout, text-align, text-decoration, text-decoration-color,
+text-decoration-line, text-decoration-style, text-decoration-thickness,
+text-indent, text-overflow, text-shadow, text-transform, top, unicode-bidi,
+vertical-align, visibility, white-space, width, word-break, word-spacing,
 word-wrap, z-index
 ```
 
@@ -81,12 +91,17 @@ Nota: las propiedades `mso-*` (`mso-line-height-rule`, `mso-table-lspace`, `mso-
 Solo sobrevive este conjunto; cualquier otra etiqueta se elimina (su contenido de texto puede conservarse, salvo en `<script>`/`<title>`, que se eliminan con todo su contenido).
 
 ```
-a, abbr, b, blockquote, br, center, code, dd, del, div, dl, dt, em, font,
-h1, h2, h3, h4, h5, h6, hr, i, img, ins, li, mark, ol, p, pre, q, s, small,
-span, strong, style, sub, sup, table, tbody, td, tfoot, th, thead, tr, u, ul, wbr
+a, abbr, address, article, aside, b, big, blockquote, br, caption, center,
+cite, code, col, colgroup, dd, del, dfn, div, dl, dt, em, figcaption,
+figure, font, footer, h1, h2, h3, h4, h5, h6, header, hr, i, img, ins, kbd,
+li, main, mark, nav, ol, p, pre, q, s, samp, section, small, span, strike,
+strong, style, sub, sup, table, tbody, td, tfoot, th, thead, time, tr, tt,
+u, ul, var, wbr
 ```
 
 Nota: `style` está en la lista (se conserva el bloque, ya saneado, para que sobrevivan las `@media`). `script` **no** está y, además, se elimina con su contenido.
+
+Nota: los envoltorios semánticos de HTML5 (`section`, `article`, `header`, `footer`, `figure`, …) y la maquinaria de columnas de tabla (`caption`, `col`, `colgroup`) están en la lista a propósito: al eliminar una etiqueta se conserva su texto pero se pierde **el estilo que llevaba encima** (un `<section style="background:…">` perdería su fondo), y las plantillas modernas los usan como contenedores con estilo.
 
 ---
 
@@ -95,11 +110,13 @@ Nota: `style` está en la lista (se conserva el bloque, ya saneado, para que sob
 | Etiqueta | Atributos permitidos |
 |----------|----------------------|
 | Todas (`*`) | `class`, `id`, `style`, `dir`, `lang`, `title`, `align`, `valign` |
-| `a` | `href`, `target`, `rel` |
-| `img` | `src`, `alt`, `width`, `height`, `border` |
-| `td` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background` |
-| `th` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background` |
-| `table` | `border`, `cellpadding`, `cellspacing`, `width`, `align`, `bgcolor`, `background` |
+| `a` | `href`, `target`, `rel` — `target` y `rel` se **fuerzan** después a `_blank` / `noopener noreferrer` (sección 8) |
+| `img` | `src`, `alt`, `width`, `height`, `border`, `hspace`, `vspace` |
+| `td` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background`, `nowrap` |
+| `th` | `colspan`, `rowspan`, `width`, `height`, `align`, `valign`, `bgcolor`, `background`, `nowrap` |
+| `tr` | `bgcolor`, `height` |
+| `table` | `border`, `cellpadding`, `cellspacing`, `width`, `height`, `align`, `bgcolor`, `background` |
+| `col` / `colgroup` | `span`, `width`, `bgcolor` |
 | `font` | `color`, `size`, `face` |
 | `ol` | `start`, `type` |
 
@@ -139,7 +156,7 @@ Cualquier atributo fuera de esta tabla (incluidos manejadores de eventos como `o
 
 | Proveedor | Estrategia | 
 |-----------|-----------|
-| **Gmail** | "UTF-8 primero": (1) se intenta UTF-8 estricto; (2) si falla, se usa la codificación declarada por la parte; (3) último recurso, UTF-8 tolerando bytes inválidos. Devuelve vacío solo si el propio base64 está corrupto. |
+| **Gmail** | "UTF-8 primero": (1) se intenta UTF-8 estricto; (2) si falla, se usa la codificación declarada por la parte; (3) último recurso, UTF-8 tolerando bytes inválidos. Devuelve vacío solo si el propio base64 está corrupto. **Excepción:** si la codificación declarada es "ASCII-enmascarada" (ISO-2022-JP/KR, HZ-GB-2312, UTF-7 — sus bytes son todos ASCII, así que el UTF-8 estricto "acertaría" devolviendo las secuencias de escape como texto visible), se intenta **primero la declarada** y solo si falla se cae a la estrategia normal. |
 | **Outlook** | La negociación de codificación la hace el servidor de Graph; no necesita corrección en cliente. |
 
 Además, en cualquier proveedor se eliminan las declaraciones de charset falsas del HTML (p. ej. `us-ascii`, `windows-1252`) y, **solo cuando el documento tiene cabecera**, se inyecta una declaración UTF-8 canónica. Si no hay cabecera, no se inyecta nada (el contenido ya llega decodificado como texto Unicode y anteponer una `<meta>` podría empeorar el render).
@@ -157,6 +174,7 @@ El cuerpo se renderiza dentro de un iframe con permisos mínimos.
 | Abrir ventanas emergentes (popups) | **Permitido** | Necesario para que los enlaces puedan abrirse. |
 | Que los popups escapen del sandbox | **Permitido** | Los enlaces se abren como pestañas normales del navegador. |
 | Destino de los enlaces | **Pestaña nueva** (`target="_blank"`) | Nunca se navega dentro del visor. |
+| Atributos forzados en cada enlace | `target="_blank"` + `rel="noopener noreferrer"` (los del remitente se sobrescriben) | La pestaña abierta no conserva referencia al visor (`window.opener` queda cortado — anti *reverse tabnabbing*) ni recibe *referrer*. |
 | Política de *referrer* | **Restringida** | No se filtra de más a dónde navega el usuario. |
 | Ancho de las imágenes | **Limitado al 100 %** del visor | Imágenes enormes no rompen el layout. |
 
@@ -171,7 +189,7 @@ El cuerpo se renderiza dentro de un iframe con permisos mínimos.
 | Qué se cachea | El HTML **ya saneado** (no el original), más el texto plano, en la base de datos local. |
 | Cuándo se puebla | En la primera apertura del correo (cache-aside): miss → **una** descarga del proveedor (cuerpo + adjuntos en la misma consulta) → saneado → persistencia → entrega. |
 | Reaperturas | Instantáneas, **sin** llamada al proveedor ni re-saneamiento. |
-| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). El **último vaciado** acompañó a la unificación de cuerpo+adjuntos en una sola lectura del proveedor (migración `0036`). |
+| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). El **último vaciado** acompañó a la ampliación de las listas blancas (etiquetas semánticas, atributos de geometría, CSS moderno), el endurecimiento de enlaces y la tolerancia de mayúsculas/percent-encoding en las imágenes `cid:` (migración `0040`). |
 | Invalidación por borrado/desconexión | El borrado de un correo o la desconexión de una cuenta limpian su contenido cacheado automáticamente (cascada en la base de datos). |
 
 No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda completo. (El límite de tamaño relevante es el de los **adjuntos**, documentado en [adjuntos.md](adjuntos.md).)
@@ -223,4 +241,4 @@ No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda co
 
 ---
 
-> El visor llega hasta: **solo 5 protocolos** (`http`, `https`, `mailto`, `cid`, `data`), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail**, imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa**, todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura. La caché tiene un **TTL deslizante de 30 días** desde el último acceso (purgado **solo durante las sincronizaciones**, sobre las cuentas sincronizadas), y se **pre-cargan** los **no leídos de las últimas 48 h** de la bandeja de entrada, **hasta 50 por cuenta y sincronización**, en segundo plano y de forma secuencial. El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).
+> El visor llega hasta: **solo 6 protocolos** (`http`, `https`, `mailto`, `tel`, `cid`, `data` — los dos últimos solo en imágenes, nunca en enlaces), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, cada enlace **endurecido** con `target="_blank"` + `rel="noopener noreferrer"`, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail** (con la codificación declarada primero para ISO-2022-*/HZ/UTF-7), imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa** (emparejando el `cid:` sin distinguir mayúsculas ni percent-encoding), todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura. La caché tiene un **TTL deslizante de 30 días** desde el último acceso (purgado **solo durante las sincronizaciones**, sobre las cuentas sincronizadas), y se **pre-cargan** los **no leídos de las últimas 48 h** de la bandeja de entrada, **hasta 50 por cuenta y sincronización**, en segundo plano y de forma secuencial. El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).
