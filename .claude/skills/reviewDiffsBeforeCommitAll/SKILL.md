@@ -1,11 +1,14 @@
 ---
 name: reviewDiffsBeforeCommitAll
-description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as background subagents launched in one go), waits in silence, then closes with a brief executive summary and a single overall verdict. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
+description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as background subagents launched in one go), waits in silence, persists the full consolidated report to a .md file and replies with a single short line. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
+argument-hint: "[opcional] flags del hijo backend (--tests dir1 ... / --md path1 ...), '--out <ruta.md>' con el destino del informe persistido y/o '--informe <ruta.md>' con el informe final del pipeline al que añadir la sección de subagentes lanzados/caídos"
+context: fork
+agent: pipeline-skill-runner
 ---
 
-Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in background subagents launched by the children; this skill only coordinates the combined launch, waits in silence, and merges the verdicts at the end.
+Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in background subagents launched by the children; this skill only coordinates the combined launch, waits in silence, merges the verdicts, **persists the full consolidated report to a `.md` file and replies with a single short line** (this skill runs in an isolated forked context: its response is data for the caller, and the report's value lives in the persisted file).
 
-Usage: `/reviewDiffsBeforeCommitAll` (same optional `$ARGUMENTS` as the backend child: `--tests dir1 dir2 ...` and `--md path1 path2 ...` — passed through to the backend child only; the frontend child takes no arguments).
+Usage: `/reviewDiffsBeforeCommitAll` (same optional `$ARGUMENTS` as the backend child: `--tests dir1 dir2 ...` and `--md path1 path2 ...` — passed through to the backend child only; the frontend child takes no arguments). Additionally accepts `--out <path.md>`: the destination file for the persisted consolidated report (not forwarded to any child). Also accepts `--informe <path.md>` (typically passed by the /implementar-feature-completa pipeline): the pipeline's user-facing final report, to which this skill appends its launched-subagents section (step 5.5); without it, that section is simply not written anywhere.
 
 ---
 
@@ -20,7 +23,7 @@ Invoke the Skill tool for `reviewDiffsBeforeCommitBackend` (forwarding any `--te
 Execute the backend child's PHASE 1 and the frontend child's Step 1, but do NOT launch any agent yet — hold both launches for the single combined message of step 3.
 
 - If one side has no diffs, that child stops by itself; continue with the other side alone.
-- If neither side has diffs, report "No backend or frontend files to review." and STOP.
+- If neither side has diffs, reply with exactly `OK | sin-diffs` (nothing else, no report file) and STOP.
 - If the diffs contain files outside `backend/` and `frontend/`, set them aside: nobody reviews them and they must be listed in the final summary.
 
 ### 3 — Single combined launch
@@ -29,17 +32,21 @@ Launch ALL background agents from both children in ONE single message: the backe
 
 Print one brief message listing everything launched.
 
+Keep your own launch roster — for every agent launched: agent type, side (backend/frontend), and a one-line objective (what it reviews). You will need it in step 5 for the `reviewers-caidos` count and the `--informe` section. If a child skill crashes before launching its agents, its whole side counts as ONE crashed entry in the roster ("review <side> — no llegó a lanzarse").
+
 ### 4 — Wait in silence
 
 STOP. Do NOT call any tool, do NOT poll, and do NOT do any other work in the main conversation. Wait for the automatic completion notifications of every launched agent.
 
-### 5 — Consolidate
+### 5 — Consolidate and persist
 
 Only when ALL launched agents have reported back:
 
-1. Produce the backend child's consolidated report exactly as its PHASE 3 defines.
-2. Produce the frontend child's report exactly as its Step 4 defines.
-3. Close with:
+1. Resolve the destination file: the `--out <path.md>` argument if provided; otherwise `nueva-implementacion-en-curso/review-suelta-<YYYYMMDD-HHmmss>.md` at the repo root (create the directory if missing).
+2. Write to that file — with the Write tool, as one single document, never printed to the conversation — in this order:
+   - The backend child's consolidated report exactly as its PHASE 3 defines (or a one-line "skipped (no backend diffs)" note).
+   - The frontend child's report exactly as its Step 4 defines (or a one-line "skipped (no frontend diffs)" note).
+   - The closing block:
 
 ```
 ## Executive Summary (Backend + Frontend)
@@ -51,7 +58,27 @@ Only when ALL launched agents have reported back:
 
 Severity order: BLOCK COMMIT > REVIEW BEFORE COMMIT > SAFE TO COMMIT. Do not re-print the children's full reports inside the summary.
 
+3. Count `validables` — the findings that feed the downstream validation stage: every **Group A** finding of the backend report plus every finding of the two **architecture reports** with severity Blocker, Major or Minor. Group B findings, Suggestions and nits are excluded (Group B is pre-existing code and never blocks; suggestions are optional).
+4. Count `reviewers-caidos` — from your step-3 roster: every launched agent that crashed or returned nothing, plus one entry per child skill that crashed before launching (agents that completed normally count 0 here, however severe their findings).
+5. If `--informe <path.md>` was provided: APPEND to that file — never read it, never rewrite it; use an append write (PowerShell `Add-Content -Encoding utf8` / Bash `cat >>`) — this section, written IN SPANISH:
+
+```
+## Fase 3 — Review: subagentes lanzados
+
+| Subagente | Lado | Objetivo | Estado |
+|---|---|---|---|
+| <agent type> | backend/frontend | <qué revisaba, una línea> | OK / CRASHEADO — <motivo corto> |
+```
+
+One row per roster entry. If none crashed, add under the table the line `Los <N> reviewers completaron sin fallos.`
+
+6. Reply with EXACTLY one line and nothing else — your response is data for the caller; the full report lives in the file:
+
+`OK | informe: <absolute path> | overall: <BLOCK COMMIT|REVIEW BEFORE COMMIT|SAFE TO COMMIT> | validables: <n> | reviewers-caidos: <m>`
+
+If a child phase or an agent crashed (rule below), the report file must state it in its Executive Summary and the verdict downgrades as defined — the one-line reply format does not change.
+
 ## Important rules
 
-- This skill and its children are read-only: never modify any file.
-- If any child phase or any agent crashes or returns nothing, report it explicitly in the Executive Summary and still present whatever the others produced; a failed reviewer downgrades the overall verdict to at least **REVIEW BEFORE COMMIT**.
+- This skill and its children are read-only **with respect to the repository**: never modify any project file. The ONLY writes this skill performs are its own report file (the `--out` path or the default under `nueva-implementacion-en-curso/`) and, when `--informe` is given, appending its subagents section to that file.
+- If any child phase or any agent crashes or returns nothing, state it explicitly in the persisted Executive Summary and still include whatever the others produced; a failed reviewer downgrades the overall verdict to at least **REVIEW BEFORE COMMIT**.

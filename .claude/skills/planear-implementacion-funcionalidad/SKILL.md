@@ -37,9 +37,54 @@ Reglas de interpretación:
 - Si la feature no requiere APIs externas, `N_api` simplemente no aplica (aunque la frase lo mencione).
 - Si la frase de iteraciones resulta ambigua o trae un valor fuera de rango, pregúntame con `AskUserQuestion` antes de arrancar.
 
+## Modo orquestado (pipeline /implementar-feature-completa)
+
+Si `$ARGUMENTS` empieza por la marca literal `[MODO-ORQUESTADO]`, estás corriendo como subagente dentro del pipeline `/implementar-feature-completa`. Retira la marca y trata el resto como el argumento normal (frase de iteraciones opcional + descripción). Todo el flujo de la skill aplica igual, con UNA única diferencia — el canal de preguntas:
+
+- Como subagente **no tienes `AskUserQuestion`** (está vetada en subagentes). **Toda** pregunta que esta skill te pida hacerme (la ambigüedad de iteraciones de arriba, el paso 4 completo, cualquier confirmación puntual) se canaliza así: termina tu turno emitiendo como mensaje final **únicamente** el bloque `PREGUNTAS-PENDIENTES` de abajo. El orquestador me presentará esas preguntas y te reenviará mis respuestas como mensaje de continuación con el bloque `RESPUESTAS`. Tu contexto sigue intacto entre rondas: continúa exactamente donde lo dejaste. Repite tantas rondas como necesites — la exigencia del paso 4 («no dejes de preguntar hasta estar al 100 % seguro») sigue vigente.
+- Cada pregunta lleva de **2 a 4 opciones cerradas** (el usuario siempre podrá además responder con texto libre) y marca `[RECOMENDADA]` la que recomiendes:
+
+```
+PREGUNTAS-PENDIENTES
+---
+id: 1
+pregunta: <una frase interrogativa completa y autocontenida>
+contexto: <1-2 líneas: por qué surge y qué implica cada camino>
+opciones:
+- <opción A> [RECOMENDADA]
+- <opción B>
+---
+id: 2
+...
+```
+
+- El bloque `RESPUESTAS` que recibirás tiene esta forma (una respuesta por id; puede ser el texto literal de una opción o texto libre del usuario):
+
+```
+RESPUESTAS
+---
+id: 1
+respuesta: <texto>
+---
+...
+```
+
+- Al cerrar la última iteración del paso 6 (o el paso 5 si `N_md = 1`), tu mensaje final debe ser **únicamente**:
+
+```
+PLAN-COMPLETADO
+slug: <feature-slug>
+dir: <ruta absoluta de nueva-implementacion-en-curso/<feature-slug>>
+```
+
+- Ante un bloqueo irresoluble que ni siquiera pueda formularse como pregunta, responde una sola línea: `FALLO: <motivo>`.
+- Fuera de esos tres mensajes (`PREGUNTAS-PENDIENTES`, `PLAN-COMPLETADO`, `FALLO: …`) no devuelvas nada más al orquestador: ni resúmenes, ni avances parciales — todo el producto vive en los tres `.md`.
+
+Sin la marca `[MODO-ORQUESTADO]` esta sección no aplica en absoluto: pregunta con `AskUserQuestion` como define el resto de la skill.
+
 ## Resultado esperado
 
-Tres documentos `.md` dentro del directorio `nueva-implementacion-en-curso/`, en la raíz del proyecto (créalo si no existe):
+Tres documentos `.md` dentro del directorio `nueva-implementacion-en-curso/<feature-slug>/`, en la raíz del proyecto — una subcarpeta por feature, nombrada con el mismo slug de los archivos (crea la ruta completa si no existe):
 
 | Archivo | Contenido |
 |---|---|
@@ -49,7 +94,7 @@ Tres documentos `.md` dentro del directorio `nueva-implementacion-en-curso/`, en
 
 Reglas de nombrado y formato:
 
-- `<feature-slug>` es un nombre corto y descriptivo de la funcionalidad en `kebab-case` ASCII: sin tildes, sin comillas, sin espacios. Usa el **mismo** slug en los tres archivos.
+- `<feature-slug>` es un nombre corto y descriptivo de la funcionalidad en `kebab-case` ASCII: sin tildes, sin comillas, sin espacios. Usa el **mismo** slug en los tres archivos y en la subcarpeta que los contiene.
 - Genera **siempre los tres** documentos. Si la feature no toca una capa, su documento lo indica de forma explícita ("Sin cambios en backend/frontend") en lugar de omitirse.
 - Redacta los tres documentos **en español**.
 - El directorio es un artefacto de trabajo temporal y **no se versiona**: comprueba que `nueva-implementacion-en-curso/` figura en el `.gitignore` del proyecto y añádelo si falta.

@@ -4,6 +4,9 @@ description: "Ejecuta de forma autónoma la implementación de una funcionalidad
 argument-hint: ruta al directorio (o a los tres archivos) con los .md de la funcionalidad — backend, frontend y general-description
 model: opus
 effort: max
+user-invocable: false
+context: fork
+agent: pipeline-skill-runner
 ---
 
 # Implementar una funcionalidad ya planificada
@@ -31,8 +34,8 @@ Cada subagente arranca con una **ventana de contexto limpia**: no ve esta conver
 Antes de lanzar ningún subagente:
 
 1. Resuelve las **tres rutas absolutas** desde el argumento (lista el directorio si hace falta e identifícalas por sufijo).
-2. Si el directorio contiene **más de un trío** de documentos (varios slugs) y no te he dejado yo claro en los argumentos que te paso al ejecutar la skill cuáles son los tres correspondientes a usar para la implementación, **detente y pregúntame** cuál implementar.
-3. Si **falta** alguno de los tres o **no existe en disco**, **detente y dímelo en una línea** (p. ej. `"falta el …-frontend.md"`). No inventes rutas, no rastrees el filesystem, no implementes nada.
+2. Si el directorio contiene **más de un trío** de documentos (varios slugs) y no te he dejado yo claro en los argumentos que te paso al ejecutar la skill cuáles son los tres correspondientes a usar para la implementación, **detente y devuelve** `BLOQUEO: hay varios tríos de documentos en el directorio y no se indicó cuál implementar` (corres en contexto aislado: no puedes preguntar).
+3. Si **falta** alguno de los tres o **no existe en disco**, **detente y devuelve una sola línea** (p. ej. `BLOQUEO: falta el …-frontend.md`). No inventes rutas, no rastrees el filesystem, no implementes nada.
 
 **No leas el contenido de los `.md`**: cada subagente lee los suyos. Tu papel es orquestar y pasar las rutas correctas.
 
@@ -89,4 +92,7 @@ A diferencia de los pasos anteriores, este es **best-effort**: si reporta un pro
 
 ## Cierre
 
-Cuando terminen los siete pasos (seis subagentes encadenados) —o la cadena se detenga por un bloqueo—, devuélveme un **resumen breve**: qué subagentes corrieron, cuál bloqueó (si alguno) y por qué. Incluye también, si lo hubo, lo que `deps-syncer-from-diff` instaló o añadió a los `requirements.txt`.
+Cuando terminen los siete pasos (seis subagentes encadenados) —o la cadena se detenga por un bloqueo—:
+
+1. **Persiste el informe completo** en `implementacion-resumen.md`, dentro del mismo directorio donde viven los tres `.md` de la feature. Debe contener: qué subagentes corrieron y su estado; el informe final que devolvió cada uno de los cuatro subagentes de cierre (tests, guías, docs, dependencias) — incluidos los hallazgos en código de producción del agente de tests, las sugerencias de `CLAUDE.md` no aplicadas y lo que `deps-syncer-from-diff` instaló o añadió a los `requirements.txt` —; y, si la cadena se detuvo, el bloqueo literal y en qué paso.
+2. **Responde únicamente una línea** — tu respuesta es un dato para quien te invocó, no un resumen; el detalle vive en el `.md`: `OK | resumen: <ruta absoluta de implementacion-resumen.md>` si la cadena completó, o `BLOQUEO: <motivo literal en una frase>` si se detuvo (persiste igualmente el informe con lo avanzado hasta ese punto).
