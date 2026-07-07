@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1700" viewBox="0 0 1240 1700" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="1700" fill="#f8fafc"/>
+
+  <!-- Título -->
+  <text x="620" y="36" text-anchor="middle" font-size="21" font-weight="bold" fill="#0f172a">/implementar-feature-completa — pipeline de implementación de una feature</text>
+  <text x="620" y="58" text-anchor="middle" font-size="12" fill="#475569">6 fases encadenadas · cada fase en contexto aislado · artefactos persistidos + informe-final.md consolidado · creado 2026-07-07</text>
+
+  <!-- Leyenda -->
+  <g font-size="11" fill="#0f172a">
+    <rect x="30" y="76" width="14" height="14" fill="#dbeafe" stroke="#2563eb" rx="3"/>
+    <text x="50" y="87">Orquestadora — INLINE en tu sesión</text>
+    <rect x="260" y="76" width="14" height="14" fill="#ede9fe" stroke="#7c3aed" rx="3"/>
+    <text x="280" y="87">Subagente runner (Agent tool, reanudable)</text>
+    <rect x="545" y="76" width="14" height="14" fill="#d1fae5" stroke="#059669" rx="3"/>
+    <text x="565" y="87">Skill forkeada (context: fork → runner)</text>
+    <rect x="810" y="76" width="14" height="14" fill="#fef3c7" stroke="#d97706" rx="3"/>
+    <text x="830" y="87">Artefacto .md persistido</text>
+    <rect x="1000" y="76" width="14" height="14" fill="#f1f5f9" stroke="#64748b" stroke-dasharray="4 3" rx="3"/>
+    <text x="1020" y="87">Salto condicional</text>
+  </g>
+
+  <!-- Entrada del usuario -->
+  <rect x="220" y="106" width="590" height="66" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="235" y="126" font-size="13" font-weight="bold" fill="#0f172a">ENTRADA (argumento del usuario)</text>
+  <text x="235" y="144" font-size="11.5" fill="#334155" font-family="Consolas, monospace">"descripción de la feature (+ frase de iteraciones opcional)"</text>
+  <text x="235" y="161" font-size="11.5" fill="#334155" font-family="Consolas, monospace">"continuar &lt;slug&gt; desde &lt;fase&gt;"  ← reanudación (salta lo ya hecho)</text>
+
+  <!-- Banda orquestadora -->
+  <rect x="20" y="106" width="170" height="1560" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="105" y="130" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">ORQUESTADORA</text>
+  <text x="105" y="146" text-anchor="middle" font-size="9.5" fill="#1e3a8a" font-family="Consolas, monospace">implementar-feature-completa</text>
+  <g font-size="10.5" fill="#1e3a8a">
+    <text x="32" y="168">· corre INLINE (única pieza</text>
+    <text x="40" y="182">con AskUserQuestion)</text>
+    <text x="32" y="200">· lanza cada fase y espera</text>
+    <text x="40" y="214">en silencio su línea corta</text>
+    <text x="32" y="232">· releva las preguntas del</text>
+    <text x="40" y="246">plan (relay ↔ SendMessage)</text>
+    <text x="32" y="264">· decide skips y paradas</text>
+    <text x="32" y="282">· NUNCA lee los artefactos</text>
+    <text x="32" y="300">· sin checkpoints: tras las</text>
+    <text x="40" y="314">preguntas corre hasta el fin</text>
+    <text x="32" y="336" font-weight="bold">Ante BLOQUEO/FALLO/gates:</text>
+    <text x="32" y="350">para, reporta el motivo</text>
+    <text x="32" y="364">literal, lo persiste en</text>
+    <text x="32" y="378">informe-final.md y</text>
+    <text x="32" y="392">recuerda cómo reanudar</text>
+  </g>
+
+  <!-- Conectores orquestadora -> fases -->
+  <line x1="190" y1="230" x2="218" y2="230" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="190" y1="520" x2="218" y2="520" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="190" y1="725" x2="218" y2="725" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="190" y1="1015" x2="218" y2="1015" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="190" y1="1270" x2="218" y2="1270" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="190" y1="1465" x2="218" y2="1465" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+
+  <!-- Flecha entrada -> F1 -->
+  <line x1="515" y1="172" x2="515" y2="198" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 1 -->
+  <rect x="220" y="200" width="590" height="250" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="235" y="222" font-size="14" font-weight="bold" fill="#0f172a">F1 · PLANIFICAR — /planear-implementacion-funcionalidad</text>
+  <text x="235" y="240" font-size="11" fill="#334155">Mecanismo: Agent tool → pipeline-skill-runner (subagente REANUDABLE · opus · effort max)</text>
+  <text x="235" y="256" font-size="11" fill="#334155" font-family="Consolas, monospace">Args: [MODO-ORQUESTADO] descripción (+ frase de iteraciones)</text>
+  <text x="235" y="277" font-size="11" fill="#334155">Interno: N_api rondas de investigación de APIs — un external-api-docs-researcher por</text>
+  <text x="235" y="292" font-size="11" fill="#334155">par (API, tema) <tspan font-weight="bold">⇉ EN PARALELO</tspan> dentro de cada ronda; rondas SECUENCIALES entre sí</text>
+  <text x="235" y="307" font-size="11" fill="#334155">· análisis del código (subagentes de exploración) · redacción de los 3 .md</text>
+  <text x="235" y="322" font-size="11" fill="#334155">· N_md−1 revisiones de calidad: subagente backend → subagente frontend (SECUENCIAL)</text>
+  <rect x="240" y="334" width="550" height="64" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="252" y="352" font-size="11" fill="#1e3a8a"><tspan font-weight="bold">RELAY DE PREGUNTAS (×N rondas):</tspan> el runner termina con PREGUNTAS-PENDIENTES →</text>
+  <text x="252" y="367" font-size="11" fill="#1e3a8a">la orquestadora te pregunta con AskUserQuestion → te reenvía RESPUESTAS vía SendMessage</text>
+  <text x="252" y="382" font-size="11" fill="#1e3a8a">(el contexto del subagente sigue intacto entre rondas)</text>
+  <text x="235" y="420" font-size="11" fill="#0f172a">Salida: los 3 .md del plan → carpeta   ·   ↩ <tspan font-family="Consolas, monospace">PLAN-COMPLETADO (slug + dir)</tspan> | <tspan font-family="Consolas, monospace">FALLO: &lt;motivo&gt;</tspan></text>
+  <line x1="190" y1="352" x2="238" y2="352" stroke="#2563eb" stroke-width="1.2" marker-end="url(#arrowBlue)" marker-start="url(#arrowBlue)"/>
+
+  <!-- F1 -> F2 -->
+  <line x1="515" y1="450" x2="515" y2="488" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 2 -->
+  <rect x="220" y="490" width="590" height="165" rx="10" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+  <text x="235" y="512" font-size="14" font-weight="bold" fill="#0f172a">F2 · IMPLEMENTAR — /implementar-funcionalidad</text>
+  <text x="235" y="530" font-size="11" fill="#334155">Mecanismo: context: fork → pipeline-skill-runner   ·   <tspan font-family="Consolas, monospace">Args: ruta de DIR (el trío de .md)</tspan></text>
+  <text x="235" y="551" font-size="11" fill="#334155">Interno <tspan font-weight="bold">→ SECUENCIAL</tspan> (mismo working tree), cadena fija de 6 subagentes:</text>
+  <text x="235" y="566" font-size="11" fill="#334155" font-family="Consolas, monospace">backend-implementer → frontend-implementer → tests-author-from-diff →</text>
+  <text x="235" y="581" font-size="11" fill="#334155" font-family="Consolas, monospace">guides-updater-from-diff → docs-updater-from-diff → deps-syncer-from-diff</text>
+  <text x="235" y="602" font-size="11" fill="#0f172a">Salida: código + tests + docs en el working tree · implementacion-resumen.md</text>
+  <text x="235" y="620" font-size="11" fill="#0f172a">↩ <tspan font-family="Consolas, monospace">OK | resumen: &lt;ruta&gt;</tspan>  |  <tspan font-family="Consolas, monospace">BLOQUEO: &lt;motivo&gt;</tspan></text>
+
+  <!-- F2 -> F3 -->
+  <line x1="515" y1="655" x2="515" y2="693" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 3 -->
+  <rect x="220" y="695" width="590" height="175" rx="10" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+  <text x="235" y="717" font-size="14" font-weight="bold" fill="#0f172a">F3 · REVIEW — /reviewDiffsBeforeCommitAll</text>
+  <text x="235" y="735" font-size="10.5" fill="#334155">Mecanismo: context: fork → runner · <tspan font-family="Consolas, monospace">Args: --out review-pre-commit.md --informe informe-final.md</tspan></text>
+  <text x="235" y="756" font-size="11" fill="#334155">Interno: carga las skills hijas reviewDiffsBeforeCommitBackend + Frontend → lanza</text>
+  <text x="235" y="771" font-size="11" fill="#334155">TODA la flota de reviewers <tspan font-weight="bold">⇉ EN PARALELO (background)</tspan>: error-structure, dead-code,</text>
+  <text x="235" y="786" font-size="11" fill="#334155">tests-quality, md-reviewers, queries-reviewer y architecture-compliance ×2 lados</text>
+  <text x="235" y="807" font-size="11" fill="#0f172a">Salida: review-pre-commit.md (Group A/B + arquitectura) + subagentes → informe-final.md</text>
+  <text x="235" y="825" font-size="10.5" fill="#0f172a">↩ <tspan font-family="Consolas, monospace">OK | informe | overall | validables: n | reviewers-caidos: m</tspan> · <tspan font-family="Consolas, monospace">sin-diffs</tspan> · <tspan font-family="Consolas, monospace">FALLO: …</tspan></text>
+
+  <!-- F3 -> D1 -->
+  <line x1="515" y1="870" x2="515" y2="903" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Decisión 1 (gate reviewers caídos + skip sin validables) -->
+  <rect x="250" y="905" width="530" height="62" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="515" y="921" text-anchor="middle" font-size="11" font-weight="bold" fill="#b91c1c">¿reviewers-caidos &gt; 0? → SÍ: GATE, parada (reanudar: desde review | desde validar)</text>
+  <text x="515" y="937" text-anchor="middle" font-size="11" font-weight="bold" fill="#334155">¿validables = 0? → SÍ: saltar F4 y F5, directo a F6</text>
+  <text x="515" y="953" text-anchor="middle" font-size="11" fill="#334155">NO ↓ continuar</text>
+
+  <!-- D1 skip a F6 -->
+  <path d="M 780 933 L 832 933 L 832 1465 L 814 1465" fill="none" stroke="#64748b" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arrowGray)"/>
+
+  <!-- D1 -> F4 -->
+  <line x1="515" y1="967" x2="515" y2="983" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 4 -->
+  <rect x="220" y="985" width="590" height="140" rx="10" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+  <text x="235" y="1007" font-size="14" font-weight="bold" fill="#0f172a">F4 · VALIDAR — /validar-mejoras-implementacion</text>
+  <text x="235" y="1025" font-size="10" fill="#334155">fork → runner · <tspan font-family="Consolas, monospace">Args: review-pre-commit.md --out validacion-mejoras.md --informe informe-final.md</tspan></text>
+  <text x="235" y="1046" font-size="11" fill="#334155">Interno: 1 subagente ESCÉPTICO por hallazgo o grupo <tspan font-weight="bold">⇉ EN PARALELO</tspan> (general-purpose · opus)</text>
+  <text x="235" y="1061" font-size="11" fill="#334155">veredictos: FALSO POSITIVO / CONDICIONAL (con condiciones) / NECESARIO DE ARREGLAR</text>
+  <text x="235" y="1082" font-size="11" fill="#0f172a">Salida: validacion-mejoras.md (autocontenido) + subagentes → informe-final.md</text>
+  <text x="235" y="1100" font-size="11" fill="#0f172a">↩ <tspan font-family="Consolas, monospace">OK | validacion | necesarias: a | condicionales: b | falsos-positivos: c</tspan></text>
+
+  <!-- F4 -> D2 -->
+  <line x1="515" y1="1125" x2="515" y2="1158" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Decisión 2 -->
+  <rect x="290" y="1160" width="450" height="48" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="515" y="1179" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#334155">¿necesarias + condicionales = 0?  →  SÍ: saltar F5, directo a F6</text>
+  <text x="515" y="1196" text-anchor="middle" font-size="11" fill="#334155">NO ↓ continuar</text>
+
+  <!-- D2 skip a F6 -->
+  <path d="M 740 1184 L 820 1184 L 820 1450 L 810 1450" fill="none" stroke="#64748b" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arrowGray)"/>
+
+  <!-- D2 -> F5 -->
+  <line x1="515" y1="1208" x2="515" y2="1238" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 5 -->
+  <rect x="220" y="1240" width="590" height="155" rx="10" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+  <text x="235" y="1262" font-size="14" font-weight="bold" fill="#0f172a">F5 · APLICAR — /aplicar-mejoras-validadas</text>
+  <text x="235" y="1280" font-size="10" fill="#334155">fork → runner · <tspan font-family="Consolas, monospace">Args: validacion-mejoras.md --dir DIR --informe informe-final.md</tspan></text>
+  <text x="235" y="1301" font-size="11" fill="#334155">Interno <tspan font-weight="bold">→ SECUENCIAL</tspan>: aplica las NECESARIAS siempre; las CONDICIONALES evaluando sus</text>
+  <text x="235" y="1316" font-size="11" fill="#334155">condiciones contra el código real (opción senior-recomendada) · coherencia mínima de</text>
+  <text x="235" y="1331" font-size="11" fill="#334155">tests/docs afectados · registro incremental EN CURSO→final (reanudable, nada se repite)</text>
+  <text x="235" y="1352" font-size="11" fill="#0f172a">Salida: mejoras-aplicadas.md (registro) · decisiones + necesarias-sin-aplicar → informe-final.md</text>
+  <text x="235" y="1370" font-size="10.5" fill="#0f172a">↩ <tspan font-family="Consolas, monospace">OK | aplicadas: n | descartadas: m | necesarias-sin-aplicar: k | detalle | decisiones</tspan></text>
+
+  <!-- F5 -> F6 -->
+  <line x1="515" y1="1395" x2="515" y2="1433" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FASE 6 -->
+  <rect x="220" y="1435" width="590" height="140" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="235" y="1457" font-size="14" font-weight="bold" fill="#0f172a">F6 · COMMIT + PUSH — /commit-push-estructurados (skill personal)</text>
+  <text x="235" y="1475" font-size="11" fill="#334155">Mecanismo: Agent tool → pipeline-skill-runner · Args: (sin argumentos; + instrucción de persistir)</text>
+  <text x="235" y="1496" font-size="11" fill="#334155">Interno <tspan font-weight="bold">→ SECUENCIAL</tspan>: agrupa los cambios por responsabilidad lógica → commits</text>
+  <text x="235" y="1511" font-size="11" fill="#334155">Conventional en orden → push al remoto (totalmente autónoma: no pregunta nada)</text>
+  <text x="235" y="1532" font-size="11" fill="#0f172a">Salida: commits-realizados.md   ·   ↩ <tspan font-family="Consolas, monospace">OK | commits: n | push: ok|fallo | detalle</tspan></text>
+
+  <!-- F6 -> Cierre -->
+  <line x1="515" y1="1575" x2="515" y2="1606" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Cierre -->
+  <rect x="220" y="1608" width="590" height="58" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="235" y="1628" font-size="12" font-weight="bold" fill="#1e3a8a">CIERRE (orquestadora): resumen ejecutivo → final de informe-final.md + tabla en pantalla</text>
+  <text x="235" y="1646" font-size="10.5" fill="#1e3a8a">· decisiones condicionales: en informe-final.md · reanudación: continuar &lt;slug&gt; desde &lt;fase&gt;</text>
+
+  <!-- Banda artefactos -->
+  <rect x="850" y="190" width="370" height="1340" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="1035" y="214" text-anchor="middle" font-size="13" font-weight="bold" fill="#78350f">CARPETA DE LA FEATURE</text>
+  <text x="1035" y="231" text-anchor="middle" font-size="11" fill="#78350f" font-family="Consolas, monospace">nueva-implementacion-en-curso/&lt;slug&gt;/</text>
+  <text x="1035" y="246" text-anchor="middle" font-size="10" font-style="italic" fill="#92400e">gitignored · permanece al terminar el pipeline</text>
+
+  <g font-size="10.5" font-family="Consolas, monospace" fill="#431407">
+    <rect x="865" y="262" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="279">implementation-&lt;slug&gt;-backend.md</text>
+    <rect x="865" y="294" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="311">implementation-&lt;slug&gt;-frontend.md</text>
+    <rect x="865" y="326" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="343">implementation-&lt;slug&gt;-general-description.md</text>
+    <rect x="865" y="547" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="564">implementacion-resumen.md</text>
+    <rect x="865" y="752" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="769">review-pre-commit.md</text>
+    <rect x="865" y="1040" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="1057">validacion-mejoras.md</text>
+    <rect x="865" y="1308" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="1325">mejoras-aplicadas.md</text>
+    <rect x="865" y="1340" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="1357">informe-final.md (caídos·interrupciones·decisiones)</text>
+    <rect x="865" y="1490" width="340" height="26" rx="5" fill="#ffffff" stroke="#d97706"/>
+    <text x="875" y="1507">commits-realizados.md</text>
+  </g>
+
+  <!-- Flechas fase -> artefacto -->
+  <line x1="812" y1="416" x2="861" y2="308" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+  <line x1="812" y1="600" x2="861" y2="562" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+  <line x1="812" y1="805" x2="861" y2="767" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+  <line x1="812" y1="1082" x2="861" y2="1055" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+  <line x1="812" y1="1352" x2="861" y2="1330" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+  <line x1="812" y1="1532" x2="861" y2="1505" stroke="#d97706" stroke-width="1.3" marker-end="url(#arrowOrange)"/>
+
+  <!-- Nota inferior -->
+  <text x="620" y="1688" text-anchor="middle" font-size="10.5" fill="#64748b">Flujo SECUENCIAL (F1→F6, mismo working tree) · paralelismo DENTRO de cada fase (⇉) · gates: reviewers caídos (F3) y NECESARIAS sin aplicar (F5) paran antes del commit · README.md</text>
+</svg>
