@@ -9,9 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import SecretStr
 
+from core.email.email_client import EmailMetadata
 from core.email.errors import EmailInvalidTokenDataError
 from core.email.helpers import (
     decode_mime_body,
+    dedupe_metadata_by_message_id,
     http_error_detail,
     inline_cid_images,
     parse_expiry,
@@ -174,6 +176,35 @@ class TestWrapAccountTokens:
             wrap_account_tokens("not-a-dict")
 
 
+# ── dedupe_metadata_by_message_id ──────────────────────────────────
+
+
+class TestDedupeMetadataByMessageId:
+    def _meta(self, msg_id: str, *, is_read: bool = False) -> EmailMetadata:
+        return EmailMetadata(
+            provider_message_id=msg_id,
+            thread_id="t1",
+            from_email="from@example.com",
+            from_name="From",
+            subject="subject",
+            received_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            is_read=is_read,
+            box="ALL_MAIL",
+        )
+
+    def test_duplicate_id_keeps_last_occurrence(self):
+        first = self._meta("m1", is_read=False)
+        last = self._meta("m1", is_read=True)
+        assert dedupe_metadata_by_message_id([first, last]) == [last]
+
+    def test_unique_ids_preserved_in_order(self):
+        items = [self._meta("m1"), self._meta("m2"), self._meta("m3")]
+        assert dedupe_metadata_by_message_id(items) == items
+
+    def test_empty_list_returns_empty(self):
+        assert dedupe_metadata_by_message_id([]) == []
+
+
 # ── inline_cid_images ──────────────────────────────────────────────
 
 
@@ -231,6 +262,19 @@ class TestInlineCidImages:
         html = '<div style="background-image: url( cid:<bg@x> )">hi</div>'
         out = inline_cid_images(html, {"bg@x": "data:image/png;base64,AAAA"})
         assert 'url("data:image/png;base64,AAAA")' in out
+
+    def test_case_mismatched_reference_resolves_via_normalized_lookup(self):
+        # The provider clients key ``cid_map`` by the ``normalize_cid`` form;
+        # an HTML reference whose case differs from the header must still
+        # resolve (real senders are not case-consistent).
+        html = '<img src="cid:Logo@X">'
+        out = inline_cid_images(html, {"logo@x": "data:image/png;base64,AAA"})
+        assert 'src="data:image/png;base64,AAA"' in out
+
+    def test_percent_encoded_reference_resolves_via_normalized_lookup(self):
+        html = '<img src="cid:logo%40x">'
+        out = inline_cid_images(html, {"logo@x": "data:image/png;base64,AAA"})
+        assert 'src="data:image/png;base64,AAA"' in out
 
 
 # ── decode_mime_body ───────────────────────────────────────────────
@@ -296,6 +340,27 @@ class TestDecodeMimeBody:
         data = _b64url("Café".encode("utf-8"))
         assert decode_mime_body(data, "") == "Café"
         assert decode_mime_body(data, "   ") == "Café"
+
+    def test_iso_2022_jp_body_with_matching_hint(self):
+        """ISO-2022-JP bytes are pure ASCII (escape-sequence based), so strict
+        UTF-8 would "succeed" and return the raw escape sequences as garbage —
+        the declared charset must win for ASCII-masquerading encodings.
+        """
+        data = _b64url("こんにちは".encode("iso-2022-jp"))
+        assert decode_mime_body(data, "iso-2022-jp") == "こんにちは"
+
+    def test_utf7_body_with_matching_hint(self):
+        # "10€" in UTF-7 is b"10+IKw-" — valid ASCII, hence valid strict
+        # UTF-8; without the carve-out the decoder returned "10+IKw-".
+        data = _b64url("10€".encode("utf-7"))
+        assert decode_mime_body(data, "utf-7") == "10€"
+
+    def test_utf8_body_mislabelled_as_iso_2022_jp_falls_back(self):
+        # The declared-first carve-out only applies when the declared decode
+        # succeeds; real UTF-8 bytes (≥ 0x80) fail ISO-2022-JP strict and the
+        # decoder falls back to the regular UTF-8-first strategy.
+        data = _b64url("Café".encode("utf-8"))
+        assert decode_mime_body(data, "iso-2022-jp") == "Café"
 
 
 # ── Reply / Forward helpers (R-01..R-12) ───────────────────────────

@@ -59,11 +59,13 @@ from .helpers import (
     GmailSendStrategy,
     build_mime_with_attachments,
     decode_mime_body,
+    dedupe_metadata_by_message_id,
     extract_filename_from_headers,
     find_referenced_cids,
     html_to_plain_text_alternative,
     http_error_detail,
     inline_cid_images,
+    normalize_cid,
     parse_expiry,
     pick_gmail_send_strategy,
     plain_text_to_html,
@@ -582,7 +584,11 @@ class GmailClient(EmailClient):
         history_id = self._get_current_history_id()
         message_ids = self._list_message_ids(max_total)
         metadata_list = self.fetch_messages_metadata(message_ids)
-        return SyncResult(upserts=metadata_list, new_cursor=history_id, is_full_sync=True)
+        return SyncResult(
+            upserts=dedupe_metadata_by_message_id(metadata_list),
+            new_cursor=history_id,
+            is_full_sync=True,
+        )
 
     def _list_message_ids(self, max_total: int) -> list[str]:
         """List message IDs using pagination, including spam and trash."""
@@ -2390,7 +2396,10 @@ class GmailClient(EmailClient):
                 disposition == "inline"
                 or (mime_type.lower().startswith("image/") and cid is not None)
             )
-            referenced = bool(cid and cid in referenced_cids)
+            # ``find_referenced_cids`` returns normalised entries, so the
+            # provider-side Content-ID must be normalised for the membership
+            # check (case / percent-encoding tolerant matching).
+            referenced = bool(cid and normalize_cid(cid) in referenced_cids)
 
             if is_inline_marked and referenced:
                 # D-13: inline + referenced → resolve to data: URL.
@@ -2484,7 +2493,10 @@ class GmailClient(EmailClient):
                 cid, type(exc).__name__, exc,
             )
             return
-        cid_map[cid] = (
+        # Keyed by the normalised CID — ``inline_cid_images`` normalises the
+        # HTML-side reference before its fallback lookup, so header/HTML
+        # case or percent-encoding mismatches still resolve.
+        cid_map[normalize_cid(cid)] = (
             f"data:{mime_type};base64,"
             f"{base64.b64encode(raw_bytes).decode('ascii')}"
         )

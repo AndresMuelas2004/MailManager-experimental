@@ -28,6 +28,7 @@ from core.email import (
     extract_filename_from_headers,
     find_referenced_cids,
     format_content_disposition,
+    normalize_cid,
     pick_gmail_send_strategy,
     pick_outlook_attachment_strategy,
     resolve_attachment_mime_type,
@@ -339,6 +340,38 @@ class TestFindReferencedCids:
         # collapses to a single set entry (D-13 classification dedup).
         html = '<img src="cid:x@y"><div style="background:url(cid:x@y)">z</div>'
         assert find_referenced_cids(html) == {"x@y"}
+
+    def test_returns_normalized_lowercase_form(self):
+        # Output is ``normalize_cid`` form: the caller normalises the
+        # provider-side Content-ID before the membership check.
+        html = '<img src="cid:Logo@X">'
+        assert find_referenced_cids(html) == {"logo@x"}
+
+    def test_percent_encoded_reference_is_decoded(self):
+        html = '<img src="cid:image%40example">'
+        assert find_referenced_cids(html) == {"image@example"}
+
+
+# ── normalize_cid ──────────────────────────────────────────────────
+
+
+class TestNormalizeCid:
+
+    def test_strips_angle_brackets_and_whitespace(self):
+        assert normalize_cid(" <Logo@X> ") == "logo@x"
+
+    def test_lowercases(self):
+        assert normalize_cid("IMAGE001") == "image001"
+
+    def test_percent_decodes(self):
+        assert normalize_cid("image%40example") == "image@example"
+
+    def test_plain_value_is_idempotent(self):
+        assert normalize_cid("logo@x") == "logo@x"
+
+    def test_empty_and_none_return_empty(self):
+        assert normalize_cid("") == ""
+        assert normalize_cid(None) == ""
 
 
 # ── retry_with_backoff ─────────────────────────────────────────────

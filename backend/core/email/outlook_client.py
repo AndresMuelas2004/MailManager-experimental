@@ -44,9 +44,11 @@ from .errors import (
 )
 from .helpers import (
     OutlookAttachmentStrategy,
+    dedupe_metadata_by_message_id,
     find_referenced_cids,
     flatten_html_document,
     inline_cid_images,
+    normalize_cid,
     parse_expiry,
     pick_outlook_attachment_strategy,
     plain_text_to_html,
@@ -686,7 +688,7 @@ class OutlookClient(EmailClient):
                 )
 
         return SyncResult(
-            upserts=upserts,
+            upserts=dedupe_metadata_by_message_id(upserts),
             new_cursor=self._encode_folder_cursors(folder_cursors),
             is_full_sync=True,
         )
@@ -719,7 +721,7 @@ class OutlookClient(EmailClient):
             raise EmailExternalAPIError("Outlook: all folder delta queries failed.")
 
         return SyncResult(
-            upserts=upserts,
+            upserts=dedupe_metadata_by_message_id(upserts),
             new_cursor=self._encode_folder_cursors(new_cursors),
             deletes=deletes,
             label_updates=label_updates,
@@ -1947,14 +1949,19 @@ class OutlookClient(EmailClient):
             attachment_id = str(attachment.get("id") or "")
             size = int(attachment.get("size") or 0)
 
+            # ``find_referenced_cids`` returns normalised entries; normalise
+            # the Graph ``contentId`` on both the membership check and the
+            # ``cid_map`` key so header/HTML case or percent-encoding
+            # mismatches still resolve (``inline_cid_images`` normalises the
+            # HTML-side reference on lookup).
             if (
                 is_inline
                 and cid_raw
-                and cid_raw in referenced_cids
+                and normalize_cid(cid_raw) in referenced_cids
                 and content_bytes_b64
                 and content_type.lower().startswith("image/")
             ):
-                cid_map[cid_raw] = f"data:{content_type};base64,{content_bytes_b64}"
+                cid_map[normalize_cid(cid_raw)] = f"data:{content_type};base64,{content_bytes_b64}"
                 continue
 
             downloadable.append(

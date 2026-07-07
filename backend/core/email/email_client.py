@@ -45,7 +45,10 @@ class SyncResult:
     """
     Result of fetch_email_metadata, supporting both bootstrap and incremental sync.
 
-    - upserts: full metadata to insert or update.
+    - upserts: full metadata to insert or update. At most one entry per
+      provider_message_id: clients collapse repeated delta/page entries
+      keeping the last (newest-state) one, because the batch persistence
+      rejects a batch touching the same key twice.
     - new_cursor: opaque sync cursor for the next call.
     - deletes: provider_message_ids to remove from persistence.
     - label_updates: partial updates (is_read, box) for messages already persisted.

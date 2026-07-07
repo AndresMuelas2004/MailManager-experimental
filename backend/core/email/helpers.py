@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import codecs
 import enum
 import html as _html_lib
 import logging
@@ -25,6 +26,7 @@ from typing import Any, Callable, Iterable, Literal, TypeVar
 
 from pydantic import SecretStr
 
+from .email_client import EmailMetadata
 from .errors import (
     EmailAttachmentSendFailed,
     EmailInvalidCredentialsDataError,
@@ -147,6 +149,42 @@ def wrap_account_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def dedupe_metadata_by_message_id(items: list[EmailMetadata]) -> list[EmailMetadata]:
+    """Collapse duplicate ``provider_message_id`` entries, keeping the last one.
+
+    Provider sync streams can legitimately repeat a message: a Graph delta
+    window emits one entry per change, so a message that changed twice since
+    the stored cursor appears twice, and page-shifted listings can duplicate
+    entries across pages on both providers. ``SyncResult.upserts`` must carry
+    at most one entry per ``provider_message_id`` — the persistence layer
+    upserts the whole batch in a single statement that rejects a batch
+    touching the same key twice. The last occurrence wins: delta entries
+    arrive oldest-first, so it carries the newest state.
+    """
+    unique: dict[str, EmailMetadata] = {item.provider_message_id: item for item in items}
+    return list(unique.values())
+
+
+def _is_ascii_masquerading_charset(hint: str) -> bool:
+    """True for charsets whose byte stream is pure ASCII (escape/shift based).
+
+    ISO-2022-* (Japanese/Korean mail), HZ-GB-2312 and UTF-7 encode non-ASCII
+    text entirely with bytes < 0x80, so a body in any of them ALWAYS decodes
+    "successfully" under strict UTF-8 — the UTF-8-first strategy would return
+    the raw escape sequences as garbage instead of failing over. For these
+    charsets the declared hint must win. Resolved through ``codecs.lookup``
+    so every alias (``iso2022_jp``, ``csISO2022JP``, …) maps to the same
+    canonical name.
+    """
+    try:
+        # ``CodecInfo.name`` is not separator-consistent across codecs
+        # ("utf-7" vs "iso2022_jp"), so normalise before comparing.
+        canonical = codecs.lookup(hint).name.replace("-", "_")
+    except LookupError:
+        return False
+    return canonical.startswith("iso2022_") or canonical in {"hz", "utf_7"}
+
+
 def decode_mime_body(data_b64url: str, charset_hint: str | None) -> str | None:
     """Decode a base64url-encoded MIME body into a Python str.
 
@@ -158,6 +196,11 @@ def decode_mime_body(data_b64url: str, charset_hint: str | None) -> str | None:
     get re-interpreted as Latin-1 and rendered as ``Ã©``.
 
     Strategy (UTF-8-first with validated fallback):
+    0. **Exception — ASCII-masquerading declared charsets.** ISO-2022-* /
+       HZ / UTF-7 bodies are pure ASCII bytes, so strict UTF-8 "succeeds"
+       on them while producing garbage (visible escape sequences). When the
+       declared charset is one of those, try it strictly FIRST; only on
+       failure fall through to the regular strategy below.
     1. **Try UTF-8 strict.** Real UTF-8 bodies always decode without error.
        A legitimate Latin-1 body with any non-ASCII byte ≥ 0x80 will fail
        on UTF-8 continuation-byte validation, so we cannot misdecode it here.
@@ -172,6 +215,16 @@ def decode_mime_body(data_b64url: str, charset_hint: str | None) -> str | None:
         raw = base64.urlsafe_b64decode(data_b64url + "==")
     except binascii.Error:
         return None
+    declared = (charset_hint or "").strip()
+    if declared and _is_ascii_masquerading_charset(declared):
+        try:
+            return raw.decode(declared)
+        except UnicodeDecodeError:
+            logger.debug(
+                "decode_mime_body: declared ASCII-masquerading charset=%s failed; "
+                "falling back to UTF-8-first strategy",
+                declared,
+            )
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -188,6 +241,22 @@ def decode_mime_body(data_b64url: str, charset_hint: str | None) -> str | None:
         except LookupError:
             pass
     return raw.decode("utf-8", errors="replace")
+
+
+def normalize_cid(value: str | None) -> str:
+    """Canonical form of a Content-ID for cross-referencing header ↔ HTML.
+
+    Providers write the header as ``<id>`` while HTML references it as
+    ``cid:id`` — sometimes with different letter case or percent-encoding
+    (``cid:image%40x`` for ``image@x``). RFC 2392 treats CIDs as
+    case-sensitive, but real senders do not: matching on the normalised form
+    (percent-decoded, angle brackets stripped, lowercased) is what keeps the
+    inline image resolving instead of rendering a broken icon. Producers of
+    ``cid_map`` keys and ``find_referenced_cids`` output must both use it.
+    """
+    if not value:
+        return ""
+    return urllib.parse.unquote(value).strip().strip("<>").strip().lower()
 
 
 _CID_REF_PATTERN = re.compile(
@@ -209,10 +278,17 @@ def _cid_replacer(cid_map: dict[str, str], formatter):
     ``formatter(match, data_url)`` receives the match and the resolved data URL
     and returns the replacement string. Unmapped CIDs fall through to the
     original match text (soft fallback — broken image beats lost email).
+
+    Lookup is two-step: exact key first (legacy maps keyed by the provider's
+    raw Content-ID keep working), then the :func:`normalize_cid` form (the
+    key shape the provider clients persist), so a case- or percent-encoding
+    mismatch between header and HTML still resolves.
     """
     def _replace(match: re.Match[str]) -> str:
         cid = match.group("cid").strip()
         data_url = cid_map.get(cid)
+        if data_url is None:
+            data_url = cid_map.get(normalize_cid(cid))
         if data_url is None:
             return match.group(0)
         return formatter(match, data_url)
@@ -244,7 +320,7 @@ def inline_cid_images(html: str, cid_map: dict[str, str]) -> str:
 
 
 def find_referenced_cids(html: str | None) -> set[str]:
-    """Return the set of CIDs referenced in ``html``.
+    """Return the set of CIDs referenced in ``html``, in ``normalize_cid`` form.
 
     Inspects both the HTML attribute form (``src="cid:…"`` /
     ``background="cid:…"``) and the CSS ``url(cid:…)`` form (produced by
@@ -252,16 +328,19 @@ def find_referenced_cids(html: str | None) -> set[str]:
     whether an inline-marked attachment is actually referenced by the
     body and therefore should remain inline; if no reference exists it
     is promoted to a downloadable attachment.
+
+    Every entry is normalised via :func:`normalize_cid` — callers must
+    normalise the provider-side Content-ID before the membership check.
     """
     if not html:
         return set()
     referenced: set[str] = set()
     for match in _CID_REF_PATTERN.finditer(html):
-        cid = match.group("cid").strip()
+        cid = normalize_cid(match.group("cid"))
         if cid:
             referenced.add(cid)
     for match in _CID_URL_FUNC_PATTERN.finditer(html):
-        cid = match.group("cid").strip()
+        cid = normalize_cid(match.group("cid"))
         if cid:
             referenced.add(cid)
     return referenced

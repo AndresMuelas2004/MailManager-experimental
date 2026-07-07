@@ -683,6 +683,23 @@ class TestBootstrapEmailMetadata:
             with pytest.raises(EmailExternalAPIError):
                 client._bootstrap_email_metadata(max_total=500)
 
+    def test_duplicate_messages_collapse_to_last_upsert(self):
+        """GET /me/messages pagination can repeat a message when the mailbox
+        shifts between pages; bootstrap dedupes keeping the newest state so the
+        batch persistence never sees the same key twice."""
+        client = _make_authenticated_client()
+        messages = [
+            _make_graph_message(msg_id="dup", parent_folder_id="folder-inbox", is_read=False),
+            _make_graph_message(msg_id="dup", parent_folder_id="folder-inbox", is_read=True),
+        ]
+        mock = self._make_bootstrap_mock(messages)
+        with patch.object(client, "_graph_request", side_effect=mock):
+            result = client._bootstrap_email_metadata(max_total=500)
+
+        assert len(result.upserts) == 1
+        assert result.upserts[0].provider_message_id == "dup"
+        assert result.upserts[0].is_read is True
+
 
 # ── _incremental_email_metadata ─────────────────────────────────────
 
@@ -892,6 +909,33 @@ class TestIncrementalEmailMetadata:
         assert len(result.label_updates) == 1
         assert result.label_updates[0].provider_message_id == "partial1"
         assert result.label_updates[0].is_read is False
+
+    def test_duplicate_message_in_delta_window_collapses_to_last_upsert(self):
+        """Graph delta can emit the same message twice in one window (a message
+        that changed twice since the stored cursor). The client must collapse
+        the repeats keeping the newest state — the batch persistence rejects a
+        batch touching the same key twice, and the crash would leave the cursor
+        stuck replaying the same window on every sync."""
+        client = _make_authenticated_client()
+        cursor = _make_folder_cursor()
+
+        def mock_graph(method, url, body=None):
+            if "delta-inbox" in url:
+                return {
+                    "value": [
+                        _make_graph_message(msg_id="dup1", is_read=False),
+                        _make_graph_message(msg_id="dup1", is_read=True),
+                    ],
+                    "@odata.deltaLink": "https://new-delta-inbox",
+                }
+            return {"value": [], "@odata.deltaLink": url.replace("delta-", "new-delta-")}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client._incremental_email_metadata(cursor)
+
+        assert len(result.upserts) == 1
+        assert result.upserts[0].provider_message_id == "dup1"
+        assert result.upserts[0].is_read is True
 
 
 # ── send_email ───────────────────────────────────────────────────
@@ -3071,6 +3115,18 @@ class TestClassifyAttachments:
             )
         assert "logo123" in cid_map
         assert cid_map["logo123"].startswith("data:image/png;base64,")
+        assert downloadable == []
+
+    def test_inline_image_with_case_mismatched_cid_still_matches(self, client: OutlookClient):
+        # Graph ``contentId`` ``Logo123`` vs HTML ``cid:logo123`` — the match
+        # runs on the ``normalize_cid`` form (case / percent-encoding
+        # tolerant), so the image stays inline.
+        value = [self._att(content_type="image/png", cid="Logo123", is_inline=True)]
+        with patch.object(client, "_graph_request", return_value={"value": value}):
+            cid_map, downloadable = client._classify_attachments(
+                "msg-1", '<img src="cid:logo123">', provider_message_id="msg-1",
+            )
+        assert "logo123" in cid_map
         assert downloadable == []
 
     def test_inline_marked_unreferenced_promoted_to_downloadable(self, client: OutlookClient):

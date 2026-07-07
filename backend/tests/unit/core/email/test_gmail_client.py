@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from core.email.email_client import DraftMetadata, SpamMoveResult, SyncResult
+from core.email.email_client import DraftMetadata, EmailMetadata, SpamMoveResult, SyncResult
 from core.email.errors import (
     EmailExternalAPIError,
     EmailInvalidCredentialsDataError,
@@ -622,10 +622,24 @@ class TestGetCurrentHistoryId:
 
 
 class TestBootstrapEmailMetadata:
+    @staticmethod
+    def _meta(msg_id: str, *, is_read: bool = False) -> EmailMetadata:
+        return EmailMetadata(
+            provider_message_id=msg_id,
+            thread_id="t1",
+            from_email="from@example.com",
+            from_name="From",
+            subject="subject",
+            received_at=datetime(2026, 1, 1),
+            is_read=is_read,
+            box="ALL_MAIL",
+        )
+
     def test_calls_list_batch_history_and_returns_sync_result(self, client: GmailClient):
         client.service = MagicMock()
+        meta1, meta2 = self._meta("m1"), self._meta("m2")
         with patch.object(client, "_list_message_ids", return_value=["m1", "m2"]) as mock_list, \
-             patch.object(client, "fetch_messages_metadata", return_value=["meta1", "meta2"]) as mock_batch, \
+             patch.object(client, "fetch_messages_metadata", return_value=[meta1, meta2]) as mock_batch, \
              patch.object(client, "_get_current_history_id", return_value="hist99") as mock_hist:
             result = client._bootstrap_email_metadata(500)
 
@@ -633,8 +647,21 @@ class TestBootstrapEmailMetadata:
         mock_batch.assert_called_once_with(["m1", "m2"])
         mock_hist.assert_called_once()
         assert isinstance(result, SyncResult)
-        assert result.upserts == ["meta1", "meta2"]
+        assert result.upserts == [meta1, meta2]
         assert result.new_cursor == "hist99"
+
+    def test_duplicate_metadata_collapses_to_last_upsert(self, client: GmailClient):
+        """messages.list pagination can repeat an id when the mailbox shifts
+        between pages; bootstrap dedupes keeping the newest state so the batch
+        persistence never sees the same key twice."""
+        client.service = MagicMock()
+        stale, fresh = self._meta("m1", is_read=False), self._meta("m1", is_read=True)
+        with patch.object(client, "_list_message_ids", return_value=["m1", "m1"]), \
+             patch.object(client, "fetch_messages_metadata", return_value=[stale, fresh]), \
+             patch.object(client, "_get_current_history_id", return_value="hist99"):
+            result = client._bootstrap_email_metadata(500)
+
+        assert result.upserts == [fresh]
 
 
 # ── _execute_batch_get retry logic ──────────────────────────────────
@@ -2802,6 +2829,20 @@ class TestClassifyAttachments:
         )
         assert "logo123" in cid_map
         assert cid_map["logo123"].startswith("data:image/png;base64,")
+        assert attachments == []
+
+    def test_inline_image_with_case_mismatched_cid_still_matches(self, client: GmailClient):
+        # Header ``Content-ID: <Logo123>`` vs HTML ``cid:logo123`` — the match
+        # runs on the ``normalize_cid`` form, so the image stays inline instead
+        # of being promoted to a downloadable with a broken icon in the body.
+        payload = {"parts": [self._part(
+            mime_type="image/png", filename="logo.png", cid="Logo123",
+            disposition="inline",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", '<img src="cid:logo123">',
+        )
+        assert "logo123" in cid_map
         assert attachments == []
 
     def test_inline_marked_unreferenced_promoted_to_downloadable(self, client: GmailClient):
