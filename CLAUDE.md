@@ -127,3 +127,7 @@
   ### 12 Application Startup and Live Browser Verification
 
   Never start any part of the application stack — database, backend, or frontend (via Podman/compose, uvicorn, the Vite dev server, or any other means) — and never verify a change you made by navigating the running app on localhost with the Playwright MCP (or any other browser automation tool) on your own initiative. These actions are allowed only when the user literally requests them in the conversation. In particular, never include them as final verification steps in plans, and never perform them voluntarily as a "check that my change works" step — live verification belongs to the user unless explicitly delegated.
+
+  ### 13 Memory Files — No Autonomous Writes
+
+  Never edit, restructure, or add entries to the persistent memory store — `MEMORY.md` and the individual memory files under the session's `memory/` directory — on your own initiative. This overrides the memory system's default of proactively saving facts: write to memory only when the user explicitly asks you to remember something. Same "never on your own initiative" discipline as § 12 (live verification) and § 10's rule that `common_mistakes.md` entries are never added autonomously.
