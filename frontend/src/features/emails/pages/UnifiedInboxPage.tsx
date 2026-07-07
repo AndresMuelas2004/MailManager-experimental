@@ -57,8 +57,24 @@ export default function UnifiedInboxPage({ box }: Props) {
     syncing,
     lastSyncedAt,
     syncError,
+    syncFailedAccounts,
   } = useEmailList(mailboxId!, box, undefined, debouncedQ, undefined, page, true, controls);
   const config = EMAIL_BOX_CONFIG[box];
+
+  // Partial-failure notice for the unified inbox: some accounts synced, one (or
+  // more) is disconnected. Resolve each failed account_id to its address (the
+  // hook already returns ``accounts``), falling back to the id when unknown/null.
+  const partialWarning =
+    syncFailedAccounts.length > 0
+      ? t('common.syncPartialFailure', {
+          accounts: syncFailedAccounts
+            .map(
+              (f) =>
+                accounts.find((a) => a.account_id === f.account_id)?.email_address ?? f.account_id,
+            )
+            .join(', '),
+        })
+      : null;
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
@@ -146,6 +162,7 @@ export default function UnifiedInboxPage({ box }: Props) {
             syncing={syncing}
             lastSyncedAt={lastSyncedAt}
             hasError={Boolean(syncError)}
+            partialWarning={partialWarning}
           />
         </div>
         <div className="flex items-center gap-2 pt-2">

@@ -23,6 +23,7 @@ export const es = {
     lastSync: 'Última actualización: {time}',
     lastSyncNever: 'Sin sincronizar todavía',
     syncFailed: 'No se pudo actualizar',
+    syncPartialFailure: 'No se pudo sincronizar: {accounts} — reconéctala',
     noSubject: '(Sin asunto)',
   },
 

@@ -7,7 +7,7 @@ import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
 import { DEFAULT_LIST_CONTROLS } from '../../../lib/listControls';
-import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
+import type { AccountOut, AccountSyncFailure, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailBox } from '../../../lib/types';
 import type { ListControlsState } from '../../../lib/listControls';
@@ -27,6 +27,7 @@ type UseEmailListReturn = {
   sync: () => void;
   lastSyncedAt: number | null;
   syncError: UiError | null;
+  syncFailedAccounts: AccountSyncFailure[];
 };
 
 const MIN_SEARCH_LENGTH = 2;
@@ -175,6 +176,13 @@ export default function useEmailList(
   // transient provider failure never empties the already-loaded listing.
   const syncError = syncMutation.error ? toUiError(syncMutation.error) : null;
 
+  // Accounts left unsynced by the last RESOLVED sync (200 partial success). A
+  // total failure rejects the mutation (409/502) → ``data`` is undefined → the
+  // list stays empty and ``syncError`` (red notice) fires instead. The two
+  // states are mutually exclusive by the mutation's outcome. The per-account
+  // view always sees an empty list (its single account's failure rejects).
+  const syncFailedAccounts = syncMutation.data?.failed_accounts ?? [];
+
   return {
     emails: emailsQuery.data?.items ?? [],
     accounts: accountsQuery.data ?? [],
@@ -190,5 +198,6 @@ export default function useEmailList(
     sync,
     lastSyncedAt,
     syncError,
+    syncFailedAccounts,
   };
 }

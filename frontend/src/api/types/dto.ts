@@ -217,9 +217,26 @@ export const accountSyncDetailSchema = z.object({
 });
 export type AccountSyncDetail = z.infer<typeof accountSyncDetailSchema>;
 
+// A per-account sync failure reported inside a partial success (200). All
+// fields are plain strings (never null). ``reason`` is a bounded category —
+// ``account_not_connected`` (auth: token expired/revoked) or ``sync_failed``
+// (any other per-account failure) — used only to nuance the notice, never to
+// branch the UI (the address is resolved from ``account_id``).
+export const accountSyncFailureSchema = z.object({
+  account_id: z.string(),
+  provider: z.string(),
+  reason: z.string(),
+});
+export type AccountSyncFailure = z.infer<typeof accountSyncFailureSchema>;
+
 export const syncResultOutSchema = z.object({
   total_synced: z.number(),
   accounts: z.array(accountSyncDetailSchema),
+  // Accounts that failed while others succeeded (unified-mailbox partial
+  // success). ``.default([])`` tolerates a 200 without the key (single-account
+  // success, or any older response) so it is always an array in the inferred
+  // type. A total failure rejects (409/502) instead of populating this.
+  failed_accounts: z.array(accountSyncFailureSchema).default([]),
 });
 export type SyncResultOut = z.infer<typeof syncResultOutSchema>;
 

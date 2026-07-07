@@ -354,5 +354,69 @@ describe('useEmailList — manual refresh & sync mark', () => {
     expect(result.current.error).toBeNull();
     expect(result.current.emails).toHaveLength(1);
     expect(result.current.lastSyncedAt).toBeNull();
+    // A hard failure exposes no partial-failure list (the mutation rejected).
+    expect(result.current.syncFailedAccounts).toEqual([]);
+  });
+
+  it('a 200 partial success exposes syncFailedAccounts, keeps syncError null, and advances the mark', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      // Unified mailbox: one account synced, another is disconnected → the
+      // backend returns 200 with ``failed_accounts`` (Option A), NOT a 409.
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json({
+          total_synced: 3,
+          accounts: [{ account_id: 'a_1', provider: 'gmail', emails_synced: 3, sync_cursor: 'c1' }],
+          failed_accounts: [
+            { account_id: 'a_2', provider: 'outlook', reason: 'account_not_connected' },
+          ],
+        }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1),
+      { wrapper },
+    );
+
+    // The disconnected account surfaces via syncFailedAccounts, and a 200 is a
+    // resolved sync so syncError stays null (no red notice).
+    await waitFor(() => expect(result.current.syncFailedAccounts).toHaveLength(1));
+    expect(result.current.syncFailedAccounts[0].account_id).toBe('a_2');
+    expect(result.current.syncFailedAccounts[0].reason).toBe('account_not_connected');
+    expect(result.current.syncError).toBeNull();
+    expect(result.current.error).toBeNull();
+    // Unlike a hard failure, the mark advances on a partial success.
+    await waitFor(() => expect(typeof result.current.lastSyncedAt).toBe('number'));
+  });
+
+  it('a rejected sync (409, total failure) sets syncError and leaves syncFailedAccounts empty', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('m_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      // Every account dead → the endpoint rejects with 409 (unchanged path).
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json(
+          { error: { code: 'account_not_connected', message: 'Not connected' } },
+          { status: 409 },
+        ),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', undefined, undefined, undefined, 1),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.emails).toHaveLength(1));
+    // The rejection is the red-notice path; ``data`` is undefined so the
+    // partial-failure list is empty. The two states are mutually exclusive.
+    await waitFor(() => expect(result.current.syncError).not.toBeNull());
+    expect(result.current.syncFailedAccounts).toEqual([]);
+    expect(result.current.error).toBeNull();
+    expect(result.current.lastSyncedAt).toBeNull();
   });
 });

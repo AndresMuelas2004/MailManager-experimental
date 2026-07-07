@@ -21,6 +21,7 @@ export const en: EsDictionary = {
     lastSync: 'Last updated: {time}',
     lastSyncNever: 'Not synced yet',
     syncFailed: 'Could not refresh',
+    syncPartialFailure: "Couldn't sync: {accounts} — reconnect it",
     noSubject: '(No subject)',
   },
 

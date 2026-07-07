@@ -85,6 +85,7 @@ from api.schemas.email import (
 )
 from api.schemas.attachment import AttachmentMetadataOut
 from api.services.services_helpers import (
+    build_account_sync_failures,
     build_manager_for_accounts,
     delete_email_metadata_batch,
     ensure_mailbox_access,
@@ -330,8 +331,10 @@ def sync_email_metadata(
             if label in sync_errors:
                 # This account failed silent auth or the metadata fetch; never
                 # persist a (possibly partial) result for it nor target it for
-                # prefetch — it is reported via the deferred raise below once
-                # the healthy accounts have landed (sincronizacion.md §7).
+                # prefetch — it is reported after the loop, either in the 200
+                # ``failed_accounts`` (partial success) or via the deferred
+                # raise (total failure), once the healthy accounts have landed
+                # (sincronizacion.md §7).
                 continue
             mid, aid, provider = ids
             prefetch_targets.append((label, aid))
@@ -375,15 +378,26 @@ def sync_email_metadata(
                 sync_cursor=sync_result.new_cursor,
             ))
 
-        # Now that every healthy account has synced and persisted, surface the
-        # per-account failures: non-auth errors translate by type, auth errors
-        # collapse to one 409 AccountNotConnected naming only the offending
-        # account(s). Raising HERE (not before the loop) is what keeps a single
-        # dead account from leaving the user without the rest (sincronizacion.md
-        # §7); the unified view still shows its "could not update" notice
-        # (refrescar-y-estado-sincronizacion.md §5.1) because the call still
-        # raises, but the healthy mail is already in the local copy.
-        raise_on_silent_auth_errors(sync_errors, fallback=EmailFetchError)
+        # Every healthy account has synced and persisted. Turn the per-account
+        # failures into ``failed_accounts`` rows WITHOUT raising, so a partial
+        # success can report them in the 200 response.
+        failed_accounts = build_account_sync_failures(sync_errors, label_lookup)
+
+        # Raise ONLY on a genuine total failure: there were errors AND not a
+        # single account synced. That still covers the single-account view whose
+        # one account is broken (409 AccountNotConnected / the typed non-auth
+        # error, unchanged) and the unified mailbox where EVERY account failed.
+        # With a partial success (>=1 account synced) we deliberately do NOT
+        # raise: the healthy mail is already in the local copy and the dead
+        # account(s) travel in ``failed_accounts`` (Option A), so the unified
+        # view updates and merely surfaces a non-blocking "reconnect" notice
+        # instead of the blocking "could not update" error
+        # (sincronizacion.md §7, refrescar-y-estado-sincronizacion.md §5.1). The
+        # ``sync_errors and`` guard keeps the empty-mailbox case (0 accounts, no
+        # errors) a plain 200 — although ``raise_on_silent_auth_errors`` is
+        # itself a no-op on an empty map, the guard reads clearer at the site.
+        if sync_errors and not synced_account_ids:
+            raise_on_silent_auth_errors(sync_errors, fallback=EmailFetchError)
 
         # After responding (D2/D3), purge expired cached bodies and prefetch
         # recent-unread inbox content for the synced accounts, reusing the
@@ -397,7 +411,11 @@ def sync_email_metadata(
                 synced_account_ids,
             )
 
-        return SyncResultOut(total_synced=total_synced, accounts=account_details)
+        return SyncResultOut(
+            total_synced=total_synced,
+            accounts=account_details,
+            failed_accounts=failed_accounts,
+        )
     except ApiError:
         raise
     except Exception as exc:

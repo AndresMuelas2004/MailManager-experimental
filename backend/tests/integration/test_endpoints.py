@@ -256,6 +256,8 @@ def test_sync_email_metadata(test_client, setup_mailbox_and_account, sample_meta
     assert isinstance(detail["emails_synced"], int)
     assert detail["emails_synced"] == expected_count
     assert data["total_synced"] == detail["emails_synced"]
+    # Full success carries an empty ``failed_accounts`` (added by Option A).
+    assert data["failed_accounts"] == []
 
 
 def test_sync_email_metadata_persists_to_db(test_client, setup_mailbox_and_account, isolated_db):
@@ -394,6 +396,30 @@ def test_multi_account_sync_metadata(test_client):
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["accounts"]) == 2
+    # Both accounts healthy → no failures reported.
+    assert data["failed_accounts"] == []
+
+
+def test_multi_account_sync_metadata_partial_failure(partial_failure_test_client):
+    # Unified mailbox where ONE of two accounts has a dead token: the healthy
+    # account still syncs and the endpoint returns 200 with the disconnected
+    # account reported in ``failed_accounts`` (Option A), instead of the old
+    # 409 that blocked the whole unified refresh.
+    client, config = partial_failure_test_client
+    mid, aid1, aid2 = _setup_mailbox_with_two_accounts(client)
+    config["failing_account_ids"].add(aid2)
+
+    resp = client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+    data = resp.json()
+    # Only the healthy account is reported as synced.
+    assert {a["account_id"] for a in data["accounts"]} == {aid1}
+    # The disconnected account travels in the 200, categorised as an auth loss.
+    assert len(data["failed_accounts"]) == 1
+    failure = data["failed_accounts"][0]
+    assert failure["account_id"] == aid2
+    assert failure["provider"] == "outlook"
+    assert failure["reason"] == "account_not_connected"
 
 
 def test_multi_account_send_targets_specific_account(test_client):

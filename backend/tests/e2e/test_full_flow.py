@@ -392,6 +392,8 @@ def test_15_sync_metadata_gmail_path_1(e2e_client, flow_state):
     assert len(accounts) == 1
     assert accounts[0]["account_id"] == GMAIL_ACCOUNT_ID
     assert accounts[0]["sync_cursor"] is not None
+    # A single healthy account also reports no partial failures.
+    assert data["failed_accounts"] == []
     flow_state["gmail_path1_done"] = "true"
 
 
@@ -423,6 +425,12 @@ def test_17_sync_metadata_gmail_path_2(e2e_client, flow_state):
     assert GMAIL_ACCOUNT_ID in synced_ids
     gmail_account = next(a for a in accounts if a["account_id"] == GMAIL_ACCOUNT_ID)
     assert gmail_account["sync_cursor"] is not None
+    # Unified sync contract (Option A): with every test account healthy the
+    # partial-failure list is empty. A real disconnected-account path is NOT
+    # exercised here — there is no non-interactive way to expire a test
+    # account's token and the E2E rules forbid touching their tokens; that
+    # branch is covered by the unit / integration suites.
+    assert data["failed_accounts"] == []
 
 
 def test_18_sync_metadata_outlook_path_2(e2e_client, flow_state):

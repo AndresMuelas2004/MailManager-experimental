@@ -24,6 +24,7 @@ from database.repositories import virtual_mailbox_repository as virtual_mailbox_
 from api.routers.routers_helpers import require_session
 from api.services import accounts_service, attachments_service, drafts_service, emails_service, oauth_pending, services_helpers
 from core.email import EmailManager
+from core.email.errors import EmailAuthError
 from tests.shared.email_fakes import FakeEmailClient
 
 _ALEMBIC_INI_PATH = Path(__file__).resolve().parents[2] / "database" / "alembic.ini"
@@ -330,6 +331,48 @@ def failing_test_client(test_client_base, sample_metadata, monkeypatch, request)
 
     _apply_test_monkeypatches(monkeypatch, _build_manager)
     return test_client_base
+
+
+@pytest.fixture
+def partial_failure_test_client(test_client_base, sample_metadata, monkeypatch):
+    """Client whose FakeEmailClients fail for ONLY the account_ids the test
+    registers in ``config['failing_account_ids']``.
+
+    ``failing_test_client`` applies its failure kwargs to EVERY account, so it
+    can only express a total failure (every account dead → 409). A partial
+    success — some accounts sync, one is disconnected → 200 with
+    ``failed_accounts`` — needs a builder that fails a single label. Returns
+    ``(client, config)``; the test adds the doomed ``account_id`` to
+    ``config['failing_account_ids']`` (read by reference at request time)
+    before POSTing sync-metadata. The default failure is an auth error
+    (``account_not_connected``); a test wanting the ``sync_failed`` reason
+    overrides ``config['failure_kwargs']`` with e.g. ``{'fetch_exc': ...}``.
+    """
+    config = {
+        "failing_account_ids": set(),
+        "failure_kwargs": {"auth_silent_exc": EmailAuthError("token revoked")},
+    }
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for account in accounts:
+            mailbox_id = str(account.get("mailbox_id") or "")
+            account_id = str(account.get("account_id") or "")
+            label = f"{mailbox_id}__{account_id}"
+            kwargs = (
+                dict(config["failure_kwargs"])
+                if account_id in config["failing_account_ids"] else {}
+            )
+            manager.add_client(FakeEmailClient(
+                label,
+                metadata=sample_metadata,
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+                **kwargs,
+            ))
+        return manager
+
+    _apply_test_monkeypatches(monkeypatch, _build_manager)
+    return test_client_base, config
 
 
 @pytest.fixture

@@ -8,8 +8,11 @@ type Props = {
   onRefresh: () => void;
   syncing: boolean;
   lastSyncedAt: number | null;
-  /** True when the last sync attempt failed; shows a non-blocking inline notice. */
+  /** True when the last sync attempt failed completely; blocking red notice. */
   hasError?: boolean;
+  /** Non-blocking notice of a PARTIAL failure (accounts that did not sync),
+   *  already composed by the page. Null/omitted when it does not apply. */
+  partialWarning?: string | null;
 };
 
 export default function RefreshControl({
@@ -17,6 +20,7 @@ export default function RefreshControl({
   syncing,
   lastSyncedAt,
   hasError = false,
+  partialWarning = null,
 }: Props) {
   const { t, lang } = useTranslation();
   // Local UI ticker (impure by necessity) so the "time ago" text advances on
@@ -52,6 +56,13 @@ export default function RefreshControl({
       >
         {status}
       </span>
+      {/* Partial-failure notice: amber, non-blocking, below the status mark.
+          Red (hasError) takes precedence — never render both at once. */}
+      {!hasError && partialWarning ? (
+        <span className="text-[12px] text-amber-600" aria-live="polite">
+          {partialWarning}
+        </span>
+      ) : null}
     </div>
   );
 }

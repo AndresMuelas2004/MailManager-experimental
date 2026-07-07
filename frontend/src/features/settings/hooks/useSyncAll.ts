@@ -64,7 +64,7 @@ export default function useSyncAll(): UseSyncAllReturn {
     const results = await Promise.allSettled(
       mailboxIds.map(async (id) => {
         try {
-          await syncEmailMetadata(id);
+          return await syncEmailMetadata(id);
         } finally {
           // Advance the progress counter as each mailbox settles, regardless
           // of success, so the indicator reaches total even on partial failure.
@@ -72,7 +72,13 @@ export default function useSyncAll(): UseSyncAllReturn {
         }
       }),
     );
-    const anyFailed = results.some((r) => r.status === 'rejected');
+    // A mailbox now returns 200 even when SOME of its accounts are disconnected
+    // (unified partial success), so a rejection alone no longer captures every
+    // failure — inspect ``failed_accounts`` of the resolved results too.
+    const anyFailed = results.some(
+      (r) =>
+        r.status === 'rejected' || (r.status === 'fulfilled' && r.value.failed_accounts.length > 0),
+    );
 
     // Refresh the listing caches once the whole fan-out has settled (same
     // prefixes a single ``sync-metadata`` invalidates).

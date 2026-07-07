@@ -65,6 +65,10 @@ The logout / delete-account actions in `features/settings/pages/SettingsAccountP
 
 Both halves are load-bearing, and each guards a distinct failure mode that silently lands logout on **`/create-mailbox`** instead of the login screen. (a) An imperative `navigate('/login')` reintroduces a race: the router's location store (`useSyncExternalStore`) and React's `user` state commit at different times, so the app briefly routes with `user` still truthy → `LoginPage` bounces the "authenticated" visitor to `/` → `MailboxGatewayPage` runs `listMailboxes()`, which 401s on the already-cleared cookie → empty list → `/create-mailbox`. (b) Moving `setUser(null)` back inside the `try` (skipped when logout 401/500s) strands the client believing it is authenticated, so `RequireAuth` never fires. Regression coverage lives in `SettingsAccountPage.test.tsx`, whose fixture mounts the real `RequireAuth` plus faithful `LoginPage`/gateway stubs; the case "still lands on /login when the server logout call fails" fails deterministically if either half regresses.
 
+### 1.10 `useSyncAll` orchestrates the fan-out without `useMutation` (features §4.1 exception)
+
+`frontend/src/features/settings/hooks/useSyncAll.ts` drives "sync everything" (`listMailboxes()` → `Promise.allSettled` of one `sync-metadata` per mailbox) from a `useState` + `useCallback` machine instead of `useMutation` — the same §4.1 deviation as §1.2 / §1.6, deliberate for the same class of reason: live per-item progress (`doneCount` / `totalCount`) and a partial-failure state that spans BOTH rejections AND resolved results carrying a non-empty `failed_accounts` do not collapse onto a single mutation's `isPending` / `isError`. The product-level rationale for the fan-out (there is deliberately no user-level sync endpoint) already lives in `repository_guide.md`'s Settings note; this entry records the §4.1 architectural exception specifically. The architecture-compliance reviewer flags it on every run; it is an accepted exception, not a regression.
+
 ## 2. TanStack Query key namespaces
 
 All cache keys follow `[<resource>, <scope>, ...<filters>]`. The eight namespaces in active use:

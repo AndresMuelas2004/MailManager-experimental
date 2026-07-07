@@ -20,8 +20,10 @@ from api.errors.exceptions import (
     Forbidden,
     MailboxNotFound,
 )
+from api.schemas.email import AccountSyncFailure
 from api.services.services_helpers import (
     _wrap_secret,
+    build_account_sync_failures,
     build_manager_for_accounts,
     delete_email_metadata_batch,
     ensure_mailbox_access,
@@ -193,6 +195,76 @@ class TestRaiseOnSilentAuthErrors:
             raise_on_silent_auth_errors(errors)
         assert "reasons" in exc_info.value.detail
         assert exc_info.value.detail["reasons"]["mb__acc1"] == "token expired"
+
+
+# ------------------------------------------------------------------
+# build_account_sync_failures — the non-raising counterpart used on the
+# partial-success path of sync_email_metadata.
+# ------------------------------------------------------------------
+
+class TestBuildAccountSyncFailures:
+
+    def test_empty_errors_returns_empty_list(self):
+        assert build_account_sync_failures({}, {}) == []
+
+    @pytest.mark.parametrize(
+        "error, expected_reason",
+        [
+            (EmailAuthError("token revoked"), "account_not_connected"),
+            (EmailMissingTokenError("missing"), "account_not_connected"),
+            (EmailExternalAPIError("provider 500"), "sync_failed"),
+            (RuntimeError("boom"), "sync_failed"),
+        ],
+    )
+    def test_reason_is_decided_by_is_auth_error(self, error, expected_reason):
+        # Only a typed auth error maps to ``account_not_connected``; every
+        # other per-account failure (core or not) is ``sync_failed``.
+        failures = build_account_sync_failures(
+            {"mb__acc1": error},
+            {"mb__acc1": ("mb", "acc1", "gmail")},
+        )
+        assert len(failures) == 1
+        assert failures[0].reason == expected_reason
+
+    def test_row_carries_account_id_and_provider_from_lookup(self):
+        failures = build_account_sync_failures(
+            {"mb__acc2": EmailAuthError("expired")},
+            {"mb__acc2": ("mb", "acc2", "outlook")},
+        )
+        assert failures == [
+            AccountSyncFailure(
+                account_id="acc2", provider="outlook",
+                reason="account_not_connected",
+            )
+        ]
+
+    def test_labels_absent_from_lookup_are_skipped(self):
+        # A label present in the error map but missing from ``label_lookup``
+        # (mirrors the sync loop's own ``label_lookup.get`` guard) is dropped,
+        # never emitted with placeholder ids.
+        failures = build_account_sync_failures(
+            {
+                "mb__acc1": EmailAuthError("expired"),
+                "mb__orphan": RuntimeError("no lookup entry"),
+            },
+            {"mb__acc1": ("mb", "acc1", "gmail")},
+        )
+        assert [f.account_id for f in failures] == ["acc1"]
+
+    def test_preserves_all_known_failures(self):
+        errors = {
+            "mb__acc1": EmailAuthError("token revoked"),
+            "mb__acc2": EmailExternalAPIError("provider 500"),
+        }
+        label_lookup = {
+            "mb__acc1": ("mb", "acc1", "gmail"),
+            "mb__acc2": ("mb", "acc2", "outlook"),
+        }
+        failures = build_account_sync_failures(errors, label_lookup)
+        assert [(f.account_id, f.reason) for f in failures] == [
+            ("acc1", "account_not_connected"),
+            ("acc2", "sync_failed"),
+        ]
 
 
 # ------------------------------------------------------------------

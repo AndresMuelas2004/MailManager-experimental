@@ -65,19 +65,25 @@ Como la apertura de una vista ya sincroniza, el usuario verá típicamente "Últ
 
 ## 5. Qué pasa si la sincronización falla
 
-Si el proveedor no responde, está caído o se alcanza un límite de peticiones (rate limiting, ver [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md)):
+Si la sincronización **no logra traer nada** —el proveedor no responde, está caído o se alcanza un límite de peticiones (rate limiting, ver [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md))—:
 
 - El correo ya descargado **se sigue mostrando**: la lista **no se vacía**. El aviso de fallo es deliberadamente **no bloqueante** y vive en el control, separado del listado, para que un tropiezo transitorio del proveedor nunca borre lo que el usuario ya tenía delante.
 - Bajo el botón aparece un aviso breve **"No se pudo actualizar"** en rojo, en lugar del texto de "última actualización".
 - La marca de "última actualización" **no avanza**: sigue mostrando (cuando el aviso desaparece) la última sincronización correcta. Una sincronización fallida nunca se cuenta como reciente.
 - El usuario puede **reintentar** con el botón.
 
-### 5.1 La asimetría del aviso entre la vista normal y la ficticia
+Esto describe el **fallo total**: no se pudo sincronizar **ninguna** cuenta de la vista. Cuando la vista agrega varias cuentas y **solo algunas** fallan mientras el resto va bien, el comportamiento es distinto y más benévolo — lo cubre § 5.1.
 
-Hay una diferencia de comportamiento que conviene conocer, y nace de cómo sincroniza cada vista por debajo:
+### 5.1 El aviso según la vista: rojo bloqueante, ámbar informativo o silencio
 
-- En la **bandeja unificada** y en la **vista por cuenta**, el refresco es **una sola operación**; si falla, el fallo es observable y se muestra el aviso "No se pudo actualizar".
-- En la **bandeja ficticia**, el refresco es un **abanico** que sincroniza cada cuenta agregada por separado y **tolera fallos parciales** (que una cuenta falle no tumba a las demás — misma filosofía que la sincronización multi-cuenta de [sincronizacion.md](sincronizacion.md) § 7). Como consecuencia, la bandeja ficticia **no muestra** el aviso rojo de error y **sí** actualiza la marca de "última actualización" en cuanto el intento termina, aunque alguna de sus cuentas haya fallado por debajo. Es una simplificación aceptada: el valor de la vista ficticia es agregar lo que sí se pudo traer, no frenarse por la cuenta más débil.
+Qué aviso ve el usuario ante un fallo depende de la vista y, sobre todo, de **cuántas** de sus cuentas fallaron. Nace de cómo sincroniza cada vista por debajo:
+
+- **Vista de una sola cuenta.** Agrega una única cuenta, así que un fallo es siempre **total**: se muestra el aviso rojo "No se pudo actualizar" (§ 5) y la marca no avanza. Es lo correcto — no hay ninguna otra cuenta cuyo correo salvar.
+- **Bandeja unificada, fallo total** (fallan **todas** sus cuentas). Igual que arriba: aviso rojo, marca congelada, listado intacto.
+- **Bandeja unificada, fallo parcial** (van bien **algunas** cuentas y cae **otra**, típicamente por token caducado o revocado). Aquí el comportamiento cambia por completo: el listado **se actualiza igual** con el correo de las cuentas sanas, la marca de "última actualización" **avanza**, y **no** aparece el aviso rojo. En su lugar surge, bajo el botón, un aviso **sutil y no bloqueante** —en **ámbar**, no en rojo— que **nombra la(s) cuenta(s)** que no se pudieron sincronizar, por su dirección de correo, e invita a reconectarla ("No se pudo sincronizar: `otra@outlook.com` — reconéctala"). Los dos avisos son **mutuamente excluyentes**: el rojo del fallo total tiene prioridad y nunca conviven. Antes de este cambio, esa cuenta caída bloqueaba **toda** la bandeja unificada con el aviso rojo y sin repintar; ahora una cuenta rota deja de dejar sin actualización al resto (el porqué, en [sincronizacion.md](sincronizacion.md) § 7).
+- **Bandeja ficticia** (ver [bandejas-ficticias.md](bandejas-ficticias.md)). Su refresco es un **abanico** que sincroniza cada cuenta agregada por separado y **tolera fallos parciales** desde siempre (misma filosofía que la unificada, [sincronizacion.md](sincronizacion.md) § 7). No muestra el rojo y **sí** avanza la marca en cuanto el intento termina, aunque alguna cuenta haya fallado por debajo. La diferencia con la unificada es que la ficticia lo hace **en silencio**: no nombra la cuenta caída ni muestra el aviso ámbar; simplemente agrega lo que sí se pudo traer. Es una simplificación aceptada: el valor de la vista ficticia es mostrar lo agregado, no frenarse por la cuenta más débil.
+
+> **Ejemplo (fallo parcial en la unificada).** Buzón unificado con `amuelas30@gmail.com` (sana) y `otra@outlook.com` (token caducado). Al abrir la bandeja unificada, el listado se actualiza con lo nuevo de `amuelas30`, la marca pasa a "hace unos segundos" y debajo aparece el aviso sutil "No se pudo sincronizar: otra@outlook.com — reconéctala". Nada de pantalla de error; el correo de la cuenta sana está delante.
 
 ---
 
@@ -105,4 +111,4 @@ Dentro de la bandeja unificada, cambiar entre **Recibidos / Enviados / Archivado
 
 ## Resumen en una frase
 
-> En la cabecera de la bandeja unificada, la vista por cuenta y la bandeja ficticia aparece un control con un botón **"Refrescar"** —que dispara a demanda la **misma** sincronización con el proveedor que ya ocurría sola al abrir la vista, acotada a esa vista, girando y deshabilitándose mientras trabaja— y un texto **"Última actualización: hace X"** que avanza solo visualmente (sin sincronizar) y se guarda **en el navegador**, por dispositivo y por ámbito de vista; un fallo deja la lista intacta, no avanza la marca y muestra "No se pudo actualizar" (salvo en la bandeja ficticia, que tolera fallos parciales y no enseña ese aviso), sin auto-refresco periódico ni permisos nuevos. Las cifras exactas están en [../limits/refrescar-y-estado-sincronizacion.md](../limits/refrescar-y-estado-sincronizacion.md).
+> En la cabecera de la bandeja unificada, la vista por cuenta y la bandeja ficticia aparece un control con un botón **"Refrescar"** —que dispara a demanda la **misma** sincronización con el proveedor que ya ocurría sola al abrir la vista, acotada a esa vista, girando y deshabilitándose mientras trabaja— y un texto **"Última actualización: hace X"** que avanza solo visualmente (sin sincronizar) y se guarda **en el navegador**, por dispositivo y por ámbito de vista; un fallo **total** deja la lista intacta, no avanza la marca y muestra "No se pudo actualizar", mientras que un fallo **parcial** de la unificada (una cuenta cae y las demás van bien) actualiza igual, avanza la marca y muestra un aviso **ámbar** sutil que nombra la cuenta a reconectar —sin rojo— (la bandeja ficticia también tolera fallos parciales, pero en silencio), sin auto-refresco periódico ni permisos nuevos. Las cifras exactas están en [../limits/refrescar-y-estado-sincronizacion.md](../limits/refrescar-y-estado-sincronizacion.md).

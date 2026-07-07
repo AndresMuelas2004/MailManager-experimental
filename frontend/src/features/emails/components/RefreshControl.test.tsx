@@ -90,4 +90,42 @@ describe('RefreshControl', () => {
     // The last-sync status is replaced, not stacked.
     expect(screen.queryByText(/Última actualización:/)).not.toBeInTheDocument();
   });
+
+  it('shows the amber partial-failure notice below the status when partialWarning is set and hasError is false', () => {
+    // The page pre-composes the notice string; the component just renders it in
+    // amber, stacked UNDER the (still-present) last-sync status — it is
+    // informative, not blocking.
+    renderWithProviders(
+      <RefreshControl
+        onRefresh={() => {}}
+        syncing={false}
+        lastSyncedAt={Date.now()}
+        partialWarning="No se pudo sincronizar: roto@outlook.com — reconéctala"
+      />,
+    );
+
+    const notice = screen.getByText('No se pudo sincronizar: roto@outlook.com — reconéctala');
+    expect(notice).toHaveClass('text-amber-600');
+    // Non-blocking: the last-sync mark still renders alongside it.
+    expect(screen.getByText('Última actualización: ahora')).toBeInTheDocument();
+  });
+
+  it('gives the red failure notice precedence over the amber partial warning', () => {
+    // Both signalled at once → only the blocking red one shows; the amber
+    // partial notice is suppressed entirely.
+    renderWithProviders(
+      <RefreshControl
+        onRefresh={() => {}}
+        syncing={false}
+        lastSyncedAt={Date.now()}
+        hasError
+        partialWarning="No se pudo sincronizar: roto@outlook.com — reconéctala"
+      />,
+    );
+
+    expect(screen.getByText('No se pudo actualizar')).toHaveClass('text-red-600');
+    expect(
+      screen.queryByText('No se pudo sincronizar: roto@outlook.com — reconéctala'),
+    ).not.toBeInTheDocument();
+  });
 });

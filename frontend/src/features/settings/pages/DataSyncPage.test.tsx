@@ -85,6 +85,43 @@ describe('DataSyncPage', () => {
     expect(screen.queryByText('Sincronización completada.')).not.toBeInTheDocument();
   });
 
+  it('reports a partial failure when a mailbox returns 200 with failed_accounts', async () => {
+    // Option A: a mailbox whose only-some accounts are disconnected no longer
+    // rejects — it returns 200 with a non-empty ``failed_accounts``. The
+    // ``rejected``-only check would miss it, so useSyncAll also inspects the
+    // resolved value; the partial-failure notice must still appear.
+    server.use(
+      http.get(`${API_BASE}/mailboxes`, () =>
+        HttpResponse.json([mailbox('mb_ok'), mailbox('mb_partial')]),
+      ),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, ({ params }) => {
+        if (params.mailboxId === 'mb_partial') {
+          return HttpResponse.json({
+            total_synced: 1,
+            accounts: [
+              { account_id: 'a_1', provider: 'gmail', emails_synced: 1, sync_cursor: 'c1' },
+            ],
+            failed_accounts: [
+              { account_id: 'a_2', provider: 'outlook', reason: 'account_not_connected' },
+            ],
+          });
+        }
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+
+    renderWithProviders(<DataSyncPage />);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Sincronizar todo ahora' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Algunas bandejas no se pudieron sincronizar.')).toBeInTheDocument(),
+    );
+    // A resolved 200 with failures is still a partial failure, not a success.
+    expect(screen.queryByText('Sincronización completada.')).not.toBeInTheDocument();
+  });
+
   it('surfaces the backend error message when listing the mailboxes fails', async () => {
     server.use(
       http.get(`${API_BASE}/mailboxes`, () =>

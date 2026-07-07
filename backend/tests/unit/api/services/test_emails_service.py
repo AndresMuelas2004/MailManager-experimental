@@ -134,6 +134,9 @@ class TestSyncEmailMetadata:
         assert result.total_synced == 1
         assert len(result.accounts) == 1
         assert result.accounts[0].account_id == _ACCOUNT_ID
+        # Full success carries an empty ``failed_accounts`` (the field defaults
+        # to [] and is only populated on a partial success).
+        assert result.failed_accounts == []
 
     def test_background_tasks_none_schedules_no_prefetch(self, monkeypatch):
         """Direct callers (service tests, scripts) omit ``background_tasks``;
@@ -206,6 +209,86 @@ class TestSyncEmailMetadata:
             "fetch_exc": RuntimeError("unexpected"),
         })
         with pytest.raises(EmailFetchError):
+            emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+    @staticmethod
+    def _partial_builder(broken_account_id, **broken_kwargs):
+        """A ``build_manager_for_accounts`` replacement that injects the failure
+        kwargs into ONLY the given account's FakeEmailClient. The uniform
+        ``fake_client_kwargs`` of ``_patch_common`` cannot express a per-account
+        failure, so a partial-success test needs its own builder."""
+        def _build(accounts):
+            manager = EmailManager()
+            for acc in accounts:
+                label = f"{acc.get('mailbox_id', '')}__{acc.get('account_id', '')}"
+                kwargs = dict(broken_kwargs) if acc.get("account_id") == broken_account_id else {}
+                manager.add_client(FakeEmailClient(
+                    label,
+                    metadata=[build_metadata()],
+                    auth_return={"access_token": "tok", "refresh_token": "ref"},
+                    **kwargs,
+                ))
+            return manager
+        return _build
+
+    def test_partial_auth_failure_reports_account_without_raising(self, monkeypatch):
+        # Unified mailbox: one healthy account + one whose token is revoked. The
+        # healthy mail still lands (no raise) and the dead account travels in
+        # ``failed_accounts`` instead of aborting the sync (Option A).
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            emails_service.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        monkeypatch.setattr(
+            emails_service, "build_manager_for_accounts",
+            self._partial_builder(_ACCOUNT_ID_2, auth_silent_exc=EmailAuthError("token revoked")),
+        )
+
+        result = emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+        # Only the healthy account persisted and is reported in ``accounts``.
+        assert result.total_synced == 1
+        assert [d.account_id for d in result.accounts] == [_ACCOUNT_ID]
+        # The broken account is reported, not raised.
+        assert len(result.failed_accounts) == 1
+        failure = result.failed_accounts[0]
+        assert failure.account_id == _ACCOUNT_ID_2
+        assert failure.reason == "account_not_connected"
+
+    def test_partial_non_auth_failure_reports_sync_failed_without_raising(self, monkeypatch):
+        # A non-auth per-account failure (provider API error) must ALSO not
+        # abort a partial success — it is reported with reason ``sync_failed``.
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            emails_service.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        monkeypatch.setattr(
+            emails_service, "build_manager_for_accounts",
+            self._partial_builder(_ACCOUNT_ID_2, fetch_exc=EmailExternalAPIError("provider 500")),
+        )
+
+        result = emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+        assert result.total_synced == 1
+        assert [d.account_id for d in result.accounts] == [_ACCOUNT_ID]
+        assert len(result.failed_accounts) == 1
+        assert result.failed_accounts[0].account_id == _ACCOUNT_ID_2
+        assert result.failed_accounts[0].reason == "sync_failed"
+
+    def test_all_accounts_failing_still_raises_account_not_connected(self, monkeypatch):
+        # Every account's token is dead → 0 synced → genuine total failure → the
+        # deferred raise still fires (409), unchanged from before Option A. The
+        # uniform ``fake_client_kwargs`` suffices here (both fail identically).
+        _patch_common(monkeypatch, fake_client_kwargs={
+            "auth_silent_exc": EmailAuthError("expired"),
+        })
+        monkeypatch.setattr(
+            emails_service.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        with pytest.raises(AccountNotConnected):
             emails_service.sync_email_metadata(_MAILBOX_ID, _USER_ID)
 
     def test_persists_refreshed_tokens(self, monkeypatch):

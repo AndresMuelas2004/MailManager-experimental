@@ -37,11 +37,39 @@ class AccountSyncDetail(BaseModel):
     sync_cursor: str | None = None
 
 
+class AccountSyncFailure(BaseModel):
+    """One account that failed inside a partially-successful mailbox sync.
+
+    ``reason`` is a stable category string (NOT the internal exception
+    message, so no internal detail leaks to the client — API CLAUDE.md
+    §9.4): ``"account_not_connected"`` when the failure is an expired /
+    revoked token (auth), ``"sync_failed"`` for any other per-account
+    failure. The frontend resolves the account's address from
+    ``account_id`` + ``provider`` and uses ``reason`` to phrase the
+    non-blocking "reconnect this account" notice.
+    """
+
+    account_id: str
+    provider: str
+    reason: str
+
+
 class SyncResultOut(BaseModel):
-    """Response for the sync-metadata endpoint."""
+    """Response for the sync-metadata endpoint.
+
+    ``failed_accounts`` carries the per-account failures of a mailbox
+    (unified) sync that still succeeded for at least one account: the
+    healthy accounts persisted and are reported in ``accounts``, while
+    the dead one(s) travel here instead of aborting the call with a 409.
+    It is empty on a full success, on a single-account sync, and on the
+    total-failure path (which still raises). ``default_factory=list``
+    keeps every existing construction site (``total_synced=...,
+    accounts=...``) valid.
+    """
 
     total_synced: int
     accounts: list[AccountSyncDetail]
+    failed_accounts: list[AccountSyncFailure] = Field(default_factory=list)
 
 
 class TrashItem(BaseModel):

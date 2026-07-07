@@ -141,11 +141,16 @@ El detalle completo de favoritos (la asimetría de conteos en la respuesta, por 
 
 ## 7. Multi-cuenta: una sincronización, varias cuentas, fallos aislados
 
-Cuando se sincroniza la **vista unificada** de un mailbox con varias cuentas, la app sincroniza **todas** sus cuentas en la misma operación. Lo importante es cómo trata los fallos: el fracaso de una cuenta **no** tumba a las demás. Cada cuenta se sincroniza y reporta su propio resultado; los errores por cuenta se recogen y se evalúan al final, en vez de abortar el lote completo al primer tropiezo.
+Cuando se sincroniza la **vista unificada** de un mailbox con varias cuentas, la app sincroniza **todas** sus cuentas en la misma operación. Lo importante es cómo trata los fallos: el fracaso de una cuenta **no** tumba a las demás. Cada cuenta se sincroniza y reporta su propio resultado; los errores por cuenta se recogen y se evalúan **al final**, en vez de abortar el lote completo al primer tropiezo. La autenticación se refresca silenciosamente cuando es posible (tokens renovados se vuelven a guardar), y solo se marca como fallida la cuenta cuyo problema no se puede resolver solo (típicamente, un token caducado o revocado que exige reconexión).
 
-Esto significa que, si un usuario tiene una cuenta de Gmail sana y una de Outlook con el token caducado, sincronizar la vista unificada actualiza la de Gmail y reporta el problema de la de Outlook, sin dejar al usuario sin nada. La autenticación se refresca silenciosamente cuando es posible (tokens renovados se vuelven a guardar), y solo se escala como error lo que no se puede resolver solo.
+La distinción que gobierna el resultado es **cuántas cuentas lograron sincronizar**:
 
-> **Ejemplo.** Vista unificada con tres cuentas. Una sincroniza 12 correos nuevos, otra 0, y la tercera falla porque su autorización expiró. El listado se actualiza con los 12 nuevos de la primera; la app no muestra una pantalla de error global por culpa de la tercera, pero sí refleja que esa cuenta tuvo un problema.
+- **Éxito parcial — al menos una cuenta va bien.** Las cuentas sanas persisten y el listado se actualiza con su correo; las cuentas que fallaron **no** tumban la operación: se devuelven **identificadas** (para que la vista pueda nombrarlas e invitar a reconectarlas) como parte de una respuesta **correcta**, sin escalar ningún error bloqueante. Esto es lo que permite que una sola cuenta desconectada ya **no** deje sin actualizar a toda la bandeja unificada — el fallo histórico que esta funcionalidad corrige.
+- **Fallo total — ninguna cuenta pudo sincronizar.** Ahí sí se escala el error, porque de verdad no se pudo traer nada. Este caso cubre también la **vista de una sola cuenta** cuya única cuenta está rota: al no haber ninguna otra que salvar, el fallo es total por definición.
+
+Cómo se traduce esto en la cabecera de la vista —el aviso rojo bloqueante del fallo total frente al aviso sutil que nombra la cuenta a reconectar en el éxito parcial— es una capa de presentación que vive en su propia feature: **[refrescar-y-estado-sincronizacion.md](refrescar-y-estado-sincronizacion.md) § 5.1**.
+
+> **Ejemplo.** Vista unificada con tres cuentas. Una sincroniza 12 correos nuevos, otra 0, y la tercera falla porque su autorización expiró. El listado **se actualiza** con los 12 nuevos de la primera y refleja que la tercera tuvo un problema; la app **no** muestra un error global bloqueante por culpa de la tercera. Solo si las **tres** fallaran, la operación entera se daría por fallida.
 
 ---
 
@@ -159,7 +164,7 @@ Para cerrar, el flujo completo tal como se vive delante de la pantalla:
 4. El listado **se repinta** con las novedades. Si no hubo novedades, no cambia nada visible.
 5. Los **borradores** se sincronizan por reemplazo completo por cuenta (conservando la metadata de respuesta local).
 6. Los **favoritos** se reconcilian solo cuando el usuario pulsa su botón, marcando/desmarcando lo que el proveedor diga sobre los correos que ya existen en local.
-7. Si una cuenta del lote falla, las demás siguen; el problema se reporta sin tumbar la sincronización entera.
+7. Si una cuenta del lote falla pero **al menos otra** se sincroniza, las demás se actualizan igual y el fallo se reporta aparte, **sin** tumbar la operación (éxito parcial); solo si **todas** fallan se escala como error.
 
 Y lo que **no** pasa: no se baja el histórico completo, no se sincroniza en background con la app cerrada, no se descargan cuerpos ni adjuntos "por si acaso", y un correo recién llegado no aparece hasta la siguiente sincronización del listado donde vive.
 

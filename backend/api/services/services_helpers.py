@@ -89,7 +89,7 @@ from api.errors.exceptions import (
     TokenIntegrityError,
     Unauthorized,
 )
-from api.schemas.email import EmailMetadataOut
+from api.schemas.email import AccountSyncFailure, EmailMetadataOut
 from database import (
     account_store,
     email_content_store,
@@ -391,6 +391,37 @@ def is_auth_error(exc: Exception) -> bool:
     Return True when the exception is a typed core authentication error.
     """
     return isinstance(exc, EmailAuthError)
+
+
+def build_account_sync_failures(
+    errors: dict[str, Exception],
+    label_lookup: dict[str, tuple[str, str, str]],
+) -> list[AccountSyncFailure]:
+    """Turn the per-account ``{account_label: exception}`` failure map into
+    :class:`AccountSyncFailure` rows WITHOUT raising.
+
+    Used on the partial-success path of ``sync_email_metadata``: the healthy
+    accounts have already persisted, so the failures (auth AND non-auth) must
+    be reported inside the 200 response instead of aborting the call. This is
+    the deliberate counterpart to :func:`raise_on_silent_auth_errors`, which
+    raises immediately on the first non-auth error and cannot walk the whole
+    map. ``label_lookup`` maps ``account_label -> (mailbox_id, account_id,
+    provider)``; labels absent from it are skipped (mirrors the sync loop's
+    own ``label_lookup.get`` guard). ``is_auth_error`` alone decides whether a
+    row is ``"account_not_connected"`` (expired/revoked token) or
+    ``"sync_failed"`` (any other failure).
+    """
+    failures: list[AccountSyncFailure] = []
+    for label, error in errors.items():
+        ids = label_lookup.get(label)
+        if not ids:
+            continue
+        _mailbox_id, account_id, provider = ids
+        reason = "account_not_connected" if is_auth_error(error) else "sync_failed"
+        failures.append(AccountSyncFailure(
+            account_id=account_id, provider=provider, reason=reason,
+        ))
+    return failures
 
 
 def _wrap_secret(value: Any) -> Any:

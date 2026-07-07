@@ -719,4 +719,53 @@ describe('UnifiedInboxPage — refresh control', () => {
     // After the sync resolves the "last updated" status renders under the button.
     await waitFor(() => expect(screen.getByText(/Última actualización:/)).toBeInTheDocument());
   });
+
+  it('shows an amber partial-failure notice resolving the disconnected account address', async () => {
+    // A second account that is disconnected. It MUST appear in the accounts
+    // list so the page can resolve account_id → email_address for the notice.
+    const brokenAccount = {
+      account_id: 'a_2',
+      mailbox_id: 'mb_1',
+      provider: 'outlook',
+      display_label: 'Outlook',
+      config: {},
+      email_address: 'roto@outlook.com',
+      signature_html: null,
+    };
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () =>
+        HttpResponse.json([accountFixture, brokenAccount]),
+      ),
+      // The mount auto-sync resolves 200 with the disconnected account reported
+      // (unified partial success — Option A), NOT a 409.
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () =>
+        HttpResponse.json({
+          total_synced: 2,
+          accounts: [{ account_id: 'a_1', provider: 'gmail', emails_synced: 2, sync_cursor: 'c1' }],
+          failed_accounts: [
+            { account_id: 'a_2', provider: 'outlook', reason: 'account_not_connected' },
+          ],
+        }),
+      ),
+    );
+
+    renderInboxAtMailbox();
+
+    // The amber notice names the resolved address, not the raw account id, and
+    // is the non-blocking amber style (not the red total-failure notice).
+    const notice = await screen.findByText(
+      'No se pudo sincronizar: roto@outlook.com — reconéctala',
+    );
+    expect(notice).toHaveClass('text-amber-600');
+    // The listing still rendered (a partial success does not empty the table).
+    expect(screen.getByText('Welcome to the platform')).toBeInTheDocument();
+  });
 });
