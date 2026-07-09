@@ -1,12 +1,12 @@
 ---
 name: reviewDiffsBeforeCommitAll
-description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as background subagents launched in one go), waits in silence, persists the full consolidated report to a .md file and replies with a single short line. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
+description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as foreground subagents launched concurrently in one go and returning their results to this fork's own execution), consolidates them without yielding its turn, persists the full consolidated report to a .md file and replies with a single short line. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
 argument-hint: "[opcional] flags del hijo backend (--tests dir1 ... / --md path1 ...), '--out <ruta.md>' con el destino del informe persistido y/o '--informe <ruta.md>' con el informe final del pipeline al que añadir la sección de subagentes lanzados/caídos"
 context: fork
 agent: pipeline-skill-runner
 ---
 
-Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in background subagents launched by the children; this skill only coordinates the combined launch, waits in silence, merges the verdicts, **persists the full consolidated report to a `.md` file and replies with a single short line** (this skill runs in an isolated forked context: its response is data for the caller, and the report's value lives in the persisted file).
+Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in foreground subagents launched by the children; this skill only coordinates the combined launch, waits for their results within its own execution (never yielding its turn, because a fork is not re-woken after ceding its turn), merges the verdicts, **persists the full consolidated report to a `.md` file and replies with a single short line** (this skill runs in an isolated forked context: its response is data for the caller, and the report's value lives in the persisted file).
 
 Usage: `/reviewDiffsBeforeCommitAll` (same optional `$ARGUMENTS` as the backend child: `--tests dir1 dir2 ...` and `--md path1 path2 ...` — passed through to the backend child only; the frontend child takes no arguments). Additionally accepts `--out <path.md>`: the destination file for the persisted consolidated report (not forwarded to any child). Also accepts `--informe <path.md>` (typically passed by the /implementar-feature-completa pipeline): the pipeline's user-facing final report, to which this skill appends its launched-subagents section (step 5.5); without it, that section is simply not written anywhere.
 
@@ -28,19 +28,19 @@ Execute the backend child's PHASE 1 and the frontend child's Step 1, but do NOT 
 
 ### 3 — Single combined launch
 
-Launch ALL background agents from both children in ONE single message: the backend child's entire fleet (its PHASE 2, including its architecture-compliance-reviewer) plus the frontend child's architecture-compliance-reviewer (its Step 2). This combined launch is the only deviation from running each child standalone — it exists so no agent waits on another.
+Launch ALL agents from both children **in the foreground** (`run_in_background: false`) in ONE single message — they still run concurrently, but their results return to THIS fork's own execution instead of firing background notifications (a fork that cedes its turn is never re-woken to consolidate, which is the bug this fixes): the backend child's entire fleet (its PHASE 2, including its architecture-compliance-reviewer) plus the frontend child's architecture-compliance-reviewer (its Step 2). This combined launch is the only deviation from running each child standalone — it exists so no agent waits on another.
 
 Print one brief message listing everything launched.
 
 Keep your own launch roster — for every agent launched: agent type, side (backend/frontend), and a one-line objective (what it reviews). You will need it in step 5 for the `reviewers-caidos` count and the `--informe` section. If a child skill crashes before launching its agents, its whole side counts as ONE crashed entry in the roster ("review <side> — no llegó a lanzarse").
 
-### 4 — Wait in silence
+### 4 — Receive every result inside this fork
 
-STOP. Do NOT call any tool, do NOT poll, and do NOT do any other work in the main conversation. Wait for the automatic completion notifications of every launched agent.
+Because the agents were launched in the foreground, the harness returns all of their results to THIS fork's own execution as the results of your Agent calls. Do NOT yield your turn, do NOT poll, and do NOT wait for external completion notifications — a fork is not re-woken after ceding its turn (that background-and-wait pattern works only in the main conversation, which is exactly the bug this replaces). As soon as every launched agent's result is in hand, proceed to step 5. Never emit an intermediate "still waiting" message: your only turn-ending output is the final line of step 5.
 
 ### 5 — Consolidate and persist
 
-Only when ALL launched agents have reported back:
+With every launched agent's result already returned to your execution:
 
 1. Resolve the destination file: the `--out <path.md>` argument if provided; otherwise `nueva-implementacion-en-curso/review-suelta-<YYYYMMDD-HHmmss>.md` at the repo root (create the directory if missing).
 2. Write to that file — with the Write tool, as one single document, never printed to the conversation — in this order:

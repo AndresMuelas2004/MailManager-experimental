@@ -1,6 +1,6 @@
 ---
 name: reviewDiffsBeforeCommitBackend
-description: "Exhaustive pre-commit backend review: analyze diffs, determine affected backend layers, launch parallel background review subagents (error handling, dead code, tests, docs, queries, architecture compliance), wait silently, and consolidate findings into a severity-graded report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitBackend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
+description: "Exhaustive pre-commit backend review: analyze diffs, determine affected backend layers, launch parallel foreground review subagents (error handling, dead code, tests, docs, queries, architecture compliance) whose results return to this execution, and consolidate findings into a severity-graded report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitBackend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
 ---
 
 Exhaustive pre-commit review of the backend side: analyze diffs, determine affected backend layers, launch parallel background review subagents (including an architecture-compliance-reviewer), wait in silence, and consolidate findings into a severity-graded report.
@@ -50,9 +50,9 @@ Execute these steps sequentially:
 
 ---
 
-## PHASE 2 — Launch All Agents (single message, all `run_in_background: true`)
+## PHASE 2 — Launch All Agents (single message, foreground — results return to this execution)
 
-Launch ALL of the following agents in a SINGLE message with multiple Agent tool calls. Every agent uses `run_in_background: true`.
+Launch ALL of the following agents in a SINGLE message with multiple Agent tool calls, so they run concurrently. Every agent runs in the **foreground** (`run_in_background: false`) so its result returns to THIS execution — never `run_in_background: true`, because when this skill runs forked (inside `/reviewDiffsBeforeCommitAll`) a fork that cedes its turn is never re-woken to consolidate.
 
 ### Per affected backend directory (up to 4 dirs x 2 agents = 8 agents):
 
@@ -117,13 +117,13 @@ This is a read-only audit: you must not modify any file. Do not propose edits to
 
 ### After launching:
 
-Print a brief message listing all agents launched (count and types) and tell the user you will report when they all finish. Then STOP — do NOT add any more tool calls. Do NOT poll, retry, resume, or call any tool, and do NOT do any other work in the main conversation. Wait for automatic completion notifications.
+Print a brief message listing all agents launched (count and types). Because they were launched in the foreground, the harness returns all their results to THIS execution as the results of your Agent calls — do NOT yield your turn and do NOT wait for external completion notifications. As soon as every result is in hand, proceed to PHASE 3.
 
 ---
 
-## PHASE 3 — Consolidation (only after ALL agents complete)
+## PHASE 3 — Consolidation (with every agent's result already returned to this execution)
 
-Only when ALL agents have reported back (via automatic completion notifications):
+With every launched agent's result already in hand (they returned to this execution because they were launched in the foreground):
 
 1. Collect all findings from every subagent. Set the architecture-compliance-reviewer's report aside: it is presented verbatim in its own section and its findings are NOT decomposed into the Group A/B classification below — only its verdict and finding severities feed the verdict rules (step 6).
 

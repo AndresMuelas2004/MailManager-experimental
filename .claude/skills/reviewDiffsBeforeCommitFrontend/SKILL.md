@@ -1,6 +1,6 @@
 ---
 name: reviewDiffsBeforeCommitFrontend
-description: "Pre-commit frontend architecture review: launches one background architecture-compliance-reviewer subagent over the modified frontend files, waits in silence, and relays its report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitFrontend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
+description: "Pre-commit frontend architecture review: launches one foreground architecture-compliance-reviewer subagent over the modified frontend files, waits for its result within its own execution, and relays its report. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitFrontend directly or as part of the /reviewDiffsBeforeCommitAll orchestrator."
 ---
 
 Pre-commit review of the **frontend** side. A single `architecture-compliance-reviewer` subagent audits the modified frontend files against the frontend documentation hierarchy. This skill does no inline review itself — it launches the reviewer in the background, waits in silence, and relays the report.
@@ -17,13 +17,13 @@ Run in parallel via Bash:
 
 Combine both lists and deduplicate. If the combined list is empty → inform the user "No frontend diffs found (staged or unstaged). Nothing to review." and STOP without launching anything.
 
-## Step 2 — Launch the architecture reviewer (background)
+## Step 2 — Launch the architecture reviewer (foreground)
 
 Launch exactly ONE agent:
 
 - `subagent_type`: `architecture-compliance-reviewer`
 - `description`: `Frontend architecture compliance review`
-- `run_in_background`: `true`
+- `run_in_background`: `false`  (foreground — its result returns to this execution; a fork is not re-woken after ceding its turn, so background+wait would strand the consolidation)
 - `prompt` (substitute `<path N>` with the actual resolved frontend paths from Step 1):
 
 ```
@@ -45,9 +45,9 @@ This is a read-only audit: you must not modify any file. Do not propose edits to
 
 Print a one-line note that the reviewer was launched.
 
-## Step 3 — Wait in silence
+## Step 3 — Receive the result inside this execution
 
-After launching, STOP. Do NOT call any tool, do NOT poll, and do NOT do any other work in the main conversation. Wait for the agent's automatic completion notification.
+Because the reviewer was launched in the foreground, the harness returns its result to THIS execution as the result of your Agent call — do NOT yield your turn and do NOT wait for an external completion notification. As soon as the result is in hand, proceed to Step 4.
 
 ## Step 4 — Relay the report
 
