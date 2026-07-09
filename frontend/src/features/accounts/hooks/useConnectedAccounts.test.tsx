@@ -14,21 +14,31 @@
 
 import type { ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import useConnectedAccounts from './useConnectedAccounts';
 import { I18nProvider } from '../../../lib/i18n';
 import { server } from '../../../test/msw/server';
+import { createTestQueryClient } from '../../../test/renderWithProviders';
 
 const API_BASE = 'http://localhost:8000';
 const MAILBOX_ID = 'mb_test';
 
-// The hook now reads error copy through ``useTranslation``, so every
-// ``renderHook`` must run inside the real I18nProvider. The language is pinned
-// to Spanish (seeded below) so the existing Spanish error-copy assertions hold.
+// The hook reads error copy through ``useTranslation`` AND holds a
+// ``useQueryClient`` (it invalidates the sidebar's ['accounts'] query on
+// add/remove/rename), so every ``renderHook`` must run inside both the real
+// I18nProvider and a QueryClientProvider. The client is rebuilt per test (in
+// beforeEach) for isolation. The language is pinned to Spanish (seeded below)
+// so the existing Spanish error-copy assertions hold.
+let queryClient: QueryClient;
 function I18nWrapper({ children }: { children: ReactNode }) {
-  return <I18nProvider>{children}</I18nProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>{children}</I18nProvider>
+    </QueryClientProvider>
+  );
 }
 
 const EXISTING_ACCOUNT = {
@@ -78,6 +88,7 @@ let openSpy: MockInstance<typeof window.open>;
 
 beforeEach(() => {
   window.localStorage.setItem('lang', 'es');
+  queryClient = createTestQueryClient();
   popup = createFakePopup();
   openSpy = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
 });
@@ -323,7 +334,7 @@ describe('useConnectedAccounts.reconnectAccount — interactive OAuth re-auth', 
 });
 
 describe('useConnectedAccounts.editAccountLabel — inline rename', () => {
-  it('PATCHes the new label and replaces the entry in place (no query invalidation)', async () => {
+  it('PATCHes the new label and replaces the entry in place', async () => {
     let patchedBody: Record<string, unknown> | null = null;
     const { result } = await setupHookWithAccount();
     server.use(
@@ -349,7 +360,8 @@ describe('useConnectedAccounts.editAccountLabel — inline rename', () => {
     // The label is trimmed before it reaches the wire.
     expect(patchedBody).toEqual({ display_label: 'Personal Gmail' });
     // The hook holds its accounts in useState, so the updated AccountOut
-    // replaces the entry's account in place (the card re-renders).
+    // replaces the entry's account in place (the card re-renders). It also
+    // invalidates the sidebar's ['accounts'] query, not observed in this test.
     expect(result.current.entries[0].account.display_label).toBe('Personal Gmail');
     expect(result.current.error).toBeNull();
   });

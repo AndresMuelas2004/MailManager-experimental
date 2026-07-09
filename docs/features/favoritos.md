@@ -78,9 +78,9 @@ Existe una pestaña dedicada que lista **únicamente** los correos marcados como
 Favoritos aparece en **dos sitios** según desde dónde se mire, y los dos se comportan igual salvo por el alcance del listado:
 
 - **A nivel de mailbox** (la entrada de "Favoritos" del menú lateral): lista los favoritos de **todas** las cuentas del mailbox.
-- **A nivel de una cuenta concreta** (una pestaña "Favoritos", con icono de estrella, dentro de la barra de pestañas de la cuenta, **entre "Enviados" y "Spam"**): lista solo los favoritos de **esa** cuenta. Su posición copia el orden en que la barra lateral del mailbox ya coloca Favoritos, y su botón de sincronizar reconcilia solo la cuenta actual (ver § 5).
+- **A nivel de una cuenta concreta** (la entrada "Favoritos" de la barra lateral cuando el selector de cuentas está en una cuenta): lista solo los favoritos de **esa** cuenta. Su botón de sincronizar reconcilia solo la cuenta actual (ver § 5).
 
-La pestaña de cuenta es el cierre de la segunda mitad de § 4.1 de este mismo documento: la afirmación *"en una cuenta concreta, solo los de esa cuenta"* ya estaba escrita pero el código nunca la había implementado; ahora sí existe. No hubo cambios de backend ni nuevas llamadas al proveedor — reutiliza el mismo listado de favoritos filtrando por la cuenta.
+La vista de favoritos por cuenta es el cierre de la segunda mitad de § 4.1 de este mismo documento: la afirmación *"en una cuenta concreta, solo los de esa cuenta"* ya estaba escrita pero el código nunca la había implementado; ahora sí existe. No hubo cambios de backend ni nuevas llamadas al proveedor — reutiliza el mismo listado de favoritos filtrando por la cuenta.
 
 ### 4.1 Qué muestra
 

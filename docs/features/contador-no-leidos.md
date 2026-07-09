@@ -9,8 +9,7 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 - **De dónde sale el correo y qué es "lo sincronizado"** se documenta en [listado-de-correos.md](listado-de-correos.md) (el contador lee de la misma copia local) y en [sincronizacion.md](sincronizacion.md).
 - **La agrupación por conversación** del listado se documenta en [conversaciones.md](conversaciones.md). Es la clave para entender por qué el badge puede ser mayor que el número de filas (sección 3).
 - **Las acciones que cambian "leído / no leído"** (abrir, marcar leído/no leído, abrir conversación, mover a papelera, spam) se documentan en [acciones-sobre-correos.md](acciones-sobre-correos.md). El contador solo **refleja** el efecto de esas acciones; no las añade ni las modifica.
-- **El concepto de buzón (mailbox) y la vista de una cuenta vs. la unificada** se documenta en [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md).
-- **El área de Ajustes › Cuentas conectadas** (donde aparece el badge por tarjeta) se documenta en [ajustes.md](ajustes.md).
+- **El concepto de buzón (mailbox) y la vista de una cuenta vs. la unificada**, y el **selector de cuentas** de la barra lateral que fija el ámbito del que cuelga el badge, se documentan en [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md).
 
 ---
 
@@ -18,17 +17,15 @@ Fronteras con otras features (no se cubren aquí, tienen su propio documento):
 
 Un **badge numérico de correos sin leer** que aparece junto a las entradas de navegación del correo. De un vistazo, el usuario sabe **dónde hay correo nuevo por leer** sin entrar bandeja por bandeja ni cuenta por cuenta. Es la misma señal que Gmail y Outlook muestran junto a cada carpeta y en el icono de la app.
 
-El badge es **informativo, no es un botón**. Para ir a una bandeja se sigue usando la propia entrada del menú o la pestaña; el badge solo cuelga de ella como indicador.
+El badge es **informativo, no es un botón**. Para ir a una bandeja se sigue usando la propia entrada del menú lateral; el badge solo cuelga de ella como indicador.
 
 ## 2. Dónde aparece
 
-El contador se muestra en **cuatro superficies dentro de la app** más el **título de la pestaña del navegador**:
+El contador se muestra en el **menú lateral** —que refleja el ámbito activo del selector de cuentas— más el **título de la pestaña del navegador**:
 
-1. **Menú lateral — «Bandeja unificada».** Total de sin leer de la **bandeja de entrada**, sumando **todas las cuentas** del buzón actual.
-2. **Menú lateral — «Spam».** Total de sin leer en la **carpeta de spam**, sumando todas las cuentas del buzón actual.
-3. **Pestañas de una cuenta concreta.** Al abrir una cuenta individual (desde Ajustes › Cuentas conectadas), las pestañas **«Bandeja»** y **«Spam»** muestran los sin leer **de esa cuenta** en cada carpeta. Las demás pestañas de la cuenta (Enviados, Favoritos, Archivados, Borradores, Papelera) **no** llevan badge, pero sí muestran los de Bandeja/Spam mientras se está en ellas (el badge cuelga de la pestaña, no de la página abierta).
-4. **Ajustes › Cuentas conectadas — tarjeta de cada cuenta.** Cada tarjeta muestra los sin leer de la **bandeja de entrada** de esa cuenta (la tarjeta no muestra el de spam).
-5. **Título de la pestaña del navegador.** El título refleja el total de sin leer de la **bandeja de entrada del buzón actual**, con el formato **«(N) MailManager»**. Cuando no hay sin leer, vuelve a ser **«MailManager»**. El número exacto que muestra el título (incluido su tope) está en el gemelo de límites.
+1. **Menú lateral en la vista unificada — «Bandeja unificada» y «Spam».** Totales de sin leer de la **bandeja de entrada** y de la **carpeta de spam**, sumando **todas las cuentas** del buzón actual.
+2. **Menú lateral dentro de una cuenta concreta — «Bandeja de entrada» y «Spam».** Cuando el selector de cuentas está en una cuenta, esas dos mismas entradas muestran los sin leer **de esa cuenta** en cada carpeta. Es el mismo menú: solo cambia el ámbito del que cuelga el número.
+3. **Título de la pestaña del navegador.** El título refleja el total de sin leer de la **bandeja de entrada del buzón actual** —siempre a nivel de buzón, no del ámbito de cuenta que esté activo—, con el formato **«(N) MailManager»**. Cuando no hay sin leer, vuelve a ser **«MailManager»**. El número exacto que muestra el título (incluido su tope) está en el gemelo de límites.
 
 > **Por qué solo Bandeja de entrada y Spam llevan contador.** Las entradas **Enviados, Favoritos, Bandejas ficticias, Borradores y Papelera no tienen badge**: no tienen una noción natural de «no leído». Los enviados y los borradores son del propio usuario (no se "leen"); Favoritos, Papelera y las bandejas ficticias son vistas **transversales** que cruzan bandejas, donde "cuántos sin leer" no es una pregunta con una respuesta única y útil. Es una decisión de producto, no una limitación técnica.
 
@@ -84,4 +81,4 @@ Resumen de las fronteras (el catálogo completo, con el porqué de cada una, est
 
 ## 7. Resumen en una frase
 
-> El contador de no leídos es un badge numérico —en «Bandeja unificada» y «Spam» del menú, en las pestañas «Bandeja»/«Spam» de cada cuenta, en cada tarjeta de cuenta conectada y en el título de la pestaña del navegador como «(N) MailManager»— que suma los **mensajes individuales sin leer** (no conversaciones, por eso puede superar al número de filas del listado) de la **copia ya sincronizada** de la bandeja de entrada o de spam, se actualiza solo y sin recargar tras abrir, marcar leído/no leído (también en bloque), mover a papelera o spam y sincronizar, oculta el «0» y abrevia los números altos, y deliberadamente no aparece en Enviados, Favoritos, Borradores, Papelera ni bandejas ficticias; las cifras exactas y todo lo que no soporta viven en [../limits/contador-no-leidos.md](../limits/contador-no-leidos.md).
+> El contador de no leídos es un badge numérico —en «Bandeja unificada» y «Spam» del menú lateral en la vista unificada, en «Bandeja de entrada» y «Spam» del mismo menú al entrar en una cuenta, y en el título de la pestaña del navegador como «(N) MailManager»— que suma los **mensajes individuales sin leer** (no conversaciones, por eso puede superar al número de filas del listado) de la **copia ya sincronizada** de la bandeja de entrada o de spam, se actualiza solo y sin recargar tras abrir, marcar leído/no leído (también en bloque), mover a papelera o spam y sincronizar, oculta el «0» y abrevia los números altos, y deliberadamente no aparece en Enviados, Favoritos, Borradores, Papelera ni bandejas ficticias; las cifras exactas y todo lo que no soporta viven en [../limits/contador-no-leidos.md](../limits/contador-no-leidos.md).

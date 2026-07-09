@@ -220,6 +220,60 @@ describe('AccountInboxPage — conversation view', () => {
     ]);
   });
 
+  it('marks the opened listing row itself and sends propagate_thread (Outlook duplicate-id fix)', async () => {
+    // Outlook persists the SAME message under different REST ids in the sync
+    // (listing) vs the conversation fetch, so marking only the conversation
+    // members leaves the listing row (a separate DB row) unread. The viewer
+    // must include the opened row's OWN id and send propagate_thread=true so
+    // the backend flips every row of the thread.
+    const readBodies: Array<{
+      items: Array<{ provider_message_id: string }>;
+      propagateThread: unknown;
+    }> = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: [
+            makeMessage('listing_rep', {
+              subject: 'Unread thread',
+              thread_message_count: 2,
+              is_read: false,
+            }),
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts/a_1/emails/:pmid/conversation`, () =>
+        HttpResponse.json({
+          thread_id: 't_1',
+          // The conversation returns a DIFFERENT id than the listing row.
+          messages: [makeMessage('conv_id', { from_name: 'Convo', is_read: false })],
+        }),
+      ),
+      http.patch(`${API_BASE}/mailboxes/:mailboxId/emails/read-status`, async ({ request }) => {
+        const body = (await request.json()) as {
+          items: Array<{ provider_message_id: string }>;
+          propagate_thread?: boolean;
+        };
+        readBodies.push({ items: body.items, propagateThread: body.propagate_thread });
+        return HttpResponse.json({ updated_count: 2, accounts: [] });
+      }),
+    );
+
+    renderAccountInbox();
+    await waitFor(() => expect(screen.getByText('Unread thread')).toBeInTheDocument());
+    const user = userEvent.setup();
+    await user.click(screen.getByText('Unread thread'));
+
+    await waitFor(() => expect(readBodies).toHaveLength(1));
+    expect(readBodies[0].propagateThread).toBe(true);
+    const ids = readBodies[0].items.map((i) => i.provider_message_id).sort();
+    expect(ids).toEqual(['conv_id', 'listing_rep']);
+  });
+
   it('lazily loads bodies: the collapsed card does not request its content until expanded', async () => {
     const contentCalls: string[] = [];
     server.use(
@@ -695,39 +749,5 @@ describe('AccountInboxPage — sort + quick-filter controls', () => {
       expect(screen.getByText('No hay correos que coincidan con los filtros')).toBeInTheDocument(),
     );
     expect(screen.queryByText('No hay correos en esta bandeja')).not.toBeInTheDocument();
-  });
-});
-
-// Unread badge on the account tabs. The page feeds AccountTabs the per-account
-// counts from useAccountUnreadCounts, which extracts this account's entry from
-// the mailbox-wide breakdown returned by /emails/unread-count.
-describe('AccountInboxPage — account tab unread badge', () => {
-  it('shows the inbox tab badge with this account unread total', async () => {
-    server.use(
-      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
-        HttpResponse.json({ items: [makeMessage('m1')], total: 1, limit: 50, offset: 0 }),
-      ),
-      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
-      http.get(`${API_BASE}/mailboxes/mb_1/emails/unread-count`, ({ request }) => {
-        const box = new URL(request.url).searchParams.get('box') ?? 'ALL_MAIL';
-        // 3 unread in ALL_MAIL for this account, none in SPAM.
-        const total = box === 'SPAM' ? 0 : 3;
-        return HttpResponse.json({
-          mailbox_id: 'mb_1',
-          box,
-          total,
-          accounts: [{ account_id: 'a_1', unread: total }],
-        });
-      }),
-    );
-
-    renderAccountInbox();
-
-    // The inbox tab carries the badge "3 sin leer"; spam (0) shows none.
-    const badge = await screen.findByLabelText('3 sin leer');
-    expect(badge).toHaveTextContent('3');
-    expect(screen.queryByLabelText('0 sin leer')).not.toBeInTheDocument();
-    // The badge belongs to the inbox tab (the link to this account's inbox).
-    expect(badge.closest('a')).toHaveAttribute('href', '/m/mb_1/account/a_1/inbox');
   });
 });

@@ -255,3 +255,101 @@ describe('MailboxLayoutPage — unread badges and tab title', () => {
     expect(document.title).toBe('MailManager');
   });
 });
+
+const accountFixture = {
+  account_id: 'a_1',
+  mailbox_id: 'mb_1',
+  provider: 'gmail',
+  display_label: 'Gmail',
+  config: {},
+  email_address: 'one@example.com',
+  signature_html: null,
+};
+
+// Mount the folder routes for both scopes so the switcher's dynamic-base links
+// resolve and useMatch can detect the account scope from the URL.
+function renderScope(initialEntry: string) {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/m/:mailboxId" element={<MailboxLayoutPage />}>
+        <Route path="inbox" element={<div>Unified inbox</div>} />
+        <Route path="archive" element={<div>Unified archive</div>} />
+        <Route path="virtual-mailboxes" element={<div>Virtual mailboxes</div>} />
+        <Route path="account/:accountId">
+          <Route path="inbox" element={<div>Account inbox</div>} />
+          <Route path="archive" element={<div>Account archive</div>} />
+        </Route>
+      </Route>
+    </Routes>,
+    { initialEntries: [initialEntry] },
+  );
+}
+
+describe('MailboxLayoutPage — sidebar scope switcher', () => {
+  it('keeps the account list collapsed and reveals it from the trigger', async () => {
+    stubMailboxes();
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderScope('/m/mb_1/inbox');
+    const user = userEvent.setup();
+
+    // Collapsed by default: the trigger shows the unified scope; accounts hidden.
+    const trigger = await screen.findByRole('button', { name: /Todas las cuentas/ });
+    expect(screen.queryByText('one@example.com')).not.toBeInTheDocument();
+
+    // Expanding the trigger reveals each account.
+    await user.click(trigger);
+    expect(screen.getByText('one@example.com')).toBeInTheDocument();
+  });
+
+  it('points folder links at the account base inside an account scope, keeping Bandejas ficticias global', async () => {
+    stubMailboxes();
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderScope('/m/mb_1/account/a_1/inbox');
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+
+    // Folder links now target this account's routes (the inbox entry also swaps
+    // its label to "Bandeja de entrada" outside the unified scope).
+    expect(screen.getByRole('link', { name: 'Bandeja de entrada' })).toHaveAttribute(
+      'href',
+      '/m/mb_1/account/a_1/inbox',
+    );
+    expect(screen.getByRole('link', { name: 'Archivados' })).toHaveAttribute(
+      'href',
+      '/m/mb_1/account/a_1/archive',
+    );
+    // Bandejas ficticias has no per-account route → it always stays on the unified base.
+    expect(screen.getByRole('link', { name: 'Bandejas ficticias' })).toHaveAttribute(
+      'href',
+      '/m/mb_1/virtual-mailboxes',
+    );
+  });
+
+  it('shows the active account unread total on the inbox badge, not the mailbox-wide total', async () => {
+    stubMailboxes();
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+      http.get(`${API_BASE}/mailboxes/:mailboxId/emails/unread-count`, ({ params, request }) => {
+        const box = new URL(request.url).searchParams.get('box') ?? 'ALL_MAIL';
+        // Mailbox-wide ALL_MAIL total is 8, but this account (a_1) has 7.
+        return HttpResponse.json({
+          mailbox_id: String(params.mailboxId),
+          box,
+          total: box === 'SPAM' ? 0 : 8,
+          accounts: [{ account_id: 'a_1', unread: box === 'SPAM' ? 0 : 7 }],
+        });
+      }),
+    );
+
+    renderScope('/m/mb_1/account/a_1/inbox');
+
+    // In the a_1 scope the inbox badge shows a_1's unread (7), not the total (8).
+    await waitFor(() => expect(screen.getByLabelText('7 sin leer')).toBeInTheDocument());
+    expect(screen.queryByLabelText('8 sin leer')).not.toBeInTheDocument();
+  });
+});

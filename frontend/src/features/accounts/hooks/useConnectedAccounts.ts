@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import {
   listAccounts,
@@ -9,12 +10,12 @@ import {
   updateAccount,
   getApiOrigin,
 } from '../../../api/endpoints/accounts';
-import { syncEmailMetadata, listEmails } from '../../../api/endpoints/emails';
+import { syncEmailMetadata } from '../../../api/endpoints/emails';
 import { syncDrafts } from '../../../api/endpoints/drafts';
 import { toUiError } from '../../../api/client/errors';
 import { getProviderMeta } from '../../../lib/providers';
 import { useTranslation } from '../../../lib/i18n';
-import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
+import type { AccountOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
 const OAUTH_RESULT_SOURCE = 'mailmanager-oauth';
@@ -61,7 +62,6 @@ function waitForOAuthOutcome(popup: Window, apiOrigin: string): Promise<OAuthOut
 
 export type AccountEntry = {
   account: AccountOut;
-  emails: EmailMetadataOut[];
   status: 'syncing' | 'ready' | 'error';
 };
 
@@ -83,6 +83,10 @@ type UseConnectedAccountsReturn = {
 
 export default function useConnectedAccounts(mailboxId: string): UseConnectedAccountsReturn {
   const { t } = useTranslation();
+  // Invalidated on add/remove/rename so the sidebar scope switcher
+  // (useMailboxAccounts, keyed ['accounts', mailboxId] — kept literal here to
+  // avoid a cross-feature import) refetches the updated account list.
+  const queryClient = useQueryClient();
   const [entries, setEntries] = useState<AccountEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [displayLabel, setDisplayLabel] = useState('');
@@ -100,38 +104,8 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         const accounts = await listAccounts(mailboxId);
         if (cancelled) return;
 
-        const initialEntries: AccountEntry[] = accounts.map((a) => ({
-          account: a,
-          emails: [],
-          status: 'syncing' as const,
-        }));
-        setEntries(initialEntries);
+        setEntries(accounts.map((a) => ({ account: a, status: 'ready' as const })));
         setLoading(false);
-
-        await Promise.all(
-          accounts.map(async (account) => {
-            try {
-              const { items } = await listEmails(mailboxId, 'ALL_MAIL', account.account_id);
-              if (cancelled) return;
-              setEntries((prev) =>
-                prev.map((e) =>
-                  e.account.account_id === account.account_id
-                    ? { ...e, emails: items.slice(0, 3), status: 'ready' as const }
-                    : e,
-                ),
-              );
-            } catch {
-              if (cancelled) return;
-              setEntries((prev) =>
-                prev.map((e) =>
-                  e.account.account_id === account.account_id
-                    ? { ...e, status: 'ready' as const }
-                    : e,
-                ),
-              );
-            }
-          }),
-        );
       } catch (err) {
         if (!cancelled) {
           setError(toUiError(err));
@@ -212,30 +186,19 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     // here never roll the account back.
     const account = connectedAccount;
     const accountId = account.account_id;
-    setEntries((prev) => [...prev, { account, emails: [], status: 'syncing' }]);
+    setEntries((prev) => [...prev, { account, status: 'syncing' }]);
     setSelectedProvider('');
     setDisplayLabel('');
+    void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
 
     try {
-      const [syncResult] = await Promise.all([
+      await Promise.all([
         syncEmailMetadata(mailboxId, accountId),
         syncDrafts(mailboxId, accountId).catch(() => {}),
       ]);
-
-      if (syncResult.total_synced > 0) {
-        const { items } = await listEmails(mailboxId, 'ALL_MAIL', accountId);
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.account.account_id === accountId
-              ? { ...e, emails: items.slice(0, 3), status: 'ready' }
-              : e,
-          ),
-        );
-      } else {
-        setEntries((prev) =>
-          prev.map((e) => (e.account.account_id === accountId ? { ...e, status: 'ready' } : e)),
-        );
-      }
+      setEntries((prev) =>
+        prev.map((e) => (e.account.account_id === accountId ? { ...e, status: 'ready' } : e)),
+      );
     } catch (err) {
       setError(toUiError(err));
       setEntries((prev) =>
@@ -244,7 +207,7 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         ),
       );
     }
-  }, [canAdd, mailboxId, selectedProvider, displayLabel, t]);
+  }, [canAdd, mailboxId, selectedProvider, displayLabel, t, queryClient]);
 
   const removeAccount = useCallback(
     async (accountId: string) => {
@@ -252,11 +215,12 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
       try {
         await deleteAccount(mailboxId, accountId);
         setEntries((prev) => prev.filter((e) => e.account.account_id !== accountId));
+        void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
       } catch (err) {
         setError(toUiError(err));
       }
     },
-    [mailboxId],
+    [mailboxId, queryClient],
   );
 
   // Rename an already-connected account's label. The hook holds its accounts in
@@ -273,13 +237,14 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         setEntries((prev) =>
           prev.map((e) => (e.account.account_id === accountId ? { ...e, account: updated } : e)),
         );
+        void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
         return true;
       } catch (err) {
         setError(toUiError(err));
         return false;
       }
     },
-    [mailboxId],
+    [mailboxId, queryClient],
   );
 
   const reconnectAccount = useCallback(
@@ -341,27 +306,15 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
       // Re-sync with the refreshed credentials. A still-dead token surfaces as
       // a sync failure here (status 'error'), prompting another retry.
       try {
-        const [syncResult] = await Promise.all([
+        await Promise.all([
           syncEmailMetadata(mailboxId, accountId),
           syncDrafts(mailboxId, accountId).catch(() => {}),
         ]);
-
-        if (syncResult.total_synced > 0) {
-          const { items } = await listEmails(mailboxId, 'ALL_MAIL', accountId);
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.account.account_id === accountId
-                ? { ...e, emails: items.slice(0, 3), status: 'ready' as const }
-                : e,
-            ),
-          );
-        } else {
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.account.account_id === accountId ? { ...e, status: 'ready' as const } : e,
-            ),
-          );
-        }
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.account.account_id === accountId ? { ...e, status: 'ready' as const } : e,
+          ),
+        );
       } catch (err) {
         setError(toUiError(err));
         setEntries((prev) =>

@@ -33,10 +33,12 @@ export const es = {
     connectedAccounts: 'Cuentas conectadas',
     settings: 'Ajustes',
     compose: 'Redactar',
+    allAccounts: 'Todas las cuentas',
   },
 
   nav: {
     inbox: 'Bandeja unificada',
+    inboxAccount: 'Bandeja de entrada',
     sent: 'Enviados',
     favorites: 'Favoritos',
     archive: 'Archivados',
@@ -147,6 +149,7 @@ export const es = {
     selectEmail: 'Seleccionar correo',
     hasAttachments: 'Tiene adjuntos',
     threadMessages: '{count} mensajes',
+    noRecipient: 'Sin destinatario',
   },
 
   bulk: {

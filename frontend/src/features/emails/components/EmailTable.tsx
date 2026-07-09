@@ -221,7 +221,13 @@ export default function EmailTable({
           // directly — everywhere else the (view, isSent) matrix decides
           // for the whole table.
           const rowIsSent = view === 'mixed' ? email.box === 'SENT' : isSent;
-          const toCell = rowIsSent ? (email.to_email ?? '') : accountEmail;
+          // In a SENT cell prefer the recipient email, then its display name;
+          // when neither was captured (a message sent Bcc-only or without a To
+          // header) fall back to a muted placeholder so the column never renders
+          // blank.
+          const toRecipient = email.to_email || email.to_name || '';
+          const toMissing = rowIsSent && toRecipient === '';
+          const toCell = rowIsSent ? toRecipient : accountEmail;
           const fromCell = rowIsSent ? accountEmail : email.from_email;
 
           const openable = Boolean(onOpen);
@@ -283,9 +289,11 @@ export default function EmailTable({
               </div>
               {showTo && (
                 <div
-                  className={`hidden w-[170px] truncate text-xs ${weight} text-zinc-900 lg:block`}
+                  className={`hidden w-[170px] truncate text-xs lg:block ${
+                    toMissing ? 'font-normal italic text-zinc-400' : `${weight} text-zinc-900`
+                  }`}
                 >
-                  {toCell}
+                  {toMissing ? t('emailTable.noRecipient') : toCell}
                 </div>
               )}
               {showFrom && (

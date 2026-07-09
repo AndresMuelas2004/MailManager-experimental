@@ -4,10 +4,8 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
-import useAccountUnreadCounts from '../hooks/useAccountUnreadCounts';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
-import AccountTabs from '../../../components/ui/AccountTabs';
 import SearchInput, { MAX_SEARCH_LENGTH } from '../components/SearchInput';
 import SearchHelpPopover from '../components/SearchHelpPopover';
 import RefreshControl from '../components/RefreshControl';
@@ -70,8 +68,6 @@ export default function AccountInboxPage({ box }: Props) {
     scopeKey: `${mailboxId}:${accountId}:${box}`,
   });
 
-  const { inboxUnread, spamUnread } = useAccountUnreadCounts(mailboxId!, accountId!);
-
   const handlePageChange = (next: number) => {
     const params = new URLSearchParams(searchParams);
     if (next <= 1) params.delete('page');
@@ -100,22 +96,16 @@ export default function AccountInboxPage({ box }: Props) {
     void composer.openForForward(email);
   };
 
-  const { title, bandejaLabel } = useMemo(() => {
+  const title = useMemo(() => {
     const account = accounts.find((a) => a.account_id === accountId);
     const hasCustomLabel = account
       ? !isGenericLabel(account.display_label, account.provider)
       : false;
     const email = account?.email_address ?? account?.display_label ?? accountId!;
-    const computedTitle = hasCustomLabel && account ? `${account.display_label} - ${email}` : email;
-    const labelBase = hasCustomLabel && account ? account.display_label : email;
-    return {
-      title: computedTitle,
-      bandejaLabel: t('inbox.inboxLabelPrefix', { label: labelBase }),
-    };
-  }, [accounts, accountId, t]);
+    return hasCustomLabel && account ? `${account.display_label} - ${email}` : email;
+  }, [accounts, accountId]);
 
   const combinedError = error || bulkError || viewer.error;
-  const basePath = `/m/${mailboxId}/account/${accountId}`;
 
   const handleSearchChange = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -163,13 +153,6 @@ export default function AccountInboxPage({ box }: Props) {
           hasError={Boolean(syncError)}
         />
       </div>
-
-      <AccountTabs
-        basePath={basePath}
-        inboxLabel={bandejaLabel}
-        inboxUnread={inboxUnread}
-        spamUnread={spamUnread}
-      />
 
       <div className="flex items-center gap-2 px-4 pt-4 lg:px-8">
         <SearchInput value={rawQ} onChange={handleSearchChange} />

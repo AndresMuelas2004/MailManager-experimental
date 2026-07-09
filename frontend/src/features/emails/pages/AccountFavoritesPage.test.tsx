@@ -269,21 +269,4 @@ describe('AccountFavoritesPage', () => {
 
     await waitFor(() => expect(patchedMailbox).toBe('mb_other'));
   });
-
-  it('renders the account tabs including the Favoritos tab', async () => {
-    server.use(
-      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
-        HttpResponse.json({ items: [makeFavorite('f1')], total: 1, limit: 50, offset: 0 }),
-      ),
-      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
-    );
-
-    renderAccountFavorites();
-
-    await waitFor(() => expect(screen.getByText('Subject f1')).toBeInTheDocument());
-    // AccountTabs is mounted with the new entry point; the active tab links to
-    // the favourites route of this account.
-    const favoritesTab = screen.getByRole('link', { name: 'Favoritos' });
-    expect(favoritesTab).toHaveAttribute('href', '/m/mb_1/account/a_1/favorites');
-  });
 });

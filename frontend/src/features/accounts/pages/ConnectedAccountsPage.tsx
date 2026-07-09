@@ -1,7 +1,6 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import useConnectedAccounts from '../hooks/useConnectedAccounts';
-import useMailboxUnreadByAccount from '../hooks/useMailboxUnreadByAccount';
 import AddAccountCard from '../components/AddAccountCard';
 import AccountCard from '../components/AccountCard';
 import Spinner from '../../../components/common/Spinner';
@@ -9,7 +8,6 @@ import { useTranslation } from '../../../lib/i18n';
 
 export default function ConnectedAccountsPage() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
-  const navigate = useNavigate();
   const { t } = useTranslation();
 
   const {
@@ -27,7 +25,6 @@ export default function ConnectedAccountsPage() {
     editAccountLabel,
     error,
   } = useConnectedAccounts(mailboxId!);
-  const { unreadByAccount } = useMailboxUnreadByAccount(mailboxId!);
 
   if (loading) {
     return (
@@ -48,8 +45,10 @@ export default function ConnectedAccountsPage() {
         </p>
       </div>
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap">
-        <div className="w-full max-w-none sm:max-w-[240px]">
+      {/* "Añadir cuenta" is a tall card fixed to the left; the thin account
+          rows flow in a grid to its right (filling left-to-right, then down). */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <div className="w-full lg:w-72 lg:shrink-0">
           <AddAccountCard
             displayLabel={displayLabel}
             onDisplayLabelChange={setDisplayLabel}
@@ -61,20 +60,18 @@ export default function ConnectedAccountsPage() {
           />
         </div>
 
-        {entries.map((entry) => (
-          <div key={entry.account.account_id} className="w-full max-w-none sm:max-w-[280px]">
+        <div className="grid flex-1 content-start gap-2 [grid-template-columns:repeat(auto-fill,minmax(12rem,1fr))]">
+          {entries.map((entry) => (
             <AccountCard
+              key={entry.account.account_id}
               account={entry.account}
-              emails={entry.emails}
               status={entry.status}
-              unreadCount={unreadByAccount.get(entry.account.account_id) ?? 0}
-              onClick={() => navigate(`/m/${mailboxId}/account/${entry.account.account_id}`)}
               onEditLabel={(label) => editAccountLabel(entry.account.account_id, label)}
               onReconnect={() => reconnectAccount(entry.account.account_id)}
               onDelete={() => removeAccount(entry.account.account_id)}
             />
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {error && <p className="text-sm text-red-600">{error.message}</p>}

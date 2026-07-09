@@ -22,8 +22,11 @@ export default function AddAccountCard({
 }: Props) {
   const { t } = useTranslation();
   return (
-    <div className="flex w-full flex-col items-center gap-4 rounded-2xl border-[1.5px] border-zinc-200 bg-white px-6 pb-4 pt-8">
-      <h3 className="text-base font-semibold text-zinc-900">{t('accounts.addTitle')}</h3>
+    <div className="flex w-full flex-col gap-4 rounded-2xl border-[1.5px] border-zinc-200 bg-white px-6 pb-4 pt-6">
+      <div className="flex flex-col gap-3">
+        <h3 className="text-center text-xl font-bold text-zinc-900">{t('accounts.addTitle')}</h3>
+        <div className="border-b border-zinc-200" />
+      </div>
 
       <div className="flex w-full flex-col gap-2">
         <label className="text-sm font-medium text-zinc-900">{t('accounts.customNameLabel')}</label>

@@ -88,16 +88,13 @@ Cada sección de la barra lateral (Bandeja unificada, Enviados, Spam, Papelera) 
 
 ### 3.2 Vista de una cuenta concreta
 
-Desde la pantalla de "Cuentas conectadas", el usuario puede entrar en **una cuenta específica**. A partir de ahí, todas las bandejas (recibidos, enviados, spam, papelera, borradores) se filtran **solo a esa cuenta**. Es el equivalente a "entrar dentro de" una de las cuentas del buzón.
+En la barra lateral, un **selector desplegable de cuentas** deja elegir el ámbito: su botón muestra el ámbito activo ("Todas las cuentas" para la vista unificada, o el correo de la cuenta en la que estés) y, al abrirlo, despliega la lista con "Todas las cuentas" más cada cuenta conectada al buzón (con el color de su proveedor); las cuentas permanecen ocultas mientras no se abre. Al elegir una cuenta, todas las bandejas (recibidos, enviados, spam, papelera, borradores) se filtran **solo a esa cuenta**: es el equivalente a "entrar dentro de" una de las cuentas del buzón. Las carpetas se recorren desde la **misma barra lateral** —no hay una fila de pestañas aparte encima del listado—, de modo que toda la navegación (elegir cuenta + elegir carpeta) vive en un único sitio a la izquierda.
 
-La vista de cuenta concreta añade dos elementos que la unificada no tiene:
-
-- Un **título con la identidad de la cuenta**: si la cuenta tiene una etiqueta personalizada, se muestra como "Etiqueta - correo@ejemplo.com"; si no, simplemente la dirección de correo.
-- Una **fila de pestañas propias** (Bandeja, Enviados, Spam, Borradores, Papelera) para moverse entre las bandejas de esa cuenta sin volver a la vista unificada.
+La vista de cuenta concreta se distingue de la unificada por un **título con la identidad de la cuenta**: si la cuenta tiene una etiqueta personalizada, se muestra como "Etiqueta - correo@ejemplo.com"; si no, simplemente la dirección de correo. Además, la entrada de la bandeja de entrada en la barra lateral pasa de leerse "Bandeja unificada" a "Bandeja de entrada" (dentro de una cuenta no hay nada que unificar).
 
 ### 3.3 Cómo se distingue una vista de la otra
 
-La diferencia la marca la **dirección de la página**: la vista unificada no nombra ninguna cuenta, mientras que la vista de cuenta concreta lleva el identificador de la cuenta en la ruta. El usuario no gestiona esto manualmente; navega con los enlaces de la barra lateral (unificada) o con los de la pantalla de cuentas (cuenta concreta), y la app sabe en qué modo está.
+La diferencia la marca la **dirección de la página**: la vista unificada no nombra ninguna cuenta, mientras que la vista de cuenta concreta lleva el identificador de la cuenta en la ruta. El usuario no gestiona esto manualmente; elige el ámbito (Todas o una cuenta) en el selector de la barra lateral y las carpetas de esa misma barra lo llevan a la bandeja correspondiente **dentro** del ámbito elegido, y la app sabe en qué modo está.
 
 ---
 
@@ -122,6 +119,8 @@ Hay tres modos de tabla, y cada uno resuelve las columnas de forma distinta:
 - En enviados unificados: "De" es la cuenta del propio usuario que lo envió, y "Para" es el destinatario real.
 
 **Modo "mixto".** Es un modo especial para listados que **mezclan correos recibidos y enviados en la misma tabla**. Hoy lo usa únicamente la pantalla de **Favoritos** (ver [favoritos.md](favoritos.md)), donde un favorito puede ser tanto algo que recibiste como algo que enviaste. En este modo se muestran **ambas columnas**, pero —y esto es lo único que lo diferencia del unificado— el sentido de cada celda **se decide fila a fila** según si ese correo concreto es enviado o recibido, en lugar de aplicar un criterio único a toda la tabla.
+
+**Destinatario ausente en enviados.** En cualquier vista de enviados, si un correo se mandó **sin un destinatario en el campo `To`** (por ejemplo, enviado solo con CC/BCC, o un envío de prueba o antiguo que no guardó destinatario), la columna "Para" muestra un texto tenue **"Sin destinatario"** en vez de quedar en blanco. El destinatario se captura al sincronizar desde la cabecera `To` del mensaje; cuando esa cabecera no traía ninguna dirección, el marcador deja claro que no había nada que mostrar (no es un fallo de la vista).
 
 ### 4.2 Por qué el modo "mixto" existe
 
@@ -176,7 +175,7 @@ Para entender el flujo completo de un vistazo:
 3. Conecta una o varias cuentas (Gmail/Outlook) → ahora el buzón tiene contenido.
 4. Navega por la barra lateral → todo lo que ve (unificada, enviados, favoritos, spam, papelera, borradores, ficticias) está **dentro de ese buzón**.
 5. En cualquier bandeja, ve los correos de **todas** las cuentas mezclados (vista unificada), con columnas "Para"/"De" que le dicen qué cuenta suya está implicada.
-6. Si quiere centrarse en una sola cuenta, entra en ella desde "Cuentas conectadas" → mismas bandejas, pero filtradas a esa cuenta, con su título e identidad propios y sus pestañas.
+6. Si quiere centrarse en una sola cuenta, la elige en el selector de cuentas de la barra lateral → mismas bandejas (recorridas desde esa misma barra), pero filtradas a esa cuenta, con su título e identidad propios.
 7. Cambia de buzón desde el selector de la cabecera → todo el contexto cambia al nuevo buzón.
 
 ---

@@ -81,7 +81,7 @@ function applyFavoriteToEmailPages(
   snapshot.forEach(([key, data]) => {
     // The ``['emails']`` prefix is shared on purpose: the unread-count badge
     // queries are keyed ``['emails', mailbox, 'unread-count', box]`` so they
-    // inherit this hook's blanket invalidation (see ``useAccountUnreadCounts``).
+    // inherit this hook's blanket invalidation (see ``useMailboxUnreadCounts``).
     // Those entries are ``UnreadCount`` envelopes, not ``EmailPage`` listings, so
     // they carry no ``items`` array — skip them rather than calling ``.map`` on
     // ``undefined`` (which aborts the whole optimistic update in ``onMutate``).

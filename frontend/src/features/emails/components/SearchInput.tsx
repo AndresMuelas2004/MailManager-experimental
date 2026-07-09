@@ -25,7 +25,9 @@ export default function SearchInput({ value, onChange, placeholder }: Props) {
         onChange={(e) => onChange(e.target.value)}
         maxLength={MAX_SEARCH_LENGTH}
         placeholder={placeholder ?? t('search.placeholder')}
-        className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-9 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none"
+        // Hide WebKit's built-in search clear "✕" (::-webkit-search-cancel-button)
+        // so only the component's own clear button on the right is shown.
+        className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-9 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-600 focus:outline-none [&::-webkit-search-cancel-button]:[-webkit-appearance:none]"
       />
       {value.length > 0 && (
         <button

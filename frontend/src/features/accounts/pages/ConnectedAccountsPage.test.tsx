@@ -1,16 +1,16 @@
 /**
- * Integration tests for ConnectedAccountsPage — the per-account unread badge
- * on each AccountCard (Settings › Accounts).
+ * Integration tests for ConnectedAccountsPage (Settings › Accounts).
  *
- * The card counts come from a SEPARATE TanStack Query hook
- * (useMailboxUnreadByAccount) rather than from useConnectedAccounts (which
- * holds the cards in useState), so it inherits the ['emails'] invalidation.
- * HTTP is intercepted at MSW; the real hooks / endpoints / cache run. We
- * override the accounts listing and the unread-count breakdown; the per-card
- * email preview listing falls back to the default empty handler.
+ * The page is now a pure management surface: each account renders as a
+ * uniform card exposing the three inline actions (edit label / reconnect /
+ * delete) — no email preview, no ⋮ menu, no per-card unread badge, and the
+ * card no longer navigates into the account (that moved to the sidebar scope
+ * switcher). HTTP is intercepted at MSW; the real hooks / endpoints / cache
+ * run. We override the accounts listing per test.
  */
 
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
@@ -22,8 +22,8 @@ import ConnectedAccountsPage from './ConnectedAccountsPage';
 
 const API_BASE = 'http://localhost:8000';
 
-// The badge aria-label "{count} sin leer" is Spanish copy; jsdom defaults the
-// I18nProvider to English otherwise.
+// The action labels asserted below are Spanish copy (accounts.editLabel etc.);
+// jsdom defaults the I18nProvider to English otherwise.
 pinTestLang('es');
 
 const accountOne = {
@@ -54,22 +54,11 @@ function renderConnectedAccounts() {
   );
 }
 
-describe('ConnectedAccountsPage — per-account unread badge', () => {
-  it('shows a badge on the account with unread mail and none on the account at zero', async () => {
+describe('ConnectedAccountsPage — account management cards', () => {
+  it('renders each account as a card with edit/reconnect/delete actions and no unread badge', async () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () =>
         HttpResponse.json([accountOne, accountTwo]),
-      ),
-      http.get(`${API_BASE}/mailboxes/mb_1/emails/unread-count`, () =>
-        HttpResponse.json({
-          mailbox_id: 'mb_1',
-          box: 'ALL_MAIL',
-          total: 4,
-          accounts: [
-            { account_id: 'a_1', unread: 4 },
-            { account_id: 'a_2', unread: 0 },
-          ],
-        }),
       ),
     );
 
@@ -79,17 +68,57 @@ describe('ConnectedAccountsPage — per-account unread badge', () => {
     await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
     expect(screen.getByText('two@example.com')).toBeInTheDocument();
 
-    // a_1 has 4 unread → its card carries the "4 sin leer" badge; a_2 is at 0
-    // so the Badge renders nothing. Exactly one badge exists across both cards.
-    expect(screen.getByLabelText('4 sin leer')).toHaveTextContent('4');
-    expect(screen.queryByLabelText('0 sin leer')).not.toBeInTheDocument();
+    // Each card exposes the three inline actions — no ⋮ menu, no email preview.
+    expect(screen.getAllByRole('button', { name: 'Editar etiqueta' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Reconectar cuenta' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Eliminar cuenta' })).toHaveLength(2);
 
-    // Defence: the badge sits in the a_1 card header (alongside one@example.com),
-    // not the a_2 header. The header is the shared parent of the email span and
-    // the badge.
-    const headerOne = screen.getByText('one@example.com').closest('div')?.parentElement;
-    expect(within(headerOne as HTMLElement).getByLabelText('4 sin leer')).toBeInTheDocument();
-    const headerTwo = screen.getByText('two@example.com').closest('div')?.parentElement;
-    expect(within(headerTwo as HTMLElement).queryByLabelText('4 sin leer')).not.toBeInTheDocument();
+    // The per-card unread badge was removed together with the preview.
+    expect(screen.queryByLabelText(/sin leer/)).not.toBeInTheDocument();
+  });
+
+  it('opens the inline rename input from the card Edit action', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+    );
+
+    renderConnectedAccounts();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    // AddAccountCard always renders one text input (the custom-name field); the
+    // account card itself shows no rename input until Edit is pressed.
+    expect(screen.getAllByRole('textbox')).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: 'Editar etiqueta' }));
+
+    // The card header swaps its email label for a rename input → one more textbox.
+    expect(screen.getAllByRole('textbox')).toHaveLength(2);
+  });
+
+  it('confirms before deleting and issues the DELETE only on confirm', async () => {
+    let deleted = false;
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+      http.delete(`${API_BASE}/mailboxes/mb_1/accounts/a_1`, () => {
+        deleted = true;
+        return HttpResponse.json({ status: 'deleted' });
+      }),
+    );
+
+    renderConnectedAccounts();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Eliminar cuenta' }));
+
+    // A confirmation modal appears; the DELETE has not fired yet.
+    expect(deleted).toBe(false);
+    // common.delete is the modal's confirm button ("Eliminar").
+    await user.click(screen.getByRole('button', { name: 'Eliminar' }));
+
+    await waitFor(() => expect(deleted).toBe(true));
+    // The card is removed from the listing after a successful delete.
+    await waitFor(() => expect(screen.queryByText('one@example.com')).not.toBeInTheDocument());
   });
 });

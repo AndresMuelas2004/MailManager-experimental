@@ -161,6 +161,35 @@ describe('EmailTable', () => {
     expect(screen.getByText('recipient@example.com')).toBeInTheDocument();
   });
 
+  it('shows a muted placeholder in the "Para" column of a SENT row with no recipient', () => {
+    // A message sent Bcc-only (or without a To header) has empty to_email AND
+    // to_name; the column must show a placeholder instead of rendering blank.
+    render(
+      <EmailTable
+        emails={[makeEmail({ to_email: null, to_name: null, box: 'SENT' })]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="individual"
+        isSent={true}
+      />,
+    );
+    expect(screen.getByText('Sin destinatario')).toBeInTheDocument();
+  });
+
+  it('falls back to to_name in the "Para" column when to_email is missing', () => {
+    render(
+      <EmailTable
+        emails={[makeEmail({ to_email: null, to_name: 'Equipo Soporte', box: 'SENT' })]}
+        accounts={[accountFixture]}
+        loading={false}
+        view="individual"
+        isSent={true}
+      />,
+    );
+    expect(screen.getByText('Equipo Soporte')).toBeInTheDocument();
+    expect(screen.queryByText('Sin destinatario')).not.toBeInTheDocument();
+  });
+
   it('shows only the "De" column with the sender in an individual received view', () => {
     render(
       <EmailTable

@@ -46,7 +46,6 @@ Catálogo de los elementos que cambian de forma o desaparecen en móvil (todos v
 | Etiquetas de texto de la barra de acciones masivas | **Ocultas** (solo iconos). El contador de seleccionados se reduce a un número. La barra puede **desplazarse horizontalmente** si no caben todas las acciones. |
 | Panel de marca de Login y de Crear bandeja | **Oculto.** Se muestra solo el formulario, centrado y a pantalla completa. |
 | Menú lateral de Ajustes | Se transforma en una **barra de pestañas horizontal deslizable** (con el título "Ajustes" oculto en móvil). |
-| Pestañas de una cuenta (Recibidos/Enviados/…) | **Fila deslizable horizontalmente** (scroll lateral). |
 | Rejilla de tarjetas de cuenta | Se **apila en una sola columna** (por debajo de 640 px; ver § 1). |
 | Títulos de página | Se reducen de tamaño (el tamaño grande se recupera a partir de 1024 px). |
 | Márgenes laterales de las páginas | Se reducen (los márgenes de escritorio se recuperan a partir de 1024 px). |

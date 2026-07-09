@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Outlet, useNavigate, useParams } from 'react-router-dom';
+import { Outlet, useMatch, useNavigate, useParams } from 'react-router-dom';
 import {
   Archive,
   Filter,
@@ -18,23 +18,27 @@ import { useTranslation } from '../../../lib/i18n';
 import Sidebar from '../../../components/ui/Sidebar';
 import ConfirmModal from '../../../components/common/ConfirmModal';
 import useMailboxList from '../hooks/useMailboxList';
+import useMailboxAccounts from '../hooks/useMailboxAccounts';
 import useMailboxUnreadCounts from '../hooks/useMailboxUnreadCounts';
 import useRenameMailbox from '../hooks/useRenameMailbox';
 import useDeleteMailbox from '../hooks/useDeleteMailbox';
 
 // Inline because the array is mailbox-feature-only and the features layer's
 // "exactly three subdirs" rule (pages / hooks / components) does not allow a
-// dedicated constants file. Labels are i18n keys resolved per render.
+// dedicated constants file. Labels are i18n keys resolved per render. ``global``
+// marks entries that have no per-account route, so the Sidebar keeps them on the
+// unified base even inside an account scope (Bandejas ficticias).
 const MAILBOX_NAV_ITEMS: Array<{
   icon: ComponentType<{ className?: string }>;
   labelKey: string;
   path: string;
+  global?: boolean;
 }> = [
   { icon: Inbox, labelKey: 'nav.inbox', path: 'inbox' },
   { icon: Send, labelKey: 'nav.sent', path: 'sent' },
   { icon: Star, labelKey: 'nav.favorites', path: 'favorites' },
   { icon: Archive, labelKey: 'nav.archive', path: 'archive' },
-  { icon: Filter, labelKey: 'nav.virtualMailboxes', path: 'virtual-mailboxes' },
+  { icon: Filter, labelKey: 'nav.virtualMailboxes', path: 'virtual-mailboxes', global: true },
   { icon: ShieldAlert, labelKey: 'nav.spam', path: 'spam' },
   { icon: FileEdit, labelKey: 'nav.drafts', path: 'drafts' },
   { icon: Trash2, labelKey: 'nav.trash', path: 'trash' },
@@ -50,10 +54,17 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { mailboxes, currentMailboxName, handleCreate } = useMailboxList(mailboxId);
-  const { inboxTotal, spamTotal } = useMailboxUnreadCounts(mailboxId);
+  const { accounts } = useMailboxAccounts(mailboxId);
+  const { inboxTotal, spamTotal, inboxByAccount, spamByAccount } =
+    useMailboxUnreadCounts(mailboxId);
   const { rename: renameMailbox } = useRenameMailbox();
   const { remove: removeMailbox } = useDeleteMailbox();
   const composer = useDraftComposerContext();
+
+  // Active scope derived from the URL: an /account/:accountId/* route means a
+  // single-account scope, anything else is the unified ("Todas") scope.
+  const accountMatch = useMatch('/m/:mailboxId/account/:accountId/*');
+  const activeAccountId = accountMatch?.params.accountId ?? null;
 
   // Confirmation for the header-selector delete entry point. The selector only
   // offers delete for the active mailbox, so storing its id is enough.
@@ -68,14 +79,24 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   // reading refs during render, so the close is driven from the interaction
   // handlers (the React-recommended place for setState) instead of being
   // derived from a location change: Sidebar fires ``onNavigate`` on every
-  // NavLink / settings click, and the select/create/compose callbacks below
-  // close it too. Tap-outside (backdrop) and the drawer's own X also close it.
+  // NavLink / scope / settings click, and the select/create/compose callbacks
+  // below close it too. Tap-outside (backdrop) and the drawer's own X also close it.
   const handleMailboxSelect = useCallback(
     (id: string) => {
       closeDrawer();
-      navigate(`/m/${id}/settings/accounts`);
+      navigate(`/m/${id}/inbox`);
     },
     [navigate, closeDrawer],
+  );
+
+  // Scope switch: navigate to the Inbox of the chosen scope (a specific account,
+  // or the unified mailbox when accountId is null). The folders then follow.
+  const handleScopeSelect = useCallback(
+    (accountId: string | null) => {
+      closeDrawer();
+      navigate(accountId ? `/m/${mailboxId}/account/${accountId}/inbox` : `/m/${mailboxId}/inbox`);
+    },
+    [navigate, mailboxId, closeDrawer],
   );
 
   const handleMailboxCreate = useCallback(
@@ -126,8 +147,9 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
 
   // Browser tab title reflects the current mailbox's inbox (ALL_MAIL) unread
   // total: ``(N) MailManager`` / ``(99+) MailManager`` / ``MailManager`` at 0.
-  // This is the only runtime writer of document.title (index.html ships the
-  // static fallback); the cleanup restores it when leaving the mailbox shell.
+  // Mailbox-wide (not scope-narrowed) on purpose — the tab represents the whole
+  // mailbox. This is the only runtime writer of document.title (index.html ships
+  // the static fallback); the cleanup restores it when leaving the mailbox shell.
   useEffect(() => {
     document.title =
       inboxTotal > 0 ? `(${inboxTotal > 99 ? '99+' : inboxTotal}) MailManager` : 'MailManager';
@@ -136,11 +158,19 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     };
   }, [inboxTotal]);
 
-  const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path }) => ({
+  // Nav badges follow the active scope: an account scope shows that account's
+  // unread from the breakdown; the unified scope shows the mailbox-wide total.
+  const inboxBadge = activeAccountId ? (inboxByAccount.get(activeAccountId) ?? 0) : inboxTotal;
+  const spamBadge = activeAccountId ? (spamByAccount.get(activeAccountId) ?? 0) : spamTotal;
+
+  const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path, global }) => ({
     icon,
-    label: t(labelKey),
+    // The inbox entry reads "Bandeja unificada" in the unified scope but
+    // "Bandeja de entrada" inside a single account (where nothing is unified).
+    label: path === 'inbox' && activeAccountId ? t('nav.inboxAccount') : t(labelKey),
     path,
-    badge: path === 'inbox' ? inboxTotal : path === 'spam' ? spamTotal : undefined,
+    global,
+    badge: path === 'inbox' ? inboxBadge : path === 'spam' ? spamBadge : undefined,
   }));
 
   return (
@@ -149,11 +179,14 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         mailboxId={mailboxId}
         mailboxName={currentMailboxName}
         mailboxes={mailboxes}
+        accounts={accounts}
+        activeAccountId={activeAccountId}
         navItems={navItems}
         onMailboxSelect={handleMailboxSelect}
         onMailboxCreate={handleMailboxCreate}
         onMailboxRename={handleMailboxRename}
         onMailboxRequestDelete={handleMailboxRequestDelete}
+        onScopeSelect={handleScopeSelect}
         onCompose={handleCompose}
         open={drawerOpen}
         onClose={closeDrawer}

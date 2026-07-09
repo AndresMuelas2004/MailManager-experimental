@@ -65,7 +65,7 @@ Cuando un correo se elimina **permanentemente** desde la papelera, internamente 
 MailManager agrupa varias cuentas de correo bajo un mismo **mailbox**. El listado se puede mirar de dos formas, y cada bandeja (principal, enviados, archivados, spam, papelera) existe en ambas:
 
 - **Vista unificada del mailbox**: muestra los correos de **todas** las cuentas conectadas de ese mailbox, mezclados en una sola lista ordenada por fecha. Es la vista por defecto cuando el usuario entra al mailbox.
-- **Vista de una cuenta concreta**: el usuario selecciona una de sus cuentas (mediante las pestañas de cuenta) y la lista se restringe **solo a esa cuenta**.
+- **Vista de una cuenta concreta**: el usuario selecciona una de sus cuentas (mediante el selector de cuentas de la barra lateral) y la lista se restringe **solo a esa cuenta**.
 
 La diferencia no es solo de filtrado: cambia también qué columnas tienen sentido mostrar (sección 4.2). El resto del comportamiento — orden, indicadores, paginación — es idéntico en ambas vistas.
 

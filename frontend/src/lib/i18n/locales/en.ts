@@ -31,10 +31,12 @@ export const en: EsDictionary = {
     connectedAccounts: 'Connected accounts',
     settings: 'Settings',
     compose: 'Compose',
+    allAccounts: 'All accounts',
   },
 
   nav: {
     inbox: 'Unified inbox',
+    inboxAccount: 'Inbox',
     sent: 'Sent',
     favorites: 'Favorites',
     archive: 'Archive',
@@ -145,6 +147,7 @@ export const en: EsDictionary = {
     selectEmail: 'Select email',
     hasAttachments: 'Has attachments',
     threadMessages: '{count} messages',
+    noRecipient: 'No recipient',
   },
 
   bulk: {

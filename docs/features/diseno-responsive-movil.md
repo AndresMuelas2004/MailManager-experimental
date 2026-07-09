@@ -89,10 +89,9 @@ Esto tiene una consecuencia de comportamiento que merece destacarse: **gracias a
 
 ---
 
-## 9. Ajustes y pestañas de cuenta: navegación que se vuelve horizontal
+## 9. Ajustes: navegación que se vuelve horizontal
 
 - El área de **Ajustes** (ver [ajustes.md](ajustes.md)) tiene en escritorio su propio **menú lateral** (Tu cuenta, Cuentas conectadas, Bandejas, Idioma, Datos, Acerca de). En móvil ese menú se convierte en una **barra de pestañas horizontal deslizable** (con scroll lateral) encima del contenido de cada sección. El contenido de cada sección no cambia; solo su navegación pasa de columna a fila.
-- Las **pestañas de una cuenta concreta** (Recibidos, Enviados, Favoritos, Spam, Borradores, Papelera) pasan también a ser una **fila deslizable horizontalmente** en móvil, para que quepan todas sin romperse.
 - Dentro de **Cuentas conectadas**, la rejilla de **tarjetas de cuenta** se **apila en una sola columna** en móvil (en escritorio se mantiene en fila).
 
 ---
