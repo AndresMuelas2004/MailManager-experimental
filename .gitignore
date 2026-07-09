@@ -81,6 +81,9 @@ UtilidadesDelProgramador/
 externalAPIinformation/
 bug-analisis/
 
+# Investigacion local exhaustiva de las APIs externas usadas (Gmail / Outlook) — no se versiona
+external-apis-used/
+
 # Skill output: features missing in the app
 features-found-needed-implementation/
 
@@ -94,3 +97,6 @@ Superhuman-features/
 compose.override.yml
 compose.override.yaml
 /initdb/
+
+# Informes locales de errores pendientes de corregir (no se versionan)
+errores-pendientes-de-corregir/

@@ -131,3 +131,7 @@
   ### 13 Memory Files — No Autonomous Writes
 
   Never edit, restructure, or add entries to the persistent memory store — `MEMORY.md` and the individual memory files under the session's `memory/` directory — on your own initiative. This overrides the memory system's default of proactively saving facts: write to memory only when the user explicitly asks you to remember something. Same "never on your own initiative" discipline as § 12 (live verification) and § 10's rule that `common_mistakes.md` entries are never added autonomously.
+
+  ### 14 External API Documentation (Gmail / Microsoft Graph)
+
+  Before answering a question or making a change that involves the Gmail API or the Outlook / Microsoft Graph API, consult the local research folder `external-apis-used/` FIRST (git-ignored). Open the classification index of the relevant provider — `external-apis-used/Gmail/CLAUDE.md` or `external-apis-used/Outlook/CLAUDE.md` — which routes to the exact per-topic `.md` file, and read that file to find what you need. Only if the needed information is not there, or looks incomplete, **warn the user first and wait** before going to the internet to fetch the official API documentation (developers.google.com / learn.microsoft.com).
