@@ -54,6 +54,8 @@ Every core module follows these rules when catching exceptions.
 
 7. **Best-effort parsing with soft fallback.** When processing response data (headers, dates, error bodies), tolerate malformed values with a fallback instead of aborting the entire operation.
 
+8. **Wrap and re-raise — never log the traceback.** This layer's `try` blocks translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original cause up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record. The one exception: an error this layer catches and deliberately swallows (a soft fallback that continues the operation) never reaches those handlers, so when the swallowed cause matters for diagnosis, the swallow site itself must log it with `exc_info=exc`.
+
 ## 4. Public Facade Rules
 
 - All external code imports from the package root or domain sub-package facade.

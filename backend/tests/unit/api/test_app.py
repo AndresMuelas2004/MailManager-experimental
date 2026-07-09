@@ -5,6 +5,8 @@ and the rate-limiting error-hierarchy contract (#11e).
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, status
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -97,6 +99,47 @@ def test_handler_omits_retry_after_header_for_non_retry_error():
     client = _client_for_error(ApiError("plain failure"))
     resp = client.get("/boom")
     assert "Retry-After" not in resp.headers
+
+
+# --- 5xx cause-chain logging by the typed ApiError handler --------------------
+
+
+def _api_error_with_cause() -> ApiError:
+    """Build an ApiError chained ``from`` a driver-level root cause."""
+    try:
+        try:
+            raise ValueError("driver-level root cause")
+        except ValueError as root:
+            raise ApiError("wrapped operation failed") from root
+    except ApiError as exc:
+        return exc
+
+
+def test_handler_logs_5xx_with_cause_chain(caplog):
+    """A server-side ApiError logs at ERROR with the full ``from exc`` chain.
+
+    The layers below wrap-and-rethrow without logging, so the handler is the
+    single point where the original driver/provider exception becomes
+    observable in the logs.
+    """
+    client = _client_for_error(_api_error_with_cause())
+    with caplog.at_level(logging.ERROR, logger="api.errors.handlers"):
+        resp = client.get("/boom")
+    assert resp.status_code == 500
+    records = [r for r in caplog.records if r.name == "api.errors.handlers"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    # The rendered traceback carries the chained root cause.
+    assert "driver-level root cause" in caplog.text
+
+
+def test_handler_does_not_log_4xx(caplog):
+    """Expected client errors (4xx) stay unlogged — they are not server faults."""
+    client = _client_for_error(TooManyRequests("throttled"))
+    with caplog.at_level(logging.DEBUG, logger="api.errors.handlers"):
+        resp = client.get("/boom")
+    assert resp.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert [r for r in caplog.records if r.name == "api.errors.handlers"] == []
 
 
 # --- Global per-IP rate-limit wiring: exemptions (#11e) -----------------------

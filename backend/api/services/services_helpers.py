@@ -418,6 +418,16 @@ def build_account_sync_failures(
             continue
         _mailbox_id, account_id, provider = ids
         reason = "account_not_connected" if is_auth_error(error) else "sync_failed"
+        # The ONLY place this failure's real cause becomes observable: a
+        # partial-success sync responds 200 (never reaches the ApiError
+        # handler) and the wire reason is a bounded category (no-leak).
+        # Log the full cause chain here or lose it.
+        logger.log(
+            logging.WARNING if reason == "account_not_connected" else logging.ERROR,
+            "Sync failure for account %s (%s) reported as '%s' in failed_accounts.",
+            account_id, provider, reason,
+            exc_info=error,
+        )
         failures.append(AccountSyncFailure(
             account_id=account_id, provider=provider, reason=reason,
         ))
@@ -806,6 +816,7 @@ def touch_email_content_last_accessed(
         logger.warning(
             "Failed to touch email content last_accessed (%s): %s",
             type(exc).__name__, exc,
+            exc_info=exc,
         )
 
 
@@ -821,6 +832,7 @@ def purge_expired_email_content(account_ids: list[str]) -> int:
         logger.warning(
             "Failed to purge expired email content (%s): %s",
             type(exc).__name__, exc,
+            exc_info=exc,
         )
         return 0
 

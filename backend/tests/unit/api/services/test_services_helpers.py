@@ -4,6 +4,8 @@ Unit tests for services_helpers.
 
 from __future__ import annotations
 
+import logging
+
 from unittest.mock import patch
 
 import pytest
@@ -250,6 +252,36 @@ class TestBuildAccountSyncFailures:
             {"mb__acc1": ("mb", "acc1", "gmail")},
         )
         assert [f.account_id for f in failures] == ["acc1"]
+
+    def test_logs_each_failure_with_cause_chain(self, caplog):
+        """The reduction to bounded categories is the only observability point
+        for these failures (a partial-success sync responds 200 and never
+        reaches the ApiError handler): auth failures log at WARNING, the rest
+        at ERROR, both carrying the exception's traceback via exc_info."""
+        try:
+            raise RuntimeError("db exploded")
+        except RuntimeError as exc:
+            non_auth_error = exc
+        with caplog.at_level(logging.WARNING):
+            build_account_sync_failures(
+                {
+                    "mb__acc1": EmailAuthError("token revoked"),
+                    "mb__acc2": non_auth_error,
+                },
+                {
+                    "mb__acc1": ("mb", "acc1", "gmail"),
+                    "mb__acc2": ("mb", "acc2", "outlook"),
+                },
+            )
+        records = [r for r in caplog.records if "failed_accounts" in r.getMessage()]
+        assert len(records) == 2
+        by_account = {
+            ("acc1" if "acc1" in r.getMessage() else "acc2"): r for r in records
+        }
+        assert by_account["acc1"].levelno == logging.WARNING
+        assert by_account["acc2"].levelno == logging.ERROR
+        # The rendered log output carries the swallowed exception's detail.
+        assert "db exploded" in caplog.text
 
     def test_preserves_all_known_failures(self):
         errors = {

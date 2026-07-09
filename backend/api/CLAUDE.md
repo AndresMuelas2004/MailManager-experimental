@@ -124,6 +124,7 @@ except Exception as exc:                    # 2. Unexpected error → log + gene
 3. **Fallback matches the context** — use the `ApiError` subclass that best describes the failed operation.
 4. **Never expose internal details in API messages** — the `except Exception` fallback must use a generic message (no `type(exc).__name__`, no `str(exc)`). Log the full details server-side with `logger.warning()` instead. This prevents leaking internal state (class names, library errors, paths) to external clients. Internal layers (`core/`, `database/`, `auth/`) may include details in their errors because those are always translated before reaching the client.
 5. **Never let lower-layer exceptions escape** — every `try` block has an `except Exception` fallback.
+6. **Log once — where the exception dies.** A translated-and-re-raised exception must NOT be logged with its traceback at the raise site: the `raise ... from exc` chain already carries the full cause to the global handlers, which log it exactly once (§ 10). The `except Exception` fallback's `logger.warning()` exists to add operation context to a deliberately generic client message — keep it message-only, never with `exc_info`. Conversely, an exception that is caught and **swallowed** (best-effort operations, background tasks, partial-success aggregation) never reaches the handlers — its swallow site is the only observability point and MUST log it with `exc_info=exc` so the full cause chain is preserved.
 
 ### Translation functions and maps
 
@@ -133,7 +134,7 @@ Translation functions convert lower-layer errors to `ApiError` subclasses. Each 
 
 Two framework exception handlers form the final safety net:
 
-1. **Typed handler** — catches any `ApiError`, looks up the HTTP status from `_STATUS_MAP` (default 500), and returns the error envelope.
+1. **Typed handler** — catches any `ApiError`, looks up the HTTP status from `_STATUS_MAP` (default 500), and returns the error envelope. For any server-side status (>= 500) it also logs the error at ERROR level with `exc_info`, so the full `raise ... from exc` cause chain — down to the original driver/provider exception — reaches the logs exactly once (§ 9.6). 4xx responses are expected client outcomes and deliberately stay unlogged.
 2. **Generic handler** — catches any `Exception` not already handled, logs the full traceback, and returns a generic 500 error envelope. This should never fire if all service functions follow the capture technique.
 
 ## 11. Application Factory

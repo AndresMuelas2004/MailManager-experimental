@@ -120,6 +120,7 @@ except Exception as exc:                    # 4. Generic fallback last
 3. **Domain-specific catch** (step 3) — all DB library error subclasses map to the appropriate exception (`QueryError` for repositories, `ConnectionPoolError` for pool, `MigrationError` for migrations).
 4. **Generic fallback last** (step 4) — ensures no exception escapes untyped. Message includes `type(exc).__name__` for debuggability. Internal layers may include these details since errors are always translated before reaching the client.
 5. **Preserve the cause chain** — always `raise ... from exc`.
+6. **Wrap and re-raise — never log the traceback.** Repositories translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original driver error up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record. The one exception: an error this layer catches and deliberately swallows (e.g. a graceful `None`/`[]` return, step 1) never reaches those handlers, so when the swallowed cause matters for diagnosis, the swallow site itself must log it with `exc_info=exc`.
 
 ### Where each exception is raised
 

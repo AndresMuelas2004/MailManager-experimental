@@ -144,6 +144,7 @@ def _reconcile_ghost_emails(
         logger.warning(
             "Reconciliation skipped for %s: failed to load suspect IDs (%s): %s",
             account_id, type(exc).__name__, exc,
+            exc_info=exc,
         )
         return 0, []
 
@@ -156,6 +157,7 @@ def _reconcile_ghost_emails(
         logger.warning(
             "Reconciliation skipped for %s: verification failed (%s): %s",
             account_id, type(exc).__name__, exc,
+            exc_info=exc,
         )
         return 0, []
 
@@ -169,6 +171,7 @@ def _reconcile_ghost_emails(
         logger.warning(
             "Reconciliation skipped for %s: failed to delete ghosts (%s): %s",
             account_id, type(exc).__name__, exc,
+            exc_info=exc,
         )
         return 0, []
     logger.info("Reconciliation for %s: %d suspect, %d ghosts deleted.", account_id, len(suspect_ids), deleted)
@@ -456,6 +459,7 @@ def _run_content_prefetch_and_purge(
             logger.warning(
                 "Content prefetch target selection failed for account '%s' (%s): %s",
                 account_id, type(exc).__name__, exc,
+                exc_info=exc,
             )
             continue
         for pmid in pmids:
@@ -467,6 +471,7 @@ def _run_content_prefetch_and_purge(
                 logger.warning(
                     "Content prefetch failed for message '%s' of account '%s' (%s): %s",
                     pmid, account_id, type(exc).__name__, exc,
+                    exc_info=exc,
                 )
                 continue
 

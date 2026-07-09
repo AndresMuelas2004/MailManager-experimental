@@ -94,6 +94,7 @@ Every provider verification function follows these rules when catching exception
 4. **Generic fallback last.** A final `except Exception as exc` with a message including `type(exc).__name__` ensures no exception escapes untyped. Maps to `AuthTokenInvalidError` as the safest default. Internal layers may include `type(exc).__name__` in error messages since these are always translated before reaching the client.
 5. **Preserve the cause chain.** Always `raise ... from exc`.
 6. **Never double-wrap typed errors.** This rule applies when code inside a `try` block can raise an `AuthError` subclass — either via an explicit `raise` or through a helper that raises one. Add a targeted `except AuthTokenError: raise` **before** the generic `except Exception` handler. **If nothing inside the `try` can produce an `AuthError`, the guard is unnecessary.**
+7. **Wrap and re-raise — never log the traceback.** Verification functions translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original provider error up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record.
 
 ### Pattern
 

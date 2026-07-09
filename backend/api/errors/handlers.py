@@ -201,6 +201,17 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         status_code = _STATUS_MAP.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # Server-side faults log their FULL cause chain here — the layers
+        # below wrap-and-rethrow with ``raise ... from exc`` and never log,
+        # so this handler is the single point where the original driver /
+        # provider exception is finally observable. 4xx are expected client
+        # outcomes and deliberately stay unlogged.
+        if status_code >= 500:
+            logger.error(
+                "ApiError %s (%s) on %s %s",
+                exc.code, status_code, request.method, request.url.path,
+                exc_info=exc,
+            )
         # Emit a ``Retry-After`` header whenever the error carries one in its
         # detail (generic: any ApiError may opt in; today only TooManyRequests
         # does). The value also rides in the JSON body via ``_error_payload``,

@@ -379,6 +379,7 @@ def _persist_outlook_forward_inherited_attachments(
         logger.warning(
             "Outlook createForward attachment inheritance discovery failed (%s): %s",
             type(exc).__name__, exc,
+            exc_info=exc,
         )
         return
 
@@ -413,11 +414,13 @@ def _persist_outlook_forward_inherited_attachments(
             logger.warning(
                 "Outlook inherited attachment persist failed (%s): %s",
                 type(exc).__name__, exc,
+                exc_info=exc,
             )
         except Exception as exc:
             logger.warning(
                 "Outlook inherited attachment unexpected persist error (%s): %s",
                 type(exc).__name__, exc,
+                exc_info=exc,
             )
 
     # Best-effort post-insert: stamp the provider_attachment_id so the
@@ -444,6 +447,7 @@ def _persist_outlook_forward_inherited_attachments(
             logger.warning(
                 "Outlook inherited attachment provider_id stamp failed (%s): %s",
                 type(exc).__name__, exc,
+                exc_info=exc,
             )
 
 
@@ -1095,6 +1099,7 @@ def send_draft(
                 logger.warning(
                     "Failed to persist provider_attachment_ids batch (%d rows, %s): %s",
                     len(success_pairs), type(exc).__name__, exc,
+                    exc_info=exc,
                 )
 
         # 5. Best-effort: delete from drafts table
@@ -1104,6 +1109,7 @@ def send_draft(
             logger.warning(
                 "Draft sent but local draft row deletion failed for '%s' (%s): %s",
                 provider_draft_id, type(exc).__name__, exc,
+                exc_info=exc,
             )
 
         # 6. Best-effort: persist sent metadata to email_metadata
@@ -1114,6 +1120,7 @@ def send_draft(
             logger.warning(
                 "Draft sent but metadata persistence failed for account '%s' (%s): %s",
                 account_id, type(exc).__name__, exc,
+                exc_info=exc,
             )
 
         return DraftSendOut(
