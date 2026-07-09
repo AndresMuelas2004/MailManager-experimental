@@ -141,6 +141,12 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_read_status_by_thread(
+        self, account_id: str, message_ids: list[str], is_read: bool,
+    ) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
     def list_provider_message_ids_not_in(
         self, account_id: str, exclude_ids: list[str],
     ) -> list[str]:

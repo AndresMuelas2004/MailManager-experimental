@@ -326,6 +326,35 @@ class PgEmailMetadataStore(EmailMetadataStore):
             "Failed to update email read status batch.",
         )
 
+    def update_read_status_by_thread(
+        self, account_id: str, message_ids: list[str], is_read: bool,
+    ) -> int:
+        # Marks every row of the threads these ids belong to (plus the ids
+        # themselves) so the conversation viewer flips ALL of Outlook's
+        # duplicate rows for one message — see UPDATE_READ_STATUS_BY_THREAD.
+        if not message_ids:
+            return 0
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        queries.UPDATE_READ_STATUS_BY_THREAD,
+                        {
+                            "account_id": account_id,
+                            "message_ids": list(message_ids),
+                            "is_read": is_read,
+                        },
+                    )
+                    return cur.rowcount
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to update email read status by thread.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected email read status by thread error ({type(exc).__name__}): {exc}"
+            ) from exc
+
     def list_provider_message_ids_not_in(
         self, account_id: str, exclude_ids: list[str],
     ) -> list[str]:

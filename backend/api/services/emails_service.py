@@ -115,6 +115,7 @@ from api.services.services_helpers import (
     unwrap_secret,
     update_email_metadata_labels_batch,
     update_email_read_status_batch,
+    update_email_read_status_by_thread,
     update_email_spam_status_batch,
     update_sync_cursor,
 )
@@ -809,7 +810,17 @@ def update_read_status(
                 ) from exc
 
             if updated_ids:
-                update_email_read_status_batch(aid, updated_ids, payload.is_read, fallback=ReadStatusUpdateError)
+                # Conversation viewer marks the whole thread (propagate_thread)
+                # so Outlook's duplicate rows for one message all flip; the
+                # per-message surfaces mark only the ids they sent.
+                if payload.propagate_thread:
+                    update_email_read_status_by_thread(
+                        aid, updated_ids, payload.is_read, fallback=ReadStatusUpdateError,
+                    )
+                else:
+                    update_email_read_status_batch(
+                        aid, updated_ids, payload.is_read, fallback=ReadStatusUpdateError,
+                    )
 
             account_details.append(AccountReadStatusDetail(
                 account_id=aid,

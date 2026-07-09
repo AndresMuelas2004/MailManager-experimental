@@ -961,6 +961,10 @@ def _patch_read_status(monkeypatch, *, accounts=None, fake_client_kwargs=None):
         emails_service, "update_email_read_status_batch",
         lambda _aid, _ids, _read, **_kw: len(_ids),
     )
+    monkeypatch.setattr(
+        emails_service, "update_email_read_status_by_thread",
+        lambda _aid, _ids, _read, **_kw: len(_ids),
+    )
 
     kwargs = fake_client_kwargs or {}
 
@@ -983,11 +987,12 @@ def _patch_read_status(monkeypatch, *, accounts=None, fake_client_kwargs=None):
 class TestUpdateReadStatus:
 
     @staticmethod
-    def _make_payload(items, is_read=True):
+    def _make_payload(items, is_read=True, propagate_thread=False):
         return ReadStatusRequest(
             is_read=is_read,
             items=[ReadStatusItem(account_id=aid, provider_message_id=mid)
                    for aid, mid in items],
+            propagate_thread=propagate_thread,
         )
 
     def test_happy_path_single_account(self, monkeypatch):
@@ -1001,6 +1006,43 @@ class TestUpdateReadStatus:
         assert len(result.accounts) == 1
         assert result.accounts[0].account_id == _ACCOUNT_ID
         assert result.accounts[0].updated == 2
+
+    def test_default_marks_by_id_not_thread(self, monkeypatch):
+        # Per-message surfaces (default propagate_thread=False) mark only the
+        # ids sent, via the per-id batch helper — never the by-thread one.
+        _patch_read_status(monkeypatch)
+        calls = {"batch": [], "by_thread": []}
+        monkeypatch.setattr(
+            emails_service, "update_email_read_status_batch",
+            lambda _aid, ids, _read, **_kw: (calls["batch"].append(list(ids)), len(ids))[1],
+        )
+        monkeypatch.setattr(
+            emails_service, "update_email_read_status_by_thread",
+            lambda _aid, ids, _read, **_kw: (calls["by_thread"].append(list(ids)), len(ids))[1],
+        )
+        payload = self._make_payload([(_ACCOUNT_ID, "m1")])
+        emails_service.update_read_status(_MAILBOX_ID, payload, _USER_ID)
+        assert calls["batch"] == [["m1"]]
+        assert calls["by_thread"] == []
+
+    def test_propagate_thread_uses_by_thread_helper(self, monkeypatch):
+        # Conversation viewer sends propagate_thread=True → the DB update must
+        # route through the by-thread helper so every duplicate Outlook row of
+        # the thread flips, not just the sent id.
+        _patch_read_status(monkeypatch)
+        calls = {"batch": [], "by_thread": []}
+        monkeypatch.setattr(
+            emails_service, "update_email_read_status_batch",
+            lambda _aid, ids, _read, **_kw: (calls["batch"].append(list(ids)), len(ids))[1],
+        )
+        monkeypatch.setattr(
+            emails_service, "update_email_read_status_by_thread",
+            lambda _aid, ids, _read, **_kw: (calls["by_thread"].append(list(ids)), len(ids))[1],
+        )
+        payload = self._make_payload([(_ACCOUNT_ID, "m1")], propagate_thread=True)
+        emails_service.update_read_status(_MAILBOX_ID, payload, _USER_ID)
+        assert calls["by_thread"] == [["m1"]]
+        assert calls["batch"] == []
 
     def test_happy_path_multi_account(self, monkeypatch):
         accounts = [

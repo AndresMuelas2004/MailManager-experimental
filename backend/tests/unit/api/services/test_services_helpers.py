@@ -53,6 +53,7 @@ from api.services.services_helpers import (
     unwrap_secret,
     update_email_metadata_labels_batch,
     update_email_read_status_batch,
+    update_email_read_status_by_thread,
     update_email_spam_status_batch,
     update_sync_cursor,
 )
@@ -736,6 +737,38 @@ class TestUpdateEmailReadStatusBatch:
             mock_store.update_read_status_batch.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to update email read status"):
                 update_email_read_status_batch("acc-1", ["m1"], True)
+
+
+# ------------------------------------------------------------------
+# update_email_read_status_by_thread
+# ------------------------------------------------------------------
+
+class TestUpdateEmailReadStatusByThread:
+
+    def test_empty_returns_zero(self):
+        assert update_email_read_status_by_thread("acc-1", [], True) == 0
+
+    def test_happy_path_returns_updated_count(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.update_read_status_by_thread.return_value = 4
+            result = update_email_read_status_by_thread("acc-1", ["m1"], True)
+        assert result == 4
+        call_args = mock_store.update_read_status_by_thread.call_args
+        assert call_args[0][0] == "acc-1"
+        assert call_args[0][1] == ["m1"]
+        assert call_args[0][2] is True
+
+    def test_query_error_translates_to_database_error(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.update_read_status_by_thread.side_effect = QueryError("DB fail")
+            with pytest.raises(DatabaseQueryError):
+                update_email_read_status_by_thread("acc-1", ["m1"], False)
+
+    def test_generic_exception_raises_api_error(self):
+        with patch("api.services.services_helpers.email_metadata_store") as mock_store:
+            mock_store.update_read_status_by_thread.side_effect = RuntimeError("boom")
+            with pytest.raises(ApiError, match="Failed to update email read status by thread"):
+                update_email_read_status_by_thread("acc-1", ["m1"], True)
 
 
 # ------------------------------------------------------------------

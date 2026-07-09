@@ -43,7 +43,13 @@ export default function useMarkThreadRead(): UseMarkThreadReadReturn {
   const mutation = useMutation({
     mutationFn: async (emails: EmailMetadataOut[]) => {
       const groups = groupByMailbox(emails);
-      await Promise.all([...groups].map(([mid, items]) => updateReadStatus(mid, true, items)));
+      // propagate_thread=true: mark the WHOLE thread of each item read, not
+      // just the sent ids. Outlook persists one physical message under several
+      // ids (sync vs conversation fetch), so a per-id update leaves the
+      // duplicate row unread and the grouped listing row stays bold.
+      await Promise.all(
+        [...groups].map(([mid, items]) => updateReadStatus(mid, true, items, true)),
+      );
     },
     onSuccess: () =>
       Promise.all([

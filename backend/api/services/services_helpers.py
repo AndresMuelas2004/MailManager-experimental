@@ -609,6 +609,34 @@ def update_email_read_status_batch(
         raise fallback("Failed to update email read status in database.") from exc
 
 
+def update_email_read_status_by_thread(
+    account_id: str,
+    message_ids: list[str],
+    is_read: bool,
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> int:
+    """Update is_read for every row of the threads ``message_ids`` belong to
+    (plus the ids themselves). Used by the conversation viewer so Outlook's
+    duplicate rows — the same message persisted under different REST ids by the
+    sync vs the conversation fetch — all flip together and the grouped listing
+    row stops showing as unread. Returns rows updated."""
+    if not message_ids:
+        return 0
+    try:
+        return email_metadata_store.update_read_status_by_thread(
+            account_id, message_ids, is_read,
+        )
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected read status by-thread DB update error (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise fallback("Failed to update email read status by thread in database.") from exc
+
+
 def update_email_spam_status_batch(
     account_id: str,
     results: list[SpamMoveResult],

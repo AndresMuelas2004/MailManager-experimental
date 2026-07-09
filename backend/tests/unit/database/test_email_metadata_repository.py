@@ -470,6 +470,44 @@ def test_update_read_status_batch_propagates_database_error(monkeypatch):
         em_module.email_metadata_store.update_read_status_batch("acc1", [("m1",)])
 
 
+# ===== update_read_status_by_thread =====
+
+
+def test_update_read_status_by_thread_happy_path(monkeypatch):
+    cursor = FakeCursor(rowcounts=[3])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.update_read_status_by_thread("acc1", ["m1"], True)
+    assert result == 3
+
+
+def test_update_read_status_by_thread_empty_returns_zero(monkeypatch):
+    assert em_module.email_metadata_store.update_read_status_by_thread("acc1", [], True) == 0
+
+
+def test_update_read_status_by_thread_psycopg2_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to update email read status by thread"):
+        em_module.email_metadata_store.update_read_status_by_thread("acc1", ["m1"], True)
+
+
+def test_update_read_status_by_thread_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.update_read_status_by_thread("acc1", ["m1"], True)
+
+
+def test_update_read_status_by_thread_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.update_read_status_by_thread("acc1", ["m1"], True)
+
+
 # ===== update_spam_status_batch =====
 
 

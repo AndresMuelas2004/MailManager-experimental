@@ -106,6 +106,13 @@ class ReadStatusRequest(BaseModel):
 
     is_read: bool
     items: list[ReadStatusItem] = Field(..., min_length=1)
+    # When true, the DB update also flips every OTHER row sharing a thread with
+    # the given items (conversation viewer). Off by default so the per-message
+    # surfaces (Favoritos, bulk actions) keep marking only the ids they send.
+    # Needed because Outlook persists one physical message under several ids
+    # (sync vs conversation fetch), and marking a single id leaves the twin
+    # unread, keeping the grouped thread row bold.
+    propagate_thread: bool = False
 
 
 class AccountReadStatusDetail(BaseModel):

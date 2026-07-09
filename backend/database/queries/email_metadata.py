@@ -54,6 +54,31 @@ UPDATE_READ_STATUS_BATCH = """
        AND em.account_id          = v.account_id::UUID
 """
 
+# Thread-wide read-status update for the conversation viewer. Marks every row
+# whose id is in ``message_ids`` OR whose ``thread_id`` matches the thread of
+# any of those ids. The thread branch is what covers Outlook's silent
+# duplicate rows: Outlook hands the same physical message different REST ids on
+# different endpoints/calls, so the sync (folder delta) and the conversation
+# (mailbox-wide $filter) persist separate rows for one message. A per-id update
+# leaves the twin's ``is_read`` stale, and the grouped listing's
+# ``bool_and(is_read)`` then keeps the thread bold. Threading is derived from
+# the ids' own rows, so the caller only needs the opened (listing) id.
+UPDATE_READ_STATUS_BY_THREAD = """
+    UPDATE email_metadata AS em
+       SET is_read = %(is_read)s
+     WHERE em.account_id = %(account_id)s::UUID
+       AND (
+             em.provider_message_id = ANY(%(message_ids)s)
+          OR em.thread_id IN (
+                 SELECT sub.thread_id
+                   FROM email_metadata AS sub
+                  WHERE sub.account_id            = %(account_id)s::UUID
+                    AND sub.provider_message_id   = ANY(%(message_ids)s)
+                    AND sub.thread_id            <> ''
+             )
+       )
+"""
+
 # Rewrites BOTH ``provider_message_id`` and ``box`` because Outlook
 # reassigns its message id when a message is moved between Spam <-> Inbox
 # (the new id replaces the old one and we cascade the change through

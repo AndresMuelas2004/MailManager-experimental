@@ -205,10 +205,17 @@ export function updateReadStatus(
   mailboxId: string,
   isRead: boolean,
   items: EmailItemRef[],
+  // Conversation viewer sets this so the backend also flips every other row
+  // sharing a thread with these items — required because Outlook keeps
+  // duplicate rows for one message under different ids. Only added to the body
+  // when true so the per-message callers keep their existing request shape.
+  propagateThread = false,
 ): Promise<ReadStatusResponse> {
   return request(`/mailboxes/${mailboxId}/emails/read-status`, {
     method: 'PATCH',
-    body: { is_read: isRead, items },
+    body: propagateThread
+      ? { is_read: isRead, items, propagate_thread: true }
+      : { is_read: isRead, items },
     schema: readStatusResponseSchema,
   });
 }

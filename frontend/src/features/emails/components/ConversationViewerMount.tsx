@@ -37,15 +37,33 @@ export default function ConversationViewerMount({
   // guard mirrors ``readTriggered`` in ``EmailViewer``: once the chain has
   // loaded we fire a single grouped read-status call for the unread subset.
   // ``markRead`` no-ops on an empty array, so an all-read thread costs nothing.
+  //
+  // ``openedEmail`` (the listing row) is included explicitly and FIRST, then
+  // the conversation members. Outlook assigns different REST ids to the same
+  // message depending on the endpoint: the sync/listing stores the folder-delta
+  // id, while ``fetch_conversation`` (``/messages?$filter=conversationId``)
+  // returns a different id. The DB rows are keyed by the listing id, so marking
+  // the conversation members alone updates the wrong row and the listing never
+  // flips to read on Outlook. Marking ``openedEmail`` by its listing id fixes
+  // that; the members still cover the rest of the thread on Gmail, where ids
+  // are consistent. Dedup by (account_id, provider_message_id) so Gmail does
+  // not mark the representative twice.
   const readTriggered = useRef(false);
   useEffect(() => {
     if (readTriggered.current) return;
     if (loading) return;
     if (messages.length === 0) return;
     readTriggered.current = true;
-    const unread = messages.filter((m) => !m.is_read);
+    const seen = new Set<string>();
+    const unread = [openedEmail, ...messages].filter((m) => {
+      if (m.is_read) return false;
+      const key = `${m.account_id}|${m.provider_message_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     void markRead(unread);
-  }, [loading, messages, markRead]);
+  }, [loading, messages, markRead, openedEmail]);
 
   return (
     <ConversationViewer
