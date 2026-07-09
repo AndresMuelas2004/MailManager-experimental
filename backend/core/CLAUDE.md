@@ -1,43 +1,43 @@
-# General Core Layer Rules
+# Reglas Generales de la Capa Core
 
-This is the `CLAUDE.md` for the **core business logic** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la capa de **lógica de negocio central (core)**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de gestión de errores y escalado, sus reglas estructurales y su comportamiento común. Todo lo que se cubre aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico al proyecto por diseño.** Nada aquí referencia un dominio, entidad o funcionalidad concretos. Cada regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the core layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la arquitectura de la capa core desde el primer día. La guía específica del proyecto extiende estas reglas con detalles de dominio, pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
-**Immutable.** This file must never be edited. All project-specific changes go in the `*_guide.md` file referenced at the end of this document.
-## 1. Layer Isolation
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas prevalecen.
+**Inmutable.** Este fichero nunca debe editarse. Todos los cambios específicos del proyecto van en el fichero `*_guide.md` referenciado al final de este documento.
+## 1. Aislamiento de la Capa
 
-The `core/` package is a framework-agnostic layer — it has **no imports from `api/`**, `database/`, or `auth/`. Services in the API layer translate `CoreError` subclasses into `ApiError` subclasses via a translation function.
+El paquete `core/` es una capa agnóstica al framework — **no tiene imports de `api/`**, `database/` ni `auth/`. Los servicios de la capa API traducen las subclases de `CoreError` a subclases de `ApiError` mediante una función de traducción.
 
-## 2. Error Hierarchy Pattern
+## 2. Patrón de Jerarquía de Errores
 
-All core errors derive from a single base class. Each class provides:
+Todos los errores de core derivan de una única clase base. Cada clase provee:
 
-- `code` — stable string identifier
-- `default_message` — class-level default
-- `message` — instance-level override (falls back to `default_message`)
-- `detail` — optional dict with structured context
+- `code` — identificador de cadena estable
+- `default_message` — valor por defecto a nivel de clase
+- `message` — override a nivel de instancia (recae en `default_message`)
+- `detail` — dict opcional con contexto estructurado
 
-Subclass errors by functional domain (e.g. email errors, payment errors) while keeping a flat or shallow hierarchy within each domain.
+Deriva los errores por dominio funcional (p. ej. errores de email, errores de pago) manteniendo una jerarquía plana o poco profunda dentro de cada dominio.
 
-## 3. Capture Technique
+## 3. Técnica de Captura
 
-Every core module follows these rules when catching exceptions.
+Cada módulo de core sigue estas reglas al capturar excepciones.
 
-### Rules
+### Reglas
 
-1. **Validate early, fail with domain errors.** Check config, tokens, and auth state at the top of each method before any external call. Raise the corresponding domain error immediately.
+1. **Valida pronto, falla con errores de dominio.** Comprueba configuración, tokens y estado de auth al inicio de cada método antes de cualquier llamada externa. Lanza el error de dominio correspondiente de inmediato.
 
-2. **Catch provider-specific exceptions first.** Each `try` block lists the concrete exception types the provider SDK can throw, ordered from most specific to most general.
+2. **Captura primero las excepciones específicas del provider.** Cada bloque `try` lista los tipos de excepción concretos que puede lanzar el SDK del provider, ordenados de más específico a más general.
 
-3. **Generic fallback last.** A final `except Exception as exc` with message `"<Provider> unexpected <operation> error ({type}): {exc}"` ensures no exception escapes untyped. Internal layers may include `type(exc).__name__` in error messages since these are always translated before reaching the client.
+3. **Fallback genérico al final.** Un `except Exception as exc` final con el mensaje `"<Provider> unexpected <operation> error ({type}): {exc}"` garantiza que ninguna excepción escape sin tipar. Las capas internas pueden incluir `type(exc).__name__` en los mensajes de error, ya que estos siempre se traducen antes de llegar al cliente.
 
-4. **Preserve the cause chain.** Always `raise ... from exc` so the original traceback remains available for debugging.
+4. **Preserva la cadena de causas.** Usa siempre `raise ... from exc` para que el traceback original siga disponible para depuración.
 
-5. **Never double-wrap typed errors.** This rule applies when code inside a `try` block can raise a `CoreError` subclass — either via an explicit `raise` or through a helper that raises one. Add a targeted `except CoreError: raise` (or the specific subclass) **before** the generic `except Exception` handler. **If nothing inside the `try` can produce a `CoreError`, the guard is unnecessary.** Example:
+5. **Nunca hagas doble envoltura de errores tipados.** Esta regla aplica cuando el código dentro de un bloque `try` puede lanzar una subclase de `CoreError` — ya sea vía un `raise` explícito o a través de un helper que lance una. Añade un `except CoreError: raise` dirigido (o la subclase específica) **antes** del handler genérico `except Exception`. **Si nada dentro del `try` puede producir un `CoreError`, la guarda es innecesaria.** Ejemplo:
    ```python
    try:
        self._internal_helper(...)     # Can raise a CoreError subclass
@@ -50,28 +50,28 @@ Every core module follows these rules when catching exceptions.
        raise DomainSpecificError(...) from exc
    ```
 
-6. **Reclassify when the functional meaning changes.** An external API failure during token refresh becomes a refresh error, not a generic external API error, because the operation that failed is authentication refresh.
+6. **Reclasifica cuando cambia el significado funcional.** Un fallo de API externa durante el refresco de token se convierte en un error de refresco, no en un error genérico de API externa, porque la operación que falló es el refresco de autenticación.
 
-7. **Best-effort parsing with soft fallback.** When processing response data (headers, dates, error bodies), tolerate malformed values with a fallback instead of aborting the entire operation.
+7. **Parseo best-effort con fallback suave.** Al procesar datos de respuesta (cabeceras, fechas, cuerpos de error), tolera valores malformados con un fallback en lugar de abortar toda la operación.
 
-8. **Wrap and re-raise — never log the traceback.** This layer's `try` blocks translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original cause up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record. The one exception: an error this layer catches and deliberately swallows (a soft fallback that continues the operation) never reaches those handlers, so when the swallowed cause matters for diagnosis, the swallow site itself must log it with `exc_info=exc`.
+8. **Envuelve y relanza — nunca loguees el traceback.** Los bloques `try` de esta capa traducen y relanzan; no deben loguear las excepciones que envuelven. La cadena `raise ... from exc` transporta la causa original hacia arriba hasta los handlers globales de la capa API, el único sitio donde se loguean los fallos del lado servidor — loguear aquí duplicaría ese registro. La única excepción: un error que esta capa captura y descarta deliberadamente (un fallback suave que continúa la operación) nunca llega a esos handlers, así que cuando la causa descartada importa para el diagnóstico, el propio sitio del descarte debe loguearla con `exc_info=exc`.
 
-## 4. Public Facade Rules
+## 4. Reglas de la Fachada Pública
 
-- All external code imports from the package root or domain sub-package facade.
-- The `__init__.py` re-exports all public symbols.
-- External consumers never import from internal submodules directly.
+- Todo el código externo importa desde la raíz del paquete o desde la fachada del sub-paquete de dominio.
+- El `__init__.py` re-exporta todos los símbolos públicos.
+- Los consumidores externos nunca importan directamente desde submódulos internos.
 
-## 5. Design Principles
+## 5. Principios de Diseño
 
-- Keep external-integration behavior encapsulated inside dedicated modules.
-- Keep API-layer concerns out of core code — no imports from `api/`.
-- Keep secrets wrapped at boundaries and unwrapped only when required.
-- Keep error messages explicit and operation-specific.
-- Use shared helpers for common operations to avoid duplication across implementations.
+- Mantén el comportamiento de integración externa encapsulado dentro de módulos dedicados.
+- Mantén las preocupaciones de la capa API fuera del código de core — sin imports de `api/`.
+- Mantén los secretos envueltos en las fronteras y desenvueltos solo cuando sea necesario.
+- Mantén los mensajes de error explícitos y específicos de la operación.
+- Usa helpers compartidos para operaciones comunes y evitar duplicación entre implementaciones.
 
-## 6. Project-Specific Guide
+## 6. Guía Específica del Proyecto
 
-This file covers the general, transferable rules for the core business logic layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`core_guide.md`](core_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa de lógica de negocio central. Para los detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`core_guide.md`](core_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide core_guide.md
+La guía complementa estas reglas pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, y luego la guía específica del proyecto core_guide.md

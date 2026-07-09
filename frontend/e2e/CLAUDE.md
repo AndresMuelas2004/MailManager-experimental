@@ -1,20 +1,20 @@
-# General End-to-End (E2E) Layer Rules
+# Reglas Generales de la Capa End-to-End (E2E)
 
-This is the `CLAUDE.md` for the **end-to-end testing layer** of the frontend. It governs browser-level tests that exercise the compiled application against a real backend. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la **capa de tests end-to-end** del frontend. Gobierna los tests a nivel de navegador que ejercitan la aplicación compilada contra un backend real. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the E2E layer from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la capa E2E desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to E2E-layer rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas de la capa E2E pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-This layer owns **browser-level, end-to-end tests**. It validates that the compiled application, the network, the backend, and the database cooperate to deliver user-visible outcomes. It complements — but does not duplicate — the unit and integration tiers documented in `../src/test/CLAUDE.md`.
+Esta capa es dueña de los **tests end-to-end a nivel de navegador**. Valida que la aplicación compilada, la red, el backend y la base de datos cooperan para entregar resultados visibles para el usuario. Complementa — pero no duplica — los niveles unitario y de integración documentados en `../src/test/CLAUDE.md`.
 
-## 2. Structure
+## 2. Estructura
 
 ```
 e2e/
@@ -25,79 +25,79 @@ e2e/
 └── playwright.config.ts   # Runner configuration
 ```
 
-## 3. Scope
+## 3. Alcance
 
-### 3.1 What E2E tests do
-- Exercise user journeys that cross at least two pages and depend on the full stack (compiled frontend, real network, real backend).
-- Authenticate through the **real** login flow with a seeded test user — never through stubs.
-- Assert on what the user sees in the DOM, not on internal implementation details.
+### 3.1 Lo que hacen los tests E2E
+- Ejercitan recorridos de usuario que cruzan al menos dos páginas y dependen del stack completo (frontend compilado, red real, backend real).
+- Se autentican a través del flujo de login **real** con un usuario de prueba sembrado — nunca a través de stubs.
+- Verifican lo que el usuario ve en el DOM, no detalles internos de implementación.
 
-### 3.2 What E2E tests do not do
-- Duplicate coverage that an integration test already provides. If a bug can be caught with MSW at the integration tier, it belongs there.
-- Mock network traffic at the browser level. The app under test is the real build.
-- Pretend to be fast. E2E is the slow, high-value tier.
+### 3.2 Lo que no hacen los tests E2E
+- Duplicar cobertura que un test de integración ya proporciona. Si un bug puede atraparse con MSW en el nivel de integración, pertenece ahí.
+- Mockear el tráfico de red a nivel de navegador. La aplicación bajo test es el build real.
+- Fingir ser rápidos. E2E es el nivel lento y de alto valor.
 
-## 4. Spec Rules (`specs/`)
+## 4. Reglas de los Specs (`specs/`)
 
-### 4.1 One journey per file
-- Each spec file covers one golden path (e.g. "log in and reach the main view", "create and submit a form"). Files stay focused so a failure points clearly at the broken journey.
+### 4.1 Un recorrido por fichero
+- Cada fichero de spec cubre un golden path (p. ej. "iniciar sesión y llegar a la vista principal", "crear y enviar un formulario"). Los ficheros se mantienen enfocados para que un fallo apunte con claridad al recorrido roto.
 
-### 4.2 File naming
-- Playwright specs use `*.spec.ts`. The extension is enforced by the runner's glob — do not mix `.test.ts`.
+### 4.2 Nombrado de ficheros
+- Los specs de Playwright usan `*.spec.ts`. La extensión la impone el glob del runner — no mezcles `.test.ts`.
 
-### 4.3 Assertions
-- Assert on visible DOM (`expect(locator).toBeVisible()`, `toHaveText()`, `toHaveURL()`) and on side effects observable by a real user.
-- Do not assert on computed state, internal variables, or framework internals.
+### 4.3 Aserciones
+- Verifica sobre el DOM visible (`expect(locator).toBeVisible()`, `toHaveText()`, `toHaveURL()`) y sobre efectos secundarios observables por un usuario real.
+- No verifiques sobre estado computado, variables internas ni internals del framework.
 
-### 4.4 Timing
-- Prefer Playwright's auto-waiting locators. Avoid arbitrary `page.waitForTimeout(ms)`. When a test needs a specific condition, use an explicit `expect(...).toPass()` or `page.waitForURL(...)`.
+### 4.4 Sincronización (timing)
+- Prefiere los locators con auto-espera de Playwright. Evita `page.waitForTimeout(ms)` arbitrarios. Cuando un test necesite una condición específica, usa un `expect(...).toPass()` explícito o `page.waitForURL(...)`.
 
-## 5. Fixtures and Authenticated State (`fixtures/`, `.auth/`)
+## 5. Fixtures y Estado Autenticado (`fixtures/`, `.auth/`)
 
-### 5.1 Seeded test users
-- Real authenticated journeys use pre-seeded test identities provisioned by the backend. Identities and their credentials are the responsibility of the backend's E2E layer; the frontend E2E layer **consumes** them.
+### 5.1 Usuarios de prueba sembrados
+- Los recorridos autenticados reales usan identidades de prueba pre-sembradas aprovisionadas por el backend. Las identidades y sus credenciales son responsabilidad de la capa E2E del backend; la capa E2E del frontend las **consume**.
 
-### 5.2 Storage state reuse
-- After authenticating once in a global setup, the resulting browser storage state is written to `.auth/<name>.json` and reused by subsequent specs via `test.use({ storageState: ... })`. This keeps the suite fast and deterministic.
+### 5.2 Reutilización del storage state
+- Tras autenticarse una vez en un setup global, el storage state del navegador resultante se escribe en `.auth/<name>.json` y lo reutilizan los specs posteriores vía `test.use({ storageState: ... })`. Esto mantiene la suite rápida y determinista.
 
-### 5.3 Git hygiene
-- `.auth/` and `.artifacts/` are git-ignored at the frontend root. They contain session material and run output respectively.
+### 5.3 Higiene de git
+- `.auth/` y `.artifacts/` están git-ignored en la raíz del frontend. Contienen material de sesión y salida de ejecución respectivamente.
 
-## 6. Reset Contract
+## 6. Contrato de Reset
 
-### 6.1 Per-spec isolation
-- No mutable state may leak between specs. Two strategies are acceptable:
-  - The seeded test identity is reset via a test-only endpoint invoked in `beforeEach`.
-  - Each spec operates within its own scoped resource (e.g. a freshly created record with a unique id) and cleans up in `afterEach`.
+### 6.1 Aislamiento por spec
+- Ningún estado mutable puede filtrarse entre specs. Dos estrategias son aceptables:
+  - La identidad de prueba sembrada se resetea vía un endpoint solo-para-tests invocado en `beforeEach`.
+  - Cada spec opera dentro de su propio recurso acotado (p. ej. un registro recién creado con un id único) y limpia en `afterEach`.
 
-### 6.2 No retry as cover
-- `retries` in the Playwright config is a diagnostic tool, not a substitute for fixing a flaky test. If a spec needs retries to pass, triage the root cause.
+### 6.2 El retry no es una tapadera
+- `retries` en la config de Playwright es una herramienta de diagnóstico, no un sustituto de arreglar un test flaky. Si un spec necesita retries para pasar, haz triaje de la causa raíz.
 
-## 7. Must / Must Not
+## 7. Debe / No Debe
 
-### Must
-- Run against a real, running backend (local or deterministic staging).
-- Authenticate through the production login flow.
-- Produce artifacts (traces, screenshots, video) on failure for debugging.
+### Debe
+- Ejecutarse contra un backend real y en marcha (local o staging determinista).
+- Autenticarse a través del flujo de login de producción.
+- Producir artefactos (traces, screenshots, vídeo) ante un fallo para depurar.
 
-### Must Not
-- Mock HTTP, cookies, or storage at the browser level.
-- Share state across specs.
-- Reproduce coverage achievable at the integration tier.
-- Import code from `src/` — the suite has its own `tsconfig` and exercises the application through the running browser only.
+### No Debe
+- Mockear HTTP, cookies ni storage a nivel de navegador.
+- Compartir estado entre specs.
+- Reproducir cobertura alcanzable en el nivel de integración.
+- Importar código de `src/` — la suite tiene su propio `tsconfig` y ejercita la aplicación solo a través del navegador en marcha.
 
-## 8. Import Boundaries
+## 8. Fronteras de Import
 
-| Allowed imports                                                           | Forbidden imports            |
+| Imports permitidos                                                        | Imports prohibidos           |
 |---------------------------------------------------------------------------|------------------------------|
-| `@playwright/test`, files inside `e2e/` (fixtures, helpers), env config   | Any path starting with `src/` |
+| `@playwright/test`, ficheros dentro de `e2e/` (fixtures, helpers), config de entorno   | Cualquier ruta que empiece por `src/` |
 
-## 9. Commands and CI
+## 9. Comandos y CI
 
-- `npm run e2e` — runs the Playwright suite against the configured base URL.
-- `npm run e2e:ui` — interactive runner for local debugging.
-- CI invokes `npm run e2e` on merges into the main branch, not on every push. E2E flakiness must never gate a small PR.
+- `npm run e2e` — ejecuta la suite de Playwright contra la base URL configurada.
+- `npm run e2e:ui` — runner interactivo para depuración local.
+- CI invoca `npm run e2e` en los merges a la rama principal, no en cada push. La flakiness de E2E nunca debe bloquear una PR pequeña.
 
-## 10. Relationship to Other Testing Tiers
+## 10. Relación con Otros Niveles de Testing
 
-The global philosophy (Testing Trophy, MSW boundary, co-location of Vitest tests) is documented in `../src/test/CLAUDE.md`. This file governs only the E2E specifics. When a change affects both tiers — for instance, adding a new critical journey — read both files before writing tests.
+La filosofía global (Testing Trophy, la frontera de MSW, la co-ubicación de los tests de Vitest) está documentada en `../src/test/CLAUDE.md`. Este fichero gobierna únicamente los aspectos específicos de E2E. Cuando un cambio afecte a ambos niveles — por ejemplo, añadir un recorrido crítico nuevo — lee ambos ficheros antes de escribir tests.

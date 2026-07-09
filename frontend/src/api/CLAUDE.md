@@ -1,20 +1,20 @@
-# General API Client Layer Rules
+# Reglas Generales de la Capa Cliente de API
 
-This is the `CLAUDE.md` for the **API client layer** of the frontend — the single doorway between the browser application and the backend HTTP surface. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la **capa cliente de API** del frontend — la única puerta entre la aplicación del navegador y la superficie HTTP del backend. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the API client layer from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la capa cliente de API desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to API-layer rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas de la capa de API pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-`api/` is the **only** layer permitted to invoke `fetch()` or talk to the backend in any form. Every other layer reaches the network exclusively through this layer. The contract with the backend — paths, methods, request/response shapes, error envelope — is expressed here and nowhere else.
+`api/` es la **única** capa a la que se le permite invocar `fetch()` o comunicarse con el backend de cualquier forma. Cualquier otra capa alcanza la red exclusivamente a través de esta capa. El contrato con el backend — rutas, métodos, formas de petición/respuesta, envoltorio de error — se expresa aquí y en ningún otro sitio.
 
-## 2. Structure
+## 2. Estructura
 
 ```
 api/
@@ -26,79 +26,79 @@ api/
     └── dto.ts       # Zod schemas + inferred TypeScript types
 ```
 
-## 3. HTTP Client Rules (`client/`)
+## 3. Reglas del Cliente HTTP (`client/`)
 
-### 3.1 Single `request<T>()`
-- Exactly **one** function issues HTTP calls in the whole codebase. No other file in `src/` may call `fetch()` directly.
-- `request<T>()` accepts: `path`, `method`, optional `body`, optional `AbortSignal`, optional `schema` (Zod validator for the response).
-- Applies `credentials: "include"` on every call.
-- Serialises bodies as JSON and sets `Content-Type: application/json` only when a body is provided.
+### 3.1 Único `request<T>()`
+- Exactamente **una** función emite llamadas HTTP en todo el código. Ningún otro fichero de `src/` puede llamar a `fetch()` directamente.
+- `request<T>()` acepta: `path`, `method`, `body` opcional, `AbortSignal` opcional, `schema` opcional (validador Zod para la respuesta).
+- Aplica `credentials: "include"` en cada llamada.
+- Serializa los cuerpos como JSON y establece `Content-Type: application/json` solo cuando se proporciona un cuerpo.
 
-### 3.2 Response handling
-- On non-2xx, convert the response into an `ApiError` through the backend's standard error envelope.
-- On 2xx, if a `schema` was provided, run `schema.safeParse(json)` and raise a `ValidationError` if the payload fails. On success, return the parsed value so the caller gets a type narrower than the wire contract.
-- On network-level failure, raise a generic `ApiError` with code `network_error`.
+### 3.2 Manejo de respuestas
+- En un no-2xx, convierte la respuesta en un `ApiError` mediante el envoltorio de error estándar del backend.
+- En un 2xx, si se proporcionó un `schema`, ejecuta `schema.safeParse(json)` y lanza un `ValidationError` si el payload falla. En caso de éxito, devuelve el valor parseado para que el llamante obtenga un tipo más estrecho que el contrato del wire.
+- En un fallo a nivel de red, lanza un `ApiError` genérico con código `network_error`.
 
-### 3.3 Error hierarchy
-- `ApiError` is the base class. It carries `code`, `message`, optional `status`, optional `detail`.
-- `ValidationError extends ApiError` adds the Zod `issues` array and uses code `schema_mismatch`.
-- `UiError` is the plain object shape (`{ message, code? }`) safe for UI consumption. `toUiError(err)` is the canonical translator that every higher layer must use.
+### 3.3 Jerarquía de errores
+- `ApiError` es la clase base. Lleva `code`, `message`, `status` opcional, `detail` opcional.
+- `ValidationError extends ApiError` añade el array `issues` de Zod y usa el código `schema_mismatch`.
+- `UiError` es la forma de objeto plano (`{ message, code? }`) segura para consumo de la UI. `toUiError(err)` es el traductor canónico que toda capa superior debe usar.
 
-### 3.4 Credentials and token storage
-- Session tokens, access tokens, and any credential material **must never** be written to `localStorage` or `sessionStorage`. Both are readable by any script running on the page, which turns a single XSS into a full session takeover.
-- When the backend supports it, authentication travels in `httpOnly` + `Secure` + `SameSite` cookies, and `request<T>()` surfaces them via `credentials: "include"` (see §3.1). The frontend never handles the raw token.
-- When the backend forces a bearer token the browser has to hold, it lives in memory only (a module variable or a closure inside `client/`) and is cleared on logout. It never crosses into storage, `window`, or any other globally reachable surface.
+### 3.4 Credenciales y almacenamiento de tokens
+- Los tokens de sesión, tokens de acceso y cualquier material de credenciales **nunca deben** escribirse en `localStorage` ni `sessionStorage`. Ambos son legibles por cualquier script que corra en la página, lo que convierte un único XSS en un secuestro completo de la sesión.
+- Cuando el backend lo soporta, la autenticación viaja en cookies `httpOnly` + `Secure` + `SameSite`, y `request<T>()` las hace efectivas mediante `credentials: "include"` (ver §3.1). El frontend nunca maneja el token en crudo.
+- Cuando el backend fuerza un bearer token que el navegador tiene que retener, este vive solo en memoria (una variable de módulo o un closure dentro de `client/`) y se limpia en el logout. Nunca cruza a almacenamiento, `window`, ni ninguna otra superficie globalmente alcanzable.
 
-## 4. Endpoint Rules (`endpoints/`)
+## 4. Reglas de Endpoints (`endpoints/`)
 
-### 4.1 Shape
-- One file per backend resource. The file name mirrors the resource name (e.g. `users.ts`, `orders.ts`).
-- Every function is a **thin wrapper** around `request<T>()`: HTTP method, path, optional body, matching schema. No retry logic, no caching, no branching, no business rules.
-- Functions return `Promise<T>` where `T` is the Zod-inferred type from `types/dto.ts`.
+### 4.1 Forma
+- Un fichero por recurso del backend. El nombre del fichero refleja el nombre del recurso (p. ej. `users.ts`, `orders.ts`).
+- Cada función es un **wrapper fino** alrededor de `request<T>()`: método HTTP, ruta, cuerpo opcional, esquema correspondiente. Sin lógica de reintentos, sin caché, sin ramificación, sin reglas de negocio.
+- Las funciones devuelven `Promise<T>` donde `T` es el tipo inferido por Zod de `types/dto.ts`.
 
-### 4.2 Schema pass-through
-- Every call to `request()` that returns data passes its response schema. "No schema" is only acceptable for responses with no body (`204 No Content`).
+### 4.2 Paso del esquema
+- Cada llamada a `request()` que devuelve datos pasa su esquema de respuesta. "Sin esquema" solo es aceptable para respuestas sin cuerpo (`204 No Content`).
 
-## 5. DTO Rules (`types/`)
+## 5. Reglas de DTOs (`types/`)
 
 ### 5.1 Schema-first
-- Every DTO is defined as a Zod `z.object({...})` (or `z.array(...)`) exported as `xxxSchema`.
-- The TypeScript type is **inferred**: `export type X = z.infer<typeof xSchema>`. Never hand-write the `type` alongside the schema.
+- Cada DTO se define como un `z.object({...})` de Zod (o `z.array(...)`) exportado como `xxxSchema`.
+- El tipo de TypeScript es **inferido**: `export type X = z.infer<typeof xSchema>`. Nunca escribas a mano el `type` junto al esquema.
 
-### 5.2 Wire-format fidelity
-- Field names match the backend **exactly**, including casing convention (`snake_case` if the backend uses it). The frontend does not translate names at this boundary.
-- Nullability is expressed with `.nullable()` when the backend may return `null`, and `.optional()` when the field may be omitted. Never both unless the backend genuinely produces three states.
+### 5.2 Fidelidad al formato del wire
+- Los nombres de campo coinciden **exactamente** con el backend, incluida la convención de casing (`snake_case` si el backend lo usa). El frontend no traduce nombres en esta frontera.
+- La nulabilidad se expresa con `.nullable()` cuando el backend puede devolver `null`, y `.optional()` cuando el campo puede omitirse. Nunca ambos salvo que el backend produzca genuinamente tres estados.
 
-### 5.3 Reusable envelopes
-- Shared response shapes (e.g. `{ status: string }`, `{ message: string }`) are declared once at the top of `dto.ts` as `statusResponseSchema`, `messageResponseSchema`, etc., and reused across endpoints. Do not inline them.
+### 5.3 Envoltorios reutilizables
+- Las formas de respuesta compartidas (p. ej. `{ status: string }`, `{ message: string }`) se declaran una vez en la parte superior de `dto.ts` como `statusResponseSchema`, `messageResponseSchema`, etc., y se reutilizan a lo largo de los endpoints. No los inlines.
 
-## 6. Must / Must Not
+## 6. Debe / No Debe
 
-### Must
-- Route every network call through `request<T>()`.
-- Validate every response body that is not `204` through a Zod schema.
-- Surface errors as `ApiError` / `ValidationError`; never as raw `Error` or `Response`.
-- Keep credential material out of every web-storage API (see §3.4).
+### Debe
+- Enrutar cada llamada de red a través de `request<T>()`.
+- Validar cada cuerpo de respuesta que no sea `204` mediante un esquema Zod.
+- Aflorar los errores como `ApiError` / `ValidationError`; nunca como `Error` o `Response` en crudo.
+- Mantener el material de credenciales fuera de toda API de web-storage (ver §3.4).
 
-### Must Not
-- Call `fetch()` outside `client/http.ts`.
-- Maintain in-memory caches here. Caching belongs in the data-fetching layer used by features (TanStack Query).
-- Import from `features/`, `components/`, or `app/`. This layer is strictly lower than any of them.
-- Hand-write types that should be inferred from a schema.
-- Persist tokens, sessions, or credentials in `localStorage`, `sessionStorage`, `IndexedDB`, or any other script-readable storage.
+### No Debe
+- Llamar a `fetch()` fuera de `client/http.ts`.
+- Mantener cachés en memoria aquí. La caché pertenece a la capa de data fetching que usan las features (TanStack Query).
+- Importar de `features/`, `components/` o `app/`. Esta capa es estrictamente inferior a cualquiera de ellas.
+- Escribir a mano tipos que deberían inferirse de un esquema.
+- Persistir tokens, sesiones o credenciales en `localStorage`, `sessionStorage`, `IndexedDB` ni ningún otro almacenamiento legible por script.
 
-## 7. Import Boundaries
+## 7. Fronteras de Import
 
-| Allowed imports                      | Forbidden imports                                  |
+| Imports permitidos                   | Imports prohibidos                                 |
 |--------------------------------------|----------------------------------------------------|
-| `zod`, `lib/` (rare), own files      | `features/`, `components/`, `app/`, `test/`       |
+| `zod`, `lib/` (raro), ficheros propios | `features/`, `components/`, `app/`, `test/`       |
 
-The API layer sits just above `lib/` in the dependency graph. See `../lib/CLAUDE.md` for the leaf-layer rules.
+La capa de API se sitúa justo por encima de `lib/` en el grafo de dependencias. Ver `../lib/CLAUDE.md` para las reglas de la capa hoja.
 
-## 8. Adding a New Endpoint — Checklist
+## 8. Añadir un Nuevo Endpoint — Checklist
 
-- [ ] **DTOs**: add the request/response Zod schemas to `types/dto.ts` and the inferred types alongside.
-- [ ] **Endpoint**: create or extend the file in `endpoints/` for the resource; add a thin wrapper around `request()` that passes the matching schema.
-- [ ] **Errors**: if the backend introduces a new error code the UI cares about, surface it via `ApiError.code`; do not add subclasses without a structural reason.
-- [ ] **No retry / caching / business logic** here — push that to the calling hook in `features/`.
-- [ ] **Tests**: add a default MSW handler mirroring the new endpoint in `src/test/msw/handlers.ts` so integration tests keep working. See `../test/CLAUDE.md`.
+- [ ] **DTOs**: añade los esquemas Zod de petición/respuesta a `types/dto.ts` y los tipos inferidos junto a ellos.
+- [ ] **Endpoint**: crea o extiende el fichero en `endpoints/` para el recurso; añade un wrapper fino alrededor de `request()` que pase el esquema correspondiente.
+- [ ] **Errores**: si el backend introduce un nuevo código de error que a la UI le importa, aflóralo mediante `ApiError.code`; no añadas subclases sin una razón estructural.
+- [ ] **Sin reintentos / caché / lógica de negocio** aquí — empuja eso al hook llamante en `features/`.
+- [ ] **Tests**: añade un handler por defecto de MSW que refleje el nuevo endpoint en `src/test/msw/handlers.ts` para que los tests de integración sigan funcionando. Ver `../test/CLAUDE.md`.

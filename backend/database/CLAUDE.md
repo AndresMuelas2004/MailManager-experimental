@@ -1,18 +1,18 @@
-# General Database Layer Rules
+# Reglas Generales de la Capa de Base de Datos
 
-This is the `CLAUDE.md` for the **database persistence** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la capa de **persistencia en base de datos**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de gestión y escalado de errores, sus reglas estructurales y su comportamiento común. Todo lo que se cubre aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico al proyecto por diseño.** Nada aquí referencia un dominio, entidad o funcionalidad concreta. Cada regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the database layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero a un nuevo proyecto para establecer la arquitectura de la capa de base de datos desde el primer día. La guía específica del proyecto extiende estas reglas con detalles de dominio, pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
-**Immutable.** This file must never be edited. All project-specific changes go in the `*_guide.md` file referenced at the end of this document.
-## 1. Layer Isolation
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas tienen precedencia.
+**Inmutable.** Este fichero nunca debe editarse. Todos los cambios específicos del proyecto van en el fichero `*_guide.md` referenciado al final de este documento.
+## 1. Aislamiento de la Capa
 
-The `database/` package is a framework-agnostic layer — it has **no imports from `api/`**, `core/`, or `auth/`. Services in the API layer translate `DatabaseError` subclasses into `ApiError` subclasses via a translation function.
+El paquete `database/` es una capa agnóstica al framework — **no tiene imports de `api/`**, `core/` ni `auth/`. Los servicios de la capa API traducen las subclases de `DatabaseError` en subclases de `ApiError` mediante una función de traducción.
 
-## 2. Package Structure
+## 2. Estructura del Paquete
 
 ```
   database/
@@ -32,20 +32,20 @@ The `database/` package is a framework-agnostic layer — it has **no imports fr
   
 ```
 
-## 3. Public Facade
+## 3. Fachada Pública
 
-All external code imports from the package root (`from database import ...`). The `__init__.py` re-exports:
+Todo el código externo importa desde la raíz del paquete (`from database import ...`). El `__init__.py` re-exporta:
 
-- Store singleton instances
-- Pool management functions (close, warmup)
-- Migration helpers
-- Credential loading functions
+- Instancias singleton de los Store
+- Funciones de gestión del pool (close, warmup)
+- Helpers de migración
+- Funciones de carga de credenciales
 
-External consumers **never import from internal submodules**.
+Los consumidores externos **nunca importan desde submódulos internos**.
 
-## 4. Internal Data Flow
+## 4. Flujo Interno de Datos
 
-### Runtime (request handling)
+### Runtime (manejo de peticiones)
 
   repositories/
     → queries/          (SQL constants)
@@ -62,25 +62,25 @@ External consumers **never import from internal submodules**.
   settings.py
     → os.environ        (the only module that reads env vars)
 
-  ### Startup (bootstrap)
+  ### Arranque (bootstrap)
 
   lifecycle.py
     → connection.py        (health-check / warmup)
     → settings.py          (migration config)
     → migrations/runner.py (schema evolution, when enabled)
 
-## 5. Layer Boundary Rules
+## 5. Reglas de Frontera de la Capa
 
-- **`settings.py`** — the only module that reads `os.environ`.
-- **`connection.py`** — the only module that manages the connection pool.
-- **`queries/`** — contains only SQL string constants. Zero imports, zero logic.
-- **`repositories/`** — the only modules that execute SQL. They combine a query with a connection and raise specific `DatabaseError` subclasses on failure.
-- **`contracts.py`** — defines abstract interfaces that decouple services from concrete implementations.
-- **`__init__.py`** — re-exports everything. External code never imports submodules directly.
+- **`settings.py`** — el único módulo que lee `os.environ`.
+- **`connection.py`** — el único módulo que gestiona el connection pool.
+- **`queries/`** — contiene únicamente constantes de cadenas SQL. Cero imports, cero lógica.
+- **`repositories/`** — los únicos módulos que ejecutan SQL. Combinan una query con una conexión y lanzan subclases específicas de `DatabaseError` en caso de fallo.
+- **`contracts.py`** — define interfaces abstractas que desacoplan los servicios de las implementaciones concretas.
+- **`__init__.py`** — re-exporta todo. El código externo nunca importa submódulos directamente.
 
-## 6. Error Hierarchy
+## 6. Jerarquía de Errores
 
-The database layer uses its own `DatabaseError` hierarchy, independent of the API error hierarchy.
+La capa de base de datos usa su propia jerarquía `DatabaseError`, independiente de la jerarquía de errores de la API.
 
 ```
  DatabaseError                   # Base for all database errors
@@ -92,11 +92,11 @@ The database layer uses its own `DatabaseError` hierarchy, independent of the AP
 ```
 
 
-Each class has a `code`, `default_message`, `message`, and `detail` dict — same base-class pattern as other layers.
+Cada clase tiene un `code`, un `default_message`, un `message` y un dict `detail` — el mismo patrón de clase base que otras capas.
 
-## 7. Capture Technique
+## 7. Técnica de Captura
 
-Every `try` block in the database layer follows this ordered pattern:
+Cada bloque `try` de la capa de base de datos sigue este patrón ordenado:
 
 ```python
 try:
@@ -113,58 +113,58 @@ except Exception as exc:                    # 4. Generic fallback last
       ) from exc
 ```
 
-### Rules
+### Reglas
 
-1. **Specific DB library errors first** (step 1) — only where applicable (e.g. invalid UUID → graceful `None`/`[]`).
-2. **Never double-wrap `DatabaseError`** (step 2) — this guard is only needed when code inside the `try` block can raise a `DatabaseError` subclass, either explicitly or via an internal helper. The `except DatabaseError: raise` re-raises it before the generic `except Exception` can catch and wrap it. **If nothing inside the `try` can produce a `DatabaseError`, this guard is unnecessary.**
-3. **Domain-specific catch** (step 3) — all DB library error subclasses map to the appropriate exception (`QueryError` for repositories, `ConnectionPoolError` for pool, `MigrationError` for migrations).
-4. **Generic fallback last** (step 4) — ensures no exception escapes untyped. Message includes `type(exc).__name__` for debuggability. Internal layers may include these details since errors are always translated before reaching the client.
-5. **Preserve the cause chain** — always `raise ... from exc`.
-6. **Wrap and re-raise — never log the traceback.** Repositories translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original driver error up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record. The one exception: an error this layer catches and deliberately swallows (e.g. a graceful `None`/`[]` return, step 1) never reaches those handlers, so when the swallowed cause matters for diagnosis, the swallow site itself must log it with `exc_info=exc`.
+1. **Errores de la librería de BD específicos primero** (paso 1) — solo donde aplique (p. ej. UUID inválido → `None`/`[]` de forma controlada).
+2. **Nunca envolver dos veces un `DatabaseError`** (paso 2) — esta guarda solo hace falta cuando el código dentro del bloque `try` puede lanzar una subclase de `DatabaseError`, ya sea explícitamente o vía un helper interno. El `except DatabaseError: raise` lo relanza antes de que el `except Exception` genérico pueda capturarlo y envolverlo. **Si nada dentro del `try` puede producir un `DatabaseError`, esta guarda es innecesaria.**
+3. **Captura específica de dominio** (paso 3) — todas las subclases de errores de la librería de BD se mapean a la excepción apropiada (`QueryError` para repositorios, `ConnectionPoolError` para el pool, `MigrationError` para migraciones).
+4. **Fallback genérico al final** (paso 4) — garantiza que ninguna excepción escape sin tipar. El mensaje incluye `type(exc).__name__` para facilitar la depuración. Las capas internas pueden incluir estos detalles ya que los errores siempre se traducen antes de llegar al cliente.
+5. **Preservar la cadena de causa** — siempre `raise ... from exc`.
+6. **Envolver y relanzar — nunca loguear el traceback.** Los repositorios traducen y relanzan; no deben loguear las excepciones que envuelven. La cadena `raise ... from exc` transporta el error original del driver hasta los handlers globales de la capa API, el único lugar donde se loguean los fallos del lado del servidor — loguear aquí duplicaría ese registro. La única excepción: un error que esta capa captura y descarta deliberadamente (p. ej. un retorno controlado `None`/`[]`, paso 1) nunca llega a esos handlers, así que cuando la causa descartada importa para el diagnóstico, el propio punto de descarte debe loguearla con `exc_info=exc`.
 
-### Where each exception is raised
+### Dónde se lanza cada excepción
 
-  - **`connection.py`** → `ConnectionPoolError` (pool creation, pool exhaustion)
-  - **`lifecycle.py`** → `ConnectionPoolError` (warmup), `MigrationError` (migrations)
-  - **`repositories/*.py`** → `QueryError` (SQL failures)
-  - **`settings.py`** → `SettingsError` (missing/invalid env vars)
-  - Project-specific modules (e.g. `security/`) raise their own `DatabaseError` subclasses as defined in the project guide.
+  - **`connection.py`** → `ConnectionPoolError` (creación del pool, agotamiento del pool)
+  - **`lifecycle.py`** → `ConnectionPoolError` (warmup), `MigrationError` (migraciones)
+  - **`repositories/*.py`** → `QueryError` (fallos de SQL)
+  - **`settings.py`** → `SettingsError` (env vars ausentes/inválidas)
+  - Los módulos específicos del proyecto (p. ej. `security/`) lanzan sus propias subclases de `DatabaseError` según se define en la guía del proyecto.
 
-## 8. Contract Pattern
+## 8. Patrón de Contrato
 
-Abstract store interfaces in `contracts.py` define the public API for each data domain:
+Las interfaces abstractas de store en `contracts.py` definen la API pública de cada dominio de datos:
 
-- Each contract is an abstract class with typed method signatures.
-- Concrete implementations live in `repositories/`.
-- Singleton instances are created at module level and re-exported via the facade.
-- Services depend on the abstract contracts, not concrete implementations.
+- Cada contrato es una clase abstracta con firmas de método tipadas.
+- Las implementaciones concretas viven en `repositories/`.
+- Las instancias singleton se crean a nivel de módulo y se re-exportan vía la fachada.
+- Los servicios dependen de los contratos abstractos, no de las implementaciones concretas.
 
-## 9. Settings Rules
+## 9. Reglas de Settings
 
-- `settings.py` is the **only module** that reads `os.environ`.
-- Missing or invalid required env vars raise `SettingsError`.
-- Settings are organized by concern: connection, pool tuning, migrations, encryption, credentials.
+- `settings.py` es el **único módulo** que lee `os.environ`.
+- Las env vars requeridas ausentes o inválidas lanzan `SettingsError`.
+- Los settings se organizan por área: conexión, tuning del pool, migraciones, cifrado, credenciales.
 
-## 10. Migration Rules
+## 10. Reglas de Migración
 
-- Schema changes are managed with a migration tool (Alembic or equivalent).
-- Migrations are the source of truth for schema evolution — not `schema.sql` snapshots.
-- Auto-migrate at startup is disabled by default; enable via env var for development.
-- Production recommendation: run migrations in CI/CD before API rollout.
+- Los cambios de esquema se gestionan con una herramienta de migración (Alembic o equivalente).
+- Las migraciones son la fuente de verdad para la evolución del esquema — no los snapshots de `schema.sql`.
+- El auto-migrate en el arranque está deshabilitado por defecto; se habilita vía env var para desarrollo.
+- Recomendación de producción: ejecutar las migraciones en CI/CD antes del despliegue de la API.
 
-## 11. Security Rules
+## 11. Reglas de Seguridad
 
-The security/ sub-package is optional. Projects that do not store encrypted tokens or credential files at the database layer may omit it entirely along with its associated error subclasses. When present,
-the following rules apply:
-- Sensitive data (tokens, credentials) is encrypted at rest.
-- Encryption keys are loaded from env vars via `settings.py`.
-- Credential files are loaded from paths specified in env vars.
-- Legacy plaintext fallback is controlled by explicit env vars — never silent.
-- A malformed encryption key raises `SettingsError` immediately — never silently treated as absent.
+El sub-paquete security/ es opcional. Los proyectos que no almacenan tokens cifrados ni ficheros de credenciales en la capa de base de datos pueden omitirlo por completo junto con sus subclases de error asociadas. Cuando está presente,
+aplican las siguientes reglas:
+- Los datos sensibles (tokens, credenciales) se cifran en reposo.
+- Las claves de cifrado se cargan desde env vars vía `settings.py`.
+- Los ficheros de credenciales se cargan desde rutas especificadas en env vars.
+- El fallback legacy a texto plano se controla mediante env vars explícitas — nunca de forma silenciosa.
+- Una clave de cifrado malformada lanza `SettingsError` de inmediato — nunca se trata silenciosamente como ausente.
 
-## 12. Service-Side Translation
+## 12. Traducción en el Lado del Servicio
 
-Services translate database errors via explicit `try`/`except` blocks using `translate_database_error`:
+Los servicios traducen los errores de base de datos mediante bloques `try`/`except` explícitos usando `translate_database_error`:
 
 ```python
 try:
@@ -176,10 +176,10 @@ except Exception as exc:
     raise ApiError("Failed to <operation>.") from exc
 ```
 
-`translate_database_error` maps `DatabaseError` subclasses to `ApiError` subclasses via the mapping. The `except Exception` fallback catches truly unexpected non-DB errors.
+`translate_database_error` mapea las subclases de `DatabaseError` a subclases de `ApiError` mediante el mapeo. El fallback `except Exception` captura errores no-BD verdaderamente inesperados.
 
-## 13. Project-Specific Guide
+## 13. Guía Específica del Proyecto
 
-This file covers the general, transferable rules for the database persistence layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`database_guide.md`](database_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa de persistencia en base de datos. Para detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`database_guide.md`](database_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide database_guide.md.
+La guía complementa estas reglas pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, después la guía específica del proyecto database_guide.md.

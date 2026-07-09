@@ -1,20 +1,20 @@
-# General Utility Layer Rules
+# Reglas Generales de la Capa de Utilidades
 
-This is the `CLAUDE.md` for the **utility layer** of the frontend. It hosts the pure, reusable building blocks that every higher layer is allowed to consume. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la **capa de utilidades** del frontend. Alberga los bloques de construcción puros y reutilizables que toda capa superior tiene permitido consumir. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the utility layer from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la capa de utilidades desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to utility-layer rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas de la capa de utilidades pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-The utility layer holds **pure, cross-feature, framework-light** helpers. Anything that two or more features would otherwise duplicate lives here. Anything tied to a single feature stays inside that feature.
+La capa de utilidades alberga helpers **puros, transversales a features y ligeros respecto al framework**. Todo lo que dos o más features duplicarían de otro modo vive aquí. Todo lo atado a una única feature permanece dentro de esa feature.
 
-## 2. Structure
+## 2. Estructura
 
 ```
 lib/
@@ -24,44 +24,44 @@ lib/
 └── hooks/           # Generic React hooks with no domain knowledge
 ```
 
-The list is open-ended, but every file must satisfy the rules below. Adding a new sub-file or sub-directory inside `lib/` is encouraged when a genuinely reusable helper emerges.
+La lista es abierta, pero cada fichero debe satisfacer las reglas de abajo. Se anima a añadir un nuevo subfichero o subdirectorio dentro de `lib/` cuando emerja un helper genuinamente reutilizable.
 
-## 3. Rules
+## 3. Reglas
 
-### 3.1 Purity
-- Functions must be deterministic and free of side effects whenever possible. Input in, output out.
-- Impure helpers (those that read `Date.now()`, the DOM, or external state) are allowed only when necessary, documented with a one-line comment, and free of business semantics.
+### 3.1 Pureza
+- Las funciones deben ser deterministas y libres de efectos secundarios siempre que sea posible. Entra una entrada, sale una salida.
+- Los helpers impuros (los que leen `Date.now()`, el DOM o estado externo) solo se permiten cuando son necesarios, documentados con un comentario de una línea, y libres de semántica de negocio.
 
-### 3.2 Scope
-- Every export must be meaningful in at least **two** places in the codebase. If only one feature uses it, move it into that feature.
-- No dependencies on the domain of the application. `lib/` must not know about users, sessions, resources, pages, or any concept that belongs in a feature or in `api/`.
+### 3.2 Alcance
+- Cada export debe ser significativo en al menos **dos** sitios del codebase. Si solo lo usa una feature, muévelo a esa feature.
+- Sin dependencias del dominio de la aplicación. `lib/` no debe conocer usuarios, sesiones, recursos, pages, ni ningún concepto que pertenezca a una feature o a `api/`.
 
-### 3.3 Hooks in `lib/hooks/`
-- Must be generic: their type parameters and behavior apply to many shapes of data, not to a specific entity.
-- Must not call endpoints. Data fetching belongs in feature hooks, not here.
-- Naming: `useXxx.ts` exporting `useXxx` as default (or named — see naming conventions in the frontend root `CLAUDE.md`).
+### 3.3 Hooks en `lib/hooks/`
+- Deben ser genéricos: sus parámetros de tipo y su comportamiento aplican a muchas formas de datos, no a una entidad concreta.
+- No deben llamar a endpoints. El data fetching pertenece a los hooks de feature, no aquí.
+- Nomenclatura: `useXxx.ts` exportando `useXxx` como export por defecto (o con nombre — ver las convenciones de nombres en el `CLAUDE.md` raíz del frontend).
 
-## 4. Must / Must Not
+## 4. Debe / No Debe
 
-### Must
-- Stay dependency-free from the rest of `src/`. Only React, pinned third-party packages (TypeScript-safe), and other files inside `lib/`.
-- Provide explicit TypeScript types for every public export.
+### Debe
+- Mantenerse libre de dependencias respecto al resto de `src/`. Solo React, paquetes de terceros fijados (TypeScript-safe), y otros ficheros dentro de `lib/`.
+- Proporcionar tipos TypeScript explícitos para cada export público.
 
-### Must Not
-- Import from `api/`, `features/`, `components/`, `app/` or `test/`. Any such import is an architectural violation.
-- Perform JSX rendering (besides the generic hooks that return state/callbacks).
-- Hold application-wide mutable state. Generic hooks may hold *local* state scoped to the caller.
+### No Debe
+- Importar de `api/`, `features/`, `components/`, `app/` o `test/`. Cualquier import de este tipo es una violación arquitectónica.
+- Realizar renderizado JSX (más allá de los hooks genéricos que devuelven estado/callbacks).
+- Mantener estado mutable a nivel de toda la aplicación. Los hooks genéricos pueden mantener estado *local* acotado al llamante.
 
-## 5. Import Boundaries
+## 5. Fronteras de Imports
 
-| Allowed imports                                                                             | Forbidden imports                                                  |
+| Imports permitidos                                                                          | Imports prohibidos                                                 |
 |---------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| React (for hooks), pinned third-party deps, other files inside `lib/`                       | Any other directory under `src/` (`api`, `features`, `components`, `app`, `test`) |
+| React (para hooks), dependencias de terceros fijadas, otros ficheros dentro de `lib/`       | Cualquier otro directorio bajo `src/` (`api`, `features`, `components`, `app`, `test`) |
 
-## 6. Adding Something to `lib/` — Checklist
+## 6. Añadir Algo a `lib/` — Checklist
 
-- [ ] Confirm the helper is genuinely reusable in two or more sites. If not, put it in the owning feature.
-- [ ] Strip any dependency on the application domain. Make the API generic.
-- [ ] Write a unit test co-located with the file (`*.test.ts`). See `src/test/CLAUDE.md`.
-- [ ] Export only what other layers need — keep internal helpers module-private.
-- [ ] Do not introduce imports from other `src/` directories.
+- [ ] Confirma que el helper es genuinamente reutilizable en dos o más sitios. Si no, ponlo en la feature que lo posee.
+- [ ] Elimina cualquier dependencia del dominio de la aplicación. Haz la API genérica.
+- [ ] Escribe un test unitario co-ubicado junto al fichero (`*.test.ts`). Ver `src/test/CLAUDE.md`.
+- [ ] Exporta solo lo que otras capas necesitan — mantén los helpers internos privados del módulo.
+- [ ] No introduzcas imports de otros directorios de `src/`.

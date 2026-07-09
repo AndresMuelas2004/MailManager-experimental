@@ -1,74 +1,74 @@
-# General Documentation Directory Rules
+# Reglas Generales del Directorio de Documentación
 
-This is the `CLAUDE.md` for the **`docs/` directory**. It is the general reference for what this directory contains, who its readers are, and how each file inside it must be written. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` del **directorio `docs/`**. Es la referencia general de qué contiene este directorio, quiénes son sus lectores y cómo debe escribirse cada fichero dentro de él. Todo aspecto tratado aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that adopts this directory.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que adopte este directorio.
 
-**Reusable.** Copy this file into a new project to establish the same documentation directory from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer el mismo directorio de documentación desde el primer día.
 
-**Precedence.** In case of conflict between this file and any other document inside `docs/`, this file takes precedence. The root `CLAUDE.md` always overrides this file.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier otro documento dentro de `docs/`, este fichero tiene precedencia. El `CLAUDE.md` raíz siempre prevalece sobre este fichero.
 
-**Immutable.** This file must never be edited. All future rule changes go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio futuro de reglas pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-`docs/` is the home for **narrative, project-specific documentation aimed at the engineering team and future maintainers** — not at end users, and not at Claude as a source of architectural rules.
+`docs/` es el hogar de la **documentación narrativa, específica del proyecto, dirigida al equipo de ingeniería y a los futuros mantenedores** — no a los usuarios finales, ni a Claude como fuente de reglas arquitectónicas.
 
-The directory is organised by subdirectory, one per kind of documentation. Today it contains:
+El directorio está organizado por subdirectorio, uno por cada tipo de documentación. Hoy contiene:
 
-- `features/` — behavior-level descriptions of individual features (one Markdown file per feature).
+- `features/` — descripciones a nivel de comportamiento de features individuales (un fichero Markdown por feature).
 
-New subdirectories may be added when a different kind of documentation needs a home (for example architecture decisions, runbooks, post-mortems). Any new subdirectory must follow the same spirit established here: narrative prose, written for humans, complementary to (never replacing) the `CLAUDE.md` and `*_guide.md` files that live next to the code.
+Se pueden añadir nuevos subdirectorios cuando un tipo distinto de documentación necesite un hogar (por ejemplo decisiones de arquitectura, runbooks, post-mortems). Todo subdirectorio nuevo debe seguir el mismo espíritu establecido aquí: prosa narrativa, escrita para humanos, complementaria a (nunca sustituta de) los ficheros `CLAUDE.md` y `*_guide.md` que viven junto al código.
 
-## 2. Audience
+## 2. Audiencia
 
-The primary audience is the **engineering team and future maintainers** — people who need to understand a feature, a decision, or a procedure without spelunking through every file that implements it. This is not user-facing documentation, and it is not the place where Claude looks for architectural rules or implementation patterns.
+La audiencia principal es el **equipo de ingeniería y los futuros mantenedores** — personas que necesitan entender una feature, una decisión o un procedimiento sin bucear por cada fichero que lo implementa. Esto no es documentación de cara al usuario, y no es el lugar donde Claude busca reglas arquitectónicas o patrones de implementación.
 
-## 3. Scope — What Belongs Here
+## 3. Alcance — Qué Pertenece Aquí
 
-- Behavior-level descriptions of features (under `features/`): triggers, conditions, edge cases, and observable results.
-- Accepted limitations (especially for MVP-scoped work): what is **deliberately** left out and why.
-- Decisions and trade-offs whose rationale is not visible in the code itself.
-- Concrete examples of inputs paired with the resulting behavior.
-- Cross-feature or cross-area interactions that are easy to miss when reading any single module in isolation.
+- Descripciones a nivel de comportamiento de features (bajo `features/`): disparadores, condiciones, casos límite y resultados observables.
+- Limitaciones aceptadas (especialmente en trabajo con alcance MVP): qué se deja fuera **deliberadamente** y por qué.
+- Decisiones y trade-offs cuya justificación no es visible en el propio código.
+- Ejemplos concretos de entradas emparejadas con el comportamiento resultante.
+- Interacciones entre features o entre áreas que es fácil pasar por alto al leer cualquier módulo aislado.
 
-### What does NOT belong here
+### Qué NO pertenece aquí
 
-- Architectural or layer-level rules → those live in the corresponding layer `CLAUDE.md`.
-- Project-specific implementation details that mirror the code one-to-one → those live in the corresponding `*_guide.md`.
-- API request/response schemas, error codes, or wire contracts → those live next to the code (`schemas/`, error class definitions, etc.).
-- Test specifications → those live in the test files.
-- Any line that merely paraphrases a function name, a field, or a signature — if it would silently rot the moment the code is renamed, it does not pay for its tokens.
+- Reglas arquitectónicas o a nivel de capa → esas viven en el `CLAUDE.md` de la capa correspondiente.
+- Detalles de implementación específicos del proyecto que reflejan el código uno a uno → esos viven en el `*_guide.md` correspondiente.
+- Esquemas de petición/respuesta de la API, códigos de error o contratos de wire → esos viven junto al código (`schemas/`, definiciones de clases de error, etc.).
+- Especificaciones de tests → esas viven en los ficheros de test.
+- Cualquier línea que se limite a parafrasear el nombre de una función, un campo o una firma — si se pudriese en silencio en el momento en que el código se renombra, no paga sus tokens.
 
-## 4. Writing Style
+## 4. Estilo de Escritura
 
-- **Behavior-first, not implementation-first.** Describe what the user (or another system) experiences, not how the code is wired internally.
-- **Natural prose.** Speak to a teammate, not to a compiler. Headings, bullet lists, and short paragraphs are encouraged; dense API-style notation is not.
-- **Concrete examples.** Show inputs and the resulting behavior whenever it sharpens a rule.
-- **Make trade-offs explicit.** "What we left out and why" is often the most valuable part of the document.
-- **Code references earn their place.** Pointing at a file path or a function is fine when it pinpoints the source of a non-obvious behavior; otherwise, prose is better.
-- **One topic per file.** If a document starts to cover two unrelated topics, split it.
+- **El comportamiento primero, no la implementación primero.** Describe lo que el usuario (u otro sistema) experimenta, no cómo está cableado el código internamente.
+- **Prosa natural.** Habla a un compañero de equipo, no a un compilador. Se fomentan los encabezados, las listas con viñetas y los párrafos cortos; la notación densa estilo API no.
+- **Ejemplos concretos.** Muestra entradas y el comportamiento resultante siempre que afile una regla.
+- **Haz explícitos los trade-offs.** «Qué dejamos fuera y por qué» suele ser la parte más valiosa del documento.
+- **Las referencias al código se ganan su sitio.** Apuntar a una ruta de fichero o a una función está bien cuando señala con precisión el origen de un comportamiento no obvio; en otro caso, la prosa es mejor.
+- **Un tema por fichero.** Si un documento empieza a cubrir dos temas no relacionados, divídelo.
 
-## 5. How This Differs From Other Documentation
+## 5. En Qué Se Diferencia Esto de Otra Documentación
 
-| Document                            | Primary audience          | Style                                                  |
-|-------------------------------------|---------------------------|--------------------------------------------------------|
-| Root `CLAUDE.md`                    | Claude + maintainers      | Supreme architectural rules                            |
-| Layer `CLAUDE.md` (e.g. `api/`)     | Claude + maintainers      | Project-agnostic structural rules                      |
-| `*_guide.md` (e.g. `api_guide.md`)  | Claude + maintainers      | Project-specific implementation rules                  |
-| `docs/<area>/<topic>.md`            | Team and new contributors | Narrative description of a feature/decision/runbook    |
+| Documento                           | Audiencia principal          | Estilo                                                 |
+|-------------------------------------|------------------------------|--------------------------------------------------------|
+| `CLAUDE.md` raíz                    | Claude + mantenedores        | Reglas arquitectónicas supremas                        |
+| `CLAUDE.md` de capa (p. ej. `api/`) | Claude + mantenedores        | Reglas estructurales agnósticas del proyecto           |
+| `*_guide.md` (p. ej. `api_guide.md`)| Claude + mantenedores        | Reglas de implementación específicas del proyecto      |
+| `docs/<area>/<topic>.md`            | Equipo y nuevos colaboradores| Descripción narrativa de una feature/decisión/runbook  |
 
-Rule of thumb: if removing the document from the repository would make a new contributor unable to understand **what something is supposed to do or why a decision was made** without reading the implementation, the document belongs here. If removing it would only hide an architectural or implementation rule, it belongs in a `CLAUDE.md` or a `*_guide.md` instead.
+Regla general: si quitar el documento del repositorio dejara a un nuevo colaborador incapaz de entender **qué se supone que hace algo o por qué se tomó una decisión** sin leer la implementación, el documento pertenece aquí. Si quitarlo solo ocultara una regla arquitectónica o de implementación, pertenece a un `CLAUDE.md` o a un `*_guide.md` en su lugar.
 
-## 6. File Naming and Language
+## 6. Nombrado de Ficheros e Idioma
 
-- One Markdown file per topic. Filename matches the topic's short identifier in lowercase (e.g. `lupa.md`, `attachments.md`, `email-search.md`). Use kebab-case if the identifier needs more than one word.
-- Files inside `docs/` may be written in **any language the team uses**, since the readers are human contributors. Consistency within a single file is required — do not mix languages within one document.
-- This `CLAUDE.md` itself must remain in English (the rule that applies to every `CLAUDE.md` in the repository).
+- Un fichero Markdown por tema. El nombre del fichero coincide con el identificador corto del tema en minúsculas (p. ej. `lupa.md`, `attachments.md`, `email-search.md`). Usa kebab-case si el identificador necesita más de una palabra.
+- Los ficheros dentro de `docs/` pueden escribirse en **cualquier idioma que use el equipo**, dado que los lectores son colaboradores humanos. Se exige consistencia dentro de un mismo fichero — no mezcles idiomas dentro de un documento.
+- Este `CLAUDE.md`, como todo `CLAUDE.md` y `*_guide.md` del repositorio, puede escribirse en español.
 
-## 7. Maintenance and Authority
+## 7. Mantenimiento y Autoridad
 
-- Add a new file when a new feature ships, a significant decision is made, or a runbook is needed, and any of its details are non-trivial enough to deserve a narrative explanation.
-- Update an existing file whenever the underlying feature, decision, or procedure changes — even small UX shifts (debounce timing, minimum character count, ordering of results, scope boundaries) belong in the file. A stale document is worse than a missing one.
-- Do not delete a file unless the topic itself is removed from the application. If the file is "out of date", update it; do not remove it.
-- A document under `docs/` carries the same authority as a `*_guide.md`: when the code contradicts it, the document is the source of truth and the code is what needs to change. Conversely, when the document no longer reflects the desired behavior, it must be updated as part of the same change that altered the underlying topic — never left for "later".
+- Añade un fichero nuevo cuando se lance una nueva feature, se tome una decisión significativa o se necesite un runbook, y cualquiera de sus detalles sea lo bastante no trivial como para merecer una explicación narrativa.
+- Actualiza un fichero existente siempre que cambie la feature, decisión o procedimiento subyacente — incluso pequeños cambios de UX (tiempo de debounce, número mínimo de caracteres, orden de los resultados, límites de alcance) pertenecen al fichero. Un documento obsoleto es peor que uno inexistente.
+- No borres un fichero a menos que el propio tema se elimine de la aplicación. Si el fichero está «desactualizado», actualízalo; no lo elimines.
+- Un documento bajo `docs/` tiene la misma autoridad que un `*_guide.md`: cuando el código lo contradice, el documento es la fuente de verdad y el código es lo que debe cambiar. A la inversa, cuando el documento ya no refleja el comportamiento deseado, debe actualizarse como parte del mismo cambio que alteró el tema subyacente — nunca dejarse para «luego».

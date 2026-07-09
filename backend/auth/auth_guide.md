@@ -1,63 +1,63 @@
-> **Permanent rule — read before editing this file.**
+> **Regla permanente — léela antes de editar este fichero.**
 >
-> This file is loaded into context on every Claude session. A line here only justifies its tokens if it cannot be reconstructed by reading the code.
+> Este fichero se carga en el contexto en cada sesión de Claude. Una línea aquí solo justifica sus tokens si no puede reconstruirse leyendo el código.
 >
-> **Before writing or keeping a line, ask: could I rebuild this by opening the relevant file(s) for ~30 seconds?**
-> - **YES → delete it.** The code is the source of truth. Catalogs of what modules / functions / tests do, paraphrases of names or bodies, exhaustive kwarg / field / config enumerations, flow tables that mirror existing file or symbol names, and step-by-step recipes for code that is itself readable all fall here. Delete them on sight.
-> - **NO → keep it.** Silent traps when extending the layer, cross-file asymmetries (siblings that don't behave alike), ordering / lifecycle rules whose violation breaks everything, invariants whose silent regression would slip through review, historical decisions whose rationale isn't in the code, and fixed identifiers (UUIDs, seeded data, magic constants) that cannot be recomputed — those earn their tokens.
+> **Antes de escribir o conservar una línea, pregúntate: ¿podría reconstruir esto abriendo el/los fichero(s) relevante(s) durante ~30 segundos?**
+> - **SÍ → bórrala.** El código es la fuente de verdad. Los catálogos de lo que hacen módulos / funciones / tests, las paráfrasis de nombres o cuerpos, las enumeraciones exhaustivas de kwargs / campos / config, las tablas de flujo que reflejan nombres de fichero o de símbolo ya existentes, y las recetas paso a paso para código que ya es legible por sí mismo caen todas aquí. Bórralas en cuanto las veas.
+> - **NO → consérvala.** Trampas silenciosas al extender la capa, asimetrías entre ficheros (hermanos que no se comportan igual), reglas de orden / ciclo de vida cuya violación lo rompe todo, invariantes cuya regresión silenciosa se colaría en la revisión, decisiones históricas cuya razón de ser no está en el código, e identificadores fijos (UUIDs, datos sembrados, constantes mágicas) que no pueden recomputarse — esos sí ganan sus tokens.
 >
-> **When updating this file, re-read every section and delete anything that has since migrated into the code.** Staleness is worse than silence.
+> **Al actualizar este fichero, relee cada sección y borra todo lo que desde entonces haya migrado al código.** La obsolescencia es peor que el silencio.
 
-# Auth Layer Guide
+# Guía de la Capa Auth
 
-> **General rules**: this layer MUST respect every rule defined in
+> **Reglas generales**: esta capa DEBE respetar todas las reglas definidas en
 > [`CLAUDE.md`](./CLAUDE.md).
-> The current document contains project-specific details that complement those rules.
+> El presente documento contiene detalles específicos del proyecto que complementan esas reglas.
 
-**Authority rule**: the code of this layer must respect what is documented here. If there is a discrepancy between this guide and existing code, this guide is the reference — fix the code, not the guide. When new functionality is added, update this guide at the end of the task to reflect the new reality.
+**Regla de autoridad**: el código de esta capa debe respetar lo documentado aquí. Si hay una discrepancia entre esta guía y el código existente, esta guía es la referencia — corrige el código, no la guía. Cuando se añada nueva funcionalidad, actualiza esta guía al final de la tarea para reflejar la nueva realidad.
 
-## Traps
+## Trampas
 
-### Subclass capture order — network error must be caught **before** its base
+### Orden de captura de subclases — el error de red debe capturarse **antes** que su base
 
-A network/transport exception that is a **subclass** of the provider's generic error must be caught first, or a verification-endpoint outage gets misclassified as a bad token: the user sees 401 "invalid token" when the real failure is "verification service unreachable" (which must surface as 502 via `AuthTokenNetworkError`). Each provider expresses this differently:
+Una excepción de red/transporte que sea **subclase** del error genérico del proveedor debe capturarse primero, o una caída del endpoint de verificación se clasifica erróneamente como un token malo: el usuario ve un 401 "invalid token" cuando el fallo real es "servicio de verificación inalcanzable" (que debe aflorar como 502 vía `AuthTokenNetworkError`). Cada proveedor lo expresa de forma distinta:
 
-- **Google** (`google.py`): `google.auth.exceptions.TransportError` is a subclass of `GoogleAuthError`.
-- **Microsoft** (`microsoft.py`): `jwt.exceptions.PyJWKClientConnectionError` is a subclass of `PyJWKClientError` (both raised by `PyJWKClient.get_signing_key_from_jwt`). The connection subclass → `AuthTokenNetworkError` (502); the base "kid not found" → `AuthTokenInvalidError` (401).
+- **Google** (`google.py`): `google.auth.exceptions.TransportError` es subclase de `GoogleAuthError`.
+- **Microsoft** (`microsoft.py`): `jwt.exceptions.PyJWKClientConnectionError` es subclase de `PyJWKClientError` (ambas lanzadas por `PyJWKClient.get_signing_key_from_jwt`). La subclase de conexión → `AuthTokenNetworkError` (502); la base "kid not found" → `AuthTokenInvalidError` (401).
 
-### Microsoft: broken JWK / JWKS / crypto backend is infra → 502, not a 4th error subclass
+### Microsoft: JWK / JWKS / backend criptográfico roto es infra → 502, no una 4ª subclase de error
 
-`microsoft.py` maps `PyJWKError` / `PyJWKSetError` / `InvalidKeyError` (malformed key material, crypto backend broken) to `AuthTokenNetworkError`, **not** `AuthTokenInvalidError`: a broken signing-key fetch is "our side / the provider's infrastructure", not "the user's token is bad". This deliberately reuses the existing 502 subclass rather than inventing a provider-specific one (`CLAUDE.md` §9 — only add a subclass when a provider needs a *different* HTTP response).
+`microsoft.py` mapea `PyJWKError` / `PyJWKSetError` / `InvalidKeyError` (material de clave malformado, backend criptográfico roto) a `AuthTokenNetworkError`, **no** a `AuthTokenInvalidError`: una obtención de clave de firma rota es "nuestro lado / la infraestructura del proveedor", no "el token del usuario es malo". Esto reutiliza deliberadamente la subclase 502 existente en lugar de inventar una específica del proveedor (`CLAUDE.md` §9 — solo añade una subclase cuando un proveedor necesita una respuesta HTTP *diferente*).
 
-### Never-double-wrap guard — now REQUIRED by `microsoft.py` (Google still does not need it)
+### Guard de nunca-envolver-dos-veces — ahora REQUERIDO por `microsoft.py` (Google sigue sin necesitarlo)
 
-The guard pattern in `auth/CLAUDE.md` §7 rule 6 is conditional. `google.py` still does not need it: `id_token.verify_oauth2_token(...)` cannot produce `AuthError`. `microsoft.py` **does** need it and carries it — its `try` body raises `AuthTokenInvalidError` / `AuthTokenNetworkError` directly (the `tid` pre-check, the per-clause `get_signing_key_from_jwt` mapping, the post-verification `iss`/`tid` re-bind), so without
+El patrón del guard en `auth/CLAUDE.md` §7 regla 6 es condicional. `google.py` sigue sin necesitarlo: `id_token.verify_oauth2_token(...)` no puede producir un `AuthError`. `microsoft.py` **sí** lo necesita y lo lleva — el cuerpo de su `try` lanza `AuthTokenInvalidError` / `AuthTokenNetworkError` directamente (la pre-comprobación de `tid`, el mapeo por-cláusula de `get_signing_key_from_jwt`, la re-vinculación post-verificación de `iss`/`tid`), de modo que sin
 
 ```python
 except AuthTokenError:  # re-raise before the generic catch
     raise
 ```
 
-the trailing `except Exception` would re-wrap those typed errors as `AuthTokenInvalidError`, collapsing the network/invalid distinction (and turning a 502 into a 401).
+el `except Exception` final re-envolvería esos errores tipados como `AuthTokenInvalidError`, colapsando la distinción red/inválido (y convirtiendo un 502 en un 401).
 
-### Microsoft tenancy `common` has no fixed issuer — bind `iss` to the token's own `tid`
+### La tenancy `common` de Microsoft no tiene issuer fijo — vincula `iss` al propio `tid` del token
 
-`verify_microsoft_token` targets the multi-tenant `common` authority, whose `iss` is `https://login.microsoftonline.com/{tid}/v2.0` and therefore not a constant. The function reads `tid` from the **unverified** payload only to build the expected issuer (re-validated GUID-shape), verifies the token against that issuer, then re-checks `iss == .../{verified tid}/v2.0` on the now-verified claims (belt-and-braces). A reviewer "simplifying" this to a hardcoded issuer constant would either reject every legitimate tenant or accept tokens from a foreign one.
+`verify_microsoft_token` apunta a la autoridad multi-tenant `common`, cuyo `iss` es `https://login.microsoftonline.com/{tid}/v2.0` y por tanto no es una constante. La función lee `tid` del payload **sin verificar** solo para construir el issuer esperado (re-validado con forma de GUID), verifica el token contra ese issuer, y luego re-comprueba `iss == .../{verified tid}/v2.0` sobre los claims ya verificados (cinturón y tirantes). Un revisor que "simplifique" esto a una constante de issuer hardcodeada rechazaría todo tenant legítimo o aceptaría tokens de uno ajeno.
 
-### Claim validation lives in the service, not in the auth layer
+### La validación de claims vive en el servicio, no en la capa auth
 
-`verify_google_token` only verifies cryptographic validity and provider issuance. Business-logic checks (`sub` present, `email` present, etc.) belong in `auth_service.google_login`, which raises `Unauthorized`. This separation keeps the auth layer reusable across endpoints and free of API concerns.
+`verify_google_token` solo verifica la validez criptográfica y la emisión por el proveedor. Las comprobaciones de lógica de negocio (`sub` presente, `email` presente, etc.) pertenecen a `auth_service.google_login`, que lanza `Unauthorized`. Esta separación mantiene la capa auth reutilizable entre endpoints y libre de cuestiones de la capa API.
 
-### Microsoft vs Google — asymmetries that live in the auth-layer files
+### Microsoft vs Google — asimetrías que viven en los ficheros de la capa auth
 
-Two cross-provider asymmetries live in the auth-layer files themselves (the *service-side* claim rules — `email` → `preferred_username` fallback and `email_verified` NOT checked — are documented in `api_guide.md` § "New identity provider"):
+Dos asimetrías entre proveedores viven en los propios ficheros de la capa auth (las reglas de claims del *lado del servicio* — fallback `email` → `preferred_username` y `email_verified` NO comprobado — están documentadas en `api_guide.md` § "New identity provider"):
 
-- **`MICROSOFT_CLIENT_ID` is optional in `settings.py`** (defaults to `""`), unlike `GOOGLE_CLIENT_ID`, whose absence raises `AuthSettingsError`. The "is Microsoft configured?" guard lives at the point of use (`auth_service.microsoft_login` → `EnvVarError`), so a Google-only deploy still loads settings and boots. Do NOT move the guard into `get_auth_settings` — it would break Google-only deploys and every test that sets only `GOOGLE_CLIENT_ID`.
-- **`microsoft.py` uses `leeway = 60 s`; `google.py` uses `10 s`.** Microsoft Entra does not specify a clock-skew tolerance, so the more generous window is intentional. Do not "align" the two values.
+- **`MICROSOFT_CLIENT_ID` es opcional en `settings.py`** (por defecto `""`), a diferencia de `GOOGLE_CLIENT_ID`, cuya ausencia lanza `AuthSettingsError`. El guard "¿está Microsoft configurado?" vive en el punto de uso (`auth_service.microsoft_login` → `EnvVarError`), de modo que un despliegue solo-Google sigue cargando settings y arrancando. NO muevas el guard a `get_auth_settings` — rompería los despliegues solo-Google y todos los tests que solo establecen `GOOGLE_CLIENT_ID`.
+- **`microsoft.py` usa `leeway = 60 s`; `google.py` usa `10 s`.** Microsoft Entra no especifica una tolerancia de desfase de reloj, así que la ventana más generosa es intencionada. No "alinees" los dos valores.
 
-## Extension — new identity provider
+## Extensión — nuevo proveedor de identidad
 
-See the general checklist in `auth/CLAUDE.md` §9. Project-specific additions:
+Ver el checklist general en `auth/CLAUDE.md` §9. Añadidos específicos del proyecto:
 
-- The existing `AuthTokenError` subclasses (`AuthTokenNetworkError`, `AuthTokenInvalidError`, `AuthTokenProviderError`) are provider-agnostic. Only create a new subclass when a provider introduces a failure mode that needs a different HTTP response or client-side handling.
-- When adding a new provider module, extend the "Subclass capture order" trap above with that provider's specific subclass relationship (or confirm it doesn't apply).
+- Las subclases existentes de `AuthTokenError` (`AuthTokenNetworkError`, `AuthTokenInvalidError`, `AuthTokenProviderError`) son agnósticas al proveedor. Crea una nueva subclase solo cuando un proveedor introduzca un modo de fallo que necesite una respuesta HTTP diferente o un manejo distinto en el lado del cliente.
+- Al añadir un nuevo módulo de proveedor, extiende la trampa "Orden de captura de subclases" de arriba con la relación de subclases específica de ese proveedor (o confirma que no aplica).

@@ -1,18 +1,18 @@
-# General Frontend Testing Layer Rules
+# Reglas Generales de la Capa de Testing del Frontend
 
-This is the `CLAUDE.md` for the **frontend testing convention**. It serves as the general architectural reference for the testing layer, describing which test types exist, what they cover, what they mock, where they live, and in what proportion they should be written. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la **convención de testing del frontend**. Sirve como la referencia arquitectónica general de la capa de testing, describiendo qué tipos de test existen, qué cubren, qué mockean, dónde viven y en qué proporción deben escribirse. Todo aspecto cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the frontend testing convention from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la convención de testing del frontend desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to testing conventions go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las convenciones de testing pasa por una nueva versión de este fichero.
 
-## 1. Testing Shape — the Testing Trophy
+## 1. Forma del Testing — el Testing Trophy
 
-The frontend does **not** follow the backend's classic test pyramid (wide unit base, thin E2E tip). It follows the **Testing Trophy** (Kent C. Dodds), which reflects where real bugs live in a React application:
+El frontend **no** sigue la clásica pirámide de tests del backend (base ancha de tests unitarios, punta fina de E2E). Sigue el **Testing Trophy** (Kent C. Dodds), que refleja dónde viven los bugs reales en una aplicación React:
 
 ```
          ╱ E2E ╲              ← few, critical flows only
@@ -25,118 +25,118 @@ The frontend does **not** follow the backend's classic test pyramid (wide unit b
 ─────────────────────────
 ```
 
-**Rationale.** In frontend, bugs rarely hide inside a single pure function. They hide at the seams between pages, hooks, components, and the API layer. Integration tests that exercise a full feature slice with HTTP intercepted at the network boundary catch those bugs without the brittleness and cost of E2E. Unit tests cover pure logic cheaply; integration tests cover real behavior; E2E tests cover the few golden paths that must survive an end-to-end deploy.
+**Justificación.** En frontend, los bugs rara vez se esconden dentro de una única función pura. Se esconden en las costuras entre pages, hooks, componentes y la capa de API. Los tests de integración que ejercitan una porción completa de feature con el HTTP interceptado en la frontera de red capturan esos bugs sin la fragilidad ni el coste de los E2E. Los tests unitarios cubren la lógica pura de forma barata; los tests de integración cubren el comportamiento real; los tests E2E cubren los pocos golden paths que deben sobrevivir a un despliegue de extremo a extremo.
 
-## 2. Test Categories
+## 2. Categorías de Test
 
-Three categories, each with a distinct scope, tooling, and location strategy.
+Tres categorías, cada una con un ámbito, unas herramientas y una estrategia de ubicación distintos.
 
-### 2.1 Unit tests
+### 2.1 Tests unitarios
 
-- **Scope.** Isolated, pure logic. No DOM rendering beyond `renderHook`, no HTTP, no router, no context.
-- **What they test.** Pure functions, pure hooks (hooks with no side effects), error translators, reducers, formatters, constants/maps.
-- **What they mock.** Nothing. If a unit test needs a mock to run, the code under test belongs in the integration layer instead.
-- **What they verify (really).** Input → output purity. Branch coverage of decision logic. Nothing else.
-- **Tools.** Vitest as the runner. `@testing-library/react` only for `renderHook` on pure hooks.
-- **Expected volume.** Moderate. Small-to-medium apps typically land in the range of 30–80 unit tests.
+- **Ámbito.** Lógica pura y aislada. Sin renderizado del DOM más allá de `renderHook`, sin HTTP, sin router, sin contexto.
+- **Qué testean.** Funciones puras, hooks puros (hooks sin efectos secundarios), traductores de errores, reducers, formateadores, constantes/mapas.
+- **Qué mockean.** Nada. Si un test unitario necesita un mock para funcionar, el código bajo prueba pertenece a la capa de integración.
+- **Qué verifican (de verdad).** Pureza entrada → salida. Cobertura de ramas de la lógica de decisión. Nada más.
+- **Herramientas.** Vitest como runner. `@testing-library/react` solo para `renderHook` sobre hooks puros.
+- **Volumen esperado.** Moderado. Las apps pequeñas y medianas suelen situarse en el rango de 30–80 tests unitarios.
 
-### 2.2 Integration tests (component tests)
+### 2.2 Tests de integración (tests de componente)
 
-- **Scope.** Render a full page or feature slice inside the same providers used in production (router, query client, auth context). Simulate the user with `user-event`. Intercept HTTP at the network boundary — nothing else is mocked.
-- **What they test.** That a page, when the user clicks X or submits Y, calls the right endpoint, reflects loading/error/success states correctly, and navigates as expected.
-- **What they mock.** Only HTTP responses, via MSW (Mock Service Worker). Browser APIs that jsdom cannot implement (`IntersectionObserver`, `matchMedia`) are polyfilled in the shared setup file — not mocked per test.
-- **What they verify (really).** Full internal integration: hooks, components, API client (`request<T>()`), endpoint functions, error translation, schema validation, and cache behavior all execute unmocked. Only the network response is synthesized. This is what makes integration tests the sweet spot of the Trophy.
-- **Tools.** Vitest + `@testing-library/react` + `@testing-library/user-event` + `@testing-library/jest-dom` + MSW.
-- **Expected volume.** The largest group. Small-to-medium apps typically land in the range of 50–200 integration tests — roughly one per page plus one per meaningful user interaction within that page.
+- **Ámbito.** Renderizan una page completa o una porción de feature dentro de los mismos providers usados en producción (router, query client, contexto de auth). Simulan al usuario con `user-event`. Interceptan el HTTP en la frontera de red — nada más se mockea.
+- **Qué testean.** Que una page, cuando el usuario hace clic en X o envía Y, llama al endpoint correcto, refleja correctamente los estados de carga/error/éxito y navega como se espera.
+- **Qué mockean.** Solo las respuestas HTTP, mediante MSW (Mock Service Worker). Las APIs de navegador que jsdom no puede implementar (`IntersectionObserver`, `matchMedia`) se polyfillan en el fichero de setup compartido — no se mockean por test.
+- **Qué verifican (de verdad).** La integración interna completa: hooks, componentes, cliente de API (`request<T>()`), funciones de endpoint, traducción de errores, validación de esquema y comportamiento de caché se ejecutan todos sin mocks. Solo se sintetiza la respuesta de red. Esto es lo que hace de los tests de integración el punto óptimo del Trophy.
+- **Herramientas.** Vitest + `@testing-library/react` + `@testing-library/user-event` + `@testing-library/jest-dom` + MSW.
+- **Volumen esperado.** El grupo más grande. Las apps pequeñas y medianas suelen situarse en el rango de 50–200 tests de integración — aproximadamente uno por page más uno por cada interacción de usuario relevante dentro de esa page.
 
-### 2.3 E2E tests
+### 2.3 Tests E2E
 
-- **Scope.** The compiled application running in a real browser against a real backend (or a deterministic staging backend with pre-seeded test accounts). Authentication goes through the real login flow with a test user.
-- **What they test.** Golden-path user journeys that cross system boundaries: login → navigate → perform a multi-step action → verify outcome in a different view. Flows that only an end-to-end stack can guarantee.
-- **What they mock.** Nothing at the browser level. The backend may be configured with test accounts or a test database, but the application under test is the real production build.
-- **What they verify (really).** That the deployed app, the network, the backend, and the database all cooperate to deliver the user outcome. They catch build, routing, cookie, and environment bugs that integration tests cannot see.
-- **Tools.** Playwright (Chromium by default). Multi-browser matrices only for flows where cross-browser differences truly matter.
-- **Expected volume.** Small. Typically 5–15 specs for the entire application. Cover the 3–7 golden paths; resist the urge to duplicate integration tests here. If a bug can be caught at the integration layer, it belongs there — E2E time and flakiness are expensive.
+- **Ámbito.** La aplicación compilada corriendo en un navegador real contra un backend real (o un backend de staging determinista con cuentas de prueba pre-sembradas). La autenticación pasa por el flujo de login real con un usuario de prueba.
+- **Qué testean.** Recorridos de usuario de golden path que cruzan fronteras del sistema: login → navegar → realizar una acción de varios pasos → verificar el resultado en una vista diferente. Flujos que solo un stack de extremo a extremo puede garantizar.
+- **Qué mockean.** Nada a nivel de navegador. El backend puede configurarse con cuentas de prueba o una base de datos de prueba, pero la aplicación bajo prueba es la build de producción real.
+- **Qué verifican (de verdad).** Que la app desplegada, la red, el backend y la base de datos cooperan todos para entregar el resultado al usuario. Capturan bugs de build, enrutado, cookies y entorno que los tests de integración no pueden ver.
+- **Herramientas.** Playwright (Chromium por defecto). Matrices multi-navegador solo para flujos donde las diferencias entre navegadores realmente importan.
+- **Volumen esperado.** Pequeño. Típicamente 5–15 specs para toda la aplicación. Cubre los 3–7 golden paths; resiste la tentación de duplicar aquí los tests de integración. Si un bug puede capturarse en la capa de integración, ahí es donde pertenece — el tiempo y la fragilidad de los E2E son caros.
 
-## 3. Locations — Co-located vs Separated
+## 3. Ubicaciones — Co-ubicados vs Separados
 
-| Test type   | Location strategy                              | Example path                                       |
+| Tipo de test   | Estrategia de ubicación                        | Ruta de ejemplo                                    |
 |-------------|------------------------------------------------|----------------------------------------------------|
-| Unit        | **Co-located** with the source file            | `src/lib/formatters.test.ts`                       |
-| Integration | **Co-located** with the page/component         | `src/features/<feature>/pages/<Page>.test.tsx`     |
-| E2E         | **Separate** top-level directory               | `e2e/specs/login.spec.ts`                          |
-| Shared test helpers (not tests)   | **Central directory**            | `src/test/setup.ts`, `src/test/msw/handlers.ts`    |
+| Unitario    | **Co-ubicado** con el fichero fuente           | `src/lib/formatters.test.ts`                       |
+| Integración | **Co-ubicado** con la page/componente          | `src/features/<feature>/pages/<Page>.test.tsx`     |
+| E2E         | Directorio **separado** de nivel superior      | `e2e/specs/login.spec.ts`                          |
+| Helpers de test compartidos (no tests)   | Directorio **central**            | `src/test/setup.ts`, `src/test/msw/handlers.ts`    |
 
-### Rules
+### Reglas
 
-1. **Co-location for Vitest tests.** Unit and integration tests live next to the file they test. Moving, renaming, or deleting source code moves its tests automatically — refactors stay safe.
-2. **E2E is always separated.** Playwright has its own runner, its own `tsconfig`, and does not import from `src/` directly. All E2E specs live under `e2e/` at the frontend root, with their own `playwright.config.ts`.
-3. **Shared test infrastructure lives in `src/test/`.** MSW handlers, Vitest setup files, test factories, custom render helpers. Production code in `src/` must never import from `src/test/`.
-4. **File naming.** Vitest specs use `*.test.ts` or `*.test.tsx`. Playwright specs use `*.spec.ts`. The extension choice is enforced by each runner's glob — do not mix.
+1. **Co-ubicación para los tests de Vitest.** Los tests unitarios y de integración viven junto al fichero que testean. Mover, renombrar o borrar código fuente mueve sus tests automáticamente — los refactors se mantienen seguros.
+2. **Los E2E siempre están separados.** Playwright tiene su propio runner, su propio `tsconfig` y no importa de `src/` directamente. Todos los specs E2E viven bajo `e2e/` en la raíz del frontend, con su propio `playwright.config.ts`.
+3. **La infraestructura de test compartida vive en `src/test/`.** Handlers de MSW, ficheros de setup de Vitest, factories de test, helpers de render personalizados. El código de producción en `src/` nunca debe importar de `src/test/`.
+4. **Nombrado de ficheros.** Los specs de Vitest usan `*.test.ts` o `*.test.tsx`. Los specs de Playwright usan `*.spec.ts`. La elección de extensión la impone el glob de cada runner — no los mezcles.
 
-## 4. The MSW Boundary
+## 4. La Frontera de MSW
 
-Mock Service Worker intercepts requests at the `fetch` layer, not at the endpoint-function layer. This boundary is non-negotiable and is the reason integration tests are trustworthy:
+Mock Service Worker intercepta las peticiones en la capa de `fetch`, no en la capa de funciones de endpoint. Esta frontera es innegociable y es la razón por la que los tests de integración son fiables:
 
-- The real `request<T>()` runs.
-- The real endpoint functions run.
-- The real error translation (`toUiError`, schema validation) runs.
-- The real data-fetching/cache layer (e.g. React Query) runs.
-- Only the HTTP response is synthesized.
+- Se ejecuta el `request<T>()` real.
+- Se ejecutan las funciones de endpoint reales.
+- Se ejecuta la traducción de errores real (`toUiError`, validación de esquema).
+- Se ejecuta la capa real de data-fetching/caché (p. ej. React Query).
+- Solo se sintetiza la respuesta HTTP.
 
-### Rules
+### Reglas
 
-1. **Handlers live in `src/test/msw/`.** One file per backend resource, mirroring `src/api/endpoints/`.
-2. **Never mock endpoint functions directly.** Do not `vi.mock("../../api/endpoints/<resource>")`. Mocking at the endpoint level bypasses the entire API client layer — one of the most common sources of real bugs — and defeats the purpose of integration tests.
-3. **Never mock `fetch` manually.** Use MSW. Hand-rolled `fetch` mocks drift, leak between tests, and do not exercise the request/response contract.
-4. **Default to success; override for failure.** The shared MSW server returns happy-path responses for every handler. Individual tests install `server.use(...)` inline to simulate errors, timeouts, or edge cases.
-5. **Reset between tests.** The shared setup calls `server.resetHandlers()` in `afterEach` so one test's overrides never leak into another.
+1. **Los handlers viven en `src/test/msw/`.** Un fichero por recurso de backend, reflejando `src/api/endpoints/`.
+2. **Nunca mockees funciones de endpoint directamente.** No hagas `vi.mock("../../api/endpoints/<resource>")`. Mockear a nivel de endpoint saltea toda la capa del cliente de API — una de las fuentes más comunes de bugs reales — y frustra el propósito de los tests de integración.
+3. **Nunca mockees `fetch` a mano.** Usa MSW. Los mocks de `fetch` hechos a mano derivan, se filtran entre tests y no ejercitan el contrato de petición/respuesta.
+4. **Por defecto éxito; sobrescribe para el fallo.** El servidor MSW compartido devuelve respuestas de happy-path para cada handler. Los tests individuales instalan `server.use(...)` en línea para simular errores, timeouts o casos límite.
+5. **Resetea entre tests.** El setup compartido llama a `server.resetHandlers()` en `afterEach` para que los overrides de un test nunca se filtren a otro.
 
-## 5. Must / Must Not — per test type
+## 5. Debe / No Debe — por tipo de test
 
-### Unit tests
-- **Must** take plain inputs, return plain outputs, and assert on them. Fast (< 10 ms each).
-- **Must not** render the full DOM, call `fetch`, import feature pages, or touch router/context.
+### Tests unitarios
+- **Debe** tomar entradas planas, devolver salidas planas y hacer aserciones sobre ellas. Rápido (< 10 ms cada uno).
+- **No debe** renderizar el DOM completo, llamar a `fetch`, importar pages de feature ni tocar router/contexto.
 
-### Integration tests
-- **Must** render the component under test inside the same providers used in production, simulate interactions via `user-event`, and use MSW for HTTP.
-- **Must not** mock endpoint functions, mock application hooks, or assert on internal implementation details (state variable names, private helpers). Assert on what the user sees.
+### Tests de integración
+- **Debe** renderizar el componente bajo prueba dentro de los mismos providers usados en producción, simular interacciones vía `user-event` y usar MSW para el HTTP.
+- **No debe** mockear funciones de endpoint, mockear hooks de aplicación ni hacer aserciones sobre detalles internos de implementación (nombres de variables de estado, helpers privados). Haz aserciones sobre lo que el usuario ve.
 
-### E2E tests
-- **Must** authenticate via the real login flow with a pre-seeded test user, exercise a journey that crosses at least two pages, and assert on visible outcomes in the DOM.
-- **Must not** duplicate coverage that integration tests already provide. E2E time is expensive; keep the suite small and high-value.
+### Tests E2E
+- **Debe** autenticarse vía el flujo de login real con un usuario de prueba pre-sembrado, ejercitar un recorrido que cruce al menos dos pages y hacer aserciones sobre resultados visibles en el DOM.
+- **No debe** duplicar cobertura que los tests de integración ya proporcionan. El tiempo de E2E es caro; mantén la suite pequeña y de alto valor.
 
-## 6. State Required Before Each Test
+## 6. Estado Requerido Antes de Cada Test
 
-| Type        | Reset between tests                                                                                     |
+| Tipo        | Reset entre tests                                                                                       |
 |-------------|---------------------------------------------------------------------------------------------------------|
-| Unit        | Nothing — stateless by design.                                                                          |
-| Integration | MSW handlers reset to defaults; query cache cleared; router reset. Automated in `src/test/setup.ts`.    |
-| E2E         | Test user's state reset via seeded fixtures or a test-only reset endpoint. Never share state across specs. |
+| Unitario    | Nada — sin estado por diseño.                                                                            |
+| Integración | Handlers de MSW reseteados a los valores por defecto; caché de queries limpiada; router reseteado. Automatizado en `src/test/setup.ts`.    |
+| E2E         | El estado del usuario de prueba reseteado mediante fixtures sembradas o un endpoint de reset solo-para-test. Nunca compartas estado entre specs. |
 
-## 7. CI and Commands
+## 7. CI y Comandos
 
-### Rules
+### Reglas
 
-1. **Three distinct commands.**
-   - `npm test` — Vitest, all unit + integration, watch mode during dev.
-   - `npm run test:unit` — Vitest with a glob that excludes integration specs (CI gate for fast feedback).
-   - `npm run e2e` — Playwright against a real backend.
-2. **`npm test` runs on every commit and every PR.** `npm run e2e` runs on CI for merges into the main branch, not on every push. E2E flakiness must never block small PRs.
-3. **Static checks run first.** `tsc --noEmit` and `eslint` execute before any test in CI. A type or lint error fails the pipeline before any test runs.
+1. **Tres comandos distintos.**
+   - `npm test` — Vitest, todos los unitarios + integración, modo watch durante el desarrollo.
+   - `npm run test:unit` — Vitest con un glob que excluye los specs de integración (gate de CI para feedback rápido).
+   - `npm run e2e` — Playwright contra un backend real.
+2. **`npm test` se ejecuta en cada commit y cada PR.** `npm run e2e` se ejecuta en CI para los merges a la rama principal, no en cada push. La fragilidad de los E2E nunca debe bloquear PRs pequeños.
+3. **Las comprobaciones estáticas se ejecutan primero.** `tsc --noEmit` y `eslint` se ejecutan antes que cualquier test en CI. Un error de tipo o de lint hace fallar el pipeline antes de que se ejecute ningún test.
 
-## 8. Adding Tests for a New Feature — Checklist
+## 8. Añadir Tests para una Nueva Feature — Checklist
 
-When adding a new feature, write tests in this order — do not start the next layer until the previous one is green:
+Al añadir una nueva feature, escribe los tests en este orden — no empieces la siguiente capa hasta que la anterior esté en verde:
 
-- [ ] A unit test for every new pure function or isolated hook in `lib/` or `features/<x>/hooks/`.
-- [ ] An integration test for the new page and for every meaningful user interaction (click, form submit, error case, optimistic update).
-- [ ] If the feature crosses pages and matters for the user's journey, add a single E2E spec for the golden path. Do not add E2E for every permutation.
+- [ ] Un test unitario por cada nueva función pura o hook aislado en `lib/` o `features/<x>/hooks/`.
+- [ ] Un test de integración para la nueva page y para cada interacción de usuario relevante (clic, envío de formulario, caso de error, actualización optimista).
+- [ ] Si la feature cruza pages e importa para el recorrido del usuario, añade un único spec E2E para el golden path. No añadas E2E para cada permutación.
 
-## 9. Anti-patterns (Do Not Do)
+## 9. Anti-patrones (No Hacer)
 
-1. **Testing implementation details.** Do not assert on state variable names, internal function names, or the shape of props passed between components the user does not see. Assert on what the user observes.
-2. **Over-mocking.** Mocking application hooks, components, or endpoint functions inside an integration test reduces it to a unit test with extra noise. Keep the mock boundary at MSW.
-3. **Snapshot-only tests.** A `toMatchSnapshot` is never an integration test on its own. Use snapshots sparingly and only for stable structural output (e.g. a small presentational component's markup).
-4. **Shared mutable state across tests.** Every test is independent. If two tests share a fixture, that fixture is built fresh per test — never mutated in place.
-5. **Coverage as a goal.** Coverage is a diagnostic, not a target. A line covered by a meaningless assertion is worse than an uncovered line, because it hides a gap behind a green bar.
+1. **Testear detalles de implementación.** No hagas aserciones sobre nombres de variables de estado, nombres de funciones internas ni la forma de las props que se pasan entre componentes que el usuario no ve. Haz aserciones sobre lo que el usuario observa.
+2. **Sobre-mockear.** Mockear hooks de aplicación, componentes o funciones de endpoint dentro de un test de integración lo reduce a un test unitario con ruido extra. Mantén la frontera de mock en MSW.
+3. **Tests solo de snapshot.** Un `toMatchSnapshot` nunca es por sí solo un test de integración. Usa los snapshots con moderación y solo para salida estructural estable (p. ej. el markup de un pequeño componente presentacional).
+4. **Estado mutable compartido entre tests.** Cada test es independiente. Si dos tests comparten una fixture, esa fixture se construye fresca por test — nunca se muta en el sitio.
+5. **La cobertura como objetivo.** La cobertura es un diagnóstico, no un objetivo. Una línea cubierta por una aserción sin sentido es peor que una línea sin cubrir, porque esconde un hueco detrás de una barra verde.
