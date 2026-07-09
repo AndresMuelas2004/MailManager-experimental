@@ -172,9 +172,7 @@ describe('useDownloadQueue — cancel', () => {
 
 describe('useDownloadQueue — error', () => {
   it('rejected download surfaces error status until a successful re-enqueue clears it', async () => {
-    const failing: DownloadFn = vi.fn(() =>
-      Promise.reject(new Error('boom')),
-    );
+    const failing: DownloadFn = vi.fn(() => Promise.reject(new Error('boom')));
     const { result } = renderHook(() => useDownloadQueue());
 
     let p: Promise<unknown>;
@@ -189,8 +187,7 @@ describe('useDownloadQueue — error', () => {
     expect(result.current.errorOf('a')).toBeDefined();
 
     // Successful retry clears the error.
-    const ok: DownloadFn = () =>
-      Promise.resolve({ blob: blobFor('OK'), filename: 'ok.pdf' });
+    const ok: DownloadFn = () => Promise.resolve({ blob: blobFor('OK'), filename: 'ok.pdf' });
     act(() => {
       void result.current.enqueue('a', ok);
     });

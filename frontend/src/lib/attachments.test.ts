@@ -18,22 +18,16 @@ function makeFile(name: string, sizeBytes: number): File {
 }
 
 describe('isBlockedExtension', () => {
-  it.each([
-    'malware.exe',
-    'script.BAT',
-    'macro.Vbs',
-    'payload.js',
-    'installer.msi',
-  ])('blocks %s', (filename) => {
-    expect(isBlockedExtension(filename)).toBe(true);
-  });
-
-  it.each(['report.pdf', 'image.png', 'archive.zip', 'doc.docx'])(
-    'allows %s',
+  it.each(['malware.exe', 'script.BAT', 'macro.Vbs', 'payload.js', 'installer.msi'])(
+    'blocks %s',
     (filename) => {
-      expect(isBlockedExtension(filename)).toBe(false);
+      expect(isBlockedExtension(filename)).toBe(true);
     },
   );
+
+  it.each(['report.pdf', 'image.png', 'archive.zip', 'doc.docx'])('allows %s', (filename) => {
+    expect(isBlockedExtension(filename)).toBe(false);
+  });
 
   it('returns false for empty string', () => {
     expect(isBlockedExtension('')).toBe(false);
