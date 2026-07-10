@@ -2725,6 +2725,30 @@ def test_46p_unread_count_outlook_and_full_breakdown(e2e_client):
 
 
 # ===================================================================
+# Section 5x: Backfill status — background bulk-load progress
+# ===================================================================
+# The interactive OAuth connect that enqueues a backfill is excluded from E2E,
+# and a real 100k backfill runs for hours, so the loop itself is covered by the
+# unit + integration suites. Here we only verify the read endpoint's contract
+# against a pre-existing account: it already has a sync_cursor and no job, so it
+# reports no active backfill. This also protects that mounting the endpoint on
+# the real mailboxes_router (global rate-limit only, no provider_sync bucket)
+# works end-to-end.
+
+
+def test_46q_backfill_status_no_active_backfill(e2e_client):
+    resp = e2e_client.get(f"/mailboxes/{GMAIL_MAILBOX_ID}/backfill-status")
+    _assert_ok(resp)
+    data = resp.json()
+    assert isinstance(data["accounts"], list)
+    # A long-synced test account is never mid-backfill: nothing pending/running.
+    assert data["active"] is False
+    for entry in data["accounts"]:
+        assert entry["status"] in ("completed", "failed")
+        assert entry["done"] is True
+
+
+# ===================================================================
 # Section 6: Auth lifecycle (MUST BE LAST — invalidates session)
 # ===================================================================
 
