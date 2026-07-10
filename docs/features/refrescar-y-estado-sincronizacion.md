@@ -28,6 +28,8 @@ El texto relativo respeta el **idioma de la interfaz**: en inglés se lee "Last 
 
 > **Ejemplo.** El usuario entra a su bandeja unificada. Como abrir la vista ya dispara una sincronización, un par de segundos después lee "Última actualización: hace unos segundos". Deja la pestaña abierta cinco minutos sin tocar nada: el texto, por su cuenta, ha pasado a "hace 5 minutos" sin que se haya sincronizado nada. Pulsa "Refrescar": el icono gira, llega un correo nuevo, y el texto vuelve a "hace unos segundos".
 
+Hay además un **tercer aviso** posible en este mismo control, de naturaleza distinta a los dos de arriba: mientras una cuenta recién conectada realiza su **descarga masiva inicial** en segundo plano (ver [sincronizacion.md](sincronizacion.md) § 3.5), bajo el botón aparece en **azul** un texto informativo *«Cargando tu histórico… N correos»* con el contador en vivo. No es un estado de error ni reemplaza a la "última actualización": es solo el progreso de esa carga, y desaparece al terminar. Es un canal **independiente** de los avisos de fallo (§ 5.1) — una cuenta en plena descarga queda fuera de la sincronización de apertura, así que nunca se cuenta como cuenta "a reconectar"; ambos avisos pueden incluso convivir si afectan a cuentas distintas.
+
 ---
 
 ## 3. Dónde aparece y dónde no

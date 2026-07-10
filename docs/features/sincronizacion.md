@@ -45,7 +45,7 @@ Esto vale tanto para la **vista unificada del mailbox** (sincroniza todas las cu
 
 ### 2.2 Al conectar una cuenta nueva
 
-Cuando el usuario añade y autoriza una cuenta, la app encadena automáticamente: conecta → sincroniza la metadata de correos → sincroniza los borradores → muestra una previsualización de los primeros correos. Esta es la "primera sincronización" de esa cuenta (el bootstrap descrito en la sección 3). La sincronización de borradores en este punto es **best-effort**: si falla, no rompe el alta de la cuenta; los correos sí se consideran la parte importante.
+Cuando el usuario añade y autoriza una cuenta, la app **no** lo bloquea esperando una descarga: en cuanto la autorización termina con éxito, la tarjeta de la cuenta aparece **de inmediato** y ya es usable. En segundo plano arranca la **primera carga** de esa cuenta — una **descarga masiva** de su histórico reciente que corre sin que el usuario espere y va rellenando la bandeja poco a poco, con un contador en vivo del progreso. Es el cambio grande respecto al modelo anterior (que bajaba una tanda pequeña de forma **síncrona**, con el usuario esperando frente a un "Sincronizando correos…"); su funcionamiento completo está en la sección 3.5. Los **borradores** sí se sincronizan en este momento y de forma **best-effort**: si fallan, no rompen el alta de la cuenta.
 
 ### 2.3 A mano, cuando el usuario quiere
 
@@ -53,7 +53,9 @@ Varios listados ofrecen además un botón explícito. El más visible es el bot�
 
 ### 2.4 Lo que NO hay: sincronización automática en background
 
-No existe un proceso programado (cron, push del proveedor, websockets) que sincronice solo mientras la app está cerrada o en otra pantalla. La sincronización ocurre **reactivamente**, atada a que el usuario abra un listado o conecte una cuenta. Si el usuario deja el inbox abierto y llega un correo nuevo al proveedor, no aparece hasta que vuelva a entrar al listado (o navegue y regrese). Es una decisión de alcance del MVP — ver [../limits/sincronizacion.md](../limits/sincronizacion.md).
+No existe un proceso programado (cron, push del proveedor, websockets) que sincronice solo el correo **del día a día** mientras la app está cerrada o en otra pantalla. La llegada de novedades se sincroniza **reactivamente**, atada a que el usuario abra un listado o conecte una cuenta. Si el usuario deja el inbox abierto y llega un correo nuevo al proveedor, no aparece hasta que vuelva a entrar al listado (o navegue y regrese). Es una decisión de alcance del MVP — ver [../limits/sincronizacion.md](../limits/sincronizacion.md).
+
+La **única** excepción es la primera carga: la descarga masiva inicial de una cuenta recién conectada (sección 3.5) **sí** es un trabajo en segundo plano que continúa aunque el usuario navegue a otra pantalla, y que incluso se reanuda si el servidor se reinicia a mitad. Pero es una carga **inicial y de una sola vez**, no un temporizador que traiga el correo nuevo de cada día: una vez completada, la cuenta vuelve al modelo reactivo de arriba.
 
 ---
 
@@ -61,12 +63,10 @@ No existe un proceso programado (cron, push del proveedor, websockets) que sincr
 
 Aquí está la parte más interesante, y donde Gmail y Outlook se comportan de forma distinta por debajo aunque el resultado para el usuario sea el mismo.
 
-La app distingue dos modos:
+La app distingue dos modos según si tiene o no un cursor válido para la cuenta (el usuario no elige):
 
-- **Bootstrap (sincronización completa).** Es la primera vez que se sincroniza una cuenta: no hay punto de partida, así que la app baja una **tanda de los correos más recientes** de la cuenta (un tope por cuenta, ver [../limits/sincronizacion.md](../limits/sincronizacion.md)) abarcando todas las bandejas, y guarda un "marcador de posición" (un cursor) para la próxima vez.
+- **Bootstrap (carga completa).** Es la primera vez que se sincroniza una cuenta: no hay punto de partida, así que la app baja una **tanda de los correos más recientes** abarcando **todas las bandejas** y guarda un "marcador de posición" (un cursor) para la próxima vez. En una cuenta recién conectada, esa carga inicial la hace hoy la **descarga masiva en segundo plano** (sección 3.5), que baja un tope por cuenta **mucho mayor** sin que el usuario espere. Sobrevive además una variante **síncrona y pequeña** del bootstrap que actúa solo de **reserva** en dos casos: cuando la descarga en segundo plano está desactivada en el despliegue, y cuando un cursor guardado caduca más tarde y hay que volver a anclarlo (sección 3.3). Las dos cifras — la de la descarga masiva y la de la reserva síncrona — están en [../limits/sincronizacion.md](../limits/sincronizacion.md).
 - **Incremental.** A partir de la segunda sincronización, la app no rebaja todo: usa el cursor guardado para preguntarle al proveedor **solo qué ha cambiado desde la última vez** — correos nuevos, borrados y cambios de estado (leído/no leído, movido de bandeja). Es mucho más barato y casi instantáneo.
-
-El usuario no elige el modo; la app decide sola según si tiene o no un cursor válido para esa cuenta.
 
 ### 3.1 Qué trae un incremental
 
@@ -101,15 +101,40 @@ El mismo principio de "caer a bootstrap" se aplica cuando el cursor guardado ha 
 
 Cuando una sincronización es un bootstrap completo, la app aprovecha para limpiar **fantasmas**: correos que siguen en la copia local pero que ya no aparecen en la tanda recién bajada del proveedor. Antes de borrarlos a ciegas, la app **verifica** contra el proveedor si esos correos sospechosos siguen existiendo; solo elimina de la copia local los que el proveedor confirma que ya no están. Es una limpieza best-effort: si la verificación falla por cualquier motivo, no borra nada (prefiere conservar de más a borrar de menos). Este paso solo ocurre en bootstrap, no en incremental.
 
+Hay una excepción **crítica** ligada a la descarga masiva (sección 3.5). Una cuenta que ya completó su descarga masiva tiene en local hasta el tope grande de correos, pero su bootstrap **de reserva** solo rebajaría la tanda pequeña reciente. Si a esa cuenta se le caduca el cursor y cae a ese bootstrap de reserva, la reconciliación de fantasmas vería casi toda su copia local (decenas de miles de correos) como "sospechosa" por no estar en esa tanda pequeña, y podría **borrar en masa el histórico** que tanto costó descargar. Por eso la reconciliación de fantasmas se **omite** para las cuentas cuya descarga masiva ya terminó: el bootstrap de reserva solo re-ancla el cursor, sin purgar la copia local.
+
+### 3.5 La primera carga: descarga masiva en segundo plano
+
+La carga inicial de una cuenta recién conectada ya no es una espera: es una **descarga masiva que corre en segundo plano** y va llenando la bandeja poco a poco. Antes la app bajaba solo una tanda pequeña de correos recientes de forma síncrona (el usuario esperaba) y ese corte dejaba fuera casi todo el histórico. Ahora baja **hasta un tope por cuenta mucho más alto** (la cifra exacta y la variable de configuración que la gobierna están en [../limits/sincronizacion.md](../limits/sincronizacion.md)), suficiente para contener el grueso del histórico reciente del buzón, como haría un cliente de correo serio.
+
+**Qué vive el usuario.** Nada más conectar, la tarjeta de la cuenta aparece y es usable. Mientras la descarga avanza, un **contador en vivo** — *«Cargando… 12.340 correos»* — se muestra en dos sitios: en la tarjeta de la cuenta (dentro de «Cuentas conectadas», ver [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) § 2.2) y en la cabecera de la bandeja de esa cuenta (ver [refrescar-y-estado-sincronizacion.md](refrescar-y-estado-sincronizacion.md) § 2). Si el usuario abre la bandeja, ve los correos aparecer **en oleadas** conforme el contador sube. Cuando la descarga alcanza el tope o agota el buzón, el contador desaparece y la cuenta queda como una cuenta normal ya sincronizada.
+
+**Cuánto tarda depende del proveedor**, y la diferencia es grande por cómo funcionan sus APIs. **Outlook** es rápido — cuestión de minutos — porque entrega la cabecera de muchos correos en cada página. **Gmail** es mucho más lento — puede tardar horas para un buzón grande — porque su API obliga a una petición por correo y limita el ritmo por usuario; por eso precisamente la descarga es en segundo plano y progresiva. Los órdenes de magnitud están en [../limits/sincronizacion.md](../limits/sincronizacion.md).
+
+**Es robusta por diseño**, y ahí está el porqué del cambio:
+
+- **A oleadas y con ritmo controlado.** La descarga pagina el buzón en tandas y **regula su propio ritmo** para no saturar al proveedor. Cuando Gmail u Outlook rechazan una petición por exceso de peticiones, la app **reintenta** en lugar de darla por perdida. La carga anterior perdía mensajes justamente porque no trataba bien esos rechazos por saturación; esta sí.
+- **Se reanuda tras un corte.** El progreso se guarda por el camino (cuántos correos lleva y por dónde iba). Si el servidor se reinicia o el proceso se cae a mitad, la descarga **retoma desde donde estaba** en el siguiente arranque, sin volver a empezar de cero y sin duplicar correos.
+- **Varias cuentas en paralelo.** Si el usuario conecta varias cuentas seguidas, sus descargas corren a la vez hasta un límite prudente (ver [../limits/sincronizacion.md](../limits/sincronizacion.md)); cada una muestra su propio contador.
+- **Solo cabeceras, como siempre.** La descarga masiva baja únicamente las **cabeceras** (sección 1), nunca cuerpos ni adjuntos. Por eso caben decenas de miles de correos por cuenta sin llenar la base de datos.
+
+**Reconectar no vuelve a descargar todo.** La descarga masiva es exclusivamente la **primera** carga de una cuenta **nueva**. Si a una cuenta ya cargada se le caduca el token y el usuario la **reconecta** (ver [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) § 2.7), la app solo refresca el token y sigue con la sincronización incremental — no relanza la descarga de todo el histórico.
+
+**Mientras descarga, la app no rehace el trabajo por su cuenta.** Abrir la bandeja de una cuenta que está en plena descarga masiva **no** dispara el viejo bootstrap síncrono en paralelo (la descarga masiva es la dueña de la carga inicial); la cuenta se sigue viendo como "cargando" a través de su contador. Si en una bandeja unificada **todas** las cuentas están descargando a la vez, la sincronización de apertura simplemente no trae nada nuevo todavía.
+
+**El relevo al modo incremental es limpio.** Al empezar la descarga, la app captura un marcador del estado del buzón (sección 3.2) y lo guarda como el cursor incremental **solo cuando la descarga termina**. Así, cualquier correo que llegue durante las horas que dura la descarga se recoge en la **primera** sincronización incremental posterior, en vez de perderse. A partir de ahí la cuenta hace incrementales normales.
+
+**Si la descarga falla**, el contador desaparece sin más: en el MVP no se muestra un aviso de error específico en la tarjeta. La forma de reintentarla es **reconectar** la cuenta, que revive la descarga desde el principio. El usuario no tiene ningún otro control sobre ella: no puede pausarla, reanudarla a mano ni elegir cuántos correos bajar (ver [../limits/sincronizacion.md](../limits/sincronizacion.md)).
+
 ---
 
 ## 4. El alcance "histórico": qué NO se recupera
 
-Conviene ser explícito sobre una limitación que sorprende a quien espera un cliente de correo "completo": **MailManager no baja todo el histórico de la cuenta**. El bootstrap trae una tanda de los correos **más recientes** (el tope exacto está en [../limits/sincronizacion.md](../limits/sincronizacion.md)) y se detiene ahí. Los correos más antiguos que ese corte **no** entran en la copia local y, por tanto, **no aparecen** en los listados ni en la búsqueda.
+Conviene ser explícito sobre una limitación que sorprende a quien espera un cliente de correo "completo": **MailManager no baja todo el histórico de la cuenta**. La descarga masiva inicial (sección 3.5) trae los correos **más recientes** hasta un tope por cuenta (el valor exacto está en [../limits/sincronizacion.md](../limits/sincronizacion.md)) y se detiene ahí. Los correos más antiguos que ese corte **no** entran en la copia local y, por tanto, **no aparecen** en los listados ni en la búsqueda. Ese tope es hoy **mucho más alto** que antes — la mayoría de buzones caben enteros —, pero sigue siendo un tope: un buzón que lo supere se trunca a los más recientes.
 
 No hay ningún mecanismo de "cargar correos más antiguos" ni scroll infinito hacia el pasado en el MVP. La app es una vista de la actividad reciente del buzón, no un archivo histórico exhaustivo. El "porqué" (coste de cuota, foco del MVP) está en [../limits/sincronizacion.md](../limits/sincronizacion.md).
 
-> **Ejemplo.** Una cuenta con 50.000 correos conecta por primera vez. Tras el bootstrap, el usuario ve sus correos más recientes hasta el tope por cuenta, no los 50.000. Un correo de hace tres años existe en Gmail pero no en MailManager, y buscarlo en la lupa no lo encuentra — porque la lupa solo mira la copia local (ver [lupa.md](lupa.md)).
+> **Ejemplo.** Una cuenta con 300.000 correos conecta por primera vez. Tras la descarga masiva, el usuario ve sus correos más recientes hasta el tope por cuenta, no los 300.000. Un correo lo bastante antiguo existe en Gmail pero no en MailManager, y buscarlo en la lupa no lo encuentra — porque la lupa solo mira la copia local (ver [lupa.md](lupa.md)). En cambio, una cuenta con 40.000 correos hoy **cabe entera** (antes solo entraba una pequeña tanda reciente).
 
 ---
 
@@ -158,18 +183,18 @@ Cómo se traduce esto en la cabecera de la vista —el aviso rojo bloqueante del
 
 Para cerrar, el flujo completo tal como se vive delante de la pantalla:
 
-1. El usuario abre un listado (o conecta una cuenta) → la app **dispara una sincronización** en segundo plano y, mientras, muestra la copia local previa.
-2. La app decide sola **bootstrap** (primera vez / cursor inválido / demasiados eventos acumulados) o **incremental** (hay cursor válido y pocos cambios).
-3. Baja **solo cabeceras** (nunca cuerpos ni adjuntos), actualiza la copia local (altas, bajas, cambios de estado) y, si fue bootstrap, limpia fantasmas.
+1. El usuario abre un listado → la app **dispara una sincronización** en segundo plano y, mientras, muestra la copia local previa. Al **conectar una cuenta nueva**, en cambio, la carga inicial la hace la **descarga masiva en segundo plano** (sección 3.5): la tarjeta aparece al instante y el histórico se baja poco a poco, con contador en vivo, sin que el usuario espere.
+2. La app decide sola **bootstrap** (primera vez / cursor inválido / demasiados eventos acumulados) o **incremental** (hay cursor válido y pocos cambios). En una cuenta nueva ese bootstrap es la descarga masiva de fondo; una variante síncrona y pequeña queda solo de reserva (sección 3).
+3. Baja **solo cabeceras** (nunca cuerpos ni adjuntos), actualiza la copia local (altas, bajas, cambios de estado) y, si fue bootstrap, limpia fantasmas (salvo en una cuenta con descarga masiva ya completada, sección 3.4).
 4. El listado **se repinta** con las novedades. Si no hubo novedades, no cambia nada visible.
 5. Los **borradores** se sincronizan por reemplazo completo por cuenta (conservando la metadata de respuesta local).
 6. Los **favoritos** se reconcilian solo cuando el usuario pulsa su botón, marcando/desmarcando lo que el proveedor diga sobre los correos que ya existen en local.
 7. Si una cuenta del lote falla pero **al menos otra** se sincroniza, las demás se actualizan igual y el fallo se reporta aparte, **sin** tumbar la operación (éxito parcial); solo si **todas** fallan se escala como error.
 
-Y lo que **no** pasa: no se baja el histórico completo, no se sincroniza en background con la app cerrada, no se descargan cuerpos ni adjuntos "por si acaso", y un correo recién llegado no aparece hasta la siguiente sincronización del listado donde vive.
+Y lo que **no** pasa: no se baja el histórico completo (hay un tope por cuenta, aunque hoy muy alto), no se sincroniza en background el correo del día a día con la app cerrada (la única tarea de fondo es **terminar** una descarga masiva inicial ya arrancada, sección 3.5), no se descargan cuerpos ni adjuntos "por si acaso", y un correo recién llegado no aparece hasta la siguiente sincronización del listado donde vive.
 
 ---
 
 ## Resumen en una frase
 
-> MailManager mantiene una copia local de la **cabecera** de los correos (nunca el cuerpo ni los adjuntos, que se bajan bajo demanda) y la actualiza sincronizando reactivamente al abrir cada listado o al conectar una cuenta: la primera vez hace un *bootstrap* de los correos más recientes de todas las bandejas y guarda un cursor; después hace *incrementales* baratos (altas, bajas y cambios de estado) vía History API en Gmail y delta queries por carpeta en Outlook, cayendo a bootstrap si el cursor caduca o se acumulan demasiados eventos; los borradores se sincronizan por reemplazo total por cuenta preservando su metadata de hilo, y los favoritos solo se reconcilian a demanda sobre correos que ya existen en local — sin recuperación histórica más allá del tope ni sincronización en segundo plano. Las cifras exactas están en [../limits/sincronizacion.md](../limits/sincronizacion.md).
+> MailManager mantiene una copia local de la **cabecera** de los correos (nunca el cuerpo ni los adjuntos, que se bajan bajo demanda) y la actualiza sincronizando reactivamente al abrir cada listado: la primera carga de una cuenta nueva es una **descarga masiva en segundo plano** (hasta un tope por cuenta alto, a oleadas con ritmo controlado, reanudable tras un corte y sin bloquear al usuario, con contador en vivo) que abarca todas las bandejas y al terminar guarda el cursor incremental — con un *bootstrap* síncrono y pequeño solo de reserva; después hace *incrementales* baratos (altas, bajas y cambios de estado) vía History API en Gmail y delta queries por carpeta en Outlook, cayendo a bootstrap si el cursor caduca o se acumulan demasiados eventos; los borradores se sincronizan por reemplazo total por cuenta preservando su metadata de hilo, y los favoritos solo se reconcilian a demanda sobre correos que ya existen en local — sin recuperación histórica más allá del tope ni sincronización periódica en segundo plano del correo del día a día. Las cifras exactas están en [../limits/sincronizacion.md](../limits/sincronizacion.md).

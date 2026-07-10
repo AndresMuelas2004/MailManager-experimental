@@ -4,7 +4,7 @@ Catálogo cuantitativo de **hasta dónde llega** la sincronización de correos, 
 
 El **comportamiento** (flujos, bootstrap vs. incremental, asimetrías Gmail/Outlook y el porqué de las decisiones) está en **[../features/sincronizacion.md](../features/sincronizacion.md)**. Aquí solo van los números y los límites.
 
-Todos estos valores están **hardcodeados** en el backend (salvo el de concurrencia de Gmail, configurable por variable de entorno) y aplican por igual a todos los usuarios. La sincronización de favoritos tiene además sus propios topes en **[favoritos.md](favoritos.md)**.
+La mayoría de estos valores están **hardcodeados** en el backend y aplican por igual a todos los usuarios; unos pocos son **configurables por variable de entorno** — el de concurrencia de lotes de Gmail y **todos los de la descarga masiva inicial** (§ 8). La sincronización de favoritos tiene además sus propios topes en **[favoritos.md](favoritos.md)**.
 
 ---
 
@@ -12,13 +12,15 @@ Todos estos valores están **hardcodeados** en el backend (salvo el de concurren
 
 | Límite | Valor | Ámbito | Detalle |
 |--------|-------|--------|---------|
-| Correos por cuenta en bootstrap | **500** | Gmail y Outlook | La primera sincronización (o cualquier fallback a bootstrap) baja como mucho los 500 correos más recientes de la cuenta, abarcando todas las bandejas. No hay forma de subirlo desde la UI. |
+| Correos por cuenta en la descarga masiva inicial (backfill) | **100.000** (por defecto) | Gmail y Outlook | La primera carga de una cuenta recién conectada baja como mucho sus 100.000 correos más recientes, abarcando todas las bandejas, en segundo plano (§ 8). Configurable con `BACKFILL_MAX_EMAILS_PER_ACCOUNT`; no se puede cambiar desde la UI. |
+| Correos por cuenta en el bootstrap síncrono de reserva | **500** | Gmail y Outlook | La variante síncrona del bootstrap — usada solo con la descarga masiva desactivada, o al re-anclar un cursor caducado — baja como mucho los 500 correos más recientes. Valor fijo, distinto del tope de la descarga masiva. |
 | Borradores por cuenta y sincronización | **100** | Gmail y Outlook | El reemplazo de borradores trae como mucho los 100 borradores más recientes de la cuenta. Los más antiguos no se sincronizan. |
 | Umbral de eventos para fallback a bootstrap | **100** | Solo Gmail (incremental) | Si un incremental de Gmail acumula más de 100 eventos desde el último cursor, se descarta y se rehace un bootstrap completo (sale más barato que procesarlos uno a uno). |
 
 ### Notas sobre los topes de volumen
 
-- **El tope de 500 es por cuenta, no por mailbox**: una vista unificada con tres cuentas puede acabar con hasta 1.500 correos en la copia local (500 por cuenta), pero ninguna cuenta individual supera los 500.
+- **Los topes son por cuenta, no por mailbox**: con la descarga masiva, una vista unificada con tres cuentas puede acabar con hasta 300.000 correos en la copia local (100.000 por cuenta), pero ninguna cuenta individual supera su tope.
+- **El tope de 100.000 y el de 500 son excluyentes por cuenta**: una cuenta nueva usa la descarga masiva (100.000); la variante de 500 solo entra como reserva (descarga masiva desactivada o re-anclaje de un cursor caducado). Nunca se aplican los dos a la misma carga.
 - **El umbral de 100 eventos es específico de Gmail**. Outlook no tiene un umbral equivalente: su fallback a bootstrap se dispara por cursor inválido/caducado o por fallo de **todas** las carpetas, no por volumen de eventos.
 - **El reemplazo de borradores es total por cuenta**: no es incremental. Lo que no esté en esos 100 borradores del proveedor se borra de la copia local de esa cuenta.
 
@@ -68,7 +70,7 @@ Una carpeta que no exista o que falle al resolverse se omite (bootstrap) o conse
 
 ### Notas sobre reintentos
 
-- **Los lotes de lectura de metadata de Gmail reintentan 5 veces en total** (un intento inicial + 4 reintentos), con 1 segundo de espera, solo sobre errores transitorios (429 y 5xx). Los errores permanentes (400, 403, 404, 410) no se reintentan: esos correos se marcan como "no recuperables" en ese lote y se omiten. El listado de borradores de Gmail reutiliza este mismo lote (mismo 5 = 1+4), y la lista paginada de borradores de Outlook reintenta cada página 5 veces (1 + 4) con 1 s fija.
+- **Los lotes de lectura de metadata de Gmail reintentan 5 veces en total** (un intento inicial + 4 reintentos), con 1 segundo de espera, sobre errores transitorios: 429, 5xx y **también 403 cuando su cuerpo trae una razón de límite de ritmo** (`rateLimitExceeded` / `userRateLimitExceeded`) — Gmail limita el ritmo bajo 403, no bajo 429, y no tratar bien ese caso hacía que se perdieran correos por saturación durante la carga inicial. Los errores permanentes (400, 404, 410, y el 403 `dailyLimitExceeded` de cuota diaria agotada) no se reintentan: esos correos se marcan como "no recuperables" en ese lote y se omiten. El listado de borradores de Gmail reutiliza este mismo lote (mismo 5 = 1+4), y la lista paginada de borradores de Outlook reintenta cada página 5 veces (1 + 4) con 1 s fija.
 - **La delta de carpeta de Outlook NO reintenta**: cada petición de delta es un único intento. Si una carpeta falla, en un incremental conserva su cursor anterior (sin reintentarla) y la sincronización continúa con las demás; en el bootstrap se omite esa carpeta. El fallback a bootstrap solo se fuerza si **todas** las carpetas fallan en el incremental. No hay tolerancia de reintento por carpeta para la delta.
 - Los reintentos de **envío** y de **descarga de adjuntos** pertenecen a otras features — ver [composicion-y-envio.md](../features/composicion-y-envio.md) y [../limits/adjuntos.md](adjuntos.md).
 
@@ -93,8 +95,10 @@ Una carpeta que no exista o que falle al resolverse se omite (bootstrap) o conse
 
 | No soporta | Detalle | Por qué |
 |------------|---------|---------|
-| **Recuperación histórica más allá del tope** | Solo se bajan los 500 correos más recientes por cuenta; los anteriores no entran en la copia local ni en la búsqueda | Bajar el histórico completo dispararía el coste de cuota del proveedor y queda fuera del foco del MVP. No hay "cargar más antiguos". |
-| **Sincronización en segundo plano** | No hay cron, push del proveedor ni websockets; la sincronización es reactiva (al abrir un listado o conectar una cuenta) | El MVP sincroniza bajo demanda. Un correo recién llegado no aparece hasta la siguiente sincronización del listado donde vive. |
+| **Recuperación histórica más allá del tope** | La descarga masiva baja hasta 100.000 correos por cuenta; los anteriores a ese corte no entran en la copia local ni en la búsqueda | El tope es hoy muy alto (la mayoría de buzones caben enteros), pero bajar sin límite dispararía el coste de cuota del proveedor y queda fuera del foco del MVP. No hay "cargar más antiguos". |
+| **Sincronización periódica en segundo plano** | No hay cron, push del proveedor ni websockets para el correo del día a día; la sincronización de novedades es reactiva (al abrir un listado). La única tarea de fondo es completar una descarga masiva inicial ya arrancada (§ 8) | El MVP sincroniza las novedades bajo demanda. Un correo recién llegado no aparece hasta la siguiente sincronización del listado donde vive. |
+| **Control del usuario sobre la descarga masiva** | No se puede pausar, reanudar a mano ni elegir cuántos correos bajar desde la interfaz | MVP: el único "control" es reconectar la cuenta para reintentar una descarga fallida; el tope solo lo cambia un administrador por variable de entorno. |
+| **Reintento automático de una descarga masiva fallida** | Una descarga que falla no se reintenta sola ni muestra un aviso de error en la tarjeta; el contador simplemente desaparece | MVP: se reintenta reconectando la cuenta, lo que revive el trabajo fallido. |
 | **Delta de borradores** | Los borradores no se sincronizan por incremental, sino por reemplazo total por cuenta | Los proveedores no exponen un delta fiable de borradores y son pocos; rebajar la lista entera es más simple y evita deriva. |
 | **Importar favoritos nuevos** | La sincronización de favoritos solo reconcilia correos que ya existen en local; ignora los que están marcados en el proveedor pero no sincronizados | Importar metadata nueva es trabajo de la sincronización general; mezclarlo duplicaría coste y recuento (ver [favoritos.md](../features/favoritos.md)). |
 | **Descarga de cuerpos/adjuntos en el sync** | La sincronización nunca baja cuerpos ni binarios "por si acaso" | Mantiene el sync barato e instantáneo; el contenido se baja bajo demanda y se cachea. |
@@ -106,14 +110,49 @@ Una carpeta que no exista o que falle al resolverse se omite (bootstrap) o conse
 
 | Situación | Resultado |
 |-----------|-----------|
-| Cursor de Gmail (`historyId`) caducado o rechazado (404/410) | Fallback silencioso a **bootstrap** (rebaja los 500 recientes, reinicia cursor). |
-| Más de 100 eventos acumulados en incremental de Gmail | Fallback a **bootstrap**. |
-| Cursor de Outlook en formato antiguo / no versionado / corrupto | Decodifica a vacío → fallback a **bootstrap**. |
+| Cursor de Gmail (`historyId`) caducado o rechazado (404/410) | Fallback silencioso al **bootstrap síncrono de reserva** (rebaja los 500 recientes, reinicia cursor). |
+| Más de 100 eventos acumulados en incremental de Gmail | Fallback al **bootstrap síncrono de reserva**. |
+| Cursor de Outlook en formato antiguo / no versionado / corrupto | Decodifica a vacío → fallback al **bootstrap síncrono de reserva**. |
 | Una carpeta de Outlook falla en incremental | Conserva su cursor anterior; las demás continúan. |
-| **Todas** las carpetas de Outlook fallan en incremental | Se fuerza el fallback a **bootstrap** (nunca se acepta "incremental con cero cambios" cuando todo falló). |
+| **Todas** las carpetas de Outlook fallan en incremental | Se fuerza el fallback al **bootstrap síncrono de reserva** (nunca se acepta "incremental con cero cambios" cuando todo falló). |
 
-Para el usuario, cualquiera de estos fallbacks es transparente: ve su listado actualizado; por dentro se rebajó la tanda completa en lugar de unos pocos cambios.
+Para el usuario, cualquiera de estos fallbacks es transparente: ve su listado actualizado; por dentro se rebajó la tanda de 500 en lugar de unos pocos cambios.
+
+> **Cuidado con las cuentas que ya completaron la descarga masiva.** En esas cuentas la copia local tiene hasta 100.000 correos, pero el bootstrap de reserva solo rebaja 500. Para no borrar en masa el histórico, la **reconciliación de fantasmas se omite** cuando una cuenta ya completó su descarga masiva: el fallback solo re-ancla el cursor, sin purgar. El comportamiento está en [../features/sincronizacion.md](../features/sincronizacion.md) § 3.4.
 
 ---
 
-> La sincronización llega hasta: **500 correos por cuenta en bootstrap, 100 borradores por cuenta (reemplazo total), umbral de 100 eventos antes de rehacer bootstrap en Gmail, lotes de 100 con 5 workers y 5 intentos (1+4) en Gmail, 6 carpetas delta secuenciales en Outlook** — baja solo cabeceras (nunca cuerpos ni adjuntos), no recupera histórico más allá del tope y no sincroniza en segundo plano. El comportamiento completo está en [../features/sincronizacion.md](../features/sincronizacion.md).
+## 8. La descarga masiva inicial (backfill)
+
+La primera carga de una cuenta recién conectada la ejecuta un **trabajador en segundo plano** dentro del propio proceso del servidor (sin cola externa; MVP de un solo proceso). El comportamiento está en [../features/sincronizacion.md](../features/sincronizacion.md) § 3.5; aquí van las cifras.
+
+### 8.1 Configuración y ritmo
+
+| Aspecto | Valor (por defecto) | Variable de entorno | Detalle |
+|---------|---------------------|---------------------|---------|
+| Tope de correos por cuenta | **100.000** | `BACKFILL_MAX_EMAILS_PER_ACCOUNT` | Ver § 1. |
+| Cuentas descargando en paralelo | **2** | `BACKFILL_MAX_CONCURRENT` | Descargas simultáneas del trabajador; el resto de cuentas encoladas espera turno. |
+| Interruptor del trabajador | **encendido** | `BACKFILL_WORKER_ENABLED` | Apagarlo desactiva la descarga masiva **y** el encolado al conectar (en bloque): las cuentas nuevas caen entonces al bootstrap síncrono de 500 (§ 1). |
+| Ritmo de Gmail | **300** peticiones `messages.get`/min | `BACKFILL_GMAIL_GETS_PER_MINUTE` | Gmail exige una petición por correo; este es el techo de ritmo que evita la saturación. |
+| Retardo entre páginas de Outlook | **300** ms | `BACKFILL_OUTLOOK_PAGE_DELAY_MS` | Outlook trae la cabecera inline, así que las páginas son baratas; basta un retardo pequeño. |
+| Sondeo del despachador | **5** s | `BACKFILL_POLL_INTERVAL_S` | Cada cuánto el trabajador busca trabajos nuevos que arrancar. |
+| Tamaño de página (por oleada) | Gmail **500** / Outlook **1.000** | — | Máximos de cada proveedor (Gmail `messages.list`, Graph `$top`). |
+| Reintento por oleada | **3** intentos (1 + 2), esperas **1 s / 2 s** | — | Sobre fallo de proveedor, por **encima** de los reintentos internos del lote de metadata (§ 4). |
+| Sondeo del contador (navegador) | **2,5** s | — | Cada cuánto se refresca el "Cargando… N correos" mientras haya una descarga activa; se detiene al terminar. |
+
+### 8.2 Estados del trabajo y reanudación
+
+- Cada cuenta tiene **un** trabajo, con estado **pendiente → en curso → completado / fallido**.
+- **Reanudación tras un corte:** al arrancar el servidor, todo trabajo que quedó "en curso" por una caída se vuelve a poner "pendiente" y se retoma **desde su punto guardado** (cuántos correos llevaba y por qué página iba), sin duplicar ni reiniciar de cero.
+- **Solo la primera conexión encola** una descarga. Una **reconexión** de una cuenta ya sincronizada no la relanza. Una cuenta **completada** nunca se vuelve a descargar; una **fallida** se revive (vuelve a "pendiente") al reconectarla.
+
+### 8.3 Tiempo estimado para el tope de 100.000
+
+| Proveedor | Orden de magnitud | Por qué |
+|-----------|-------------------|---------|
+| **Outlook** | **minutos** | Entrega la cabecera de hasta 1.000 correos por página; el ritmo lo marca solo el retardo entre páginas. |
+| **Gmail** | **~2 a 6 horas** | Una petición por correo a 300/min ≈ 5,5 h para el tope completo; menos si el buzón es más pequeño o un administrador sube `BACKFILL_GMAIL_GETS_PER_MINUTE`. |
+
+---
+
+> La sincronización llega hasta: **100.000 correos por cuenta en la descarga masiva inicial (por defecto, configurable; con un bootstrap síncrono de reserva de 500), hasta 2 cuentas descargando en paralelo con ritmo controlado (Gmail ~300 get/min) y reanudación tras un corte, 100 borradores por cuenta (reemplazo total), umbral de 100 eventos antes de rehacer bootstrap en Gmail, lotes de 100 con 5 workers y 5 intentos (1+4) en Gmail, 6 carpetas delta secuenciales en Outlook** — baja solo cabeceras (nunca cuerpos ni adjuntos), no recupera histórico más allá del tope y no sincroniza periódicamente en segundo plano el correo del día a día. El comportamiento completo está en [../features/sincronizacion.md](../features/sincronizacion.md).

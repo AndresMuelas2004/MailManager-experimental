@@ -36,6 +36,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow (browser popup + API-side redirect callback, container-friendly) plus silent re-authentication and a manual "Reconnect account" action that re-runs consent to recover a revoked/expired account without deleting its synced mail.
+- Background initial bulk-load ("backfill"): the first time an account is connected, its history (up to 100,000 messages, configurable) downloads in the background in resumable, rate-paced waves, so emails appear progressively in the listings — replacing the old synchronous 500-message bootstrap. Runs in an in-process worker (single uvicorn worker, no extra infrastructure) driven by a checkpoint table; progress is polled via `GET /mailboxes/{id}/backfill-status`. Disable the worker (`BACKFILL_WORKER_ENABLED=false`) and a newly connected account falls back to the classic synchronous 500-message bootstrap.
 - PostgreSQL persistence for mailboxes, accounts, and tokens.
 - Strict layered architecture with centralized API error mapping.
 
@@ -220,6 +221,12 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `MICROSOFT_CLIENT_ID` | No | Azure App Registration client ID for Microsoft (Entra) login. The backend verifies the `id_token` only (no redirect URI / token exchange). Leave empty to disable Microsoft login server-side — `POST /auth/microsoft` then returns 500 `env_var_error`. Must match the frontend's `VITE_MICROSOFT_CLIENT_ID`. |
 | `GOOGLE_OAUTH_REDIRECT_URI` | No | Redirect URI for the interactive Gmail connect flow. Default: `http://localhost:8000/auth/google/callback` (Google "Desktop app" clients accept any localhost redirect without registration). In production set it to `https://DOMAIN/api/auth/google/callback` and register it in Google Cloud. |
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
+| `BACKFILL_WORKER_ENABLED` | No | Kill-switch for the background initial-bulk-load (backfill) worker. Truthy (default) starts the in-process worker thread AND enqueues a backfill on each first account connection (in lockstep); falsy disables both, so a newly connected account falls back to the synchronous 500-message bootstrap on its first sync. Default: `true`. |
+| `BACKFILL_MAX_EMAILS_PER_ACCOUNT` | No | Per-account cap on the background backfill. Default: `100000`. |
+| `BACKFILL_MAX_CONCURRENT` | No | Accounts backfilled in parallel by the worker pool. The worker adds up to this many + 1 concurrent DB consumers, so raise `DB_POOL_MAX_CONN` alongside it. Default: `2`. |
+| `BACKFILL_GMAIL_GETS_PER_MINUTE` | No | Target Gmail `messages.get` rate during backfill (fixed conservative pacing, not adaptive). Default: `300`. |
+| `BACKFILL_OUTLOOK_PAGE_DELAY_MS` | No | Delay between Outlook backfill pages. Default: `300`. |
+| `BACKFILL_POLL_INTERVAL_S` | No | Dispatcher poll interval (seconds) for claiming pending backfill jobs. Default: `5`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `AUTH_COOKIE_SAMESITE` | No | Session cookie `SameSite` policy: `lax` / `strict` / `none`. `none` requires `AUTH_COOKIE_SECURE=true`. Default: `lax`. |
@@ -267,6 +274,7 @@ Mailboxes:
 - `GET /mailboxes/{mailbox_id}`
 - `PATCH /mailboxes/{mailbox_id}` — Rename a mailbox (`{ "display_name": ... }`, 1–120 chars, no uniqueness). Ownership-checked like `DELETE`; a row deleted between the check and the update collapses to 404.
 - `DELETE /mailboxes/{mailbox_id}`
+- `GET /mailboxes/{mailbox_id}/backfill-status` — Report the background initial bulk-load (backfill) progress for each account of the mailbox: `{ accounts: [{ account_id, status, fetched_count, target_total, done }], active }` where `status ∈ pending|running|completed|failed` and `done = status ∈ {completed, failed}`. Accounts with no backfill job are omitted. Local-only (no provider call), intended for frequent polling of the live "loading…" counter.
 
 Accounts:
 
@@ -394,6 +402,8 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `virtual_mailbox_operation_error` — 500
 - `virtual_mailbox_list_error` — 500
 - `recipient_suggestions_error` — 500
+- `backfill_status_error` — 500
+- `backfill_job_error` — 500 (background worker persistence fallback; swallowed, never sent to a client)
 - `email_fetch_error` — 502
 - `email_send_error` — 502
 - `external_api_error` — 502
