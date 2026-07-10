@@ -17,6 +17,7 @@ from core.email import EmailContent
 from core.email.errors import EmailExternalAPIError
 from tests.integration.conftest import (
     MAILBOX_URL as _MAILBOX_URL,
+    patch_emails_build_manager,
 )
 
 
@@ -53,7 +54,6 @@ def _patch_content_manager(monkeypatch, *, html_body=None, text_body=None, **cli
     returns the given body from the unified content read. Used by the prefetch
     tests to prove the body lands in ``email_content``."""
     from tests.shared.email_fakes import FakeEmailClient
-    from api.services import emails_service
     from core.email import EmailManager
 
     def _build(accounts):
@@ -72,7 +72,7 @@ def _patch_content_manager(monkeypatch, *, html_body=None, text_body=None, **cli
             )
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+    patch_emails_build_manager(monkeypatch, _build)
 
 
 def _fetch_content_row(cur, account_id: str, provider_message_id: str):
@@ -285,7 +285,6 @@ def test_get_email_content_cache_miss_persists_attachment_metadata(
     """Cache miss → ``list_message_attachments`` is called and the rows land in DB."""
     from core.email import AttachmentMetadata
     from tests.shared.email_fakes import FakeEmailClient
-    from api.services import emails_service
     from core.email import EmailManager
 
     mid, aid = setup_mailbox_and_account(test_client)
@@ -321,7 +320,7 @@ def test_get_email_content_cache_miss_persists_attachment_metadata(
             )
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+    patch_emails_build_manager(monkeypatch, _build)
 
     resp = test_client.get(_content_url(mid, "m1", aid))
     assert resp.status_code == 200, resp.text
@@ -495,7 +494,6 @@ def test_get_email_content_cache_miss_sanitizes_persisted_filename(
     """
     from core.email import AttachmentMetadata
     from tests.shared.email_fakes import FakeEmailClient
-    from api.services import emails_service
     from core.email import EmailManager
 
     mid, aid = setup_mailbox_and_account(test_client)
@@ -528,7 +526,7 @@ def test_get_email_content_cache_miss_sanitizes_persisted_filename(
             )
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+    patch_emails_build_manager(monkeypatch, _build)
 
     resp = test_client.get(_content_url(mid, "m1", aid))
     assert resp.status_code == 200, resp.text

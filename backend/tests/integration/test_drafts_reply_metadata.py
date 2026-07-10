@@ -18,9 +18,11 @@ from datetime import datetime, timezone
 
 import psycopg2.extras
 
-from api.services import drafts_service
 from core.email import DraftMetadata, EmailManager
-from tests.integration.conftest import MAILBOX_URL as _MAILBOX_URL
+from tests.integration.conftest import (
+    MAILBOX_URL as _MAILBOX_URL,
+    patch_drafts_build_manager,
+)
 from tests.shared.email_fakes import FakeEmailClient
 
 
@@ -63,7 +65,7 @@ def _patch_fake_clients(monkeypatch, **fake_kwargs):
             manager.add_client(client)
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
     return captured
 
 

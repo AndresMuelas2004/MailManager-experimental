@@ -17,10 +17,14 @@ from typing import Any
 
 import psycopg2.extras
 
-from api.services import drafts_service, emails_service
+from api.services import emails_service
 from core.email import EmailManager
 from core.email.email_client import ReplyContext
-from tests.integration.conftest import MAILBOX_URL as _MAILBOX_URL
+from tests.integration.conftest import (
+    MAILBOX_URL as _MAILBOX_URL,
+    patch_drafts_build_manager,
+    patch_emails_build_manager,
+)
 from tests.shared.email_fakes import FakeEmailClient
 
 
@@ -113,8 +117,8 @@ def _override_manager_with_reply_context(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_emails_build_manager(monkeypatch, _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     if account_email:
         # The service reads ``account.get("email_address")`` to filter
@@ -332,7 +336,7 @@ def test_provider_failure_returns_502_reply_context_error(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build)
+    patch_emails_build_manager(monkeypatch, _build)
     resp = test_client.get(_reply_context_url(mailbox_id, account_id, "m1", "reply"))
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "email_reply_context_error"

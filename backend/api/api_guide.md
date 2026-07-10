@@ -16,6 +16,19 @@
 
 **Regla de autoridad**: el código de esta capa debe respetar lo documentado aquí. Si hay una discrepancia entre esta guía y el código existente, esta guía es la referencia — arregla el código, no la guía. Cuando se añada nueva funcionalidad, actualiza esta guía al final de la tarea para reflejar la nueva realidad.
 
+## Estructura en paquetes temáticos (capa de services)
+
+Tres módulos de service son ahora **paquetes homónimos con fachada `__init__.py`** — los import paths públicos NO cambian (`from api.services.emails_service import ...` sigue igual):
+
+- `services_helpers/` — `traduccion_errores` (aquí viven `_CORE_TO_API_MAP` y `translate_core_error`), `contexto_cuentas`, `persistencia_metadatos`, `papelera`, `contenido`, `busqueda` (`parse_search_query`, `ParsedSearchQuery`, el `_SEARCH_TIMEZONE` de Europe/Madrid), `adjuntos` (`recompute_has_attachments`), `mapeo`. El `__init__` conserva los re-exports legacy `sanitize_email_html` / `sanitize_outbound_html` / `format_content_disposition`.
+- `emails_service/` — `_comunes`, `sincronizacion` (`_PREFETCH_LIMIT`, prefetch/purga), `envio`, `papelera`, `lectura`, `favoritos`, `movimientos_buzon` (motor único `_execute_box_move_operation`), `listado`, `contenido`, `contexto_respuesta`, `conversacion`.
+- `drafts_service/` — `_comunes` (caps `_MAX_*`), `gestion`, `sincronizacion`, `envio`, `adjuntos`.
+
+Reglas al extender (violarlas rompe en silencio):
+- **Anti-ciclo.** Un submódulo importa a sus hermanos DIRECTAMENTE (`from .hermano import x`), nunca vía el `__init__` de su propio paquete; los routers y demás consumidores externos importan SIEMPRE la fachada.
+- **Función nueva → su submódulo temático** + re-export en el `__init__`. Los símbolos privados que aparecen en la fachada están ahí SOLO porque algún test los importa por ese path.
+- **Los tests parchean el SUBMÓDULO que ejecuta el código** (p. ej. `build_manager_for_accounts` tal como lo importa `emails_service/sincronizacion.py`), no la fachada `__init__` (parchearla no intercepta) — ver `tests/unit/unit_guide.md` y `tests/integration/integration_guide.md`.
+
 ## Eliminación de cuenta (`DELETE /auth/me`)
 
 `DELETE /auth/me` requiere `require_session`. Tras eliminar la fila del usuario, el `CASCADE` de PostgreSQL se encarga de cada artefacto asociado (mailboxes, accounts, tokens, sessions); el service solo borra la cookie de sesión después.

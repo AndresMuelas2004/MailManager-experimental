@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from api.errors.exceptions import AccountMisconfigured
-from api.services import accounts_service, emails_service, services_helpers
+from api.services import accounts_service, services_helpers
 from core.email import (
     EmailAccountNotFoundError,
     EmailAccountRecordError,
@@ -35,6 +35,7 @@ from core.email import (
 from tests.integration.conftest import (
     MAILBOX_URL as _MAILBOX_URL,
     _setup_mailbox_and_account,
+    patch_emails_build_manager,
 )
 
 
@@ -168,7 +169,7 @@ def test_connect_account_misconfigured(test_client, setup_mailbox_and_account, m
 
     monkeypatch.setattr(services_helpers, "build_manager_for_accounts", _build_that_translates)
     monkeypatch.setattr(accounts_service, "build_manager_for_accounts", _build_that_translates)
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_that_translates)
+    patch_emails_build_manager(monkeypatch, _build_that_translates)
 
     resp = test_client.post(f"{_MAILBOX_URL}/{mid}/accounts/{aid}/connect")
     assert resp.status_code == 400

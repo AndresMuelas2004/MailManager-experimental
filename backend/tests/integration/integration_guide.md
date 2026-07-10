@@ -18,6 +18,10 @@
 
 ## Notas Específicas del Proyecto
 
+### Los tests de endpoints se dividen por recurso (`test_endpoints_<recurso>.py`)
+
+El antiguo `test_endpoints.py` monolítico ya no existe: los tests de endpoints se reparten en ficheros `test_endpoints_<recurso>.py` (uno por recurso — el árbol del directorio es el índice). Un endpoint nuevo va al fichero de su recurso, o a uno nuevo de la familia si estrena recurso; no reintroduzcas un `test_endpoints.py` único.
+
 ### Trampa 1 — un nuevo módulo de repositorio debe parchearse en `isolated_db`
 
 Al añadir un nuevo módulo de repositorio, su `get_connection` debe monkeypatchearse en la fixture `isolated_db` (`conftest.py`). Sin esto, el repositorio usa el pool de conexiones real en lugar de la transacción por test, rompiendo el aislamiento y causando tests inestables (flaky). Síntoma: fugas de datos entre tests y el rollback deja de funcionar. El conjunto actual de módulos parcheados es lo que lista `conftest.py::isolated_db` — mantén esa lista y esta sección sincronizadas al añadir un nuevo repositorio.
