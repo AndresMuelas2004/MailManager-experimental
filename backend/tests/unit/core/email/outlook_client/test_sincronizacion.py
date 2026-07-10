@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.email.email_client import EmailMetadata, LabelUpdate, SyncResult
+from core.email.email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from core.email.errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from core.email.outlook_client import OutlookClient, _DELTA_FOLDERS
 
@@ -764,6 +764,156 @@ class TestFetchFolderDelta:
         assert len(upserts) == 1
         assert upserts[0].provider_message_id == "partial1"
         assert upserts[0].from_email == ""
+
+
+# ── _prime_folder_delta_cursors (shared by bootstrap + backfill anchor) ──
+
+
+class TestPrimeFolderDeltaCursors:
+    def _delta_mock(self, *, fail_folders=None):
+        fail_folders = fail_folders or set()
+
+        def mock_graph(method, url, body=None):
+            for folder in _DELTA_FOLDERS:
+                if f"/mailFolders/{folder}/messages/delta" in url:
+                    if folder in fail_folders:
+                        raise EmailExternalAPIError(f"delta {folder} failed")
+                    return {"value": [], "@odata.deltaLink": f"https://delta-{folder}"}
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        return mock_graph
+
+    def test_primes_every_delta_folder(self):
+        client = _make_authenticated_client()
+        with patch.object(client, "_graph_request", side_effect=self._delta_mock()):
+            cursors = client._prime_folder_delta_cursors()
+        assert set(cursors) == set(_DELTA_FOLDERS)
+        assert cursors["inbox"] == "https://delta-inbox"
+
+    def test_failing_folder_is_omitted(self):
+        client = _make_authenticated_client()
+        with patch.object(
+            client, "_graph_request", side_effect=self._delta_mock(fail_folders={"inbox"}),
+        ):
+            cursors = client._prime_folder_delta_cursors()
+        assert "inbox" not in cursors
+        assert "sentitems" in cursors
+
+
+# ── _folder_id_to_box_cached (resolve once, reuse across waves) ──────
+
+
+class TestFolderIdToBoxCached:
+    def test_resolves_once_and_caches(self):
+        client = _make_authenticated_client()
+        resolved = {"id-sent": "SENT"}
+        with patch.object(
+            client, "_resolve_special_folder_ids", return_value=resolved,
+        ) as mock_resolve:
+            first = client._folder_id_to_box_cached()
+            second = client._folder_id_to_box_cached()
+        assert first == resolved
+        assert second is first
+        # Resolved exactly once — the instance cache survives across waves.
+        mock_resolve.assert_called_once()
+        assert client._backfill_folder_map == resolved
+
+
+# ── capture_backfill_anchor (Outlook: primed per-folder delta links) ──
+
+
+class TestCaptureBackfillAnchor:
+    def test_returns_encoded_primed_cursors(self):
+        client = _make_authenticated_client()
+
+        def mock_graph(method, url, body=None):
+            for folder in _DELTA_FOLDERS:
+                if f"/mailFolders/{folder}/messages/delta" in url:
+                    return {"value": [], "@odata.deltaLink": f"https://delta-{folder}"}
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            anchor = client.capture_backfill_anchor()
+
+        decoded = OutlookClient._decode_folder_cursors(anchor)
+        assert set(decoded) == set(_DELTA_FOLDERS)
+        assert decoded["inbox"] == "https://delta-inbox"
+
+    def test_requires_authentication(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.capture_backfill_anchor()
+
+
+# ── fetch_backfill_page (Outlook: inline-metadata page via retrying transport) ──
+
+
+class TestFetchBackfillPage:
+    _FOLDER_MAP = {"id-sent": "SENT", "id-archive": "ARCHIVE"}
+
+    def test_first_page_builds_ordered_query_via_retrying_transport(self):
+        client = _make_authenticated_client()
+        messages = [
+            _make_graph_message(msg_id="m1", parent_folder_id="id-inbox"),
+            _make_graph_message(msg_id="m2", parent_folder_id="id-sent"),
+        ]
+        response = {"value": messages, "@odata.nextLink": "https://next-page"}
+
+        with patch.object(
+            client, "_folder_id_to_box_cached", return_value=self._FOLDER_MAP,
+        ), patch.object(
+            client, "_graph_request_json_with_retries", return_value=response,
+        ) as mock_retry, patch.object(
+            client, "_graph_request",
+            side_effect=AssertionError("backfill must not use the non-retrying transport"),
+        ):
+            page = client.fetch_backfill_page(None, 5000)
+
+        # The GET is routed through the Retry-After-aware transport, NOT the
+        # plain _graph_request (which the assertion side_effect would trip).
+        assert mock_retry.call_count == 1
+        method, url = mock_retry.call_args[0][0], mock_retry.call_args[0][1]
+        assert method == "GET"
+        assert "$orderby=receivedDateTime+desc" in url
+        # $top is clamped to the Graph 1000-per-page maximum.
+        assert "$top=1000" in url
+
+        assert isinstance(page, BackfillPage)
+        by_id = {u.provider_message_id: u for u in page.upserts}
+        assert by_id["m1"].box == "ALL_MAIL"  # unknown parent folder → ALL_MAIL
+        assert by_id["m2"].box == "SENT"
+        assert page.next_cursor == "https://next-page"
+
+    def test_subsequent_page_uses_cursor_as_url(self):
+        client = _make_authenticated_client()
+        response = {"value": [], "@odata.deltaLink": "ignored"}
+        with patch.object(client, "_folder_id_to_box_cached", return_value=self._FOLDER_MAP), \
+             patch.object(
+                 client, "_graph_request_json_with_retries", return_value=response,
+             ) as mock_retry:
+            page = client.fetch_backfill_page("https://next-page-cursor", 1000)
+        # The opaque @odata.nextLink cursor is followed literally.
+        assert mock_retry.call_args[0][1] == "https://next-page-cursor"
+        # No nextLink in the response → mailbox exhausted.
+        assert page.next_cursor is None
+
+    def test_dedupes_page_keeping_newest(self):
+        client = _make_authenticated_client()
+        messages = [
+            _make_graph_message(msg_id="dup", parent_folder_id="id-inbox", is_read=False),
+            _make_graph_message(msg_id="dup", parent_folder_id="id-inbox", is_read=True),
+        ]
+        response = {"value": messages}
+        with patch.object(client, "_folder_id_to_box_cached", return_value=self._FOLDER_MAP), \
+             patch.object(client, "_graph_request_json_with_retries", return_value=response):
+            page = client.fetch_backfill_page(None, 1000)
+        assert len(page.upserts) == 1
+        assert page.upserts[0].is_read is True
+
+    def test_requires_authentication(self):
+        client = OutlookClient(account_label="mb__outlook")
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.fetch_backfill_page(None, 1000)
 
 
 # ── verify_message_existence ───────────────────────────────────────

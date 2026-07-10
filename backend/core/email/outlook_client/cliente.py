@@ -41,6 +41,10 @@ class OutlookClient(
         self._access_token: str | None = None
         self._sender_email: str | None = None
         self._sender_name: str | None = None
+        # Special-folder id -> box map, resolved lazily once per instance and
+        # reused across all backfill waves of an account (the worker keeps the
+        # client alive for the whole backfill). ``None`` until first resolved.
+        self._backfill_folder_map: dict[str, str] | None = None
         # Injection point for the favourite retry loops so tests do not
         # wait on real backoff delays. Defaults to ``time.sleep`` in
         # production.

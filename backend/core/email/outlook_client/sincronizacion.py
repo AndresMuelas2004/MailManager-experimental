@@ -7,7 +7,7 @@ import logging
 import urllib.parse
 from typing import Any
 
-from ..email_client import EmailMetadata, LabelUpdate, SyncResult
+from ..email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from ..errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from ..helpers import dedupe_metadata_by_message_id
 from .contenido import OutlookContenidoMixin
@@ -233,15 +233,14 @@ class OutlookSincronizacionMixin:
 
         return upserts
 
-    def _bootstrap_email_metadata(self, max_total: int) -> SyncResult:
-        """Path 1: Fetch most recent messages across all folders, then init delta cursors."""
-        # Step 1: Discover special folder IDs for box classification.
-        folder_id_to_box = self._resolve_special_folder_ids()
+    def _prime_folder_delta_cursors(self) -> dict[str, str]:
+        """Prime the per-folder delta cursors, returning ``{folder: deltaLink}``.
 
-        # Step 2: Fetch the most recent messages across all folders.
-        upserts = self._fetch_recent_messages(max_total, folder_id_to_box)
-
-        # Step 3: Initialize per-folder delta cursors for future incremental syncs.
+        Paginates each folder's delta query with ``max_collect=0`` (capture
+        the deltaLink without collecting any messages). Shared by the
+        bootstrap (step 3) and the backfill anchor capture. A folder that
+        fails is logged and omitted.
+        """
         folder_cursors: dict[str, str] = {}
         for folder in _DELTA_FOLDERS:
             url = (
@@ -257,14 +256,97 @@ class OutlookSincronizacionMixin:
                     folder_cursors[folder] = delta_link
             except EmailExternalAPIError:
                 logger.warning(
-                    "Outlook bootstrap: delta init for '%s' failed, skipping.",
+                    "Outlook: delta init for '%s' failed, skipping.",
                     folder,
                 )
+        return folder_cursors
+
+    def _folder_id_to_box_cached(self) -> dict[str, str]:
+        """Resolve special-folder IDs once per client instance and cache them.
+
+        The backfill worker keeps the client alive across all waves of an
+        account, so this cache survives between waves (only a process
+        restart re-resolves it). The regular bootstrap / single-message
+        paths keep re-resolving per call — unchanged.
+        """
+        if self._backfill_folder_map is None:
+            self._backfill_folder_map = self._resolve_special_folder_ids()
+        return self._backfill_folder_map
+
+    def _bootstrap_email_metadata(self, max_total: int) -> SyncResult:
+        """Path 1: Fetch most recent messages across all folders, then init delta cursors."""
+        # Step 1: Discover special folder IDs for box classification.
+        folder_id_to_box = self._resolve_special_folder_ids()
+
+        # Step 2: Fetch the most recent messages across all folders.
+        upserts = self._fetch_recent_messages(max_total, folder_id_to_box)
+
+        # Step 3: Initialize per-folder delta cursors for future incremental syncs.
+        folder_cursors = self._prime_folder_delta_cursors()
 
         return SyncResult(
             upserts=dedupe_metadata_by_message_id(upserts),
             new_cursor=self._encode_folder_cursors(folder_cursors),
             is_full_sync=True,
+        )
+
+    def capture_backfill_anchor(self) -> str:
+        """Outlook backfill anchor: the per-folder delta links, primed + encoded.
+
+        Captured at the START of the backfill so mail arriving during the
+        backfill is replayed by the first incremental sync.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook capture_backfill_anchor requires authentication."
+            )
+        return self._encode_folder_cursors(self._prime_folder_delta_cursors())
+
+    def fetch_backfill_page(
+        self, cursor: str | None, page_size: int,
+    ) -> BackfillPage:
+        """Fetch one backfill wave of recent messages across all folders.
+
+        ``cursor`` is ``None`` for the first page (builds the ordered initial
+        query) or an ``@odata.nextLink`` for subsequent pages. The GET is
+        routed through ``_graph_request_json_with_retries`` so it honours
+        ``Retry-After`` and retries transient 429/5xx — ``_graph_request``
+        (used by the plain bootstrap) does neither.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook fetch_backfill_page requires authentication."
+            )
+        if cursor is None:
+            url = (
+                f"{GRAPH_BASE_URL}/me/messages"
+                f"?$select={_BOOTSTRAP_SELECT_FIELDS}"
+                f"&$orderby=receivedDateTime+desc"
+                f"&$top={min(page_size, 1000)}"
+            )
+        else:
+            url = cursor
+
+        folder_id_to_box = self._folder_id_to_box_cached()
+        response = self._graph_request_json_with_retries(
+            "GET", url, operation="backfill page fetch",
+        )
+
+        upserts: list[EmailMetadata] = []
+        for msg in response.get("value", []):
+            parent_folder_id = msg.get("parentFolderId", "")
+            box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
+            try:
+                upserts.append(self._parse_graph_message(msg, box))
+            except Exception as exc:
+                logger.warning(
+                    "Outlook backfill: skipping unparseable message %s: %s",
+                    msg.get("id", "?"), exc,
+                )
+
+        return BackfillPage(
+            upserts=dedupe_metadata_by_message_id(upserts),
+            next_cursor=response.get("@odata.nextLink"),
         )
 
     def _incremental_email_metadata(self, sync_cursor: str) -> SyncResult:

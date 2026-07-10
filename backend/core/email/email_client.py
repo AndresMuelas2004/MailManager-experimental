@@ -68,6 +68,20 @@ class SpamMoveResult:
 
 
 @dataclass
+class BackfillPage:
+    """One wave of the background initial mass backfill.
+
+    Returned by :py:meth:`EmailClient.fetch_backfill_page`. ``upserts`` is
+    the deduplicated metadata for the messages fetched in this wave;
+    ``next_cursor`` is the opaque cursor for the next page (Gmail
+    ``messages.list`` pageToken / Outlook ``@odata.nextLink``) or ``None``
+    when the mailbox is exhausted.
+    """
+    upserts: list[EmailMetadata]
+    next_cursor: str | None
+
+
+@dataclass
 class EmailContent:
     """Full body content of a single email message."""
     html_body: str | None
@@ -693,3 +707,49 @@ class EmailClient(ABC):
         Implementations must apply ``Prefer: IdType="ImmutableId"`` to
         every Outlook request that touches messages or attachments.
         """
+
+    # ------------------------------------------------------------------
+    # Background initial mass backfill (paginated, resumable, rate-paced).
+    #
+    # These two are concrete with a ``NotImplementedError`` default rather
+    # than ``@abstractmethod`` on purpose: the ABC has non-provider
+    # subclasses (test fakes) that must stay instantiable without stubbing
+    # the whole backfill surface. The real providers (Gmail / Outlook)
+    # override both.
+    # ------------------------------------------------------------------
+
+    def capture_backfill_anchor(self) -> str:
+        """Capture the incremental sync cursor to resume from AFTER the backfill.
+
+        Called ONCE, before the first backfill wave, so any mail arriving
+        during the (possibly hours-long) backfill is replayed by the first
+        incremental sync instead of being lost.
+
+        - **Gmail** — the current ``historyId`` (``users.getProfile``).
+          Captured before listing (invariant: historyId before listing).
+        - **Outlook** — the per-folder delta links primed with
+          ``max_collect=0`` and serialised as the JSON folder-cursor string.
+
+        The returned string is written into ``accounts.sync_cursor`` on
+        backfill completion. Raises a :py:class:`CoreError` subclass on
+        provider failure.
+        """
+        raise NotImplementedError
+
+    def fetch_backfill_page(
+        self, cursor: str | None, page_size: int,
+    ) -> "BackfillPage":
+        """Fetch one wave of message metadata for the background backfill.
+
+        ``cursor`` is ``None`` for the first page, then the opaque cursor
+        returned by the previous page (Gmail ``messages.list`` pageToken /
+        Outlook ``@odata.nextLink``). ``page_size`` is the requested page
+        size, already clamped by the caller to what remains until the
+        target (and further clamped to the provider maximum inside).
+
+        Returns a :py:class:`BackfillPage` with deduplicated ``upserts``
+        and the ``next_cursor`` for the following wave (``None`` when the
+        mailbox is exhausted). Raises a :py:class:`CoreError` subclass on
+        provider failure so the worker's wave-retry loop can back off.
+        """
+        raise NotImplementedError

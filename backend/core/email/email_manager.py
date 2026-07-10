@@ -5,6 +5,7 @@ from .email_client import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    BackfillPage,
     ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
@@ -174,6 +175,43 @@ class EmailManager:
             except Exception as exc:
                 self._last_errors[label] = exc
         return results
+
+    def capture_backfill_anchor(self, account_label: str) -> str:
+        """Capture the incremental sync cursor to resume from after the backfill.
+
+        Delegates to the matching client's
+        :py:meth:`EmailClient.capture_backfill_anchor`. Called once by the
+        background backfill worker before the first wave.
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.capture_backfill_anchor()
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected capture_backfill_anchor error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def fetch_backfill_page(
+        self, account_label: str, cursor: str | None, page_size: int,
+    ) -> BackfillPage:
+        """Fetch one backfill wave for the given account.
+
+        Delegates to the matching client's
+        :py:meth:`EmailClient.fetch_backfill_page`. Used by the background
+        backfill worker, paginating with the returned ``next_cursor`` until
+        it is ``None`` (mailbox exhausted) or the target is reached.
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            return client.fetch_backfill_page(cursor, page_size)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected fetch_backfill_page error ({type(exc).__name__}): {exc}"
+            ) from exc
 
     def verify_message_existence(
         self,

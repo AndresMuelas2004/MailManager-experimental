@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 from core.email.gmail_client import _is_retryable, _split_address_header
+from core.email.gmail_client._comunes import _gmail_error_reasons
 
 
 # ── _is_retryable ───────────────────────────────────────────────────
 
 
 class TestIsRetryable:
-    def _make_http_error(self, status: int) -> Exception:
+    def _make_http_error(self, status: int, content: bytes = b"err") -> Exception:
         from googleapiclient.errors import HttpError
         resp = MagicMock()
         type(resp).status = status
-        return HttpError(resp=resp, content=b"err")
+        return HttpError(resp=resp, content=content)
+
+    def _make_403_with_reason(self, reason: str) -> Exception:
+        body = json.dumps({"error": {"errors": [{"reason": reason}]}}).encode("utf-8")
+        return self._make_http_error(403, content=body)
 
     def test_404_not_retryable(self):
         assert _is_retryable(self._make_http_error(404)) is False
@@ -23,11 +29,32 @@ class TestIsRetryable:
     def test_400_not_retryable(self):
         assert _is_retryable(self._make_http_error(400)) is False
 
-    def test_403_not_retryable(self):
+    def test_403_without_rate_limit_reason_not_retryable(self):
+        # A 403 whose body carries no recognised rate-limit reason (here an
+        # unparseable body) stays permanent — Gmail throttles only under the
+        # two rate-limit reasons.
         assert _is_retryable(self._make_http_error(403)) is False
+
+    def test_403_rate_limit_exceeded_is_retryable(self):
+        # Gmail surfaces per-project throttling as HTTP 403 rateLimitExceeded
+        # (NOT 429), so the fix makes it retryable.
+        assert _is_retryable(self._make_403_with_reason("rateLimitExceeded")) is True
+
+    def test_403_user_rate_limit_exceeded_is_retryable(self):
+        assert _is_retryable(self._make_403_with_reason("userRateLimitExceeded")) is True
+
+    def test_403_daily_limit_exceeded_not_retryable(self):
+        # Exhausted daily quota is a hard wall — retrying only burns it.
+        assert _is_retryable(self._make_403_with_reason("dailyLimitExceeded")) is False
+
+    def test_403_unknown_reason_not_retryable(self):
+        assert _is_retryable(self._make_403_with_reason("insufficientPermissions")) is False
 
     def test_410_not_retryable(self):
         assert _is_retryable(self._make_http_error(410)) is False
+
+    def test_401_not_retryable(self):
+        assert _is_retryable(self._make_http_error(401)) is False
 
     def test_429_retryable(self):
         assert _is_retryable(self._make_http_error(429)) is True
@@ -49,6 +76,38 @@ class TestIsRetryable:
 
     def test_generic_exception_retryable(self):
         assert _is_retryable(Exception("network error")) is True
+
+
+class TestGmailErrorReasons:
+    """The reason-parsing helper used by the 403 retry classification."""
+
+    def _http_error(self, content) -> Exception:
+        from googleapiclient.errors import HttpError
+        resp = MagicMock()
+        type(resp).status = 403
+        return HttpError(resp=resp, content=content)
+
+    def test_extracts_reasons_from_valid_body(self):
+        body = json.dumps(
+            {"error": {"errors": [{"reason": "rateLimitExceeded"}, {"reason": "backendError"}]}}
+        ).encode("utf-8")
+        assert _gmail_error_reasons(self._http_error(body)) == {"rateLimitExceeded", "backendError"}
+
+    def test_empty_content_returns_empty_set(self):
+        assert _gmail_error_reasons(self._http_error(b"")) == set()
+
+    def test_malformed_json_returns_empty_set(self):
+        assert _gmail_error_reasons(self._http_error(b"{not json")) == set()
+
+    def test_non_dict_payload_returns_empty_set(self):
+        assert _gmail_error_reasons(self._http_error(b"[1, 2, 3]")) == set()
+
+    def test_missing_error_key_returns_empty_set(self):
+        assert _gmail_error_reasons(self._http_error(b'{"foo": "bar"}')) == set()
+
+    def test_errors_entries_without_reason_are_skipped(self):
+        body = json.dumps({"error": {"errors": [{"message": "no reason here"}]}}).encode("utf-8")
+        assert _gmail_error_reasons(self._http_error(body)) == set()
 
 
 class TestSplitAddressHeader:
