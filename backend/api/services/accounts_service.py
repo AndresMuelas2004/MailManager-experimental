@@ -25,6 +25,7 @@ from api.schemas.account import (
     AccountUpdate,
 )
 from api.services import oauth_pending
+from api.services.backfill_service import enqueue_backfill_on_connect
 from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
@@ -303,5 +304,18 @@ def complete_account_connect(
     except Exception as exc:
         logger.warning("Token persist failed completing connect (%s): %s", type(exc).__name__, exc)
         return {**result_base, "ok": False, "message": "Failed to persist tokens after completing the connection."}
+
+    # Enqueue the first-connection background backfill (best-effort, soft-fail):
+    # a failure here must NOT flip the callback to ok:False — the tokens are
+    # already persisted, and the user can retry the load by reconnecting (which
+    # revives a job left 'failed'). Gated internally by BACKFILL_WORKER_ENABLED
+    # and by sync_cursor (first connection only).
+    try:
+        enqueue_backfill_on_connect(pending.mailbox_id, pending.account_id, pending.provider)
+    except Exception as exc:
+        logger.warning(
+            "Backfill enqueue on connect failed (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
 
     return {**result_base, "ok": True, "message": "Account connected successfully. You can close this tab."}

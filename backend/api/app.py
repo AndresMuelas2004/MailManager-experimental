@@ -63,6 +63,7 @@ from api.routers.mailboxes_routers import router as mailboxes_router
 from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.routers_helpers import rate_limit_by_ip
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
+from api.services.backfill_worker import start_backfill_worker, stop_backfill_worker
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
@@ -77,7 +78,25 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.critical("Startup failed (%s): %s", type(exc).__name__, exc)
         raise
+    # Start the background backfill worker best-effort: a failure here (e.g. the
+    # account_backfill_jobs table missing because DB_AUTO_MIGRATE=false) must NOT
+    # abort app startup — the API must serve traffic even without the worker.
+    # Deliberately distinct from the fail-fast validate/migrate/warmup above.
+    try:
+        start_backfill_worker()
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker failed to start (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
     yield
+    try:
+        stop_backfill_worker()
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker failed to stop cleanly (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
     close_pool()
 
 

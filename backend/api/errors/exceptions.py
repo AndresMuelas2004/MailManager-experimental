@@ -434,6 +434,31 @@ class RecipientSuggestionsError(ApiError):
 
 
 # ---------------------------------------------------------------------------
+# Background initial mass backfill.
+# ---------------------------------------------------------------------------
+
+
+class BackfillStatusError(ApiError):
+    """Unexpected (non-DB) failure while loading the backfill status of a
+    mailbox. Mapped to HTTP 500 — same family as ``EmailListError`` (a
+    read-only status failure has no retry story; a ``DatabaseError`` from the
+    same store call still translates to 503)."""
+    code = "backfill_status_error"
+
+
+class BackfillJobError(ApiError):
+    """Persistence fallback for the background backfill machinery.
+
+    Two producers, both OUTSIDE the request/response cycle so it never reaches
+    a client: (1) the worker, which reuses the service persistence helpers
+    (``persist_email_metadata_batch``, ``update_sync_cursor``, …) and swallows
+    this (logs with ``exc_info`` + marks the job failed); (2)
+    ``enqueue_backfill_on_connect``, whose caller (``complete_account_connect``)
+    swallows it best-effort. Registered at 500 for completeness."""
+    code = "backfill_job_error"
+
+
+# ---------------------------------------------------------------------------
 # Health / readiness.
 # ---------------------------------------------------------------------------
 

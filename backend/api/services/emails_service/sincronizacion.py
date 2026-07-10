@@ -39,6 +39,7 @@ from api.services.services_helpers import (
     update_sync_cursor,
 )
 from database import (
+    account_backfill_store,
     account_store,
     DatabaseError,
 )
@@ -153,6 +154,35 @@ def sync_email_metadata(
             logger.warning("Unexpected account listing error during sync (%s): %s", type(exc).__name__, exc)
             raise EmailFetchError("Failed to list accounts for metadata sync.") from exc
 
+    # Guard: exclude accounts under an ACTIVE backfill (pending/running) from
+    # the normal sync. During the initial mass backfill ``sync_cursor`` is NULL,
+    # so a sync-metadata would take the bootstrap path (fetch_all_email_metadata
+    # passes sync_cursor=None -> _bootstrap_email_metadata(500)) and double-write
+    # alongside the background worker. The worker owns the initial load. This
+    # guard is INDEPENDENT of BACKFILL_WORKER_ENABLED (a job that exists is
+    # honoured regardless) — the no-stranding when the worker is off is solved
+    # at enqueue time (§4.4/§4.10), which also keeps this guard testable without
+    # launching the background thread. Excluded accounts keep surfacing as
+    # "loading" via GET /backfill-status.
+    try:
+        active_backfill_ids = set(account_backfill_store.list_active_account_ids(mailbox_id))
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected active-backfill lookup error during sync (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise EmailFetchError("Failed to load active backfill jobs for metadata sync.") from exc
+
+    if active_backfill_ids:
+        accounts = [a for a in accounts if str(a.get("account_id")) not in active_backfill_ids]
+        # Single account in backfill, or every account of a unified mailbox in
+        # backfill: return a neutral 200 (no bootstrap) — the accounts are still
+        # "loading" via the status endpoint.
+        if not accounts:
+            return SyncResultOut(total_synced=0, accounts=[])
+
     try:
         auth_payloads, label_lookup = _build_auth_context(accounts, mailbox_id)
 
@@ -202,6 +232,31 @@ def sync_email_metadata(
         prefetch_targets: list[tuple[str, str]] = []
         synced_account_ids: list[str] = []
 
+        # Accounts whose backfill has COMPLETED: skip ghost reconciliation for
+        # them. If a backfilled account's incremental cursor ever expires (rare
+        # in 2-6h) the fetch falls back to bootstrap(500); with up to 100k local
+        # rows, reconciliation would treat ~99,500 as suspects and mass-delete
+        # the history. Skipping it re-anchors the cursor without purging the
+        # history. Computed once (the same list_by_mailbox the status endpoint
+        # uses) and consulted in memory (§4.6.2).
+        try:
+            backfill_rows = account_backfill_store.list_by_mailbox(mailbox_id)
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected completed-backfill lookup error during sync (%s): %s",
+                type(exc).__name__, exc,
+            )
+            raise EmailFetchError(
+                "Failed to load completed backfill jobs for ghost reconciliation gating."
+            ) from exc
+        completed_backfill_ids = {
+            str(row["account_id"])
+            for row in backfill_rows
+            if row.get("status") == "completed"
+        }
+
         for label, sync_result in results.items():
             ids = label_lookup.get(label)
             if not ids:
@@ -224,7 +279,7 @@ def sync_email_metadata(
             update_sync_cursor(mid, aid, sync_result.new_cursor, fallback=EmailFetchError)
 
             reconciled, ghost_ids = 0, []
-            if sync_result.is_full_sync:
+            if sync_result.is_full_sync and aid not in completed_backfill_ids:
                 reconciled, ghost_ids = _reconcile_ghost_emails(manager, label, aid, sync_result)
 
             count = upserted + deleted + label_updated + reconciled

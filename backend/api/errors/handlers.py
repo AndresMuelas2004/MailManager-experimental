@@ -39,6 +39,8 @@ from api.errors.exceptions import (
     AttachmentSendFailed,
     AttachmentTooLarge,
     AttachmentUnavailable,
+    BackfillJobError,
+    BackfillStatusError,
     ConversationFetchError,
     CredentialFileError,
     DatabaseConnectionError,
@@ -176,6 +178,9 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Contacts (recipient autocomplete)
     RecipientSuggestionsError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # Background initial mass backfill
+    BackfillStatusError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    BackfillJobError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Health / readiness
     ServiceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # Rate limiting

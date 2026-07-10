@@ -9,8 +9,16 @@ import psycopg2.extras
 import pytest
 from pydantic import SecretStr
 
+# The background backfill worker thread starts in the app lifespan (which the
+# session-scoped TestClient enters). Default it OFF for the integration suite so
+# no daemon thread polls the DB during tests (§4.8). The sync guard is
+# independent of this flag, so the guard tests still exercise it fully; the
+# enqueue-on-connect tests flip it true per-case via monkeypatch.setenv.
+os.environ.setdefault("BACKFILL_WORKER_ENABLED", "false")
+
 from database import connection as connection_module
 from database.migrations.runner import ensure_schema_at_head
+from database.repositories import account_backfill_repository as account_backfill_repo_module
 from database.repositories import account_repository as account_repo_module
 from database.repositories import draft_attachment_repository as draft_attachment_repo_module
 from database.repositories import draft_repository as draft_repo_module
@@ -198,6 +206,10 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(connection_module, "get_connection", _get_conn)
     monkeypatch.setattr(mailbox_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(account_repo_module.connection, "get_connection", _get_conn)
+    # Backfill job repository (Trap 1): without this patch the enqueue-on-connect
+    # + backfill status/guard reads use the real pool instead of the per-test
+    # transaction, leaking committed job rows across tests.
+    monkeypatch.setattr(account_backfill_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(user_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(session_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(email_metadata_repo_module.connection, "get_connection", _get_conn)

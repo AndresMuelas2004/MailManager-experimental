@@ -406,6 +406,11 @@ class TestConnectAccountFlow:
             return manager
 
         monkeypatch.setattr(accounts_service, "build_manager_for_accounts", _build_manager)
+        # The connect callback now enqueues a first-connection backfill. Stub it
+        # to a no-op by default so the unrelated connect tests stay DB-free (the
+        # real one reaches ``account_store.get_sync_cursor``); the dedicated
+        # backfill-enqueue tests override it.
+        monkeypatch.setattr(accounts_service, "enqueue_backfill_on_connect", lambda *_a, **_kw: None)
         return store
 
     def _start(self):
@@ -458,6 +463,32 @@ class TestConnectAccountFlow:
         assert payload["email_address"] == "user@example.com"
         # single-use: the pending entry is consumed
         assert oauth_pending._pending == {}
+
+    def test_complete_enqueues_backfill_after_token_persist(self, monkeypatch):
+        self._patch_connect_deps(monkeypatch)
+        enqueue_calls = []
+        monkeypatch.setattr(
+            accounts_service, "enqueue_backfill_on_connect",
+            lambda mid, aid, prov: enqueue_calls.append((mid, aid, prov)),
+        )
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
+        assert enqueue_calls == [(self._MID, self._AID, "gmail")]
+
+    def test_complete_backfill_enqueue_failure_does_not_flip_ok(self, monkeypatch):
+        # Best-effort soft-fail: an enqueue failure must NOT roll the callback
+        # to ok:False (the tokens are already persisted; the user can retry by
+        # reconnecting, which revives a failed job).
+        self._patch_connect_deps(monkeypatch)
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("enqueue exploded")
+
+        monkeypatch.setattr(accounts_service, "enqueue_backfill_on_connect", _boom)
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
 
     def test_complete_unknown_state_reports_expired(self, monkeypatch):
         self._patch_connect_deps(monkeypatch)
