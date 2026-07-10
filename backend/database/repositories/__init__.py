@@ -4,6 +4,7 @@ Concrete repository exports.
 
 from __future__ import annotations
 
+from database.repositories.account_backfill_repository import account_backfill_store
 from database.repositories.account_repository import account_store
 from database.repositories.draft_attachment_repository import draft_attachment_store
 from database.repositories.draft_repository import draft_store
@@ -16,6 +17,7 @@ from database.repositories.user_repository import user_store
 from database.repositories.virtual_mailbox_repository import virtual_mailbox_store
 
 __all__ = [
+    "account_backfill_store",
     "account_store",
     "draft_attachment_store",
     "draft_store",

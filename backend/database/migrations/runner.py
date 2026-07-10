@@ -524,6 +524,37 @@ _DDL_STATEMENTS = [
     # per-migration TRUNCATE in 0040 still runs via Alembic.
     "TRUNCATE TABLE email_content;",
     "UPDATE alembic_version SET version_num = '0040_invalidate_email_content_cache_allowlist_links';",
+    # Migration 0041: account_backfill_jobs — checkpoint table for the
+    # background initial mass backfill (one row per account). account_id is
+    # UUID (a FK must match the referenced accounts.account_id UUID type; a
+    # TEXT column would fail to create the FK) with ON DELETE CASCADE;
+    # mailbox_id is a denormalised UUID (no FK — the account already cascades)
+    # so the worker rebuilds account_label without a JOIN. The partial index
+    # backs the dispatcher's poll for active (pending/running) jobs.
+    """
+    CREATE TABLE IF NOT EXISTS account_backfill_jobs (
+        account_id           UUID         PRIMARY KEY
+                             REFERENCES accounts(account_id) ON DELETE CASCADE,
+        mailbox_id           UUID         NOT NULL,
+        provider             VARCHAR(20)  NOT NULL
+                             CHECK (provider IN ('gmail', 'outlook')),
+        status               VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+        target_total         INTEGER      NOT NULL,
+        fetched_count        INTEGER      NOT NULL DEFAULT 0,
+        page_cursor          TEXT,
+        initial_sync_cursor  TEXT,
+        attempts             INTEGER      NOT NULL DEFAULT 0,
+        last_error           TEXT,
+        created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        completed_at         TIMESTAMPTZ
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_backfill_jobs_active "
+    "ON account_backfill_jobs (status) "
+    "WHERE status IN ('pending', 'running');",
+    "UPDATE alembic_version SET version_num = '0041_create_account_backfill_jobs';",
 ]
 
 

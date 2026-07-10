@@ -119,6 +119,91 @@ class AccountStore(ABC):
         raise NotImplementedError
 
 
+class AccountBackfillStore(ABC):
+    """
+    Contract for the background initial-mass-backfill job checkpoint.
+
+    One row per account in ``account_backfill_jobs``. The row is the
+    resumable checkpoint the in-process backfill worker drives: it holds
+    the target size, the page cursor + fetched count (to resume after a
+    process restart), and the incremental cursor snapshotted at the start.
+    """
+
+    @abstractmethod
+    def enqueue(
+        self,
+        account_id: str,
+        mailbox_id: str,
+        provider: str,
+        target_total: int,
+    ) -> None:
+        """Create a backfill job for a first-connected account, or revive a
+        previously FAILED one back to ``pending``.
+
+        An existing ``pending`` / ``running`` / ``completed`` job is NOT
+        touched (a no-op) — a completed account already has its history and
+        must not be re-backfilled. Idempotent and safe to call on every
+        connect: only a ``failed`` row is revived.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, account_id: str) -> dict[str, Any] | None:
+        """Return the job row for ``account_id`` or ``None`` when absent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_by_mailbox(self, mailbox_id: str) -> list[dict[str, Any]]:
+        """Return every job row for the accounts of ``mailbox_id``.
+
+        Backs the status endpoint and the ghost-reconciliation guard (which
+        needs the set of ``completed`` accounts).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_active_account_ids(self, mailbox_id: str) -> list[str]:
+        """Return only the ``account_id``s with a ``pending`` / ``running`` job.
+
+        Backs the sync guard that excludes accounts under active backfill
+        from the normal sync without pulling full rows.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def claim_next_batch(self, limit: int) -> list[dict[str, Any]]:
+        """Atomically claim up to ``limit`` ``pending`` jobs, marking them
+        ``running``, and return the claimed rows. Used by the dispatcher."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_progress(
+        self, account_id: str, fetched_count: int, page_cursor: str | None,
+    ) -> None:
+        """Checkpoint the wave progress: fetched count + next page cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_anchor(self, account_id: str, initial_sync_cursor: str) -> None:
+        """Persist the incremental cursor captured at the start of the backfill."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_completed(self, account_id: str) -> None:
+        """Mark the job ``completed`` and clear ``page_cursor``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_failed(self, account_id: str, error: str) -> None:
+        """Mark the job ``failed``, store ``error`` and increment ``attempts``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_running_to_pending(self) -> None:
+        """Put every ``running`` job back to ``pending`` (startup recovery)."""
+        raise NotImplementedError
+
+
 class EmailMetadataStore(ABC):
     """
     Contract for email metadata persistence.

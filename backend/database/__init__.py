@@ -24,6 +24,7 @@ from database.lifecycle import (
     warmup_connection,
 )
 from database.repositories import (
+    account_backfill_store,
     account_store,
     draft_attachment_store,
     draft_store,
@@ -39,6 +40,7 @@ from database.security import load_app_credentials
 from database.settings import get_frontend_origin, get_google_oauth_redirect_uri
 
 __all__ = [
+    "account_backfill_store",
     "account_store",
     "close_pool",
     "draft_attachment_store",
