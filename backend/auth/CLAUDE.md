@@ -1,18 +1,18 @@
-# General Auth Layer Rules
+# Reglas Generales de la Capa Auth
 
-This is the `CLAUDE.md` for the **authentication** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la capa de **autenticación**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de manejo de errores y escalado, sus reglas estructurales y su comportamiento común. Todo lo que se cubre aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstica al proyecto por diseño.** Nada de aquí referencia un dominio, entidad o funcionalidad concreta. Toda regla se aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the auth layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la arquitectura de la capa auth desde el primer día. La guía específica del proyecto extiende estas reglas con detalles de dominio, pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
-**Immutable.** This file must never be edited. All project-specific changes go in the `*_guide.md` file referenced at the end of this document.
-## 1. Layer Isolation
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas tienen precedencia.
+**Inmutable.** Este fichero nunca debe editarse. Todos los cambios específicos del proyecto van en el fichero `*_guide.md` referenciado al final de este documento.
+## 1. Aislamiento de la Capa
 
-The `auth/` package is a framework-agnostic layer — it has **no imports from `api/`**. Services in the API layer translate `AuthError` subclasses into `ApiError` subclasses via a translation function (same pattern used for core and database errors).
+El paquete `auth/` es una capa agnóstica al framework — **no tiene imports de `api/`**. Los servicios de la capa API traducen las subclases de `AuthError` a subclases de `ApiError` mediante una función de traducción (el mismo patrón usado para los errores de core y database).
 
-## 2. Package Structure
+## 2. Estructura del Paquete
 
 ```
 auth/
@@ -26,26 +26,26 @@ auth/
     └── <provider>.py         #   verify_<provider>_token — pure token verification
 ```
 
-## 3. Public Facade
+## 3. Fachada Pública
 
-All external code imports from the package root (`from auth import ...`). The `__init__.py` re-exports:
+Todo el código externo importa desde la raíz del paquete (`from auth import ...`). El `__init__.py` reexporta:
 
-- Error classes (full hierarchy)
-- Settings dataclass and its loader function
-- Provider verification functions
+- Clases de error (jerarquía completa)
+- Dataclass de settings y su función loader
+- Funciones de verificación de proveedores
 
-External consumers **never import from internal submodules** — only from the facade.
+Los consumidores externos **nunca importan desde submódulos internos** — solo desde la fachada.
 
-## 4. Settings Rules
+## 4. Reglas de Settings
 
-- `settings.py` is the **only module** that reads `os.environ`.
-- Settings are returned as a frozen dataclass.
-- Missing or invalid required env vars raise `AuthSettingsError`.
-- Settings are loaded per service call (not cached globally), so env var changes take effect without restart.
+- `settings.py` es el **único módulo** que lee `os.environ`.
+- Los settings se devuelven como una dataclass frozen.
+- Las env vars requeridas ausentes o inválidas lanzan `AuthSettingsError`.
+- Los settings se cargan por cada llamada de servicio (no se cachean globalmente), de modo que los cambios en las env vars surten efecto sin reinicio.
 
-## 5. Token Verification Contract
+## 5. Contrato de Verificación de Token
 
-Each identity provider module exposes a single verification function:
+Cada módulo de proveedor de identidad expone una única función de verificación:
 
 ```python
 def verify_<provider>_token(raw_token: str, ...) -> dict:
@@ -55,18 +55,18 @@ def verify_<provider>_token(raw_token: str, ...) -> dict:
     """
 ```
 
-The function must:
+La función debe:
 
-1. Accept the raw token string and any provider-specific config.
-2. Return a `dict` of decoded claims on success.
-3. Raise only `AuthTokenError` subclasses on failure — never raw provider exceptions.
-4. Follow the capture technique described in § 7.
+1. Aceptar el string del token en crudo y cualquier configuración específica del proveedor.
+2. Devolver un `dict` de claims decodificados en caso de éxito.
+3. Lanzar únicamente subclases de `AuthTokenError` ante un fallo — nunca excepciones crudas del proveedor.
+4. Seguir la técnica de captura descrita en § 7.
 
-Claim validation (business logic like checking `sub`, `email`) stays in the service layer, not in the auth layer. The auth layer only verifies cryptographic validity.
+La validación de claims (lógica de negocio como comprobar `sub`, `email`) permanece en la capa de servicio, no en la capa auth. La capa auth solo verifica la validez criptográfica.
 
-## 6. Error Hierarchy
+## 6. Jerarquía de Errores
 
-All errors follow the same base-class pattern: each class has a `code`, `default_message`, `message`, and `detail` dict.
+Todos los errores siguen el mismo patrón de clase base: cada clase tiene un `code`, `default_message`, `message` y un dict `detail`.
 
 ```
 AuthError                           # Base for all auth errors
@@ -77,26 +77,26 @@ AuthError                           # Base for all auth errors
     └── AuthTokenProviderError      # Provider rejected the token
 ```
 
-### Semantic notes
+### Notas semánticas
 
-- Error names are **provider-agnostic** — reusable across identity providers.
-- `AuthTokenNetworkError` maps to a 502-equivalent, not 401. A transport failure is not an invalid token — the token may be valid, but the verification endpoint is unreachable. This lets clients differentiate "your token is bad" from "the verification service is down."
+- Los nombres de error son **agnósticos al proveedor** — reutilizables entre proveedores de identidad.
+- `AuthTokenNetworkError` mapea a un equivalente de 502, no 401. Un fallo de transporte no es un token inválido — el token puede ser válido, pero el endpoint de verificación es inalcanzable. Esto permite a los clientes diferenciar «tu token es malo» de «el servicio de verificación está caído».
 
-## 7. Capture Technique
+## 7. Técnica de Captura
 
-Every provider verification function follows these rules when catching exceptions.
+Toda función de verificación de proveedor sigue estas reglas al capturar excepciones.
 
-### Rules
+### Reglas
 
-1. **Catch provider-specific exceptions first.** List the concrete exception types the provider library can throw, ordered from most specific to most general.
-2. **Map to the correct `AuthTokenError` subclass.** Each provider exception maps to the subclass that best describes the *functional* failure: network errors → `AuthTokenNetworkError`, provider rejections → `AuthTokenProviderError`, format errors → `AuthTokenInvalidError`.
-3. **Catch built-in `ValueError` explicitly.** Some verification libraries raise `ValueError` for malformed tokens. Catch it before the generic handler and map to `AuthTokenInvalidError`.
-4. **Generic fallback last.** A final `except Exception as exc` with a message including `type(exc).__name__` ensures no exception escapes untyped. Maps to `AuthTokenInvalidError` as the safest default. Internal layers may include `type(exc).__name__` in error messages since these are always translated before reaching the client.
-5. **Preserve the cause chain.** Always `raise ... from exc`.
-6. **Never double-wrap typed errors.** This rule applies when code inside a `try` block can raise an `AuthError` subclass — either via an explicit `raise` or through a helper that raises one. Add a targeted `except AuthTokenError: raise` **before** the generic `except Exception` handler. **If nothing inside the `try` can produce an `AuthError`, the guard is unnecessary.**
-7. **Wrap and re-raise — never log the traceback.** Verification functions translate and re-raise; they must not log the exceptions they wrap. The `raise ... from exc` chain carries the original provider error up to the API layer's global handlers, the single place where server-side failures are logged — logging here would duplicate that record.
+1. **Captura primero las excepciones específicas del proveedor.** Enumera los tipos de excepción concretos que la librería del proveedor puede lanzar, ordenados de más específico a más general.
+2. **Mapea a la subclase de `AuthTokenError` correcta.** Cada excepción del proveedor mapea a la subclase que mejor describe el fallo *funcional*: errores de red → `AuthTokenNetworkError`, rechazos del proveedor → `AuthTokenProviderError`, errores de formato → `AuthTokenInvalidError`.
+3. **Captura explícitamente el `ValueError` incorporado.** Algunas librerías de verificación lanzan `ValueError` para tokens malformados. Captúralo antes del handler genérico y mapéalo a `AuthTokenInvalidError`.
+4. **El fallback genérico va el último.** Un `except Exception as exc` final con un mensaje que incluya `type(exc).__name__` asegura que ninguna excepción escape sin tipar. Mapea a `AuthTokenInvalidError` como el default más seguro. Las capas internas pueden incluir `type(exc).__name__` en los mensajes de error, ya que estos siempre se traducen antes de llegar al cliente.
+5. **Preserva la cadena de causas.** Siempre `raise ... from exc`.
+6. **Nunca envuelvas dos veces errores ya tipados.** Esta regla se aplica cuando el código dentro de un bloque `try` puede lanzar una subclase de `AuthError` — ya sea mediante un `raise` explícito o a través de un helper que lance una. Añade un `except AuthTokenError: raise` dirigido **antes** del handler genérico `except Exception`. **Si nada dentro del `try` puede producir un `AuthError`, el guard es innecesario.**
+7. **Envuelve y relanza — nunca loguees el traceback.** Las funciones de verificación traducen y relanzan; no deben loguear las excepciones que envuelven. La cadena `raise ... from exc` transporta el error original del proveedor hasta los handlers globales de la capa API, el único lugar donde se loguean los fallos del lado del servidor — loguear aquí duplicaría ese registro.
 
-### Pattern
+### Patrón
 
 ```python
 try:
@@ -113,9 +113,9 @@ except Exception as exc:                 # 4. Generic fallback
     ) from exc
 ```
 
-## 8. Service-Side Translation
+## 8. Traducción en la Capa de Servicio
 
-The service layer catches `AuthError` and translates via a mapping function:
+La capa de servicio captura `AuthError` y traduce mediante una función de mapeo:
 
 ```python
 try:
@@ -127,50 +127,50 @@ except Exception as exc:
     raise Unauthorized("Token verification failed.") from exc
 ```
 
-No context manager exists for auth translation — there are typically only a few catch sites.
+No existe ningún context manager para la traducción de auth — normalmente solo hay unos pocos sitios de captura.
 
-## 9. Adding a New Identity Provider Checklist
+## 9. Checklist para Añadir un Nuevo Proveedor de Identidad
 
-### Auth layer
+### Capa auth
 
-- [ ] Create `auth/<provider>_auth/<provider>.py` with `verify_<provider>_token(...)`.
-- [ ] Follow the capture technique — map provider exceptions to `AuthTokenError` subclasses.
-- [ ] Add the never-double-wrap guard only if internal helpers raise `AuthError` subclasses.
-- [ ] If new env vars are needed, add them to `settings.py` and the settings dataclass.
-- [ ] Re-export the verification function from `auth/__init__.py`.
+- [ ] Crear `auth/<provider>_auth/<provider>.py` con `verify_<provider>_token(...)`.
+- [ ] Seguir la técnica de captura — mapear las excepciones del proveedor a subclases de `AuthTokenError`.
+- [ ] Añadir el guard de nunca-envolver-dos-veces solo si los helpers internos lanzan subclases de `AuthError`.
+- [ ] Si se necesitan nuevas env vars, añadirlas a `settings.py` y a la dataclass de settings.
+- [ ] Reexportar la función de verificación desde `auth/__init__.py`.
 
-### Service layer
+### Capa de servicio
 
-- [ ] Add a service function (e.g. `<provider>_login`) in the auth service.
-- [ ] Catch `AuthError` and translate via the translation function.
-- [ ] Add claim validation (business logic) in the service, not in the auth layer.
+- [ ] Añadir una función de servicio (p. ej. `<provider>_login`) en el servicio de auth.
+- [ ] Capturar `AuthError` y traducir mediante la función de traducción.
+- [ ] Añadir la validación de claims (lógica de negocio) en el servicio, no en la capa auth.
 
-### Error hierarchy
+### Jerarquía de errores
 
-- The existing `AuthTokenError` subclasses are provider-agnostic and should cover most scenarios. Only create new subclasses if a provider introduces a failure mode requiring a different HTTP response or client-side handling.
+- Las subclases existentes de `AuthTokenError` son agnósticas al proveedor y deberían cubrir la mayoría de escenarios. Crea nuevas subclases solo si un proveedor introduce un modo de fallo que requiera una respuesta HTTP diferente o un manejo distinto en el lado del cliente.
 
 ### Router / schema
 
-- [ ] Add a new endpoint (e.g. `POST /auth/<provider>`) — one endpoint per provider.
-- [ ] Add request/response schemas.
+- [ ] Añadir un nuevo endpoint (p. ej. `POST /auth/<provider>`) — un endpoint por proveedor.
+- [ ] Añadir schemas de request/response.
 
-### Tests and docs
+### Tests y docs
 
-- [ ] Unit tests for the verification function.
-- [ ] Unit tests for the service function.
-- [ ] Integration tests for the new endpoint.
-- [ ] Update docs with the new provider's exception ordering.
+- [ ] Tests unitarios para la función de verificación.
+- [ ] Tests unitarios para la función de servicio.
+- [ ] Tests de integración para el nuevo endpoint.
+- [ ] Actualizar la documentación con el orden de excepciones del nuevo proveedor.
 
-## 10. Design Principles
+## 10. Principios de Diseño
 
-- Keep provider-specific verification logic inside provider modules.
-- Keep API-layer concerns out of auth code — no imports from `api/`.
-- Keep settings centralized — the only module that reads env vars.
-- Keep error names provider-agnostic — reuse across providers.
-- Keep claim validation (business logic) in the service layer, not in the auth layer.
+- Mantén la lógica de verificación específica del proveedor dentro de los módulos de proveedor.
+- Mantén las cuestiones de la capa API fuera del código de auth — sin imports de `api/`.
+- Mantén los settings centralizados — el único módulo que lee env vars.
+- Mantén los nombres de error agnósticos al proveedor — reutilizables entre proveedores.
+- Mantén la validación de claims (lógica de negocio) en la capa de servicio, no en la capa auth.
 
-## 11. Project-Specific Guide
+## 11. Guía Específica del Proyecto
 
-This file covers the general, transferable rules for the authentication layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`auth_guide.md`](auth_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa de autenticación. Para los detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`auth_guide.md`](auth_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide auth_guide.md.
+La guía complementa estas reglas pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, luego la guía específica del proyecto auth_guide.md.

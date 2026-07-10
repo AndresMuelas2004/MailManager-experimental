@@ -1,11 +1,11 @@
 # backend/Scripts/
 
-Manual execution scripts for hands-on verification of endpoint behavior against real email provider clients.
+Scripts de ejecución manual para la verificación práctica del comportamiento de los endpoints contra clientes reales de proveedores de correo.
 
-These scripts contain **no business logic** — they call existing service-layer endpoints directly, acting as lightweight CLI wrappers. Their purpose is to complement the automated test suites (unit, integration, E2E) by enabling manual exploration of edge cases and provider-specific behaviors that are easier to inspect interactively.
+Estos scripts **no contienen lógica de negocio** — llaman directamente a los endpoints de la capa de servicios ya existentes, actuando como wrappers ligeros de CLI. Su propósito es complementar las suites de tests automatizados (unit, integration, E2E) permitiendo la exploración manual de casos límite y comportamientos específicos de cada proveedor que resultan más fáciles de inspeccionar de forma interactiva.
 
-Subdirectories:
+Subdirectorios:
 
-- `cli_utilities/` — reusable scripts for common operations (register users, connect accounts, send emails, manage trash, etc.). All parameters are passed via CLI arguments; no hardcoded credentials.
-- `ejecucion_unica/` — one-off scripts for specific setup tasks (not tracked in git).
-- `EXECUTION_MDs/` — personal notes with runtime parameters (not tracked in git).
+- `cli_utilities/` — scripts reutilizables para operaciones comunes (registrar usuarios, conectar cuentas, enviar correos, gestionar la papelera, etc.). Todos los parámetros se pasan mediante argumentos de CLI; sin credenciales hardcodeadas.
+- `ejecucion_unica/` — scripts de un solo uso para tareas de configuración específicas (no versionados en git).
+- `EXECUTION_MDs/` — notas personales con parámetros de ejecución (no versionadas en git).

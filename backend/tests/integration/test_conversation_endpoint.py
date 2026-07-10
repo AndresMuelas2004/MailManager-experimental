@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from api.services import emails_service
 from core.email.email_manager import EmailManager
 from core.email.errors import EmailExternalAPIError
 from tests.integration.conftest import (
     MAILBOX_URL as _MAILBOX_URL,
+    patch_emails_build_manager,
 )
 from tests.shared.email_fakes import FakeEmailClient, build_conversation_message
 
@@ -58,7 +58,7 @@ def _patch_conversation_manager(monkeypatch, members):
             manager.add_client(FakeEmailClient(label, **kwargs))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
 
 def _conversation_url(mailbox_id: str, account_id: str, provider_message_id: str) -> str:

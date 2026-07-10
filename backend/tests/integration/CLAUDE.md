@@ -1,82 +1,82 @@
-# General Integration Test Rules
+# Reglas generales de tests de integración
 
-This is the `CLAUDE.md` for the **integration test** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la capa de **tests de integración**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de manejo de errores y escalado, sus reglas estructurales y su comportamiento común. Todo lo que se cubre aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico al proyecto por diseño.** Nada aquí referencia un dominio, entidad o funcionalidad concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the integration test layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero en un nuevo proyecto para establecer la arquitectura de la capa de tests de integración desde el primer día. La guía específica del proyecto amplía estas reglas con detalles de dominio, pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
-**Immutable.** This file must never be edited. All project-specific changes go in the `*_guide.md` file referenced at the end of this document.
-## 1. Scope
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas tienen precedencia.
+**Inmutable.** Este fichero nunca debe editarse. Todos los cambios específicos del proyecto van en el fichero `*_guide.md` referenciado al final de este documento.
+## 1. Alcance
 
-Integration tests verify the full internal backend flow:
+Los tests de integración verifican el flujo interno completo del backend:
 
 ```
 router → router helpers → service → database → service → core
 ```
 
-These tests execute real framework endpoints and real database operations, while replacing external provider boundaries with fakes.
+Estos tests ejecutan endpoints reales del framework y operaciones reales de base de datos, mientras sustituyen las fronteras de proveedores externos con fakes.
 
-## 2. Test Boundary Model
+## 2. Modelo de fronteras de los tests
 
-| Component | Real or Fake | Notes |
+| Componente | Real o Fake | Notas |
 |---|---|---|
-| Framework app | Real | Exercised via test client |
-| Routers and services | Real | Production modules |
-| Database | Real | Per-test transaction rollback isolation |
-| Core orchestration | Real | Built and used in tests |
-| External APIs calls | Fake | Replaced with fake clients |
-| App credentials loading | Fake | Monkeypatched |
-| Token loading/saving | Fake | Monkeypatched |
-| Session authentication | Fake | Auth dependency overridden |
+| App del framework | Real | Ejercitada vía cliente de test |
+| Routers y servicios | Real | Módulos de producción |
+| Base de datos | Real | Aislamiento por rollback de transacción por test |
+| Orquestación de core | Real | Construida y usada en los tests |
+| Llamadas a APIs externas | Fake | Sustituidas con clientes fake |
+| Carga de credenciales de la app | Fake | Monkeypatched |
+| Carga/guardado de tokens | Fake | Monkeypatched |
+| Autenticación de sesión | Fake | Dependencia de auth sobreescrita |
 
-## 3. Database Isolation
+## 3. Aislamiento de base de datos
 
-- Each test runs inside a database transaction that is **rolled back** after the test completes.
-- A shared connection is monkeypatched into all repository modules.
-- Schema is created once per test session (e.g. via migration tool).
-- A deterministic test user is seeded per test for ownership checks.
-- Tests are fully independent — no test relies on state produced by another. The per-test rollback and seed fixtures guarantee a clean, deterministic starting state for every test.
+- Cada test se ejecuta dentro de una transacción de base de datos que se hace **rollback** después de que el test termina.
+- Una conexión compartida se inyecta vía monkeypatch en todos los módulos de repositorio.
+- El esquema se crea una vez por sesión de test (p. ej. vía herramienta de migración).
+- Un usuario de test determinista se siembra por test para las comprobaciones de propiedad.
+- Los tests son totalmente independientes — ningún test depende del estado producido por otro. El rollback por test y las fixtures de seed garantizan un estado inicial limpio y determinista para cada test.
 
-## 4. Auth Override Pattern
+## 4. Patrón de override de auth
 
-- The session/auth dependency is overridden to return a fixed test user ID for all protected endpoints.
-- Tests that verify real session validation temporarily remove the override and restore it in a `finally` block.
+- La dependencia de sesión/auth se sobreescribe para devolver un ID de usuario de test fijo para todos los endpoints protegidos.
+- Los tests que verifican la validación real de sesión eliminan temporalmente el override y lo restauran en un bloque `finally`.
 
-## 5. Error Strategy Coverage
+## 5. Cobertura de estrategia de errores
 
-Integration tests separate two major error surfaces:
+Los tests de integración separan dos superficies de error principales:
 
-1. **Direct API-layer errors** — service raises `ApiError` directly (missing resources, validation failures, auth/session errors).
-2. **Translated errors** — lower-layer errors translated to API errors (core errors, database errors, auth errors).
+1. **Errores directos de la capa API** — el servicio lanza `ApiError` directamente (recursos ausentes, fallos de validación, errores de auth/sesión).
+2. **Errores traducidos** — errores de capas inferiores traducidos a errores de API (errores de core, errores de base de datos, errores de auth).
 
-## 6. Fixture Design Patterns
+## 6. Patrones de diseño de fixtures
 
-- **Schema fixture** (session scope, autouse) — runs migrations once.
-- **Isolation fixture** (per test, autouse) — manages transaction rollback.
-- **Seed fixture** (per test, autouse) — inserts deterministic test data.
-- **Auth override fixture** (session scope, autouse) — overrides auth dependency.
-- **Client fixture** — patches builder helpers and provides a test client.
-- **Setup helpers** — callable fixtures that create prerequisite resources via API calls.
-- **Failing client fixture** (indirect parametrize) — injects fake failures for error translation tests.
+- **Fixture de esquema** (scope de sesión, autouse) — ejecuta las migraciones una vez.
+- **Fixture de aislamiento** (por test, autouse) — gestiona el rollback de transacción.
+- **Fixture de seed** (por test, autouse) — inserta datos de test deterministas.
+- **Fixture de override de auth** (scope de sesión, autouse) — sobreescribe la dependencia de auth.
+- **Fixture de cliente** — parchea los helpers de construcción y provee un cliente de test.
+- **Helpers de setup** — fixtures invocables que crean recursos prerrequisito vía llamadas a la API.
+- **Fixture de cliente fallido** (parametrize indirecto) — inyecta fallos fake para los tests de traducción de errores.
 
-## 7. Maintenance Rules
+## 7. Reglas de mantenimiento
 
-- Keep fake behavior deterministic.
-- Keep each test focused on one API contract or one translation path.
-- Avoid provider-specific assumptions in integration tests.
-- Add E2E coverage when a change depends on real provider behavior.
+- Mantén el comportamiento de los fakes determinista.
+- Mantén cada test enfocado en un contrato de API o una ruta de traducción.
+- Evita asunciones específicas de proveedor en los tests de integración.
+- Añade cobertura E2E cuando un cambio dependa del comportamiento real del proveedor.
 
-## 8. What Integration Tests Do NOT Cover
+## 8. Lo que los tests de integración NO cubren
 
-- Real OAuth browser flows
-- Real provider HTTP traffic
-- Real token refresh against live endpoints
-- Frontend behavior
+- Flujos OAuth reales en navegador
+- Tráfico HTTP real de proveedor
+- Refresco real de tokens contra endpoints en vivo
+- Comportamiento del frontend
 
-## 9. Project-Specific Guide
+## 9. Guía específica del proyecto
 
-This file covers the general, transferable rules for the integration test layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`integration_guide.md`](integration_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa de tests de integración. Para detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`integration_guide.md`](integration_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide.
+La guía complementa estas reglas pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, luego la guía específica del proyecto.

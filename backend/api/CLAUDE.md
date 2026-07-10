@@ -1,16 +1,16 @@
-# General API Layer Rules
-This is the `CLAUDE.md` for the **HTTP API** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+# Reglas Generales de la Capa API
+Este es el `CLAUDE.md` de la capa **HTTP API**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de manejo y escalado de errores, sus reglas estructurales y su comportamiento común. Todo lo que aquí se cubre es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico al proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o funcionalidad concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the API layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero a un nuevo proyecto para establecer la arquitectura de la capa API desde el primer día. La guía específica del proyecto extiende estas reglas con detalles de dominio pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
-**Immutable.** This file must never be edited. All project-specific changes go in the `*_guide.md` file referenced at the end of this document.
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas tienen precedencia.
+**Inmutable.** Este fichero nunca debe editarse. Todos los cambios específicos del proyecto van en el fichero `*_guide.md` referenciado al final de este documento.
 
-## 1. Package Structure
+## 1. Estructura del Paquete
 
-The API layer is organized into four sub-packages:
+La capa API se organiza en cuatro subpaquetes:
 
 ```
 api/
@@ -22,52 +22,52 @@ api/
 ```
 ## 2. Framework
 
-  This layer is built on **FastAPI** (Python). All conventions — dependency injection
-  (`Depends`), lifespan management, CORS middleware, and exception handlers — described
-  in this document assume FastAPI as the underlying framework.
-## 3. Layer Boundaries
+  Esta capa está construida sobre **FastAPI** (Python). Todas las convenciones — inyección de dependencias
+  (`Depends`), gestión del lifespan, middleware CORS y manejadores de excepciones — descritas
+  en este documento asumen FastAPI como framework subyacente.
+## 3. Límites de las Capas
 
-- **Routers** — thin HTTP surface. Zero business logic. Each endpoint declares Pydantic schemas and contains a single service call.
-- **Services** — orchestration, validation, and error mapping. The only layer that raises `ApiError` subclasses. Services call into lower layers — never the reverse, the only layer of the API that communicates with external layers such as the database, core, and auth is the services layer; furthermore, these layers are not aware of one another—they are always orchestrated by the services layer.
-- **Errors** — defines the `ApiError` hierarchy and the framework exception handlers that translate them to HTTP responses.
-- **Schemas** — Pydantic `BaseModel` subclasses defining the API contract.
+- **Routers** — superficie HTTP fina. Cero lógica de negocio. Cada endpoint declara schemas Pydantic y contiene una única llamada a un service.
+- **Services** — orquestación, validación y mapeo de errores. La única capa que lanza subclases de `ApiError`. Los services llaman a las capas inferiores — nunca al revés; la única capa de la API que se comunica con capas externas como la database, el core y el auth es la capa de services; además, estas capas no se conocen entre sí—siempre son orquestadas por la capa de services.
+- **Errors** — define la jerarquía `ApiError` y los manejadores de excepciones del framework que las traducen a respuestas HTTP.
+- **Schemas** — subclases de `BaseModel` de Pydantic que definen el contrato de la API.
 
-Hard rule: routers never contain business logic, services never expose HTTP details (except receiving `Response` for cookie management).
+Regla estricta: los routers nunca contienen lógica de negocio, los services nunca exponen detalles HTTP (excepto recibir `Response` para la gestión de cookies).
 
-## 4. Router Rules
+## 4. Reglas de los Routers
 
-Every router follows the same pattern:
+Todo router sigue el mismo patrón:
 
-1. **One service call per endpoint.** The route function calls a single service function and returns its result.
-2. **Auth dependency** on all protected endpoints — returns the authenticated identity.
-3. **No business logic.** No conditionals, no error handling, no data transformation.
-4. **Pydantic schemas** declare the request/response contract.
+1. **Una llamada a un service por endpoint.** La función de ruta llama a una única función del service y devuelve su resultado.
+2. **Dependencia de auth** en todos los endpoints protegidos — devuelve la identidad autenticada.
+3. **Sin lógica de negocio.** Sin condicionales, sin manejo de errores, sin transformación de datos.
+4. **Los schemas Pydantic** declaran el contrato de request/response.
 
-## 5. Service Rules
+## 5. Reglas de los Services
 
-- The **only layer** that raises `ApiError` subclasses.
-- **Ownership check** — for any action scoped to a resource, verify the authenticated user owns it before proceeding.
-- **Database calls** — wrap all database calls in explicit `try`/`except` blocks using a translation helper that catches `DatabaseError` and unexpected exceptions, consistent with the pattern used for core and auth errors.
-- **Cookie management** — services that manage session cookies receive the framework `Response` object from the router. Cookie setting/clearing happens in the service layer, not in routers.
+- La **única capa** que lanza subclases de `ApiError`.
+- **Comprobación de propiedad (ownership check)** — para cualquier acción acotada a un recurso, verifica que el usuario autenticado es su propietario antes de proceder.
+- **Llamadas a la base de datos** — envuelve todas las llamadas a la base de datos en bloques `try`/`except` explícitos usando un helper de traducción que capture `DatabaseError` y excepciones inesperadas, de forma consistente con el patrón usado para los errores de core y auth.
+- **Gestión de cookies** — los services que gestionan cookies de sesión reciben el objeto `Response` del framework desde el router. El establecimiento/borrado de cookies ocurre en la capa de services, no en los routers.
 
-## 6. Error Hierarchy
+## 6. Jerarquía de Errores
 
-All API errors derive from a single base class with a stable `code` string. A status map translates error types to HTTP status codes.
+Todos los errores de la API derivan de una única clase base con una cadena `code` estable. Un mapa de estados traduce los tipos de error a códigos de estado HTTP.
 
-### Base class contract
+### Contrato de la clase base
 
-Every `ApiError` subclass provides:
-- `code` — stable string identifier (e.g. `"resource_not_found"`)
-- `message` — human-readable description
-- `detail` — optional dict with structured context
+Toda subclase de `ApiError` proporciona:
+- `code` — identificador de cadena estable (p. ej. `"resource_not_found"`)
+- `message` — descripción legible por humanos
+- `detail` — dict opcional con contexto estructurado
 
-### HTTP status mapping
+### Mapeo de estados HTTP
 
-A `_STATUS_MAP` dict maps each error class to its HTTP status code. The base `ApiError` defaults to 500.
+Un dict `_STATUS_MAP` mapea cada clase de error a su código de estado HTTP. El `ApiError` base usa 500 por defecto.
 
-### Response envelope
+### Envoltorio (envelope) de la respuesta
 
-All error responses use a standard envelope:
+Todas las respuestas de error usan un envoltorio estándar:
 
 ```json
 {
@@ -79,33 +79,33 @@ All error responses use a standard envelope:
 }
 ```
 
-## 7. Error Message Uniqueness
+## 7. Unicidad del Mensaje de Error
 
-Every `ApiError` raised directly in the service layer (i.e. not escalated from a lower layer, which already carries its own descriptive message) **must** have a `message` that:
+Todo `ApiError` lanzado directamente en la capa de services (es decir, no escalado desde una capa inferior, que ya lleva su propio mensaje descriptivo) **debe** tener un `message` que:
 
-1. **Describes what happened and where** — the message must be concrete enough to identify the failing operation and its context without inspecting a stack trace.
-2. **Is globally unique across all raise sites** — no two raise statements in the entire service layer may share the same message string. This guarantees that a single error message is sufficient to pinpoint exactly where the error originated.
+1. **Describa qué ha pasado y dónde** — el mensaje debe ser lo bastante concreto para identificar la operación que falla y su contexto sin inspeccionar un stack trace.
+2. **Sea globalmente único en todos los puntos de raise** — no puede haber dos sentencias raise en toda la capa de services que compartan la misma cadena de mensaje. Esto garantiza que un único mensaje de error basta para localizar exactamente dónde se originó el error.
 
-Bad: `raise ResourceNotFoundError("Not found")` — generic, duplicated across multiple sites.
+Mal: `raise ResourceNotFoundError("Not found")` — genérico, duplicado en múltiples puntos.
 
-Good: `raise ResourceNotFoundError("Order not found while processing refund for the given transaction")` — specific to the operation and site.
+Bien: `raise ResourceNotFoundError("Order not found while processing refund for the given transaction")` — específico de la operación y del punto.
 
-## 8. ApiError Subclass Granularity
+## 8. Granularidad de las Subclases de ApiError
 
-Every `ApiError` subclass must represent the **semantic meaning** of the error from the context where it is raised. Reading the error type alone should give a strong hint about what went wrong and in which area of the service layer.
+Toda subclase de `ApiError` debe representar el **significado semántico** del error desde el contexto donde se lanza. Leer únicamente el tipo de error debería dar una pista clara de qué salió mal y en qué área de la capa de services.
 
-### Rules
+### Reglas
 
-1. **One concept per class** — do not reuse a generic class (e.g. `OperationError`) across unrelated operations. If two errors describe fundamentally different failures, they deserve different classes.
-2. **As many classes as needed** — create as many `ApiError` subclasses as necessary to maintain a tight relationship between the error type and the raising context. Under-specifying error types hides information; prefer more classes over fewer.
-3. **Self-documenting names** — the class name should read as a short description of the failure domain (e.g. `ResourceOwnershipError`, `SessionExpiredError`, `DataSyncError`).
-4. **Register every new class** — add it to `_STATUS_MAP` with the appropriate HTTP status code and document it in the project-specific API guide.
+1. **Un concepto por clase** — no reutilices una clase genérica (p. ej. `OperationError`) en operaciones no relacionadas. Si dos errores describen fallos fundamentalmente distintos, merecen clases distintas.
+2. **Tantas clases como haga falta** — crea tantas subclases de `ApiError` como sea necesario para mantener una relación estrecha entre el tipo de error y el contexto que lo lanza. Especificar de menos los tipos de error oculta información; prefiere más clases antes que menos.
+3. **Nombres autodocumentados** — el nombre de la clase debería leerse como una breve descripción del dominio del fallo (p. ej. `ResourceOwnershipError`, `SessionExpiredError`, `DataSyncError`).
+4. **Registra cada clase nueva** — añádela a `_STATUS_MAP` con el código de estado HTTP apropiado y documéntala en la guía de la API específica del proyecto.
 
-## 9. Error Handling — Capture Technique
+## 9. Manejo de Errores — Técnica de Captura
 
-This is the central pattern for error handling in the service layer. Every `try` block in services follows the same ordered structure.
+Este es el patrón central para el manejo de errores en la capa de services. Todo bloque `try` en los services sigue la misma estructura ordenada.
 
-### The pattern
+### El patrón
 
 ```python
 try:
@@ -117,69 +117,69 @@ except Exception as exc:                    # 2. Unexpected error → log + gene
     raise SpecificApiError("Failed to ...") from exc
 ```
 
-### Rules
+### Reglas
 
-1. **Catch the layer base class** (`CoreError`, `AuthError`, `DatabaseError`) — the translation function uses `isinstance` to find the most specific mapping.
-2. **Always `from exc`** — preserve the cause chain.
-3. **Fallback matches the context** — use the `ApiError` subclass that best describes the failed operation.
-4. **Never expose internal details in API messages** — the `except Exception` fallback must use a generic message (no `type(exc).__name__`, no `str(exc)`). Log the full details server-side with `logger.warning()` instead. This prevents leaking internal state (class names, library errors, paths) to external clients. Internal layers (`core/`, `database/`, `auth/`) may include details in their errors because those are always translated before reaching the client.
-5. **Never let lower-layer exceptions escape** — every `try` block has an `except Exception` fallback.
-6. **Log once — where the exception dies.** A translated-and-re-raised exception must NOT be logged with its traceback at the raise site: the `raise ... from exc` chain already carries the full cause to the global handlers, which log it exactly once (§ 10). The `except Exception` fallback's `logger.warning()` exists to add operation context to a deliberately generic client message — keep it message-only, never with `exc_info`. Conversely, an exception that is caught and **swallowed** (best-effort operations, background tasks, partial-success aggregation) never reaches the handlers — its swallow site is the only observability point and MUST log it with `exc_info=exc` so the full cause chain is preserved.
+1. **Captura la clase base de la capa** (`CoreError`, `AuthError`, `DatabaseError`) — la función de traducción usa `isinstance` para encontrar el mapeo más específico.
+2. **Siempre `from exc`** — preserva la cadena de causas.
+3. **El fallback encaja con el contexto** — usa la subclase de `ApiError` que mejor describa la operación fallida.
+4. **Nunca expongas detalles internos en los mensajes de la API** — el fallback `except Exception` debe usar un mensaje genérico (sin `type(exc).__name__`, sin `str(exc)`). En su lugar, registra los detalles completos en el servidor con `logger.warning()`. Esto evita filtrar estado interno (nombres de clase, errores de librería, rutas) a clientes externos. Las capas internas (`core/`, `database/`, `auth/`) pueden incluir detalles en sus errores porque siempre se traducen antes de llegar al cliente.
+5. **Nunca dejes escapar excepciones de capas inferiores** — todo bloque `try` tiene un fallback `except Exception`.
+6. **Registra una sola vez — donde la excepción muere.** Una excepción traducida-y-relanzada NO debe registrarse con su traceback en el punto del raise: la cadena `raise ... from exc` ya lleva la causa completa a los manejadores globales, que la registran exactamente una vez (§ 10). El `logger.warning()` del fallback `except Exception` existe para añadir contexto de la operación a un mensaje de cliente deliberadamente genérico — mantenlo solo con el mensaje, nunca con `exc_info`. A la inversa, una excepción que se captura y se **traga (swallow)** (operaciones best-effort, tareas en segundo plano, agregación de éxito parcial) nunca llega a los manejadores — su punto de tragado es el único punto de observabilidad y DEBE registrarla con `exc_info=exc` para preservar la cadena de causas completa.
 
-### Translation functions and maps
+### Funciones y mapas de traducción
 
-Translation functions convert lower-layer errors to `ApiError` subclasses. Each uses an `isinstance`-based mapping list evaluated most specific first. The final entry is always `(LayerErrorBase, ApiError)` as a catch-all.
+Las funciones de traducción convierten errores de capas inferiores en subclases de `ApiError`. Cada una usa una lista de mapeo basada en `isinstance` evaluada de más específico a menos. La entrada final es siempre `(LayerErrorBase, ApiError)` como catch-all.
 
-## 10. Global Exception Handlers
+## 10. Manejadores Globales de Excepciones
 
-Two framework exception handlers form the final safety net:
+Dos manejadores de excepciones del framework forman la red de seguridad final:
 
-1. **Typed handler** — catches any `ApiError`, looks up the HTTP status from `_STATUS_MAP` (default 500), and returns the error envelope. For any server-side status (>= 500) it also logs the error at ERROR level with `exc_info`, so the full `raise ... from exc` cause chain — down to the original driver/provider exception — reaches the logs exactly once (§ 9.6). 4xx responses are expected client outcomes and deliberately stay unlogged.
-2. **Generic handler** — catches any `Exception` not already handled, logs the full traceback, and returns a generic 500 error envelope. This should never fire if all service functions follow the capture technique.
+1. **Manejador tipado** — captura cualquier `ApiError`, busca el estado HTTP en `_STATUS_MAP` (500 por defecto) y devuelve el envoltorio de error. Para cualquier estado del lado del servidor (>= 500) también registra el error a nivel ERROR con `exc_info`, de modo que la cadena de causas completa `raise ... from exc` — hasta la excepción original del driver/provider — llega a los logs exactamente una vez (§ 9.6). Las respuestas 4xx son resultados esperados del cliente y deliberadamente no se registran.
+2. **Manejador genérico** — captura cualquier `Exception` no manejada ya, registra el traceback completo y devuelve un envoltorio de error 500 genérico. Esto nunca debería dispararse si todas las funciones de service siguen la técnica de captura.
 
-## 11. Application Factory
+## 11. Factoría de la Aplicación
 
-The `create_app()` factory:
+La factoría `create_app()`:
 
-1. Loads environment variables (OS env vars take precedence over `.env` files).
-2. Creates the framework instance with a lifespan context manager.
-3. Adds CORS middleware.
-4. Registers error handlers.
-5. Includes all routers in order.
+1. Carga las variables de entorno (las variables de entorno del SO tienen precedencia sobre los ficheros `.env`).
+2. Crea la instancia del framework con un context manager de lifespan.
+3. Añade el middleware CORS.
+4. Registra los manejadores de errores.
+5. Incluye todos los routers en orden.
 
 ### Lifespan
 
-- **Startup**: runs optional auto-migrations, then warms the connection pool.
-- **Shutdown**: closes the connection pool.
+- **Startup**: ejecuta auto-migraciones opcionales y luego precalienta el pool de conexiones.
+- **Shutdown**: cierra el pool de conexiones.
 
-## 12. Schema Rules
+## 12. Reglas de los Schemas
 
-- All schemas are Pydantic `BaseModel` subclasses.
-- Request schemas define validation constraints (min length, allowed values, etc.).
-- Response schemas define the API contract for clients.
-- Error schemas define the standard error envelope.
+- Todos los schemas son subclases de `BaseModel` de Pydantic.
+- Los schemas de request definen restricciones de validación (longitud mínima, valores permitidos, etc.).
+- Los schemas de response definen el contrato de la API para los clientes.
+- Los schemas de error definen el envoltorio de error estándar.
 
-## 13. Router Helper Rules
+## 13. Reglas de los Helpers de Routers
 
-- Shared `Depends` callables live in a dedicated helper module.
-- The session/auth dependency validates the session and returns the authenticated identity.
-- All protected routes use the auth dependency.
-- Override the auth dependency in integration tests to return a fixed test identity.
+- Los callables `Depends` compartidos viven en un módulo helper dedicado.
+- La dependencia de sesión/auth valida la sesión y devuelve la identidad autenticada.
+- Todas las rutas protegidas usan la dependencia de auth.
+- Sobrescribe la dependencia de auth en los tests de integración para devolver una identidad de prueba fija.
 
-## 14. Adding a New Endpoint Checklist
+## 14. Checklist para Añadir un Nuevo Endpoint
 
-- [ ] **Schema** — add request/response models in the schemas package.
-- [ ] **Service** — add the service function. Follow service conventions: ownership check, database error wrapping, translation of layer errors, `except Exception` fallback.
-- [ ] **Router** — add the route. Single service call, auth dependency unless unauthenticated.
-- [ ] **Register** — include the router in the factory (app.py) if it's a new router module.
-- [ ] **Error mapping** — if new `ApiError` subclasses are needed, add them and register their HTTP status.
-- [ ] **Unit tests** — Add all the unit test that you consider to need, first read the CLAUDE.md inside the tests/unit directory
-- [ ] **Integration tests** — Add all the integration test that you consider to need, first read the CLAUDE.md inside the tests/integration directory
-- [ ] **E2E tests** — Add all the e2e test that you consider to need, first read the CLAUDE.md inside the tests/e2e directory
-- [ ] **Docs** — update the project-specific API guide if patterns change.
+- [ ] **Schema** — añade los modelos de request/response en el paquete de schemas.
+- [ ] **Service** — añade la función de service. Sigue las convenciones de service: ownership check, envoltura de errores de base de datos, traducción de errores de capa, fallback `except Exception`.
+- [ ] **Router** — añade la ruta. Una única llamada a un service, dependencia de auth salvo que sea no autenticada.
+- [ ] **Register** — incluye el router en la factoría (app.py) si es un módulo de router nuevo.
+- [ ] **Error mapping** — si se necesitan nuevas subclases de `ApiError`, añádelas y registra su estado HTTP.
+- [ ] **Unit tests** — Añade todos los unit tests que consideres necesarios, primero lee el CLAUDE.md dentro del directorio tests/unit
+- [ ] **Integration tests** — Añade todos los integration tests que consideres necesarios, primero lee el CLAUDE.md dentro del directorio tests/integration
+- [ ] **E2E tests** — Añade todos los e2e tests que consideres necesarios, primero lee el CLAUDE.md dentro del directorio tests/e2e
+- [ ] **Docs** — actualiza la guía de la API específica del proyecto si los patrones cambian.
 
-## 15. Project-Specific Guide
+## 15. Guía Específica del Proyecto
 
-This file covers the general, transferable rules for the HTTP API layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`api_guide.md`](api_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa HTTP API. Para los detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`api_guide.md`](api_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide api_guide.md.
+La guía complementa estas reglas pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, luego la guía específica del proyecto api_guide.md.

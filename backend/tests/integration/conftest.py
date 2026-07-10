@@ -27,6 +27,75 @@ from core.email import EmailManager
 from core.email.errors import EmailAuthError
 from tests.shared.email_fakes import FakeEmailClient
 
+# --- Post-split monkeypatch targets -----------------------------------------
+# ``build_manager_for_accounts`` / ``load_wrapped_*`` are imported *by name*
+# into each service submodule (``from api.services.services_helpers import
+# build_manager_for_accounts``). After the ``emails_service`` / ``drafts_service``
+# module->package split, a monkeypatch must target the submodule where the call
+# executes, not the package facade (root CLAUDE.md §9 patch-target rule). These
+# helpers re-point the fake onto every submodule that binds the name — the
+# post-split analogue of patching the old single module once.
+from api.services.emails_service import (
+    _comunes as _emails_comunes,
+    contenido as _emails_contenido,
+    contexto_respuesta as _emails_contexto_respuesta,
+    conversacion as _emails_conversacion,
+    envio as _emails_envio,
+    favoritos as _emails_favoritos,
+    lectura as _emails_lectura,
+    movimientos_buzon as _emails_movimientos_buzon,
+    papelera as _emails_papelera,
+    sincronizacion as _emails_sincronizacion,
+)
+from api.services.drafts_service import (
+    _comunes as _drafts_comunes,
+    adjuntos as _drafts_adjuntos,
+    envio as _drafts_envio,
+    gestion as _drafts_gestion,
+    sincronizacion as _drafts_sincronizacion,
+)
+
+_EMAILS_BUILD_MANAGER_MODULES = (
+    _emails_lectura,
+    _emails_conversacion,
+    _emails_sincronizacion,
+    _emails_papelera,
+    _emails_contenido,
+    _emails_favoritos,
+    _emails_contexto_respuesta,
+    _emails_envio,
+    _emails_movimientos_buzon,
+)
+_DRAFTS_BUILD_MANAGER_MODULES = (
+    _drafts_envio,
+    _drafts_sincronizacion,
+    _drafts_gestion,
+    _drafts_adjuntos,
+)
+_EMAILS_LOAD_WRAPPED_MODULES = (_emails_comunes,)
+_DRAFTS_LOAD_WRAPPED_MODULES = (
+    _drafts_comunes,
+    _drafts_envio,
+    _drafts_gestion,
+    _drafts_adjuntos,
+)
+
+
+def patch_emails_build_manager(monkeypatch, build_manager_fn):
+    """Re-point ``build_manager_for_accounts`` on every ``emails_service``
+    submodule that binds it (post-split analogue of patching the old single
+    ``emails_service`` module)."""
+    for _module in _EMAILS_BUILD_MANAGER_MODULES:
+        monkeypatch.setattr(_module, "build_manager_for_accounts", build_manager_fn)
+
+
+def patch_drafts_build_manager(monkeypatch, build_manager_fn):
+    """Re-point ``build_manager_for_accounts`` on every ``drafts_service``
+    submodule that binds it."""
+    for _module in _DRAFTS_BUILD_MANAGER_MODULES:
+        monkeypatch.setattr(_module, "build_manager_for_accounts", build_manager_fn)
+
+
 _ALEMBIC_INI_PATH = Path(__file__).resolve().parents[2] / "database" / "alembic.ini"
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
@@ -196,8 +265,8 @@ def _apply_test_monkeypatches(monkeypatch, build_manager_fn):
 
     monkeypatch.setattr(services_helpers, "build_manager_for_accounts", build_manager_fn)
     monkeypatch.setattr(accounts_service, "build_manager_for_accounts", build_manager_fn)
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", build_manager_fn)
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", build_manager_fn)
+    patch_emails_build_manager(monkeypatch, build_manager_fn)
+    patch_drafts_build_manager(monkeypatch, build_manager_fn)
     monkeypatch.setattr(attachments_service, "build_manager_for_accounts", build_manager_fn)
 
     monkeypatch.setattr(
@@ -210,20 +279,14 @@ def _apply_test_monkeypatches(monkeypatch, build_manager_fn):
     monkeypatch.setattr(
         accounts_service, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
     )
-    monkeypatch.setattr(
-        emails_service, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
-    )
-    monkeypatch.setattr(
-        emails_service, "load_wrapped_account_tokens",
-        lambda _mb, _acc, _prov: _fake_account_tokens,
-    )
-    monkeypatch.setattr(
-        drafts_service, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
-    )
-    monkeypatch.setattr(
-        drafts_service, "load_wrapped_account_tokens",
-        lambda _mb, _acc, _prov: _fake_account_tokens,
-    )
+    for _module in (*_EMAILS_LOAD_WRAPPED_MODULES, *_DRAFTS_LOAD_WRAPPED_MODULES):
+        monkeypatch.setattr(
+            _module, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
+        )
+        monkeypatch.setattr(
+            _module, "load_wrapped_account_tokens",
+            lambda _mb, _acc, _prov: _fake_account_tokens,
+        )
     monkeypatch.setattr(
         attachments_service, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
     )

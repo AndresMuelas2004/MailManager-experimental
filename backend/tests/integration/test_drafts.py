@@ -20,7 +20,10 @@ import psycopg2.extras
 
 from api.services import drafts_service
 from core.email import DraftMetadata, EmailManager
-from tests.integration.conftest import MAILBOX_URL as _MAILBOX_URL
+from tests.integration.conftest import (
+    MAILBOX_URL as _MAILBOX_URL,
+    patch_drafts_build_manager,
+)
 from tests.shared.email_fakes import FakeEmailClient
 
 
@@ -78,7 +81,7 @@ def _patch_drafts_builder(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
 
 def _create_foreign_mailbox(isolated_db) -> str:
@@ -982,7 +985,7 @@ def test_update_draft_provider_external_api_error_returns_502(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.patch(
         _update_draft_url(mid, aid, "draft-update-err"),
@@ -1015,7 +1018,7 @@ def test_update_draft_provider_generic_exception_returns_502(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.patch(
         _update_draft_url(mid, aid, "draft-update-rt"),
@@ -1074,7 +1077,7 @@ def test_update_draft_silent_auth_failure_returns_409(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.patch(
         _update_draft_url(mid, aid, "draft-update-auth"),
@@ -1202,7 +1205,7 @@ def test_delete_draft_provider_error_preserves_db_row(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build_failing)
+    patch_drafts_build_manager(monkeypatch, _build_failing)
 
     resp = test_client.delete(_delete_draft_url(mid, aid, "keep-me"))
     assert resp.status_code == 502
@@ -1340,7 +1343,7 @@ def test_send_draft_provider_failure_502(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.post(_send_draft_url(mid, aid, "draft-send-fail"))
     assert resp.status_code == 502
@@ -1382,7 +1385,7 @@ def test_send_draft_silent_auth_failure_returns_409(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.post(_send_draft_url(mid, aid, "draft-send-auth"))
     assert resp.status_code == 409
@@ -1416,7 +1419,7 @@ def test_send_draft_provider_generic_exception_returns_502(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.post(_send_draft_url(mid, aid, "draft-send-runtime"))
     assert resp.status_code == 502
@@ -1484,7 +1487,7 @@ def test_send_draft_attachment_send_failed_persists_partial_results(
             ))
         return manager
 
-    monkeypatch.setattr(drafts_service, "build_manager_for_accounts", _build)
+    patch_drafts_build_manager(monkeypatch, _build)
 
     resp = test_client.post(_send_draft_url(mid, aid, "draft-d27"))
     assert resp.status_code == 502

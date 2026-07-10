@@ -1,82 +1,82 @@
-# General Unit Test Rules
+# Reglas Generales de Tests Unitarios
 
-This is the `CLAUDE.md` for the **unit test** layer. It serves as the general architectural reference for this layer, describing its separation of responsibilities, its error handling and escalation model, its structural rules, and its common behavior. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la capa de **tests unitarios**. Sirve como referencia arquitectónica general de esta capa, describiendo su separación de responsabilidades, su modelo de gestión de errores y escalado, sus reglas estructurales y su comportamiento común. Todo aspecto cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Independiente del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o funcionalidad concretos. Cada regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the unit test layer architecture from day one. The project-specific guide extends these rules with domain details but must never contradict them.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la arquitectura de la capa de tests unitarios desde el primer día. La guía específica del proyecto extiende estas reglas con detalles del dominio, pero nunca debe contradecirlas.
 
-**Precedence.** In case of conflict between this file and a project-specific guide, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y una guía específica del proyecto, estas reglas tienen precedencia.
 
-## 1. Scope
+## 1. Alcance
 
-Unit tests validate individual modules in isolation. They do **not** require:
+Los tests unitarios validan módulos individuales de forma aislada. **No** requieren:
 
-- External services (databases, APIs, message queues)
-- Network access
-- Browser interaction
-- File system side effects
+- Servicios externos (bases de datos, APIs, colas de mensajes)
+- Acceso a red
+- Interacción con navegador
+- Efectos secundarios sobre el sistema de ficheros
 
-## 2. Principles
+## 2. Principios
 
-- **Test one behavior per case.** Each test validates a single logical assertion or behavioral contract.
-- **Keep tests deterministic and fast.** No randomness, no timing dependencies, no flaky external calls.
-- **Mock only at external boundaries.** Replace external dependencies (network, database, file I/O) with fakes or mocks. Internal logic is tested directly.
-- **Prefer pure function testing where possible.** Functions without side effects are the easiest to test and require no mocking.
+- **Testea un comportamiento por caso.** Cada test valida una única aserción lógica o contrato de comportamiento.
+- **Mantén los tests deterministas y rápidos.** Sin aleatoriedad, sin dependencias de temporización, sin llamadas externas inestables (flaky).
+- **Mockea solo en las fronteras externas.** Reemplaza las dependencias externas (red, base de datos, E/S de ficheros) con fakes o mocks. La lógica interna se testea directamente.
+- **Prefiere el testeo de funciones puras cuando sea posible.** Las funciones sin efectos secundarios son las más fáciles de testear y no requieren mocking.
 
-## 3. Mocking Strategy
+## 3. Estrategia de Mocking
 
-Mock or fake these boundaries:
+Mockea o falsea (fake) estas fronteras:
 
-- Network requests (HTTP clients, API SDKs)
-- Database stores and connections
-- File system operations
-- External authentication/verification calls
-- Time-dependent operations (use deterministic timestamps)
+- Peticiones de red (clientes HTTP, SDKs de API)
+- Stores y conexiones de base de datos
+- Operaciones del sistema de ficheros
+- Llamadas externas de autenticación/verificación
+- Operaciones dependientes del tiempo (usa timestamps deterministas)
 
-Do **not** mock:
+**No** mockees:
 
-- Internal helper functions (test them directly)
-- Data transformations and parsing logic
-- Error class instantiation and hierarchy
+- Funciones auxiliares internas (testéalas directamente)
+- Transformaciones de datos y lógica de parseo
+- Instanciación y jerarquía de clases de error
 
-## 4. Shared Test Utilities
+## 4. Utilidades de Test Compartidas
 
-Maintain reusable fakes and builders in a shared test utilities module:
+Mantén fakes y builders reutilizables en un módulo de utilidades de test compartido:
 
-- **Fake clients** — deterministic implementations of abstract interfaces for testing orchestration logic.
-- **Builder functions** — create test data objects with sensible defaults and overridable fields.
-- **Fake database primitives** — record SQL executions, return pre-configured results.
-- **Patch helpers** — convenience functions to replace module-level dependencies.
+- **Clientes fake** — implementaciones deterministas de interfaces abstractas para testear la lógica de orquestación.
+- **Funciones builder** — crean objetos de datos de test con valores por defecto sensatos y campos sobreescribibles.
+- **Primitivas fake de base de datos** — registran ejecuciones SQL, devuelven resultados preconfigurados.
+- **Helpers de patch** — funciones de conveniencia para reemplazar dependencias a nivel de módulo.
 
-Shared utilities are used by both unit and integration tests.
+Las utilidades compartidas se usan tanto por los tests unitarios como por los de integración.
 
-## 5. Naming Conventions
+## 5. Convenciones de Nomenclatura
 
-- File naming: `test_<module>.py`
-- Test function naming: `test_<behavior>_<scenario>`
-- Group related cases in classes when it improves readability.
-- Keep fixtures in `conftest.py` focused and composable.
+- Nombrado de ficheros: `test_<module>.py`
+- Nombrado de funciones de test: `test_<behavior>_<scenario>`
+- Agrupa casos relacionados en clases cuando mejore la legibilidad.
+- Mantén las fixtures en `conftest.py` enfocadas y componibles.
 
-## 6. What Unit Tests Cover
+## 6. Qué Cubren los Tests Unitarios
 
-- Service logic and orchestration
-- Error translation and mapping
-- Settings/configuration validation
-- Helper and utility functions
-- Provider client guard clauses and internal logic
-- Error hierarchy contracts (codes, default messages)
+- Lógica de servicio y orquestación
+- Traducción y mapeo de errores
+- Validación de settings/configuración
+- Funciones auxiliares y de utilidad
+- Guard clauses y lógica interna de los clientes de provider
+- Contratos de la jerarquía de errores (códigos, mensajes por defecto)
 
-## 7. What Unit Tests Do NOT Cover
+## 7. Qué NO Cubren los Tests Unitarios
 
-- Real OAuth/browser flows
-- Real provider API calls
-- Real database persistence
-- API router/service wiring (covered by integration tests)
-- End-to-end flows (covered by E2E tests)
+- Flujos reales de OAuth/navegador
+- Llamadas reales a las APIs de los providers
+- Persistencia real en base de datos
+- Cableado de router/servicio de la API (cubierto por los tests de integración)
+- Flujos de extremo a extremo (cubiertos por los tests E2E)
 
-## 8. Project-Specific Guide
+## 8. Guía Específica del Proyecto
 
-This file covers the general, transferable rules for the unit test layer. For project-specific details — concrete rules, architectural decisions, and implementation details that apply these general principles to the current application — consult [`unit_guide.md`](unit_guide.md).
+Este fichero cubre las reglas generales y transferibles de la capa de tests unitarios. Para los detalles específicos del proyecto — reglas concretas, decisiones arquitectónicas y detalles de implementación que aplican estos principios generales a la aplicación actual — consulta [`unit_guide.md`](unit_guide.md).
 
-The guide complements these rules but never contradicts them. In case of conflict, this `CLAUDE.md` has absolute precedence. Code in this layer must respect both levels: first these general rules, then the project-specific guide.
+La guía complementa estas reglas, pero nunca las contradice. En caso de conflicto, este `CLAUDE.md` tiene precedencia absoluta. El código de esta capa debe respetar ambos niveles: primero estas reglas generales, y luego la guía específica del proyecto.

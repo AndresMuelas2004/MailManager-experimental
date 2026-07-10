@@ -1,44 +1,44 @@
-# Limits Documentation Subdirectory Rules
+# Reglas del Subdirectorio de Documentación de Límites
 
-This is the `CLAUDE.md` for the **`docs/limits/` subdirectory**. It defines how the quantitative "how far it goes" documents in this folder must be written. It is loaded on demand only when working on files here, and it **complements** the parent [`../CLAUDE.md`](../CLAUDE.md) — it must never repeat what the parent already says.
+Este es el `CLAUDE.md` del **subdirectorio `docs/limits/`**. Define cómo deben escribirse los documentos cuantitativos de «hasta dónde llega» que hay en esta carpeta. Se carga bajo demanda solo cuando se trabaja con ficheros de aquí, y **complementa** al `CLAUDE.md` padre [`../CLAUDE.md`](../CLAUDE.md) — nunca debe repetir lo que el padre ya dice.
 
-**Project-agnostic by design.** Nothing here names a concrete feature or domain. Every rule transfers to any project that adopts the behavior/limits two-tier documentation pattern.
+**Agnóstico del proyecto por diseño.** Nada aquí nombra una feature o dominio concretos. Toda regla se transfiere a cualquier proyecto que adopte el patrón de documentación en dos niveles comportamiento/límites.
 
-**Precedence.** The root `CLAUDE.md` overrides this file, and the parent `docs/CLAUDE.md` overrides this file. This file governs only `docs/limits/`.
+**Precedencia.** El `CLAUDE.md` raíz prevalece sobre este fichero, y el padre `docs/CLAUDE.md` prevalece sobre este fichero. Este fichero solo gobierna `docs/limits/`.
 
-**Immutable.** This file must never be edited. All future rule changes go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio futuro de reglas pasa por una nueva versión de este fichero.
 
-## 1. What this folder is
+## 1. Qué es esta carpeta
 
-One Markdown file per feature: the **quantitative complement** of `features/`. It holds exact caps, sizes, TTLs, retries, concurrency, minimums, debounce, pagination, exact permissions/scopes, and the exhaustive list of "what it does NOT support" with a short *why* for each deliberate omission. Audience: the engineering team and future maintainers.
+Un fichero Markdown por feature: el **complemento cuantitativo** de `features/`. Contiene topes exactos, tamaños, TTLs, reintentos, concurrencia, mínimos, debounce, paginación, permisos/scopes exactos, y la lista exhaustiva de «qué NO soporta» con un breve *por qué* para cada omisión deliberada. Audiencia: el equipo de ingeniería y los futuros mantenedores.
 
-## 2. The behavior / limits split (mirror of `features/`)
+## 2. La separación comportamiento / límites (espejo de `features/`)
 
-- `limits/<slug>.md` holds the **figures and the boundaries**; `features/<slug>.md` holds the **behavior**. Same slug, **1:1** pairing, never one half without the other.
-- **Put the figures here, not in `features/`.** This is the only place a concrete value (a size cap, a retry count, a timeout, a minimum) is meant to appear as a number.
-- **Do not re-narrate behavior here.** A limits document is a catalog, not a flow description. If you find yourself explaining *how* something works step by step, that belongs in the behavior twin — link to it instead.
-- Keep the overlap with the twin minimal and deliberate.
+- `limits/<slug>.md` contiene las **cifras y los límites**; `features/<slug>.md` contiene el **comportamiento**. Mismo slug, emparejamiento **1:1**, nunca una mitad sin la otra.
+- **Pon las cifras aquí, no en `features/`.** Este es el único sitio donde se pretende que aparezca como número un valor concreto (un tope de tamaño, un número de reintentos, un timeout, un mínimo).
+- **No vuelvas a narrar el comportamiento aquí.** Un documento de límites es un catálogo, no una descripción de flujo. Si te encuentras explicando *cómo* funciona algo paso a paso, eso pertenece al gemelo de comportamiento — enlaza a él en su lugar.
+- Mantén el solapamiento con el gemelo mínimo y deliberado.
 
-## 3. Cross-links
+## 3. Enlaces cruzados
 
-- To the behavior twin: `[../features/<slug>.md](../features/<slug>.md)`.
-- To a sibling limits doc: `[<other-slug>.md](<other-slug>.md)`.
-- A figure that belongs to another feature lives in **that** feature's limits doc — link to it, do not copy the number.
-- Never leave a broken link.
+- Al gemelo de comportamiento: `[../features/<slug>.md](../features/<slug>.md)`.
+- A un documento de límites hermano: `[<other-slug>.md](<other-slug>.md)`.
+- Una cifra que pertenece a otra feature vive en el documento de límites de **esa** feature — enlaza a él, no copies el número.
+- Nunca dejes un enlace roto.
 
-## 4. Shape of a limits document
+## 4. Forma de un documento de límites
 
-- Open with a one-line statement of what the catalog covers and a pointer to its behavior twin.
-- Prefer **tables** (`Limit | exact value | where it applies | note`) and bullet lists over prose.
-- Include a dedicated section listing **"what it does NOT support"**, one short *why* per item.
-- Every figure must be the **exact** value taken from the code, with enough context to locate where it applies.
-- Language: match the other documents already in this folder; one language per file (parent `docs/CLAUDE.md` § 6).
+- Abre con una frase de una línea sobre qué cubre el catálogo y un puntero a su gemelo de comportamiento.
+- Prefiere **tablas** (`Límite | valor exacto | dónde aplica | nota`) y listas con viñetas antes que prosa.
+- Incluye una sección dedicada que liste **«qué NO soporta»**, con un breve *por qué* por cada elemento.
+- Toda cifra debe ser el valor **exacto** tomado del código, con contexto suficiente para localizar dónde aplica.
+- Idioma: coincide con los demás documentos que ya hay en esta carpeta; un idioma por fichero (padre `docs/CLAUDE.md` § 6).
 
-## 5. Source of truth — figures must be exact
+## 5. Fuente de verdad — las cifras deben ser exactas
 
-These documents are treated as correct when the code disagrees (root `CLAUDE.md` § 9). A wrong number here will misdirect a future reviewer into "fixing" code that was right. **Verify every figure against the implementation** when you write or edit it; never copy a number from another document without confirming it in the code first.
+Estos documentos se tratan como correctos cuando el código discrepa (`CLAUDE.md` raíz § 9). Un número equivocado aquí desviará a un futuro revisor hacia «arreglar» código que estaba bien. **Verifica cada cifra contra la implementación** cuando la escribas o edites; nunca copies un número de otro documento sin confirmarlo antes en el código.
 
-## 6. Adding or changing limits
+## 6. Añadir o cambiar límites
 
-- New feature → create the limits doc together with its behavior twin, and add both to the `README.md` indexes.
-- A changed cap/number → update it here in the same change. If a figure has leaked into the behavior twin, move it back here and leave only a passing mention plus a link there.
+- Nueva feature → crea el documento de límites junto con su gemelo de comportamiento, y añade ambos a los índices `README.md`.
+- Un tope/número cambiado → actualízalo aquí en el mismo cambio. Si una cifra se ha colado en el gemelo de comportamiento, muévela de vuelta aquí y deja allí solo una mención de pasada más un enlace.

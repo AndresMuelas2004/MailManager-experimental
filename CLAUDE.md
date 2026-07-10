@@ -1,22 +1,22 @@
 # CLAUDE.md
 
-  This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+  Este fichero proporciona orientación a Claude Code (claude.ai/code) cuando trabaja con el código de este repositorio.
 
-  Project-specific details are maintained in @repository_guide.md (auto-imported into context).
+  Los detalles específicos del proyecto se mantienen en @repository_guide.md (auto-importado al contexto).
 
   ---
 
-  ## General Architecture 
+  ## Arquitectura General 
 
-  This section describes the layered architecture, structural rules, and conventions that apply to any project following this pattern. It is project-agnostic and should not be
-  modified for domain-specific changes.
+  Esta sección describe la arquitectura por capas, las reglas estructurales y las convenciones que aplican a cualquier proyecto que siga este patrón. Es agnóstica del proyecto y no debe
+  modificarse por cambios específicos del dominio.
 
-  ### 1 Layer Rules (Auto-Loaded)
+  ### 1 Reglas de Capa (Auto-Cargadas)
 
-  Each layer has its own `CLAUDE.md` that Claude Code loads automatically when reading files in that directory. These layer-level `CLAUDE.md` files are project-agnostic,
-  transferable, and **must never be modified**. Each one references internally a `*_guide.md` with project-specific details.
+  Cada capa tiene su propio `CLAUDE.md` que Claude Code carga automáticamente al leer ficheros en ese directorio. Estos `CLAUDE.md` a nivel de capa son agnósticos del proyecto,
+  transferibles, y **nunca deben modificarse**. Cada uno referencia internamente un `*_guide.md` con los detalles específicos del proyecto.
 
-  Layers with their own `CLAUDE.md`:
+  Capas con su propio `CLAUDE.md`:
   - `backend/api/`
   - `backend/auth/`
   - `backend/database/`
@@ -26,112 +26,112 @@
   - `backend/tests/integration/`
   - `backend/tests/e2e/`
   - `frontend/`
-  - `docs/` (plus its subdirectories `docs/features/` and `docs/limits/`, each with its own `CLAUDE.md`)
+  - `docs/` (más sus subdirectorios `docs/features/` y `docs/limits/`, cada uno con su propio `CLAUDE.md`)
 
-  The `docs/` tree is the exception to the `*_guide.md` reference: its `CLAUDE.md` files reference no `*_guide.md` — the project-specific content is the documents themselves, indexed by each subdirectory's `README.md` (see § 5).
+  El árbol `docs/` es la excepción a la referencia a `*_guide.md`: sus ficheros `CLAUDE.md` no referencian ningún `*_guide.md` — el contenido específico del proyecto son los propios documentos, indexados por el `README.md` de cada subdirectorio (ver § 5).
 
-  **Hard rule**: these layer rules are non-negotiable and override any conflicting project-specific guidance.
+  **Regla estricta**: estas reglas de capa son innegociables y prevalecen sobre cualquier orientación específica del proyecto que las contradiga.
 
-  ### 2 Monorepo Structure
+  ### 2 Estructura del Monorepo
 
-  - `backend/` — API server organized in layers (FastAPI + Python).
-  - `frontend/` — Client application (React + Vite + TypeScript + Tailwind).
-  - `docs/` — Narrative project documentation for the team (feature behavior + limits catalogs). See § 5.
+  - `backend/` — Servidor API organizado en capas (FastAPI + Python).
+  - `frontend/` — Aplicación cliente (React + Vite + TypeScript + Tailwind).
+  - `docs/` — Documentación narrativa del proyecto para el equipo (comportamiento de las features + catálogos de límites). Ver § 5.
 
-  ### 3 Excluded Directories
+  ### 3 Directorios Excluidos
 
-  - `backend/Scripts/` — personal developer scripts (manual tests, one-off utilities). Claude must **not** read, edit, or reference files in this directory unless the user explicitly requests it. These scripts are unrelated to the application's business logic, is only to try manual executions.
+  - `backend/Scripts/` — scripts personales del desarrollador (pruebas manuales, utilidades puntuales). Claude **no** debe leer, editar ni referenciar ficheros de este directorio salvo que el usuario lo solicite explícitamente. Estos scripts no tienen relación con la lógica de negocio de la aplicación, son solo para probar ejecuciones manuales.
 
-  ### 4 Backend Layers and Relationships
+  ### 4 Capas del Backend y sus Relaciones
 
-  → API (routers → services → rest of the layers)
-  → Auth       (identity verification, session management)
-  → Database   (persistence)
-  → Core       (domain logic, provider clients)
+  → API (routers → services → resto de las capas)
+  → Auth       (verificación de identidad, gestión de sesiones)
+  → Database   (persistencia)
+  → Core       (lógica de dominio, clientes de proveedor)
 
-  Communication rules:
+  Reglas de comunicación:
 
-  - Only **Services** (inside API) talk to Auth, Database, and Core.
-  - Auth, Database, and Core are **independent** — none imports from another.
-  - No lower layer imports from API.
+  - Solo los **Services** (dentro de API) hablan con Auth, Database y Core.
+  - Auth, Database y Core son **independientes** — ninguno importa de otro.
+  - Ninguna capa inferior importa de API.
 
-  Each layer defines its own error hierarchy. Services translate lower-layer errors into API-layer errors. For specifics, consult the layer's `CLAUDE.md` (auto-loaded when reading files in that directory).
+  Cada capa define su propia jerarquía de errores. Los Services traducen los errores de las capas inferiores en errores de la capa API. Para los detalles concretos, consulta el `CLAUDE.md` de la capa (auto-cargado al leer ficheros en ese directorio).
 
-  ### 5 Two-Level Documentation Pattern
+  ### 5 Patrón de Documentación de Dos Niveles
 
-  Each layer has two documentation files:
+  Cada capa tiene dos ficheros de documentación:
 
-  - `CLAUDE.md` (in each layer directory) — general, transferable rules. Not modified for project changes. Auto-loaded by Claude Code when reading files in that directory.
-  - `*_guide.md` — project-specific details. Claude updates these when the project changes.
+  - `CLAUDE.md` (en el directorio de cada capa) — reglas generales y transferibles. No se modifican por cambios del proyecto. Auto-cargado por Claude Code al leer ficheros en ese directorio.
+  - `*_guide.md` — detalles específicos del proyecto. Claude los actualiza cuando el proyecto cambia.
 
-  The layer `CLAUDE.md` references its guide. This root `CLAUDE.md` lists the layers that have their own rules (§ 1.1).
+  El `CLAUDE.md` de la capa referencia su guía. Este `CLAUDE.md` raíz lista las capas que tienen sus propias reglas (§ 1.1).
 
-  A third documentation home complements this pattern: `docs/` — narrative, project-specific documentation aimed at the engineering team and future maintainers, not at Claude as a source of architectural rules. Its structure: a directory-level `CLAUDE.md` (general rules), and two paired subdirectories — `docs/features/` (behavior-level description of each feature) and `docs/limits/` (exact figures and the exhaustive "what it does NOT support" list) — each with its own `CLAUDE.md` and a `README.md` index. Documents pair 1:1 by slug (`features/<slug>.md` ↔ `limits/<slug>.md`); never create or keep one half without the other. A document under `docs/` carries the same authority as a `*_guide.md` (§ 9).
+  Un tercer hogar de documentación complementa este patrón: `docs/` — documentación narrativa y específica del proyecto dirigida al equipo de ingeniería y a los futuros mantenedores, no a Claude como fuente de reglas de arquitectura. Su estructura: un `CLAUDE.md` a nivel de directorio (reglas generales), y dos subdirectorios emparejados — `docs/features/` (descripción a nivel de comportamiento de cada feature) y `docs/limits/` (cifras exactas y la lista exhaustiva de "lo que NO soporta") — cada uno con su propio `CLAUDE.md` y un índice `README.md`. Los documentos se emparejan 1:1 por slug (`features/<slug>.md` ↔ `limits/<slug>.md`); nunca crees ni mantengas una mitad sin la otra. Un documento bajo `docs/` tiene la misma autoridad que un `*_guide.md` (§ 9).
 
-  ### 6 Style and Code Quality
+  ### 6 Estilo y Calidad del Código
 
-  - Python: PEP 8, FastAPI conventions, `from __future__ import annotations` in all modules.
-  - TypeScript: ESLint config in `frontend/eslint.config.js`.
-  - Code language: English everywhere — identifiers, comments, docstrings, and all `.md` documentation files tracked by git. Exception: documents under `docs/` may be written in the team's working language (see `docs/CLAUDE.md` § 6); every `CLAUDE.md` itself must remain in English.
-  - Comments only where they clarify non-obvious logic; avoid noise or redundancy.
+  - Python: PEP 8, convenciones de FastAPI, `from __future__ import annotations` en todos los módulos.
+  - TypeScript: configuración de ESLint en `frontend/eslint.config.js`.
+  - Idioma: el idioma de trabajo del repositorio es el español — tanto para la documentación (ficheros `.md`, incluidos todos los `CLAUDE.md` y todos los `*_guide.md`) como para el código (identificadores, comentarios, docstrings). Ninguna parte del repositorio está obligada a escribirse en otro idioma.
+  - Comentarios solo donde aclaren lógica no evidente; evita el ruido o la redundancia.
 
-  ### 7 Immutable Files
+  ### 7 Ficheros Inmutables
 
-  Every `CLAUDE.md` inside this repository — both the root `CLAUDE.md` and every layer-level `CLAUDE.md` (listed in § 1.1) — is protected by a pre-edit hook that prevents any modification. The protection is scoped to this repository only; `CLAUDE.md` files outside the repo are not affected. Claude must never propose direct edits to these files. Instead, describe the suggested change — what, where, and why — so the developer can apply it manually.
-  Project-specific changes always go in the corresponding `*_guide.md` file, which is not protected.
+  Todo `CLAUDE.md` dentro de este repositorio — tanto el `CLAUDE.md` raíz como cada `CLAUDE.md` a nivel de capa (listados en § 1.1) — está protegido por un hook de pre-edición que impide cualquier modificación. La protección está acotada solo a este repositorio; los ficheros `CLAUDE.md` fuera del repo no se ven afectados. Claude nunca debe proponer ediciones directas de estos ficheros. En su lugar, describe el cambio sugerido — qué, dónde y por qué — para que el desarrollador pueda aplicarlo manualmente.
+  Los cambios específicos del proyecto siempre van en el fichero `*_guide.md` correspondiente, que no está protegido.
 
-  ### 8 Plan Execution Rules
+  ### 8 Reglas de Ejecución de Planes
 
-  Every plan produced in plan mode for a non-trivial feature implementation must include these two final steps, in this order:
+  Todo plan producido en modo plan para la implementación de una feature no trivial debe incluir estos dos pasos finales, en este orden:
 
-  **Penultimate step — Tests update:**
-  Review the code changes introduced by the plan and add new tests or update existing ones to cover the new or modified functionality.
+  **Paso penúltimo — Actualización de tests:**
+  Revisa los cambios de código introducidos por el plan y añade tests nuevos o actualiza los existentes para cubrir la funcionalidad nueva o modificada.
 
-  **Final step — Documentation update (critical):**
-  This step is the foundation of the entire quality assurance system. The Documentation Priority rule (§ 9) establishes that `.md` files are always the source of truth: when code contradicts documentation, the documentation is correct and the code must change. Review subagent md-reviewer rely on this principle to catch and fix code mistakes.
+  **Paso final — Actualización de la documentación (crítico):**
+  Este paso es la base de todo el sistema de aseguramiento de la calidad. La regla de Prioridad de la Documentación (§ 9) establece que los ficheros `.md` son siempre la fuente de verdad: cuando el código contradice a la documentación, la documentación es la correcta y el código debe cambiar. El subagente de revisión md-reviewer se apoya en este principio para detectar y corregir errores de código.
 
-  This only works if the documentation accurately reflects the intended behavior after every plan execution. If a `*_guide.md` is left outdated or partially updated, two things break:
-  1. Legitimate new code may be flagged as "wrong" because it doesn't match the stale `.md`.
-  2. Actual code mistakes may go undetected because the `.md` never described the new functionality.
+  Esto solo funciona si la documentación refleja con precisión el comportamiento pretendido después de cada ejecución de un plan. Si un `*_guide.md` queda desactualizado o parcialmente actualizado, se rompen dos cosas:
+  1. Código nuevo legítimo puede ser marcado como "erróneo" porque no coincide con el `.md` obsoleto.
+  2. Errores de código reales pueden pasar desapercibidos porque el `.md` nunca describió la nueva funcionalidad.
 
-  Therefore, this documentation update is not a formality — it is the step that keeps the `.md`-as-source-of-truth model reliable.
-  Claude must directly review and update — without launching any external agent or command — the following files so they accurately reflect the new or changed functionality:
-  - Root `repository_guide.md`.
-  - Root `README.md`.
-  - Every `*_guide.md` in directories affected by the plan's changes.
-  - Every `docs/features/<slug>.md` / `docs/limits/<slug>.md` pair affected by the plan's changes — update both twins, and the two `README.md` indexes when a feature is added or renamed.
+  Por tanto, esta actualización de la documentación no es una formalidad — es el paso que mantiene fiable el modelo de `.md`-como-fuente-de-verdad.
+  Claude debe revisar y actualizar directamente — sin lanzar ningún agente o comando externo — los siguientes ficheros para que reflejen con precisión la funcionalidad nueva o modificada:
+  - El `repository_guide.md` raíz.
+  - El `README.md` raíz.
+  - Cada `*_guide.md` en los directorios afectados por los cambios del plan.
+  - Cada pareja `docs/features/<slug>.md` / `docs/limits/<slug>.md` afectada por los cambios del plan — actualiza ambos gemelos, y los dos índices `README.md` cuando se añade o se renombra una feature.
 
-  ### 9 Documentation Priority
+  ### 9 Prioridad de la Documentación
 
-  When rules or information conflict, the following precedence applies (highest to lowest):
-  **This root `CLAUDE.md`** — general architecture rules. Supreme authority.
-  **Layer `CLAUDE.md` files** (e.g. `backend/api/CLAUDE.md`, `docs/CLAUDE.md` and its subdirectory `CLAUDE.md` files) — structural rules for that layer. Override anything below.
-  **`*_guide.md` files and `docs/` documents** (e.g. `api_guide.md`, `repository_guide.md`, `docs/features/<slug>.md`, `docs/limits/<slug>.md`) — project-specific details that supplement the `CLAUDE.md` files. Never contradict levels above.
-  **The source code itself** — the actual implementation. When code contradicts documentation at any level above, the documentation is correct and the code is what needs to change.
+  Cuando las reglas o la información entran en conflicto, aplica la siguiente precedencia (de mayor a menor):
+  **Este `CLAUDE.md` raíz** — reglas generales de arquitectura. Autoridad suprema.
+  **Ficheros `CLAUDE.md` de capa** (p. ej. `backend/api/CLAUDE.md`, `docs/CLAUDE.md` y los ficheros `CLAUDE.md` de sus subdirectorios) — reglas estructurales de esa capa. Prevalecen sobre todo lo inferior.
+  **Ficheros `*_guide.md` y documentos de `docs/`** (p. ej. `api_guide.md`, `repository_guide.md`, `docs/features/<slug>.md`, `docs/limits/<slug>.md`) — detalles específicos del proyecto que complementan a los ficheros `CLAUDE.md`. Nunca contradicen a los niveles superiores.
+  **El propio código fuente** — la implementación real. Cuando el código contradice a la documentación en cualquier nivel superior, la documentación es la correcta y el código es lo que debe cambiar.
 
-  This hierarchy applies to all decisions: error handling, layer boundaries, naming conventions, allowed imports, and any other rule. If a lower-priority source conflicts with a higher-priority one, always follow the higher-priority source and flag the conflict.
+  Esta jerarquía aplica a todas las decisiones: manejo de errores, límites entre capas, convenciones de nomenclatura, imports permitidos y cualquier otra regla. Si una fuente de menor prioridad entra en conflicto con una de mayor prioridad, sigue siempre la de mayor prioridad y señala el conflicto.
 
-  ### 10 Common Mistakes Tracking
+  ### 10 Seguimiento de Errores Comunes
 
   @common_mistakes.md
 
-  Recurring mistakes are tracked in the file imported above. Claude must treat every entry as a hard rule with the same authority as this `CLAUDE.md`.
+  Los errores recurrentes se registran en el fichero importado arriba. Claude debe tratar cada entrada como una regla estricta con la misma autoridad que este `CLAUDE.md`.
 
-  **Proactive flagging:** When Claude notices it is repeating an error — or the user corrects the same kind of mistake more than once across conversations — Claude must explicitly ask the user whether the
-  correction should be added to `common_mistakes.md`. Do not add entries autonomously; always ask first.
+  **Señalización proactiva:** Cuando Claude note que está repitiendo un error — o el usuario corrija el mismo tipo de error más de una vez a lo largo de varias conversaciones — Claude debe preguntar explícitamente al usuario si la
+  corrección debe añadirse a `common_mistakes.md`. No añadas entradas de forma autónoma; pregunta siempre primero.
 
-  ### 11 Integration and E2E Test Execution
+  ### 11 Ejecución de Tests de Integración y E2E
 
-  Never run the integration or E2E test suites on your own initiative. Run them only when the user explicitly requests it; in that case you may decide to run them.
+  Nunca ejecutes las suites de tests de integración o E2E por iniciativa propia. Ejecútalas solo cuando el usuario lo solicite explícitamente; en ese caso puedes decidir ejecutarlas.
 
-  ### 12 Application Startup and Live Browser Verification
+  ### 12 Arranque de la Aplicación y Verificación en Navegador en Vivo
 
-  Never start any part of the application stack — database, backend, or frontend (via Podman/compose, uvicorn, the Vite dev server, or any other means) — and never verify a change you made by navigating the running app on localhost with the Playwright MCP (or any other browser automation tool) on your own initiative. These actions are allowed only when the user literally requests them in the conversation. In particular, never include them as final verification steps in plans, and never perform them voluntarily as a "check that my change works" step — live verification belongs to the user unless explicitly delegated.
+  Nunca arranques ninguna parte del stack de la aplicación — base de datos, backend o frontend (vía Podman/compose, uvicorn, el servidor de desarrollo de Vite, o cualquier otro medio) — y nunca verifiques un cambio que hayas hecho navegando la aplicación en ejecución en localhost con el MCP de Playwright (o cualquier otra herramienta de automatización de navegador) por iniciativa propia. Estas acciones solo están permitidas cuando el usuario las solicita literalmente en la conversación. En particular, nunca las incluyas como pasos finales de verificación en los planes, y nunca las realices voluntariamente como un paso de "comprobar que mi cambio funciona" — la verificación en vivo pertenece al usuario salvo que se delegue explícitamente.
 
-  ### 13 Memory Files — No Autonomous Writes
+  ### 13 Ficheros de Memoria — Sin Escrituras Autónomas
 
-  Never edit, restructure, or add entries to the persistent memory store — `MEMORY.md` and the individual memory files under the session's `memory/` directory — on your own initiative. This overrides the memory system's default of proactively saving facts: write to memory only when the user explicitly asks you to remember something. Same "never on your own initiative" discipline as § 12 (live verification) and § 10's rule that `common_mistakes.md` entries are never added autonomously.
+  Nunca edites, reestructures ni añadas entradas al almacén de memoria persistente — `MEMORY.md` y los ficheros de memoria individuales bajo el directorio `memory/` de la sesión — por iniciativa propia. Esto anula el comportamiento por defecto del sistema de memoria de guardar hechos de forma proactiva: escribe en memoria solo cuando el usuario te pida explícitamente recordar algo. La misma disciplina de "nunca por iniciativa propia" que la § 12 (verificación en vivo) y la regla de la § 10 de que las entradas de `common_mistakes.md` nunca se añaden de forma autónoma.
 
-  ### 14 External API Documentation (Gmail / Microsoft Graph)
+  ### 14 Documentación de APIs Externas (Gmail / Microsoft Graph)
 
-  Before answering a question or making a change that involves the Gmail API or the Outlook / Microsoft Graph API, consult the local research folder `external-apis-used/` FIRST (git-ignored). Open the classification index of the relevant provider — `external-apis-used/Gmail/CLAUDE.md` or `external-apis-used/Outlook/CLAUDE.md` — which routes to the exact per-topic `.md` file, and read that file to find what you need. Only if the needed information is not there, or looks incomplete, **warn the user first and wait** before going to the internet to fetch the official API documentation (developers.google.com / learn.microsoft.com).
+  Antes de responder a una pregunta o hacer un cambio que involucre la API de Gmail o la API de Outlook / Microsoft Graph, consulta PRIMERO la carpeta de investigación local `external-apis-used/` (ignorada por git). Abre el índice de clasificación del proveedor correspondiente — `external-apis-used/Gmail/CLAUDE.md` o `external-apis-used/Outlook/CLAUDE.md` — que enruta al fichero `.md` exacto por tema, y lee ese fichero para encontrar lo que necesitas. Solo si la información necesaria no está ahí, o parece incompleta, **avisa primero al usuario y espera** antes de ir a internet a buscar la documentación oficial de la API (developers.google.com / learn.microsoft.com).

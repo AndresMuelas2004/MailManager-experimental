@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import psycopg2.extras
 
+from api.services import emails_service
 from tests.integration.conftest import (
     MAILBOX_URL as _MAILBOX_URL,
     SEEDED_GMAIL_ACCOUNT_ID as _SEEDED_ACCOUNT,
     SEEDED_GMAIL_MAILBOX_ID as _SEEDED_MAILBOX,
     SEEDED_USER_ID as _SEEDED_USER,
+    patch_emails_build_manager,
 )
 
 
@@ -222,7 +224,6 @@ def test_sync_favorites_full_replace_for_account(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
     """Provider returns ['m1','m3']; only those rows end up favourite."""
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from tests.shared.email_fakes import FakeEmailClient
 
@@ -256,7 +257,7 @@ def test_sync_favorites_full_replace_for_account(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.post(
         f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
@@ -284,7 +285,6 @@ def test_set_favorite_race_zero_rows_returns_404(
     ``update_favorite`` reports zero rows → 404 ``email_not_found`` instead of
     a silent 200 (never persist a state the provider/DB disagree on).
     """
-    from api.services import emails_service
 
     mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
     with isolated_db.cursor() as cur:
@@ -323,7 +323,6 @@ def test_set_favorite_provider_failure_returns_502(
     function name keeps ``_returns_502`` because the HTTP status is
     correct; only the ``code`` differs from the historical docstring.
     """
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from core.email.errors import EmailExternalAPIError
     from tests.shared.email_fakes import FakeEmailClient
@@ -351,7 +350,7 @@ def test_set_favorite_provider_failure_returns_502(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.patch(
         f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/prov-1/favorite",
@@ -369,7 +368,6 @@ def test_sync_favorites_multi_account_aggregates_total(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
     """``total_synced`` aggregates the rowcount across every account in the mailbox."""
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from tests.shared.email_fakes import FakeEmailClient
 
@@ -408,7 +406,7 @@ def test_sync_favorites_multi_account_aggregates_total(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.post(f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync")
     assert resp.status_code == 200, resp.text
@@ -442,7 +440,6 @@ def test_sync_favorites_aborts_when_account_list_fails_returns_502(
     ``translate_core_error`` → the whole sync aborts with
     ``external_api_error`` (502), not the ``favorite_sync_error`` fallback.
     """
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from core.email.errors import EmailExternalAPIError
     from tests.shared.email_fakes import FakeEmailClient
@@ -473,7 +470,7 @@ def test_sync_favorites_aborts_when_account_list_fails_returns_502(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.post(f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync")
     assert resp.status_code == 502, resp.text
@@ -489,7 +486,6 @@ def test_set_favorite_account_not_connected_returns_409(
     ``_last_errors``; the first ``raise_on_silent_auth_errors`` aggregates
     it into a single ``AccountNotConnected`` (409).
     """
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from core.email.errors import EmailAuthError
     from tests.shared.email_fakes import FakeEmailClient
@@ -516,7 +512,7 @@ def test_set_favorite_account_not_connected_returns_409(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.patch(
         f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/auth-1/favorite",
@@ -532,7 +528,6 @@ def test_sync_favorites_account_not_connected_returns_409(
     test_client, setup_mailbox_and_account, monkeypatch,
 ):
     """Silent auth failure during sync → 409 ``account_not_connected``."""
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from core.email.errors import EmailAuthError
     from tests.shared.email_fakes import FakeEmailClient
@@ -549,7 +544,7 @@ def test_sync_favorites_account_not_connected_returns_409(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.post(
         f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
@@ -569,7 +564,6 @@ def test_set_favorite_missing_email_does_not_call_provider(
     ``build_manager_for_accounts`` is never invoked (no client, hence no
     provider call, can exist).
     """
-    from api.services import emails_service
 
     mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
     build_calls = {"count": 0}
@@ -578,7 +572,7 @@ def test_set_favorite_missing_email_does_not_call_provider(
         build_calls["count"] += 1
         raise AssertionError("provider manager must not be built on a 404 pre-check")
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.patch(
         f"{_MAILBOX_URL}/{mailbox_id}/accounts/{account_id}/emails/ghost-row/favorite",
@@ -597,7 +591,6 @@ def test_sync_favorites_ignores_unknown_provider_id_no_new_row(
 
     silently skipped — the sync never imports a new metadata row.
     """
-    from api.services import emails_service
     from core.email.email_manager import EmailManager
     from tests.shared.email_fakes import FakeEmailClient
 
@@ -635,7 +628,7 @@ def test_sync_favorites_ignores_unknown_provider_id_no_new_row(
             ))
         return manager
 
-    monkeypatch.setattr(emails_service, "build_manager_for_accounts", _build_manager)
+    patch_emails_build_manager(monkeypatch, _build_manager)
 
     resp = test_client.post(
         f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",

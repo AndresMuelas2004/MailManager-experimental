@@ -1,18 +1,18 @@
-# General Feature Slice Layer Rules
+# Reglas Generales de la Capa Feature Slice
 
-This is the `CLAUDE.md` for the **feature layer** of the frontend — the vertical-slice directory where the majority of application code lives. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de la **capa feature** del frontend — el directorio de vertical slices donde vive la mayor parte del código de la aplicación. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the feature layer from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la capa feature desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to feature-layer rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas de la capa feature pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-Each direct subdirectory of `features/` is a **vertical slice** of the application: one self-contained domain, with its own pages, hooks, and components. Features are the place where UI, local state, and server state are assembled into user-facing behavior.
+Cada subdirectorio directo de `features/` es un **vertical slice** de la aplicación: un dominio autocontenido, con sus propias pages, hooks y components. Las features son el lugar donde la UI, el estado local y el estado de servidor se ensamblan en comportamiento visible para el usuario.
 
 ```
 features/
@@ -21,11 +21,11 @@ features/
 └── ...
 ```
 
-Every feature is self-contained. Features **never** depend on each other.
+Cada feature es autocontenida. Las features **nunca** dependen entre sí.
 
-## 2. Feature Structure
+## 2. Estructura de una Feature
 
-Every feature directory has **exactly three** subdirectories — no more, no less:
+Cada directorio de feature tiene **exactamente tres** subdirectorios — ni más, ni menos:
 
 ```
 features/<name>/
@@ -34,92 +34,92 @@ features/<name>/
 └── components/   # Feature-specific presentational components
 ```
 
-Any other layout is a violation. If a file seems not to fit, it belongs in a different layer:
-- Shared by multiple features → `components/` or `lib/`.
-- HTTP contract → `api/`.
+Cualquier otra disposición es una violación. Si un fichero parece no encajar, pertenece a otra capa:
+- Compartido por varias features → `components/` o `lib/`.
+- Contrato HTTP → `api/`.
 
-## 3. Page Rules (`pages/`)
+## 3. Reglas de Pages (`pages/`)
 
-### 3.1 One file per route
-- Exactly one route in the router maps to each file in `pages/`. A page file that has no route is dead code.
+### 3.1 Un fichero por ruta
+- Exactamente una ruta del router mapea a cada fichero en `pages/`. Un fichero de page sin ruta es código muerto.
 
-### 3.2 Orchestrate, don't render
-- A page instantiates the feature's hooks, and passes the resulting data and callbacks as props to components. Pages contain minimal JSX — the structural skeleton and any top-level layout concerns only.
+### 3.2 Orquesta, no renderices
+- Una page instancia los hooks de la feature y pasa los datos y callbacks resultantes como props a los components. Las pages contienen JSX mínimo — solo el esqueleto estructural y cualquier cuestión de layout de nivel superior.
 
-### 3.3 No direct HTTP
-- Pages never import from `api/endpoints/`. All data access flows through the feature's hooks.
+### 3.3 Nada de HTTP directo
+- Las pages nunca importan de `api/endpoints/`. Todo el acceso a datos fluye a través de los hooks de la feature.
 
-## 4. Hook Rules (`hooks/`)
+## 4. Reglas de Hooks (`hooks/`)
 
-### 4.1 TanStack Query first
-- Reads go through `useQuery` with a stable `queryKey`.
-- Writes go through `useMutation`. On success, invalidate the relevant `queryKey` via `queryClient.invalidateQueries(...)` so dependent queries refetch automatically.
-- Query keys follow a consistent shape: `[<resource>, <scope>, ...<filters>]`. Filters that may be `undefined` use `filter ?? null` to keep the key stable.
+### 4.1 TanStack Query primero
+- Las lecturas van por `useQuery` con un `queryKey` estable.
+- Las escrituras van por `useMutation`. En caso de éxito, invalida el `queryKey` correspondiente mediante `queryClient.invalidateQueries(...)` para que las queries dependientes se refresquen automáticamente.
+- Las query keys siguen una forma consistente: `[<resource>, <scope>, ...<filters>]`. Los filtros que pueden ser `undefined` usan `filter ?? null` para mantener la key estable.
 
-### 4.2 Side-effect ownership
-- All `fetch`-adjacent side effects, including schema-derived calls to `api/endpoints/`, live in hooks. Never in components, never in pages directly.
+### 4.2 Propiedad de los efectos secundarios
+- Todos los efectos secundarios adyacentes a `fetch`, incluidas las llamadas derivadas de esquema a `api/endpoints/`, viven en hooks. Nunca en components, nunca en pages directamente.
 
-### 4.3 Error translation
-- Every hook that exposes errors to the UI converts them through `toUiError()` from `../../api/client/errors`. Consumers receive a `UiError`, never a raw `Error` or `ApiError`.
+### 4.3 Traducción de errores
+- Todo hook que expone errores a la UI los convierte mediante `toUiError()` de `../../api/client/errors`. Los consumidores reciben un `UiError`, nunca un `Error` o `ApiError` en crudo.
 
-### 4.4 Public contract
-- A list hook returns an object with `{ data, loading, error, refresh, ... }` or an equivalently flat shape. The keys are derived, not raw TanStack Query objects — callers should not need to understand TanStack Query internals to consume the hook.
-- A mutation hook returns callable functions (plus `loading` / `error`) rather than raw `useMutation` return values.
+### 4.4 Contrato público
+- Un hook de listado devuelve un objeto con `{ data, loading, error, refresh, ... }` o una forma plana equivalente. Las keys son derivadas, no objetos de TanStack Query en crudo — quien lo consume no debería necesitar entender los entresijos de TanStack Query para usar el hook.
+- Un hook de mutación devuelve funciones invocables (más `loading` / `error`) en lugar de los valores de retorno en crudo de `useMutation`.
 
-### 4.5 Derived flags
-- When a feature needs a separate "background syncing" indicator alongside the first-load spinner, derive `syncing` as something like `mutation.isPending || (query.isFetching && !query.isLoading)` so the indicator stays on during the post-invalidation refetch.
+### 4.5 Flags derivados
+- Cuando una feature necesita un indicador separado de "sincronización en segundo plano" junto al spinner de la primera carga, deriva `syncing` como algo tipo `mutation.isPending || (query.isFetching && !query.isLoading)` para que el indicador siga activo durante el refetch posterior a la invalidación.
 
-## 5. Component Rules (`components/`)
+## 5. Reglas de Components (`components/`)
 
-### 5.1 Presentational
-- Components receive data via props and emit events via callbacks. They do not import from `api/` and they do not call hooks that fetch data.
+### 5.1 Presentacionales
+- Los components reciben datos vía props y emiten eventos vía callbacks. No importan de `api/` y no llaman a hooks que hagan fetch de datos.
 
-### 5.2 Local UI state only
-- `useState` is allowed for UI concerns (toggles, selection, input drafts). Anything representing server truth stays in a hook.
+### 5.2 Solo estado de UI local
+- `useState` está permitido para cuestiones de UI (toggles, selección, borradores de input). Cualquier cosa que represente la verdad del servidor se queda en un hook.
 
-### 5.3 One file per component
-- `PascalCase.tsx` with a matching default export. Props typed explicitly.
+### 5.3 Un fichero por componente
+- `PascalCase.tsx` con un export por defecto que coincide. Props tipadas explícitamente.
 
-## 6. Cross-Feature Rule (Hard Boundary)
+## 6. Regla Entre Features (Frontera Dura)
 
-A file under `features/<a>/` may **not** import from `features/<b>/` under any circumstance. If two features need the same thing:
+Un fichero bajo `features/<a>/` **no** puede importar de `features/<b>/` bajo ninguna circunstancia. Si dos features necesitan lo mismo:
 
-- Shared JSX → promote to `components/common/` or `components/ui/`.
-- Shared logic → promote to `lib/` (or, if HTTP-bound, to a new endpoint in `api/`).
-- Shared type → promote to `lib/types.ts`.
+- JSX compartido → promuévelo a `components/common/` o `components/ui/`.
+- Lógica compartida → promuévela a `lib/` (o, si está ligada a HTTP, a un nuevo endpoint en `api/`).
+- Tipo compartido → promuévelo a `lib/types.ts`.
 
-Violations of this rule are the most common cause of coupling rot. Reject them without exception.
+Las violaciones de esta regla son la causa más común de degradación por acoplamiento. Recházalas sin excepción.
 
-## 7. Must / Must Not
+## 7. Debe / No Debe
 
-### Must
-- Keep `pages/`, `hooks/`, and `components/` inside every feature directory.
-- Route every remote call through a hook in `hooks/`.
-- Translate errors with `toUiError` at the hook boundary.
+### Debe
+- Mantener `pages/`, `hooks/` y `components/` dentro de cada directorio de feature.
+- Encaminar toda llamada remota a través de un hook en `hooks/`.
+- Traducir los errores con `toUiError` en la frontera del hook.
 
-### Must Not
-- Import from another feature.
-- Call `fetch()` or `useQuery`/`useMutation` from components. Those live in hooks.
-- Define routing logic inside the feature. Pages are exported; the router decides where they mount.
+### No Debe
+- Importar de otra feature.
+- Llamar a `fetch()` o `useQuery`/`useMutation` desde components. Eso vive en hooks.
+- Definir lógica de enrutado dentro de la feature. Las pages se exportan; el router decide dónde se montan.
 
-## 8. Import Boundaries
+## 8. Fronteras de Import
 
-| From `features/<x>/`            | May import from                                                  | May not import from                         |
+| Desde `features/<x>/`           | Puede importar de                                                | No puede importar de                        |
 |---------------------------------|------------------------------------------------------------------|---------------------------------------------|
-| `pages/`                        | own `hooks/`, own `components/`, `components/`, `lib/`           | `api/client/http` (go through endpoints)    |
+| `pages/`                        | `hooks/` propio, `components/` propio, `components/`, `lib/`     | `api/client/http` (pasa por endpoints)      |
 | `hooks/`                        | `api/endpoints/`, `api/client/errors`, `api/types/`, `lib/`      | `components/ui/`, `components/common/`      |
 | `components/`                   | `components/common/`, `components/ui/`, `lib/`                   | `api/`                                      |
-| any of the three                | `features/<y>/` — **never**                                      |                                             |
+| cualquiera de las tres          | `features/<y>/` — **nunca**                                      |                                             |
 
-See `../api/CLAUDE.md` for the API contract and `../components/CLAUDE.md` for the shared UI tiers.
+Ver `../api/CLAUDE.md` para el contrato de API y `../components/CLAUDE.md` para los niveles de UI compartida.
 
-## 9. Adding a New Feature — Checklist
+## 9. Añadir una Nueva Feature — Checklist
 
-- [ ] Read `../api/CLAUDE.md`, `../components/CLAUDE.md`, `../lib/CLAUDE.md`, and `../test/CLAUDE.md` before writing code.
-- [ ] Create `features/<name>/{pages,hooks,components}/`.
-- [ ] Add the Zod schemas + inferred types in `../api/types/dto.ts` (see the API-layer checklist).
-- [ ] Add the endpoint file in `../api/endpoints/` (thin wrappers around `request()`).
-- [ ] Implement hooks with `useQuery` / `useMutation`; invalidate query keys in every mutation's `onSuccess`.
-- [ ] Build the page to orchestrate hooks and pass data to components; build the components as presentational.
-- [ ] Register the route in `../app/routes/router.tsx` (see `../app/CLAUDE.md`). Lazy-load unless the page is on the boot path.
-- [ ] Add unit tests for pure helpers and integration tests for the page. See `../test/CLAUDE.md`.
+- [ ] Lee `../api/CLAUDE.md`, `../components/CLAUDE.md`, `../lib/CLAUDE.md` y `../test/CLAUDE.md` antes de escribir código.
+- [ ] Crea `features/<name>/{pages,hooks,components}/`.
+- [ ] Añade los esquemas Zod + tipos inferidos en `../api/types/dto.ts` (ver el checklist de la capa API).
+- [ ] Añade el fichero de endpoint en `../api/endpoints/` (wrappers finos alrededor de `request()`).
+- [ ] Implementa los hooks con `useQuery` / `useMutation`; invalida las query keys en el `onSuccess` de cada mutación.
+- [ ] Construye la page para orquestar los hooks y pasar los datos a los components; construye los components como presentacionales.
+- [ ] Registra la ruta en `../app/routes/router.tsx` (ver `../app/CLAUDE.md`). Carga con lazy-load salvo que la page esté en el camino de arranque.
+- [ ] Añade tests unitarios para los helpers puros y tests de integración para la page. Ver `../test/CLAUDE.md`.

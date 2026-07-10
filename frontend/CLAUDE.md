@@ -1,30 +1,30 @@
-# General Frontend Layer Rules
+# Reglas Generales de la Capa Frontend
 
-This is the top-level `CLAUDE.md` for the **frontend** of the application. It describes the architecture, the tech stack, and the rules that govern every directory under `frontend/`. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` de nivel superior del **frontend** de la aplicación. Describe la arquitectura, el stack tecnológico y las reglas que gobiernan cada directorio bajo `frontend/`. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the frontend layer from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer la capa frontend desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository (sub-layer `CLAUDE.md` files included), the most specific layer rule wins **unless** this file states a stricter constraint, in which case this file takes precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio (incluidos los `CLAUDE.md` de subcapas), gana la regla de capa más específica **salvo** que este fichero establezca una restricción más estricta, en cuyo caso este fichero tiene precedencia.
 
-**Immutable.** This file must never be edited. All changes to frontend rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas del frontend pasa por una nueva versión de este fichero.
 
-## 1. Tech Stack
+## 1. Stack Tecnológico
 
-- **React** with **TypeScript** in strict mode (`strict: true`, `noUnusedLocals`, `noUnusedParameters`).
-- **Vite** as the build tool and dev server.
-- **React Router** for client-side routing.
-- **TanStack Query** for server-state and data fetching. This is the only acceptable cache layer.
-- **Zod** for runtime validation of every API response and request shape.
-- **Tailwind CSS** for styling — utility classes only.
-- **Vitest** + **Testing Library** + **MSW** for unit and integration tests.
-- **Playwright** for end-to-end tests.
-- **Prettier** + **ESLint** + **lint-staged** + pre-commit hooks for formatting and linting.
+- **React** con **TypeScript** en modo estricto (`strict: true`, `noUnusedLocals`, `noUnusedParameters`).
+- **Vite** como herramienta de build y servidor de desarrollo.
+- **React Router** para el enrutado del lado del cliente.
+- **TanStack Query** para el estado de servidor y el data fetching. Es la única capa de caché aceptable.
+- **Zod** para la validación en runtime de la forma de cada respuesta y petición de la API.
+- **Tailwind CSS** para los estilos — solo clases de utilidad.
+- **Vitest** + **Testing Library** + **MSW** para tests unitarios y de integración.
+- **Playwright** para tests end-to-end.
+- **Prettier** + **ESLint** + **lint-staged** + hooks de pre-commit para formateo y linting.
 
-No Redux, MobX, Zustand or similar global-state library unless a concrete need justifies it. Server state belongs in TanStack Query; UI state belongs in `useState`.
+Ni Redux, MobX, Zustand ni ninguna librería similar de estado global salvo que una necesidad concreta lo justifique. El estado de servidor pertenece a TanStack Query; el estado de UI pertenece a `useState`.
 
-## 2. Package Structure
+## 2. Estructura de Paquetes
 
 ```
 frontend/
@@ -41,11 +41,11 @@ frontend/
 └── <configs>           # vite.config.ts, vitest.config.ts, playwright.config.ts, etc.
 ```
 
-Each subdirectory of `src/` and `e2e/` has its own `CLAUDE.md` with the rules specific to that layer. This file is the summary; those are the authority for their own scope.
+Cada subdirectorio de `src/` y `e2e/` tiene su propio `CLAUDE.md` con las reglas específicas de esa capa. Este fichero es el resumen; aquellos son la autoridad en su propio ámbito.
 
-## 3. Layer Boundaries (Dependency Graph)
+## 3. Fronteras de Capa (Grafo de Dependencias)
 
-Imports flow in one direction only. Arrows read as "may import from":
+Los imports fluyen en una única dirección. Las flechas se leen como "puede importar de":
 
 ```
             app/
@@ -60,34 +60,34 @@ Imports flow in one direction only. Arrows read as "may import from":
       lib/   zod
 ```
 
-Explicit rules:
-- **`features/<a>/` never imports from `features/<b>/`.** Shared pieces go to `components/`, `lib/`, or `api/`.
-- **`api/` never imports from `features/`, `components/`, or `app/`.** It is a near-leaf layer.
-- **`lib/` never imports from any other `src/` directory.** It is the leaf.
-- **`components/common/` never imports from `components/ui/` or any higher layer.**
-- **`components/ui/` never imports from `features/` or `api/endpoints/`.**
-- **`app/` never imports feature hooks directly** (pages do that inside the feature).
-- **`src/` never imports from `src/test/` or `e2e/`.** Test helpers are scoped to tests.
+Reglas explícitas:
+- **`features/<a>/` nunca importa de `features/<b>/`.** Las piezas compartidas van a `components/`, `lib/` o `api/`.
+- **`api/` nunca importa de `features/`, `components/` ni `app/`.** Es una capa casi-hoja.
+- **`lib/` nunca importa de ningún otro directorio de `src/`.** Es la hoja.
+- **`components/common/` nunca importa de `components/ui/` ni de ninguna capa superior.**
+- **`components/ui/` nunca importa de `features/` ni de `api/endpoints/`.**
+- **`app/` nunca importa hooks de feature directamente** (las pages lo hacen dentro de la feature).
+- **`src/` nunca importa de `src/test/` ni de `e2e/`.** Los helpers de test están acotados a los tests.
 
-Refer to each layer's `CLAUDE.md` for the detailed boundaries.
+Consulta el `CLAUDE.md` de cada capa para las fronteras detalladas.
 
-## 4. Styling
+## 4. Estilos
 
-Tailwind utility classes only. No CSS modules, no styled-components, no inline `style` objects unless a truly dynamic pixel value requires it. The only CSS file is `styles/globals.css` (Tailwind import + minimal resets). Responsive design uses Tailwind prefixes (`sm:`, `md:`, `lg:`). Dark mode, when present, uses Tailwind's `dark:` prefix.
+Solo clases de utilidad de Tailwind. Sin CSS modules, sin styled-components, sin objetos `style` inline salvo que un valor de píxel realmente dinámico lo requiera. El único fichero CSS es `styles/globals.css` (import de Tailwind + resets mínimos). El diseño responsive usa los prefijos de Tailwind (`sm:`, `md:`, `lg:`). El modo oscuro, cuando existe, usa el prefijo `dark:` de Tailwind.
 
-## 5. State Management
+## 5. Gestión de Estado
 
-| Kind of state                 | Lives in                                        |
+| Tipo de estado                 | Vive en                                         |
 |-------------------------------|-------------------------------------------------|
-| Server state (remote data)    | **TanStack Query cache** (`useQuery`/`useMutation`) |
-| UI state (local to a component)| `useState` inside the component                 |
-| Cross-cutting app state       | React `Context` composed in `app/providers/`    |
+| Estado de servidor (datos remotos)    | **TanStack Query cache** (`useQuery`/`useMutation`) |
+| Estado de UI (local a un componente)| `useState` dentro del componente                 |
+| Estado transversal de la app       | React `Context` compuesto en `app/providers/`    |
 
-Never store server state in `useState` and never turn a TanStack Query cache into a global variable. If UI state must be shared between components, lift it only as far as necessary; reach for `Context` only when deeply nested components need it.
+Nunca almacenes estado de servidor en `useState` y nunca conviertas una caché de TanStack Query en una variable global. Si el estado de UI debe compartirse entre componentes, elévalo solo lo estrictamente necesario; recurre a `Context` únicamente cuando componentes muy anidados lo necesiten.
 
-## 6. Error Handling
+## 6. Manejo de Errores
 
-A single pipeline governs every error surfaced to the user:
+Un único pipeline gobierna cada error que se muestra al usuario:
 
 ```
 fetch or schema parse → ApiError / ValidationError (in api/client/errors.ts)
@@ -99,73 +99,73 @@ hook catches → toUiError(err) → UiError { message, code? }
 component renders error.message
 ```
 
-Rules:
-- Every response body from the backend is validated at the API boundary by a Zod schema. Drift between frontend and backend surfaces as `ValidationError`, not as a silent render bug.
-- Hooks catch; components display. Components never call `toUiError`, never read raw `Error.message`, never branch on `instanceof ApiError`.
-- Network failures distinguish themselves (code `network_error`) so the UI can show a specific message when appropriate.
+Reglas:
+- Cada cuerpo de respuesta del backend se valida en la frontera de la API mediante un esquema Zod. La divergencia entre frontend y backend aflora como `ValidationError`, no como un bug de renderizado silencioso.
+- Los hooks capturan; los componentes muestran. Los componentes nunca llaman a `toUiError`, nunca leen `Error.message` en crudo, nunca ramifican sobre `instanceof ApiError`.
+- Los fallos de red se distinguen a sí mismos (código `network_error`) para que la UI pueda mostrar un mensaje específico cuando corresponda.
 
-Full hierarchy and conventions live in `src/api/CLAUDE.md`.
+La jerarquía completa y las convenciones viven en `src/api/CLAUDE.md`.
 
-## 7. Naming Conventions
+## 7. Convenciones de Nombres
 
-- **Components**: `PascalCase.tsx` — the default export matches the filename.
-- **Hooks**: `camelCase.ts` starting with `use` (e.g. `useResourceList.ts`).
-- **Endpoint files**: `camelCase.ts` matching the backend resource.
-- **Type files**: `camelCase.ts` (e.g. `dto.ts`).
-- **Props types**: `Props` for internal types, `<ComponentName>Props` when exported.
-- **Constants**: `UPPER_SNAKE_CASE` for true constants.
-- **Directories**: lowercase, no separators (`components`, `endpoints`, `providers`).
+- **Componentes**: `PascalCase.tsx` — el export por defecto coincide con el nombre del fichero.
+- **Hooks**: `camelCase.ts` empezando por `use` (p. ej. `useResourceList.ts`).
+- **Ficheros de endpoint**: `camelCase.ts` que coincide con el recurso del backend.
+- **Ficheros de tipos**: `camelCase.ts` (p. ej. `dto.ts`).
+- **Tipos de props**: `Props` para tipos internos, `<ComponentName>Props` cuando se exportan.
+- **Constantes**: `UPPER_SNAKE_CASE` para constantes de verdad.
+- **Directorios**: en minúsculas, sin separadores (`components`, `endpoints`, `providers`).
 
 ## 8. Testing
 
-The frontend follows the **Testing Trophy**: static checks (TypeScript + ESLint) as the base, a moderate unit tier, a large integration tier (the sweet spot — MSW intercepts HTTP at the `fetch` boundary while every other layer runs unmocked), and a small E2E tier for golden paths.
+El frontend sigue el **Testing Trophy**: comprobaciones estáticas (TypeScript + ESLint) como base, un nivel unitario moderado, un gran nivel de integración (el punto óptimo — MSW intercepta HTTP en la frontera de `fetch` mientras el resto de capas corre sin mocks), y un pequeño nivel E2E para los golden paths.
 
-- Unit + integration tests: co-located `*.test.ts(x)` next to the file they cover. See `src/test/CLAUDE.md`.
-- E2E tests: `e2e/specs/*.spec.ts`, separate runner and config. See `e2e/CLAUDE.md`.
+- Tests unitarios + de integración: `*.test.ts(x)` co-ubicados junto al fichero que cubren. Ver `src/test/CLAUDE.md`.
+- Tests E2E: `e2e/specs/*.spec.ts`, runner y config separados. Ver `e2e/CLAUDE.md`.
 
-## 9. Formatting, Linting, Commits
+## 9. Formateo, Linting, Commits
 
-- Prettier enforces a single formatting style. Pre-commit hook runs `prettier --write` + `eslint --fix` on staged files via lint-staged.
-- TypeScript strict mode, ESLint with React Hooks and React Refresh plugins, and Prettier integration are non-negotiable.
-- CI gates on `tsc --noEmit`, `eslint`, `prettier --check`, and the Vitest suite. E2E runs on merges to the main branch.
+- Prettier impone un único estilo de formateo. El hook de pre-commit ejecuta `prettier --write` + `eslint --fix` sobre los ficheros staged mediante lint-staged.
+- El modo estricto de TypeScript, ESLint con los plugins de React Hooks y React Refresh, y la integración de Prettier son innegociables.
+- CI bloquea según `tsc --noEmit`, `eslint`, `prettier --check` y la suite de Vitest. E2E se ejecuta en los merges a la rama principal.
 
-## 10. Reading Order Before Adding Functionality
+## 10. Orden de Lectura Antes de Añadir Funcionalidad
 
-When touching the frontend, **read the layer-level `CLAUDE.md` of every directory the change lives in or crosses** before writing code. In practice:
+Al tocar el frontend, **lee el `CLAUDE.md` de nivel de capa de cada directorio en el que el cambio vive o que atraviesa** antes de escribir código. En la práctica:
 
-- New or changed API contract → `src/api/CLAUDE.md`.
-- New or changed page / hook / feature-local component → `src/features/CLAUDE.md`.
-- New shared primitive or widget → `src/components/CLAUDE.md`.
-- New global provider, layout, or route → `src/app/CLAUDE.md`.
-- New pure helper, type, or generic hook → `src/lib/CLAUDE.md`.
-- New tests → `src/test/CLAUDE.md` (and `e2e/CLAUDE.md` if end-to-end).
+- Contrato de API nuevo o modificado → `src/api/CLAUDE.md`.
+- Page / hook / componente local de feature nuevo o modificado → `src/features/CLAUDE.md`.
+- Primitiva o widget compartido nuevo → `src/components/CLAUDE.md`.
+- Provider global, layout o ruta nuevo → `src/app/CLAUDE.md`.
+- Helper puro, tipo o hook genérico nuevo → `src/lib/CLAUDE.md`.
+- Tests nuevos → `src/test/CLAUDE.md` (y `e2e/CLAUDE.md` si son end-to-end).
 
-Skipping this step is the most common source of architectural drift.
+Saltarse este paso es la fuente más común de deriva arquitectónica.
 
-## 11. Adding a New Feature — End-to-End Checklist
+## 11. Añadir una Nueva Feature — Checklist End-to-End
 
-- [ ] **Read** the layer `CLAUDE.md` files for every affected directory (see §10).
-- [ ] **DTOs**: add Zod schemas + inferred types in `src/api/types/dto.ts`.
-- [ ] **Endpoints**: thin wrappers around `request()` in `src/api/endpoints/`.
-- [ ] **Feature slice**: create `src/features/<name>/{pages,hooks,components}/`.
-- [ ] **Hooks**: `useQuery` for reads, `useMutation` with `onSuccess` invalidation for writes; translate errors via `toUiError`.
-- [ ] **Pages**: one per route, orchestrate hooks, pass data as props.
-- [ ] **Components**: presentational, props-typed, no API calls.
-- [ ] **Shared UI promotion**: if a piece is used by ≥2 features, move it to `components/`.
-- [ ] **Routing**: register in `src/app/routes/router.tsx`, `React.lazy()` unless boot path.
-- [ ] **MSW handlers**: add happy-path handlers for new endpoints in `src/test/msw/handlers.ts`.
-- [ ] **Tests**: unit for pure helpers, integration for the page, E2E if the journey is critical.
-- [ ] **No forbidden imports**: verify the dependency graph in §3 is respected.
+- [ ] **Lee** los ficheros `CLAUDE.md` de capa de cada directorio afectado (ver §10).
+- [ ] **DTOs**: añade esquemas Zod + tipos inferidos en `src/api/types/dto.ts`.
+- [ ] **Endpoints**: wrappers finos alrededor de `request()` en `src/api/endpoints/`.
+- [ ] **Slice de feature**: crea `src/features/<name>/{pages,hooks,components}/`.
+- [ ] **Hooks**: `useQuery` para lecturas, `useMutation` con invalidación en `onSuccess` para escrituras; traduce los errores mediante `toUiError`.
+- [ ] **Pages**: una por ruta, orquestan hooks, pasan los datos como props.
+- [ ] **Componentes**: presentacionales, tipados por props, sin llamadas a la API.
+- [ ] **Promoción a UI compartida**: si una pieza la usan ≥2 features, muévela a `components/`.
+- [ ] **Routing**: regístrala en `src/app/routes/router.tsx`, `React.lazy()` salvo que sea ruta de arranque.
+- [ ] **Handlers de MSW**: añade handlers de happy-path para los nuevos endpoints en `src/test/msw/handlers.ts`.
+- [ ] **Tests**: unitarios para helpers puros, de integración para la page, E2E si el recorrido es crítico.
+- [ ] **Sin imports prohibidos**: verifica que se respeta el grafo de dependencias del §3.
 
-## 12. Anti-Patterns (Do Not Do)
+## 12. Anti-Patrones (No Hacer)
 
-1. Calling `fetch()` outside `src/api/client/http.ts`.
-2. Importing from another feature.
-3. Hand-writing TypeScript types for DTOs instead of inferring them from a Zod schema.
-4. Storing server state in `useState`.
-5. Mocking endpoint functions or application hooks inside an integration test — always mock at the MSW (network) boundary.
-6. Rendering raw `error.message` from an `Error` or `ApiError` — always go through `UiError`.
-7. Declaring routes outside `src/app/routes/router.tsx`.
-8. Writing CSS outside Tailwind.
-9. Adding a global state management library without a concrete need that TanStack Query plus `Context` cannot cover.
-10. Commenting on *what* code does rather than *why* a non-obvious decision was made.
+1. Llamar a `fetch()` fuera de `src/api/client/http.ts`.
+2. Importar de otra feature.
+3. Escribir a mano tipos de TypeScript para los DTOs en lugar de inferirlos de un esquema Zod.
+4. Almacenar estado de servidor en `useState`.
+5. Mockear funciones de endpoint o hooks de aplicación dentro de un test de integración — mockea siempre en la frontera de MSW (red).
+6. Renderizar `error.message` en crudo de un `Error` o `ApiError` — pasa siempre por `UiError`.
+7. Declarar rutas fuera de `src/app/routes/router.tsx`.
+8. Escribir CSS fuera de Tailwind.
+9. Añadir una librería de gestión de estado global sin una necesidad concreta que TanStack Query más `Context` no puedan cubrir.
+10. Comentar *qué* hace el código en lugar de *por qué* se tomó una decisión no obvia.

@@ -1,47 +1,47 @@
-# Features Documentation Subdirectory Rules
+# Reglas del Subdirectorio de Documentación de Features
 
-This is the `CLAUDE.md` for the **`docs/features/` subdirectory**. It defines how the behavior-level feature documents in this folder must be written. It is loaded on demand only when working on files here, and it **complements** the parent [`../CLAUDE.md`](../CLAUDE.md) — it must never repeat what the parent already says.
+Este es el `CLAUDE.md` del **subdirectorio `docs/features/`**. Define cómo deben escribirse los documentos de feature a nivel de comportamiento de esta carpeta. Se carga bajo demanda solo al trabajar sobre ficheros de aquí, y **complementa** al padre [`../CLAUDE.md`](../CLAUDE.md) — nunca debe repetir lo que el padre ya dice.
 
-**Project-agnostic by design.** Nothing here names a concrete feature or domain. Every rule transfers to any project that adopts the behavior/limits two-tier documentation pattern.
+**Agnóstico del proyecto por diseño.** Nada aquí nombra una feature o dominio concretos. Toda regla es transferible a cualquier proyecto que adopte el patrón de documentación de dos niveles comportamiento/límites.
 
-**Precedence.** The root `CLAUDE.md` overrides this file, and the parent `docs/CLAUDE.md` overrides this file. This file governs only `docs/features/`.
+**Precedencia.** El `CLAUDE.md` raíz prevalece sobre este fichero, y el padre `docs/CLAUDE.md` prevalece sobre este fichero. Este fichero gobierna únicamente `docs/features/`.
 
-**Immutable.** This file must never be edited. All future rule changes go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio futuro de reglas pasa por una nueva versión de este fichero.
 
-## 1. What this folder is
+## 1. Qué es esta carpeta
 
-One Markdown file per feature, describing **behavior**: what the feature does, what the user experiences, the triggers, the conditions, the edge cases, and the *why* behind design decisions. Audience: the engineering team and future maintainers — not end users, and not Claude as a source of architectural rules.
+Un fichero Markdown por feature, describiendo el **comportamiento**: qué hace la feature, qué experimenta el usuario, los disparadores, las condiciones, los casos límite y el *porqué* detrás de las decisiones de diseño. Audiencia: el equipo de ingeniería y los futuros mantenedores — no los usuarios finales, y no Claude como fuente de reglas arquitectónicas.
 
-## 2. The behavior / limits split (the rule that matters most here)
+## 2. La división comportamiento / límites (la regla que más importa aquí)
 
-Every feature is documented across **two paired files**:
+Cada feature se documenta a través de **dos ficheros emparejados**:
 
-- `features/<slug>.md` — **behavior**: how it works and what the user experiences.
-- `limits/<slug>.md` — **exact figures** (caps, sizes, TTLs, retries, timeouts, minimums, debounce) plus the exhaustive list of "what it does NOT support".
+- `features/<slug>.md` — **comportamiento**: cómo funciona y qué experimenta el usuario.
+- `limits/<slug>.md` — **cifras exactas** (topes, tamaños, TTLs, reintentos, timeouts, mínimos, debounce) más la lista exhaustiva de «qué NO soporta».
 
-The pair shares a **slug**: `features/lupa.md` ↔ `limits/lupa.md`. The pairing is **1:1** — never create or keep one half without the other.
+El par comparte un **slug**: `features/lupa.md` ↔ `limits/lupa.md`. El emparejamiento es **1:1** — nunca crees ni conserves una mitad sin la otra.
 
-**In `features/`, do not state cap values as figures.** Mention a limit only in passing and defer the number to the twin (e.g. "up to a cap — the exact figure is in [`../limits/<slug>.md`]"). Numbers live in `limits/`; the behavior and the *why* live here. Keep the overlap minimal and deliberate.
+**En `features/`, no indiques los valores de los topes como cifras.** Menciona un límite solo de pasada y difiere el número al gemelo (p. ej. «hasta un tope — la cifra exacta está en [`../limits/<slug>.md`]»). Los números viven en `limits/`; el comportamiento y el *porqué* viven aquí. Mantén el solape mínimo y deliberado.
 
-## 3. Cross-links
+## 3. Enlaces cruzados
 
-- To the limits twin: `[../limits/<slug>.md](../limits/<slug>.md)`.
-- To a sibling feature: `[<other-slug>.md](<other-slug>.md)`.
-- Prefer linking **inside `docs/`** over linking to code-level guides (`*_guide.md`, `repository_guide.md`) — those target a different audience.
-- Never leave a broken link: the target must already exist or be created in the same change.
+- Al gemelo de límites: `[../limits/<slug>.md](../limits/<slug>.md)`.
+- A una feature hermana: `[<other-slug>.md](<other-slug>.md)`.
+- Prefiere enlazar **dentro de `docs/`** antes que enlazar a guías a nivel de código (`*_guide.md`, `repository_guide.md`) — esas se dirigen a una audiencia distinta.
+- Nunca dejes un enlace roto: el destino debe existir ya o crearse en el mismo cambio.
 
-## 4. Shape of a feature document
+## 4. Forma de un documento de feature
 
-- Open with a one-paragraph statement of what the document covers and a pointer to its limits twin.
-- Numbered sections (`## N. Title`), short paragraphs, and concrete input→result examples.
-- Close with a `## Resumen en una frase` section: a single blockquote that condenses the whole feature.
-- Language: match the other documents already in this folder; do not mix languages within one file (parent `docs/CLAUDE.md` § 6).
+- Abre con un párrafo que exponga qué cubre el documento y un puntero a su gemelo de límites.
+- Secciones numeradas (`## N. Título`), párrafos cortos y ejemplos concretos entrada→resultado.
+- Cierra con una sección `## Resumen en una frase`: un único blockquote que condensa toda la feature.
+- Idioma: coincide con los demás documentos ya presentes en esta carpeta; no mezcles idiomas dentro de un mismo fichero (padre `docs/CLAUDE.md` § 6).
 
-## 5. Source of truth — keep it accurate
+## 5. Fuente de verdad — mantenla exacta
 
-A document here carries the same authority as a `*_guide.md`: when the code contradicts it, the document is treated as correct and the code is what must change (root `CLAUDE.md` § 9). So **every behavioral claim must match the real, current code.** When you write or edit a feature doc, confirm the claim against the implementation — an inaccurate document silently misdirects a future reviewer into "fixing" code that was right.
+Un documento de aquí tiene la misma autoridad que un `*_guide.md`: cuando el código lo contradice, el documento se trata como correcto y el código es lo que debe cambiar (`CLAUDE.md` raíz § 9). Por eso **toda afirmación de comportamiento debe coincidir con el código real y actual.** Cuando escribas o edites un documento de feature, confirma la afirmación contra la implementación — un documento inexacto desvía en silencio a un futuro revisor hacia «arreglar» código que estaba bien.
 
-## 6. Adding or changing a feature
+## 6. Añadir o cambiar una feature
 
-- New feature → create **both** `features/<slug>.md` and `limits/<slug>.md`, and add the entry to **both** `README.md` indexes.
-- Changed behavior → update the feature doc (and its limits twin, if a figure moved) in the same change. A stale document is worse than a missing one.
+- Nueva feature → crea **ambos** `features/<slug>.md` y `limits/<slug>.md`, y añade la entrada a **ambos** índices `README.md`.
+- Comportamiento cambiado → actualiza el documento de feature (y su gemelo de límites, si se movió una cifra) en el mismo cambio. Un documento obsoleto es peor que uno inexistente.

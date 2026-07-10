@@ -1,20 +1,20 @@
-# General Application Shell Layer Rules
+# Reglas Generales de la Capa Application Shell
 
-This is the `CLAUDE.md` for the **application shell** — the layer that boots the frontend, composes the global providers, and maps URLs to feature pages. Every aspect covered here is transferable to any application that follows this layered architecture — nothing is specific to a single project.
+Este es el `CLAUDE.md` del **application shell** — la capa que arranca el frontend, compone los providers globales y mapea las URLs a las pages de feature. Todo lo cubierto aquí es transferible a cualquier aplicación que siga esta arquitectura por capas — nada es específico de un único proyecto.
 
-**Project-agnostic by design.** Nothing here references a concrete domain, entity, or feature. Every rule applies to any repository that follows this layered architecture.
+**Agnóstico del proyecto por diseño.** Nada aquí hace referencia a un dominio, entidad o feature concretos. Toda regla aplica a cualquier repositorio que siga esta arquitectura por capas.
 
-**Reusable.** Copy this file into a new project to establish the application shell from day one.
+**Reutilizable.** Copia este fichero en un proyecto nuevo para establecer el application shell desde el primer día.
 
-**Precedence.** In case of conflict between this file and any document further down the repository, these rules take precedence.
+**Precedencia.** En caso de conflicto entre este fichero y cualquier documento más abajo en el repositorio, estas reglas tienen precedencia.
 
-**Immutable.** This file must never be edited. All changes to shell-layer rules go through a new version of this file.
+**Inmutable.** Este fichero nunca debe editarse. Todo cambio en las reglas de la capa shell pasa por una nueva versión de este fichero.
 
-## 1. Purpose
+## 1. Propósito
 
-The shell is the "skeleton" of the application. It **boots** the app, **wraps** it in global providers, and **routes** URLs to feature pages. It owns no business logic and no visual domain concerns beyond the structural layouts every route shares.
+El shell es el "esqueleto" de la aplicación. **Arranca** la app, la **envuelve** en providers globales y **enruta** las URLs a las pages de feature. No posee lógica de negocio ni preocupaciones visuales de dominio más allá de los layouts estructurales que comparten todas las rutas.
 
-## 2. Structure
+## 2. Estructura
 
 ```
 app/
@@ -23,74 +23,74 @@ app/
 └── routes/      # Router configuration — one router.tsx
 ```
 
-## 3. Router Rules (`routes/`)
+## 3. Reglas del Router (`routes/`)
 
-### 3.1 Single source of truth
-- All routes are declared in **one** `router.tsx` using the framework's router factory. No feature declares its own routes.
+### 3.1 Fuente única de verdad
+- Todas las rutas se declaran en **un** `router.tsx` usando la factoría de router del framework. Ninguna feature declara sus propias rutas.
 
-### 3.2 Point at feature pages
-- Each route's element references a page component exported by a feature (`features/<x>/pages/...`). The shell never defines page components itself.
+### 3.2 Apuntar a pages de feature
+- El element de cada ruta referencia un page component exportado por una feature (`features/<x>/pages/...`). El shell nunca define page components él mismo.
 
 ### 3.3 Lazy loading
-- Non-boot-path pages use `React.lazy()` (or the framework's equivalent lazy loader) to split the bundle. Boot-path pages — those reached before the router has resolved a feature route — may be eager.
+- Las pages fuera de la ruta de arranque usan `React.lazy()` (o el cargador lazy equivalente del framework) para dividir el bundle. Las pages de la ruta de arranque — las que se alcanzan antes de que el router haya resuelto una ruta de feature — pueden ser eager.
 
-### 3.4 Route paths
-- Flat and descriptive. Use resource-style paths (`/resources`, `/resources/:id`). Avoid deep nesting beyond two levels.
+### 3.4 Paths de ruta
+- Planos y descriptivos. Usa paths estilo recurso (`/resources`, `/resources/:id`). Evita el anidamiento profundo más allá de dos niveles.
 
-### 3.5 No routing logic in features
-- Features export page components only. They never import the router, never build paths, and never call navigation helpers that bypass the router.
+### 3.5 Nada de lógica de enrutado en las features
+- Las features exportan page components únicamente. Nunca importan el router, nunca construyen paths y nunca llaman a helpers de navegación que salten el router.
 
-## 4. Provider Rules (`providers/`)
+## 4. Reglas de los Providers (`providers/`)
 
-### 4.1 Composition in one file
-- All global context providers are composed inside `Providers.tsx` (or an equivalent single entry point). Individual providers are defined in sibling files and only consumed by `Providers.tsx`.
+### 4.1 Composición en un único fichero
+- Todos los context providers globales se componen dentro de `Providers.tsx` (o un punto de entrada único equivalente). Los providers individuales se definen en ficheros hermanos y solo los consume `Providers.tsx`.
 
-### 4.2 Cross-cutting only
-- A context lives here only if it is genuinely cross-cutting: authenticated identity, data-fetching cache, theme, locale. Feature-scoped state does not belong in a global context.
+### 4.2 Solo transversales
+- Un context vive aquí solo si es genuinamente transversal: identidad autenticada, caché de data fetching, theme, locale. El estado acotado a una feature no pertenece a un context global.
 
-### 4.3 Singleton instances
-- Long-lived instances (for example, a data-fetching client) are created once with `useState(() => createClient())` inside the provider to avoid re-instantiation on re-render.
+### 4.3 Instancias singleton
+- Las instancias de larga vida (por ejemplo, un cliente de data fetching) se crean una sola vez con `useState(() => createClient())` dentro del provider para evitar la reinstanciación en cada re-render.
 
 ### 4.4 Devtools
-- Optional developer overlays (devtools panels, mock-switchers) mount only under `import.meta.env.DEV` (or the equivalent dev-mode guard).
+- Los overlays opcionales de desarrollo (paneles de devtools, mock-switchers) se montan solo bajo `import.meta.env.DEV` (o el guard de modo dev equivalente).
 
-## 5. Layout Rules (`layout/`)
+## 5. Reglas de los Layouts (`layout/`)
 
-### 5.1 Render an `<Outlet />`
-- Layouts are React components that declare the shell structure (chrome, navigation, suspense boundaries) and delegate their content region to the router's `<Outlet />`.
+### 5.1 Renderizar un `<Outlet />`
+- Los layouts son React components que declaran la estructura del shell (chrome, navegación, boundaries de suspense) y delegan su región de contenido al `<Outlet />` del router.
 
-### 5.2 No domain logic
-- A layout does not fetch data, does not know about specific features, and does not orchestrate hooks that depend on the domain. If a layout needs contextual information (e.g. the current resource id), it reads it from the router (URL params) or from a global context.
+### 5.2 Nada de lógica de dominio
+- Un layout no hace fetch de datos, no conoce features concretas y no orquesta hooks que dependan del dominio. Si un layout necesita información contextual (p. ej. el id del recurso actual), la lee del router (params de la URL) o de un context global.
 
-## 6. Entry Point
+## 6. Punto de Entrada
 
-The `main.tsx` (or equivalent) file mounts `<Providers />` into the root DOM node and does nothing else. No fetching, no routing, no conditional logic.
+El fichero `main.tsx` (o equivalente) monta `<Providers />` en el nodo DOM raíz y no hace nada más. Nada de fetching, nada de enrutado, nada de lógica condicional.
 
-## 7. Must / Must Not
+## 7. Debe / No Debe
 
-### Must
-- Keep routing, layout, and providers strictly structural.
-- Lazy-load every non-boot page.
-- Compose all providers in a single entry.
+### Debe
+- Mantener el enrutado, el layout y los providers estrictamente estructurales.
+- Cargar en lazy toda page que no sea de arranque.
+- Componer todos los providers en un único punto de entrada.
 
-### Must Not
-- Import feature hooks directly from the shell (pages do that inside the feature, not here).
-- Declare routes outside `routes/`.
-- Hold domain state in a global context. Domain state belongs in `features/` or in the data-fetching cache.
+### No Debe
+- Importar hooks de feature directamente desde el shell (eso lo hacen las pages dentro de la feature, no aquí).
+- Declarar rutas fuera de `routes/`.
+- Mantener estado de dominio en un context global. El estado de dominio pertenece a `features/` o a la caché de data fetching.
 
-## 8. Import Boundaries
+## 8. Fronteras de Import
 
-| From `app/`    | May import from                                                    | May not import from                                           |
+| Desde `app/`   | Puede importar de                                                  | No puede importar de                                          |
 |----------------|--------------------------------------------------------------------|---------------------------------------------------------------|
-| `layout/`      | `components/`, `lib/`                                              | `api/`, `features/*/hooks` or `features/*/components`         |
-| `providers/`   | `api/client/errors`, `lib/`, pinned third-party providers          | `features/`, `components/ui/`                                 |
+| `layout/`      | `components/`, `lib/`                                              | `api/`, `features/*/hooks` o `features/*/components`          |
+| `providers/`   | `api/client/errors`, `lib/`, providers de terceros pineados         | `features/`, `components/ui/`                                 |
 | `routes/`      | `features/*/pages`, `layout/`                                      | `features/*/hooks`, `features/*/components`                   |
 
-See `../features/CLAUDE.md` for the pages the router points at and `../api/CLAUDE.md` for the error types providers may import.
+Ver `../features/CLAUDE.md` para las pages a las que apunta el router y `../api/CLAUDE.md` para los tipos de error que los providers pueden importar.
 
-## 9. Adding Something to the Shell — Checklist
+## 9. Añadir Algo al Shell — Checklist
 
-- [ ] If it is a new route: add it in `routes/router.tsx`, referencing a page from `features/<x>/pages/`. Prefer `React.lazy()`.
-- [ ] If it is a new global provider: add its file under `providers/` and compose it inside `Providers.tsx`. Justify why it is cross-cutting.
-- [ ] If it is a new layout: place it under `layout/`, render an `<Outlet />`, avoid domain logic.
-- [ ] Verify no forbidden import crossed a boundary (see the table above).
+- [ ] Si es una ruta nueva: añádela en `routes/router.tsx`, referenciando una page de `features/<x>/pages/`. Prefiere `React.lazy()`.
+- [ ] Si es un provider global nuevo: añade su fichero bajo `providers/` y compónlo dentro de `Providers.tsx`. Justifica por qué es transversal.
+- [ ] Si es un layout nuevo: colócalo bajo `layout/`, renderiza un `<Outlet />`, evita la lógica de dominio.
+- [ ] Verifica que ningún import prohibido cruzó una frontera (ver la tabla de arriba).
