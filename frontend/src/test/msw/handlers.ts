@@ -122,6 +122,12 @@ export const handlers = [
       state: 'state-test',
     }),
   ),
+  // Backfill status (background bulk-load progress). Happy-path: no active
+  // backfill, so ``active: false`` stops the poll and no counter shows. Specs
+  // override with ``server.use(...)`` to return a running job.
+  http.get(`${API_BASE}/mailboxes/:mailboxId/backfill-status`, () =>
+    HttpResponse.json({ accounts: [], active: false }),
+  ),
 
   // Recipient autocomplete (contacts) — user-level, no path params. Static
   // happy-path list; specs needing the empty / error case override inline.

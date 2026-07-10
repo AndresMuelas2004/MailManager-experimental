@@ -145,6 +145,44 @@ describe('useConnectedAccounts.addAccount — interactive OAuth flow', () => {
     expect(popup.location.href).toContain('https://accounts.google.com/');
   });
 
+  it('backgrounds the initial load: no metadata sync, drafts sync fires, backfill poll kicked', async () => {
+    let syncMetaCalled = false;
+    let draftsSyncCalled = false;
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () => {
+        syncMetaCalled = true;
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/drafts/sync`, () => {
+        draftsSyncCalled = true;
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await setupHook();
+    emitOAuthResultWhenStarted(popup, {
+      source: 'mailmanager-oauth',
+      ok: true,
+      provider: 'gmail',
+      message: 'Account connected successfully.',
+    });
+
+    await act(async () => {
+      await result.current.addAccount();
+    });
+
+    expect(result.current.entries).toHaveLength(1);
+    expect(result.current.entries[0].status).toBe('ready');
+    // The initial history now downloads via the backend backfill — addAccount
+    // no longer syncs metadata for the initial load.
+    expect(syncMetaCalled).toBe(false);
+    // Drafts still sync best-effort (fire-and-forget) — let it settle.
+    await waitFor(() => expect(draftsSyncCalled).toBe(true));
+    // The poll is kicked so the "Cargando…" counter appears without a remount.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['backfill-status', MAILBOX_ID] });
+  });
+
   it('rolls the account back and shows the error when the start step fails', async () => {
     let deleted = false;
     server.use(
@@ -295,6 +333,44 @@ describe('useConnectedAccounts.reconnectAccount — interactive OAuth re-auth', 
     expect(result.current.entries[0].account.account_id).toBe('acc_existing');
     expect(result.current.entries[0].status).toBe('ready');
     expect(popup.location.href).toContain('https://accounts.google.com/');
+  });
+
+  it('still syncs metadata on reconnect and does NOT kick the backfill poll', async () => {
+    // A reconnection is not a first connection: the backend enqueues no backfill
+    // (sync_cursor is set), so reconnect keeps its classic sync-metadata call
+    // and never touches the backfill-status query.
+    let syncMetaCalled = false;
+    const { result } = await setupHookWithAccount();
+    server.use(
+      http.post(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/connect`, ({ params }) =>
+        HttpResponse.json({
+          provider: 'gmail',
+          account_id: params.accountId,
+          account_label: `${params.mailboxId}__${params.accountId}`,
+          authorization_url: 'https://accounts.google.com/o/oauth2/auth?mock=1',
+          state: 'state-test',
+        }),
+      ),
+      http.post(`${API_BASE}/mailboxes/:mailboxId/emails/sync-metadata`, () => {
+        syncMetaCalled = true;
+        return HttpResponse.json({ total_synced: 0, accounts: [] });
+      }),
+    );
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    emitOAuthResultWhenStarted(popup, {
+      source: 'mailmanager-oauth',
+      ok: true,
+      provider: 'gmail',
+      message: 'Account connected successfully.',
+    });
+
+    await act(async () => {
+      await result.current.reconnectAccount('acc_existing');
+    });
+
+    expect(syncMetaCalled).toBe(true);
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['backfill-status', MAILBOX_ID] });
   });
 
   it('keeps the account (no rollback) and shows the error when the reconnect fails', async () => {

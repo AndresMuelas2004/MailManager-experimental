@@ -99,6 +99,7 @@ export const es = {
     editLabelPlaceholder: 'Nombre de la cuenta',
     syncingEmails: 'Sincronizando correos, un momento...',
     syncError: 'Error al sincronizar',
+    backfillLoading: 'Cargando… {count} correos',
     noEmailsYet: 'Sin correos todavía',
     confirmDeleteTitle: '¿Eliminar esta cuenta?',
     confirmDeleteDescription: 'Se eliminarán los correos y borradores asociados a esta cuenta.',
@@ -110,6 +111,7 @@ export const es = {
     emptyDefault: 'No hay correos en esta bandeja',
     emptySearch: 'No se encontraron correos para tu búsqueda.',
     emptyFiltered: 'No hay correos que coincidan con los filtros',
+    backfillNotice: 'Cargando tu histórico… {count} correos',
   },
 
   listControls: {

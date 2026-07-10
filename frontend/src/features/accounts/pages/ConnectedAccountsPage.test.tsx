@@ -121,4 +121,57 @@ describe('ConnectedAccountsPage — account management cards', () => {
     // The card is removed from the listing after a successful delete.
     await waitFor(() => expect(screen.queryByText('one@example.com')).not.toBeInTheDocument());
   });
+
+  it('shows the live backfill counter on a card whose account is still loading', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+      // The account is mid-backfill → its card shows the counter.
+      http.get(`${API_BASE}/mailboxes/mb_1/backfill-status`, () =>
+        HttpResponse.json({
+          accounts: [
+            {
+              account_id: 'a_1',
+              status: 'running',
+              fetched_count: 340,
+              target_total: 100000,
+              done: false,
+            },
+          ],
+          active: true,
+        }),
+      ),
+    );
+
+    renderConnectedAccounts();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    const notice = await screen.findByText(/Cargando/);
+    expect(notice.textContent).toContain('340');
+  });
+
+  it('renders the card normally when the account has no active backfill', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+      // A completed job is terminal → the counter is retired.
+      http.get(`${API_BASE}/mailboxes/mb_1/backfill-status`, () =>
+        HttpResponse.json({
+          accounts: [
+            {
+              account_id: 'a_1',
+              status: 'completed',
+              fetched_count: 100000,
+              target_total: 100000,
+              done: true,
+            },
+          ],
+          active: false,
+        }),
+      ),
+    );
+
+    renderConnectedAccounts();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    expect(screen.queryByText(/Cargando/)).not.toBeInTheDocument();
+  });
 });

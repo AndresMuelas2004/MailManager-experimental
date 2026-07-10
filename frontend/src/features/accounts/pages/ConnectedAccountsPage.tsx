@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 
 import useConnectedAccounts from '../hooks/useConnectedAccounts';
+import useBackfillStatus from '../hooks/useBackfillStatus';
 import AddAccountCard from '../components/AddAccountCard';
 import AccountCard from '../components/AccountCard';
 import Spinner from '../../../components/common/Spinner';
@@ -25,6 +26,10 @@ export default function ConnectedAccountsPage() {
     editAccountLabel,
     error,
   } = useConnectedAccounts(mailboxId!);
+
+  // Live backfill progress per account (server state). Accounts without a job
+  // are simply absent from the Map → their card renders normally.
+  const { statuses: backfillStatuses } = useBackfillStatus(mailboxId!);
 
   if (loading) {
     return (
@@ -61,16 +66,21 @@ export default function ConnectedAccountsPage() {
         </div>
 
         <div className="grid flex-1 content-start gap-2 [grid-template-columns:repeat(auto-fill,minmax(12rem,1fr))]">
-          {entries.map((entry) => (
-            <AccountCard
-              key={entry.account.account_id}
-              account={entry.account}
-              status={entry.status}
-              onEditLabel={(label) => editAccountLabel(entry.account.account_id, label)}
-              onReconnect={() => reconnectAccount(entry.account.account_id)}
-              onDelete={() => removeAccount(entry.account.account_id)}
-            />
-          ))}
+          {entries.map((entry) => {
+            const backfill = backfillStatuses.get(entry.account.account_id);
+            return (
+              <AccountCard
+                key={entry.account.account_id}
+                account={entry.account}
+                status={entry.status}
+                backfillStatus={backfill?.status}
+                backfillFetchedCount={backfill?.fetched_count}
+                onEditLabel={(label) => editAccountLabel(entry.account.account_id, label)}
+                onReconnect={() => reconnectAccount(entry.account.account_id)}
+                onDelete={() => removeAccount(entry.account.account_id)}
+              />
+            );
+          })}
         </div>
       </div>
 

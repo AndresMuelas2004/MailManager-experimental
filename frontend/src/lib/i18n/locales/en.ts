@@ -97,6 +97,7 @@ export const en: EsDictionary = {
     editLabelPlaceholder: 'Account name',
     syncingEmails: 'Syncing email, one moment...',
     syncError: 'Sync error',
+    backfillLoading: 'Loading… {count} emails',
     noEmailsYet: 'No email yet',
     confirmDeleteTitle: 'Delete this account?',
     confirmDeleteDescription: 'The email and drafts associated with this account will be deleted.',
@@ -108,6 +109,7 @@ export const en: EsDictionary = {
     emptyDefault: 'No email in this mailbox',
     emptySearch: 'No email found for your search.',
     emptyFiltered: 'No emails match the filters',
+    backfillNotice: 'Loading your history… {count} emails',
   },
 
   listControls: {

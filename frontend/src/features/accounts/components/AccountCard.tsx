@@ -9,6 +9,10 @@ import type { AccountOut } from '../../../api/types/dto';
 type Props = {
   account: AccountOut;
   status: 'syncing' | 'ready' | 'error';
+  // Background bulk-load progress (server state, resolved by the page from the
+  // useBackfillStatus Map). Absent when the account has no active backfill job.
+  backfillStatus?: 'pending' | 'running' | 'completed' | 'failed';
+  backfillFetchedCount?: number;
   onEditLabel?: (label: string) => void;
   onReconnect?: () => void;
   onDelete?: () => void;
@@ -20,12 +24,19 @@ type Props = {
 export default function AccountCard({
   account,
   status,
+  backfillStatus,
+  backfillFetchedCount,
   onEditLabel,
   onReconnect,
   onDelete,
 }: Props) {
   const { t } = useTranslation();
   const meta = getProviderMeta(account.provider);
+
+  // Show the live counter only while the backfill is in flight; completed /
+  // failed / absent all collapse to the normal render (the label just retires
+  // — a failed backfill shows no error notice by design, MVP).
+  const isBackfilling = backfillStatus === 'pending' || backfillStatus === 'running';
 
   const hasCustomLabel = !isGenericLabel(account.display_label, account.provider);
   const email = account.email_address;
@@ -98,6 +109,13 @@ export default function AccountCard({
           >
             {headerText}
           </span>
+          {isBackfilling && (
+            <span className="shrink-0 text-[10px] font-medium text-blue-600">
+              {t('accounts.backfillLoading', {
+                count: (backfillFetchedCount ?? 0).toLocaleString(),
+              })}
+            </span>
+          )}
           {status === 'error' && (
             <span className="shrink-0 text-[10px] text-red-500">{t('accounts.syncError')}</span>
           )}

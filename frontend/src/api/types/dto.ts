@@ -98,6 +98,27 @@ export const accountConnectStartResponseSchema = z.object({
 });
 export type AccountConnectStartResponse = z.infer<typeof accountConnectStartResponseSchema>;
 
+// Background bulk-load (backfill) progress — response of
+// ``GET /mailboxes/{mid}/backfill-status``. ``accounts`` lists ONLY the
+// accounts that currently have a backfill job (pending/running/completed/failed);
+// an account with no job is simply absent (treated as "no backfill"). ``done``
+// mirrors ``status ∈ {completed, failed}``; ``active`` is true while at least one
+// account is pending/running (the poll stops when it flips to false).
+export const backfillAccountStatusSchema = z.object({
+  account_id: z.string(),
+  status: z.enum(['pending', 'running', 'completed', 'failed']),
+  fetched_count: z.number(),
+  target_total: z.number(),
+  done: z.boolean(),
+});
+export type BackfillAccountStatus = z.infer<typeof backfillAccountStatusSchema>;
+
+export const backfillStatusListSchema = z.object({
+  accounts: z.array(backfillAccountStatusSchema),
+  active: z.boolean(),
+});
+export type BackfillStatusList = z.infer<typeof backfillStatusListSchema>;
+
 // Attachments — see decisionesTomadasAdjuntosFrontend.md §4.
 export const attachmentMetadataSchema = z.object({
   attachment_id: z.string().uuid(),
