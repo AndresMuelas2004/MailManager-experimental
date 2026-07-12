@@ -1,4 +1,4 @@
-import { request } from '../client/http';
+import { getApiBaseUrl, request } from '../client/http';
 import { EMAILS_PAGE_SIZE } from '../../lib/constants';
 import type { SortKey, SortDir } from '../../lib/listControls';
 import {
@@ -146,11 +146,22 @@ export function getEmailContent(
   mailboxId: string,
   providerMessageId: string,
   accountId: string,
+  signal?: AbortSignal,
 ): Promise<EmailContentOut> {
   const params = new URLSearchParams({ account_id: accountId });
   return request(`/mailboxes/${mailboxId}/emails/${providerMessageId}/content?${params}`, {
     schema: emailContentOutSchema,
+    signal,
   });
+}
+
+// Absolute base URL of the image-proxy endpoint. Exposed here — inside ``api/``,
+// where importing ``getApiBaseUrl`` from ``client/http`` is allowed — so the
+// email-content ``queryFn`` can rewrite the sanitized body's sentinel image URLs
+// (see ``lib/imageProxy.ts``) without a feature hook importing ``client/http``
+// directly, which the feature import boundary forbids (features/CLAUDE.md §8).
+export function buildImageProxyBaseUrl(): string {
+  return `${getApiBaseUrl()}/image-proxy`;
 }
 
 export function getUnreadCount(

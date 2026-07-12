@@ -45,6 +45,17 @@ export function getApiOrigin(): string {
   return new URL(getBaseUrl()).origin;
 }
 
+/**
+ * Absolute API base URL with any trailing slash stripped (e.g.
+ * `https://DOMAIN/api` in prod, `http://localhost:8000` in dev). Used to build
+ * the image-proxy URL that replaces the sentinel prefix in sanitized email
+ * bodies (see `lib/imageProxy.ts`). Unlike `getApiOrigin`, this keeps the base
+ * path (`/api`) so Caddy routes the request to the backend.
+ */
+export function getApiBaseUrl(): string {
+  return getBaseUrl().replace(/\/+$/, '');
+}
+
 async function parseBody(response: Response): Promise<unknown> {
   if (response.status === 204) {
     return undefined;
