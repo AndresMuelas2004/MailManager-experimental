@@ -886,36 +886,6 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 f"Unexpected email favorites sync error ({type(exc).__name__}): {exc}"
             ) from exc
 
-    def set_favorites_true_batch(
-        self,
-        account_id: str,
-        provider_message_ids: list[str],
-    ) -> int:
-        # Single statement marking the supplied subset TRUE (the thread's
-        # favourite members during a conversation lazy-sync). Never forces
-        # FALSE — the full-replacement path is ``sync_favorites_for_account``.
-        # An empty list emits ``= ANY('{}')`` (matches nothing); the service
-        # guards against it, but the query is harmless regardless.
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        queries.UPDATE_FAVORITES_TRUE_BATCH,
-                        {
-                            "account_id": account_id,
-                            "true_ids": provider_message_ids,
-                        },
-                    )
-                    return cur.rowcount
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to batch-mark email favorites.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected email favorites batch update error ({type(exc).__name__}): {exc}"
-            ) from exc
-
     def list_recipient_suggestions(
         self,
         account_ids: list[str],

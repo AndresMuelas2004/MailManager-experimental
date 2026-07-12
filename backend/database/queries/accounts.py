@@ -50,6 +50,18 @@ LIST_ACCOUNT_IDS_BY_USER = """
     WHERE m.owner_user_id = %(user_id)s
 """
 
+# Count of every account the user owns across all of their mailboxes. Backs
+# the per-user account limit guard (create_account) and GET /accounts/quota.
+# Counts ALL account rows including those with an expired token (decision 3A):
+# a stale account still occupies storage and counts until deleted. Same JOIN
+# shape as ``LIST_ACCOUNT_IDS_BY_USER`` reduced to a COUNT.
+COUNT_ACCOUNTS_BY_USER = """
+    SELECT COUNT(*) AS account_count
+    FROM accounts a
+    INNER JOIN mailboxes m ON m.mailbox_id = a.mailbox_id
+    WHERE m.owner_user_id = %(user_id)s
+"""
+
 UPSERT_ACCOUNT = """
     INSERT INTO accounts (account_id, mailbox_id, provider, display_label, config, signature_html)
     VALUES (%(account_id)s, %(mailbox_id)s, %(provider)s, %(display_label)s, %(config)s::jsonb, %(signature_html)s)

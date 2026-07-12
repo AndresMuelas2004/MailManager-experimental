@@ -7,7 +7,7 @@ checkpoint driven by the in-process backfill worker.
 
 from __future__ import annotations
 
-# Full projection reused by GET / LIST_BY_MAILBOX / CLAIM_NEXT_BATCH RETURNING
+# Full projection reused by LIST_BY_MAILBOX / CLAIM_NEXT_BATCH RETURNING
 # so the store always returns a complete row shape.
 _COLUMNS = (
     "account_id, mailbox_id, provider, status, target_total, fetched_count, "
@@ -35,27 +35,10 @@ ENQUEUE = """
 """
 
 
-GET = f"""
-    SELECT {_COLUMNS}
-    FROM account_backfill_jobs
-    WHERE account_id = %(account_id)s
-"""
-
-
 LIST_BY_MAILBOX = f"""
     SELECT {_COLUMNS}
     FROM account_backfill_jobs
     WHERE mailbox_id = %(mailbox_id)s
-"""
-
-
-# Only the account_ids of active (pending/running) jobs — used by the sync
-# guard to exclude accounts under active backfill without pulling full rows.
-LIST_ACTIVE_ACCOUNT_IDS = """
-    SELECT account_id
-    FROM account_backfill_jobs
-    WHERE mailbox_id = %(mailbox_id)s
-      AND status IN ('pending', 'running')
 """
 
 
@@ -121,4 +104,20 @@ RESET_RUNNING_TO_PENDING = """
     UPDATE account_backfill_jobs
        SET status = 'pending', updated_at = now()
      WHERE status = 'running'
+"""
+
+
+# Auto-recovery reaper: revive a 'failed' job back to 'pending' so the
+# dispatcher re-claims and RESUMES it from its checkpoint (page_cursor +
+# fetched_count are preserved by MARK_FAILED). Bounded by ``max_attempts`` so a
+# permanently broken account eventually stays 'failed' (visible in
+# GET /backfill-status; the user reconnects). The ``updated_at`` backoff avoids
+# a tight retry loop — a job is only revived once it has sat 'failed' for at
+# least ``backoff_seconds``. Called once per dispatcher poll.
+RESET_RETRIABLE_FAILED_TO_PENDING = """
+    UPDATE account_backfill_jobs
+       SET status = 'pending', updated_at = now()
+     WHERE status = 'failed'
+       AND attempts < %(max_attempts)s
+       AND updated_at < now() - (%(backoff_seconds)s * INTERVAL '1 second')
 """

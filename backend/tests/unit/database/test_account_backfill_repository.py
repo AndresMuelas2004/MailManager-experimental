@@ -86,45 +86,6 @@ def test_enqueue_propagates_connection_pool_error(monkeypatch):
         backfill_module.account_backfill_store.enqueue("acc1", "mb1", "gmail", 1)
 
 
-# ===== get =====
-
-
-def test_get_happy_path_casts_ids_and_timestamps(monkeypatch):
-    cursor = FakeCursor(fetchone_results=[_fake_job_row(status="running", fetched_count=42)])
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    row = backfill_module.account_backfill_store.get("acc1")
-    assert row["account_id"] == "acc1"
-    assert row["status"] == "running"
-    assert row["fetched_count"] == 42
-    # ids are coerced to str and timestamps to ISO strings by _row_to_dict.
-    assert isinstance(row["account_id"], str)
-    assert row["created_at"] == _CREATED.isoformat()
-    assert row["completed_at"] is None
-
-
-def test_get_returns_none_when_absent(monkeypatch):
-    cursor = FakeCursor(fetchone_results=[None])
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    assert backfill_module.account_backfill_store.get("acc1") is None
-
-
-def test_get_returns_none_on_invalid_uuid(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    assert backfill_module.account_backfill_store.get("not-a-uuid") is None
-
-
-def test_get_raises_query_error_on_psycopg2(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    with pytest.raises(QueryError, match="Failed to get backfill job"):
-        backfill_module.account_backfill_store.get("acc1")
-
-
 # ===== list_by_mailbox =====
 
 
@@ -151,24 +112,6 @@ def test_list_by_mailbox_raises_query_error(monkeypatch):
 
     with pytest.raises(QueryError, match="Failed to list backfill jobs by mailbox"):
         backfill_module.account_backfill_store.list_by_mailbox("mb1")
-
-
-# ===== list_active_account_ids =====
-
-
-def test_list_active_account_ids_returns_only_ids(monkeypatch):
-    cursor = FakeCursor(fetchall_results=[[{"account_id": "acc1"}, {"account_id": "acc2"}]])
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    result = backfill_module.account_backfill_store.list_active_account_ids("mb1")
-    assert result == ["acc1", "acc2"]
-
-
-def test_list_active_account_ids_empty_on_invalid_uuid(monkeypatch):
-    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
-    patch_connection(monkeypatch, backfill_module, [cursor])
-
-    assert backfill_module.account_backfill_store.list_active_account_ids("nope") == []
 
 
 # ===== claim_next_batch =====
@@ -279,3 +222,34 @@ def test_reset_running_to_pending_propagates_connection_pool_error(monkeypatch):
 
     with pytest.raises(ConnectionPoolError, match="pool down"):
         backfill_module.account_backfill_store.reset_running_to_pending()
+
+
+# ===== reset_retriable_failed_to_pending (auto-recovery reaper) =====
+
+
+def test_reset_retriable_failed_executes_with_params_and_returns_rowcount(monkeypatch):
+    cursor = FakeCursor(rowcounts=[3])
+    patch_connection(monkeypatch, backfill_module, [cursor])
+
+    revived = backfill_module.account_backfill_store.reset_retriable_failed_to_pending(5, 60)
+
+    sql, params = cursor.executed[0]
+    assert sql == account_backfill.RESET_RETRIABLE_FAILED_TO_PENDING
+    assert params == {"max_attempts": 5, "backoff_seconds": 60}
+    # The revived-job count is returned so the worker can log it.
+    assert revived == 3
+
+
+def test_reset_retriable_failed_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, backfill_module, [cursor])
+
+    with pytest.raises(QueryError, match="reset retriable failed backfill"):
+        backfill_module.account_backfill_store.reset_retriable_failed_to_pending(5, 60)
+
+
+def test_reset_retriable_failed_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, backfill_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        backfill_module.account_backfill_store.reset_retriable_failed_to_pending(5, 60)

@@ -59,26 +59,6 @@ class PgAccountBackfillStore(AccountBackfillStore):
                 f"Unexpected backfill enqueue error ({type(exc).__name__}): {exc}"
             ) from exc
 
-    def get(self, account_id: str) -> dict[str, Any] | None:
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(account_backfill.GET, {"account_id": account_id})
-                    row = cur.fetchone()
-        except psycopg2.errors.InvalidTextRepresentation:
-            return None
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to get backfill job.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected backfill get error ({type(exc).__name__}): {exc}"
-            ) from exc
-        if row is None:
-            return None
-        return _row_to_dict(row)
-
     def list_by_mailbox(self, mailbox_id: str) -> list[dict[str, Any]]:
         try:
             with connection.get_connection() as conn:
@@ -99,27 +79,6 @@ class PgAccountBackfillStore(AccountBackfillStore):
                 f"Unexpected backfill list error ({type(exc).__name__}): {exc}"
             ) from exc
         return [_row_to_dict(row) for row in rows]
-
-    def list_active_account_ids(self, mailbox_id: str) -> list[str]:
-        try:
-            with connection.get_connection() as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        account_backfill.LIST_ACTIVE_ACCOUNT_IDS,
-                        {"mailbox_id": mailbox_id},
-                    )
-                    rows = cur.fetchall()
-        except psycopg2.errors.InvalidTextRepresentation:
-            return []
-        except DatabaseError:
-            raise
-        except psycopg2.Error as exc:
-            raise QueryError("Failed to list active backfill account ids.") from exc
-        except Exception as exc:
-            raise QueryError(
-                f"Unexpected active backfill list error ({type(exc).__name__}): {exc}"
-            ) from exc
-        return [str(row["account_id"]) for row in rows if row.get("account_id") is not None]
 
     def claim_next_batch(self, limit: int) -> list[dict[str, Any]]:
         try:
@@ -225,6 +184,26 @@ class PgAccountBackfillStore(AccountBackfillStore):
         except Exception as exc:
             raise QueryError(
                 f"Unexpected backfill reset error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def reset_retriable_failed_to_pending(
+        self, max_attempts: int, backoff_seconds: int,
+    ) -> int:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        account_backfill.RESET_RETRIABLE_FAILED_TO_PENDING,
+                        {"max_attempts": max_attempts, "backoff_seconds": backoff_seconds},
+                    )
+                    return cur.rowcount
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to reset retriable failed backfill jobs to pending.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected backfill retriable reset error ({type(exc).__name__}): {exc}"
             ) from exc
 
 

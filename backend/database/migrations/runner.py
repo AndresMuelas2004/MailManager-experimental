@@ -555,6 +555,32 @@ _DDL_STATEMENTS = [
     "ON account_backfill_jobs (status) "
     "WHERE status IN ('pending', 'running');",
     "UPDATE alembic_version SET version_num = '0041_create_account_backfill_jobs';",
+    # Migration 0042: draft_sync_jobs — reliable server-side draft sync queue
+    # (one row per account). Simplified clone of account_backfill_jobs without
+    # the pagination checkpoint columns: the draft sync is a single non-paginated
+    # operation per account. Enqueued on every connect (first + reconnect) so
+    # drafts always refresh. Same UUID PK + ON DELETE CASCADE + denormalised
+    # mailbox_id + partial active index as the backfill table.
+    """
+    CREATE TABLE IF NOT EXISTS draft_sync_jobs (
+        account_id   UUID         PRIMARY KEY
+                     REFERENCES accounts(account_id) ON DELETE CASCADE,
+        mailbox_id   UUID         NOT NULL,
+        provider     VARCHAR(20)  NOT NULL
+                     CHECK (provider IN ('gmail', 'outlook')),
+        status       VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+        attempts     INTEGER      NOT NULL DEFAULT 0,
+        last_error   TEXT,
+        created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        completed_at TIMESTAMPTZ
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_draft_sync_jobs_active "
+    "ON draft_sync_jobs (status) "
+    "WHERE status IN ('pending', 'running');",
+    "UPDATE alembic_version SET version_num = '0042_create_draft_sync_jobs';",
 ]
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 UPSERT_EMAIL_METADATA_BATCH = """
     INSERT INTO email_metadata
         (provider_message_id, account_id, thread_id, from_email, from_name,
-         subject, received_at, is_read, box, to_email, to_name)
+         subject, received_at, is_read, box, is_favorite, to_email, to_name)
     VALUES %s
     ON CONFLICT (provider_message_id, account_id) DO UPDATE SET
         is_read = EXCLUDED.is_read,
@@ -23,6 +23,7 @@ UPSERT_EMAIL_METADATA_BATCH = """
             THEN 'DELETED'
             ELSE EXCLUDED.box
         END,
+        is_favorite = EXCLUDED.is_favorite,
         to_email = EXCLUDED.to_email,
         to_name = EXCLUDED.to_name
 """
@@ -33,6 +34,12 @@ DELETE_BATCH_BY_MESSAGE_IDS = """
       AND provider_message_id = ANY(%(message_ids)s)
 """
 
+# ``is_favorite`` is updated through COALESCE so a NULL incoming value leaves
+# the stored favourite untouched. Gmail always sends a concrete bool (star
+# state read from labelIds); Outlook partial delta objects send NULL when the
+# ``flag`` field is absent from the partial payload. The ``::BOOLEAN`` cast is
+# required because ``execute_values`` sends Python ``None`` as an untyped NULL,
+# and ``COALESCE(NULL, em.is_favorite)`` needs the branch typed to BOOLEAN.
 UPDATE_LABELS_BATCH = """
     UPDATE email_metadata AS em
        SET is_read = v.is_read,
@@ -40,8 +47,9 @@ UPDATE_LABELS_BATCH = """
                WHEN em.box = 'DELETED' AND v.box = 'TRASH'
                THEN 'DELETED'
                ELSE v.box
-           END
-      FROM (VALUES %s) AS v(provider_message_id, account_id, is_read, box)
+           END,
+           is_favorite = COALESCE(v.is_favorite::BOOLEAN, em.is_favorite)
+      FROM (VALUES %s) AS v(provider_message_id, account_id, is_read, box, is_favorite)
      WHERE em.provider_message_id = v.provider_message_id::VARCHAR
        AND em.account_id          = v.account_id::UUID
 """
@@ -547,19 +555,6 @@ SYNC_FAVORITES_FOR_ACCOUNT = """
     UPDATE email_metadata
     SET is_favorite = (provider_message_id = ANY(%(true_ids)s))
     WHERE account_id = %(account_id)s
-"""
-
-# Conversation lazy-sync favourites: mark a SUBSET of an account's rows
-# (the thread members the provider reports as favourite) TRUE in a single
-# statement. Unlike SYNC_FAVORITES_FOR_ACCOUNT it does NOT touch rows
-# outside ``true_ids`` — the conversation sync only knows the thread it
-# just fetched, so it must never clear favourites elsewhere in the account.
-# One-directional by design (never sets FALSE).
-UPDATE_FAVORITES_TRUE_BATCH = """
-    UPDATE email_metadata
-    SET is_favorite = TRUE
-    WHERE account_id = %(account_id)s
-      AND provider_message_id = ANY(%(true_ids)s)
 """
 
 EXISTS_BY_MESSAGE_ID = """
