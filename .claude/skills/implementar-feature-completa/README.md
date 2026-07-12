@@ -54,8 +54,8 @@ Con una sola invocación — `/implementar-feature-completa "descripción [+ fra
 | Pieza | Ruta | Rol |
 |---|---|---|
 | Skill orquestadora | `.claude/skills/implementar-feature-completa/SKILL.md` | Corre inline; encadena las 6 fases; relay de preguntas; reanudación |
-| Skill aplicadora | `.claude/skills/aplicar-mejoras-validadas/SKILL.md` | Fase 5. `context: fork`. Visible en menú |
-| Skill validadora interna | `.claude/skills/validar-mejoras-implementacion/SKILL.md` | Fase 4. `context: fork`. Oculta (`user-invocable: false`) |
+| Skill aplicadora | `.claude/skills/aplicar-mejoras-validadas/SKILL.md` | Fase 5. `context: fork` (retirado el 2026-07-10, ver «Revisión 2026-07-10»). Visible en menú |
+| Skill validadora interna | `.claude/skills/validar-mejoras-implementacion/SKILL.md` | Fase 4. `context: fork` (retirado el 2026-07-10, ver «Revisión 2026-07-10»). Oculta (`user-invocable: false`) |
 | Agente runner | `.claude/agents/pipeline-skill-runner.md` | Ejecuta/aloja todas las fases aisladas; opus + max; hook de formato |
 | Hook de formato | `.claude/hooks/validate-pipeline-runner-output.py` | `SubagentStop` determinista v2 (2026-07-07): valida `last_assistant_message` contra TODOS los formatos del protocolo — líneas `OK \| …`/`FALLO:`/`BLOQUEO:` y bloques `PREGUNTAS-PENDIENTES`/`PLAN-COMPLETADO` (chequeo estructural) — y bloquea solo lo no conforme; **fail-open** si el campo no llega (jamás bloquear a ciegas) y anti-bucle con `stop_hook_active` (decisión 17) |
 
@@ -64,8 +64,8 @@ Con una sola invocación — `/implementar-feature-completa "descripción [+ fra
 | Pieza | Cambios |
 |---|---|
 | `.claude/skills/planear-implementacion-funcionalidad/SKILL.md` | (a) Los 3 `.md` pasan a escribirse en subcarpeta `nueva-implementacion-en-curso/<slug>/` (antes: directorio plano); (b) nueva sección **«Modo orquestado»** activada por la marca `[MODO-ORQUESTADO]` en `$ARGUMENTS`: sustituye `AskUserQuestion` por el protocolo `PREGUNTAS-PENDIENTES`/`RESPUESTAS`/`PLAN-COMPLETADO`. **El uso manual directo no cambia en nada** |
-| `.claude/skills/implementar-funcionalidad/SKILL.md` | Frontmatter: `user-invocable: false` + `context: fork` + `agent: pipeline-skill-runner`; los dos casos de «detente y pregúntame/dímelo» pasan a devolver `BLOQUEO: …` (en fork no se puede preguntar); el Cierre persiste el informe completo en `implementacion-resumen.md` (informes de los 4 agentes de cierre incluidos) y responde una única línea |
-| `.claude/skills/reviewDiffsBeforeCommitAll/SKILL.md` | Frontmatter: `argument-hint` + `context: fork` + `agent: pipeline-skill-runner`; nuevo argumento `--out <ruta.md>`; el paso 5 escribe el informe consolidado completo al `.md` (default sin `--out`: `nueva-implementacion-en-curso/review-suelta-<timestamp>.md`) y responde una única línea con `overall` y `validables`; «sin diffs» responde `OK \| sin-diffs`. Las dos skills hijas: **cero cambios** |
+| `.claude/skills/implementar-funcionalidad/SKILL.md` | Frontmatter: `user-invocable: false` + `context: fork` + `agent: pipeline-skill-runner` (estos dos últimos retirados el 2026-07-10, ver «Revisión 2026-07-10»); los dos casos de «detente y pregúntame/dímelo» pasan a devolver `BLOQUEO: …` (en fork no se puede preguntar); el Cierre persiste el informe completo en `implementacion-resumen.md` (informes de los 4 agentes de cierre incluidos) y responde una única línea |
+| `.claude/skills/reviewDiffsBeforeCommitAll/SKILL.md` | Frontmatter: `argument-hint` + `context: fork` + `agent: pipeline-skill-runner` (estos dos últimos retirados el 2026-07-10, ver «Revisión 2026-07-10»); nuevo argumento `--out <ruta.md>`; el paso 5 escribe el informe consolidado completo al `.md` (default sin `--out`: `nueva-implementacion-en-curso/review-suelta-<timestamp>.md`) y responde una única línea con `overall` y `validables`; «sin diffs» responde `OK \| sin-diffs`. Las dos skills hijas: **cero cambios** |
 | `~/.claude/skills/commit-push-estructurados/SKILL.md` (personal) | Solo: retirado `disable-model-invocation: true` + frase disuasoria añadida a la description. Comportamiento intacto |
 
 Sin cambios en: `~/.claude/skills/validar-mejoras` (personal), las skills hijas de review, los 6 agentes de `/implementar-funcionalidad`, `.gitignore` (ya cubría la carpeta), permisos (`Skill` en allow global de usuario + `Agent(*)` de proyecto ya lo cubren).
@@ -103,3 +103,24 @@ Auditoría de la skill con verificación contra la doc oficial → cambios aplic
 | `aplicar-mejoras-validadas` | Registro incremental reanudable `EN CURSO → estado final` con Paso 0.5 de reanudación (decisión 20); nuevo arg `--informe`: decisiones condicionales y NECESARIAS sin aplicar van al informe final (sin `--informe` — uso suelto — sigue creando `decisiones-condicionales.md`) |
 
 Confirmaciones de doc obtenidas en la auditoría: `${CLAUDE_PROJECT_DIR}` se expande en hooks de frontmatter (riesgo original retirado); la tabla `user-invocable`/`disable-model-invocation`, la semántica fork+agent (incl. «un fork no puede engendrar otro fork» — las skills hijas de review NO están forkeadas, correcto), la reanudación por `SendMessage` y el veto de `AskUserQuestion` en subagentes funcionan como asumía el diseño. NO documentados hoy: `last_assistant_message` y `stop_hook_active` (→ fail-open del hook v2).
+
+---
+
+## Revisión 2026-07-10 — fases 2–5 lanzadas con la herramienta `Agent` (Opción B)
+
+A petición del usuario, las fases 2–5 pasan a **lanzarse igual que las fases 1 y 6**: con la herramienta `Agent` (`subagent_type: pipeline-skill-runner`) y un **task prompt** que ordena ejecutar la skill correspondiente con la herramienta `Skill`, en vez de invocarlas directamente con la herramienta `Skill`. Motivo del usuario: uniformidad del mecanismo de lanzamiento y del árbol de subagentes en el visor. Es **equivalente en aislamiento de contexto** (verificado contra la doc oficial de skills/sub-agents: «both use the same underlying system» — al padre solo le vuelve la línea de protocolo en ambos casos); el cambio es de mecánica, no de qué contamina el contexto de la orquestadora.
+
+| # | Decisión | Elección | Por qué / alternativa descartada |
+|---|---|---|---|
+| 21 | Mecanismo de lanzamiento de las fases 2–5 | **Herramienta `Agent` + task prompt** (como 1 y 6). Se **retira `context: fork` + `agent:`** del frontmatter de las 4 skills (`implementar-funcionalidad`, `reviewDiffsBeforeCommitAll`, `validar-mejoras-implementacion`, `aplicar-mejoras-validadas`), que ahora corren **inline** dentro del subagente `pipeline-skill-runner` wrapper (fork único, idéntico a 1/6) | Descartada la **Opción A** (envolver en `Agent` dejando el `context: fork`): habría producido un **doble fork** — el wrapper invocaría una skill que re-forkea — que choca con la restricción documentada «**un fork no puede engendrar otro fork**» (restricción implícita en la nota de auditoría de arriba) y añadía una capa de runner redundante. La Opción B da un solo fork y anida igual que antes (2 niveles de 5) |
+
+**Trade-off aceptado (elegido por el usuario con pleno conocimiento):** al quitarles el `context: fork`, las 4 skills **pierden su aislamiento al invocarse SUELTAS** — invocadas directamente (p. ej. `/reviewDiffsBeforeCommitAll`) corren **inline en la conversación que las llama** en vez de forkear. Tres son de uso interno del pipeline y apenas se invocan sueltas (`implementar-funcionalidad` y `validar-mejoras-implementacion` son `user-invocable: false`); el impacto real recae en `reviewDiffsBeforeCommitAll` y `aplicar-mejoras-validadas` usadas en solitario. Dentro del pipeline **no cambia nada**: el wrapper aísla igual que el fork.
+
+**Consecuencia sobre la decisión 10 (pineo de modelo):** el opus+max lo sigue garantizando el runner `pipeline-skill-runner`, ahora vía `Agent` en vez de vía `context: fork`. Mismo resultado; la salvedad «el `model` del frontmatter de la skill no es fiable en fork» deja de aplicar a las fases 2–5 (ya no forkean).
+
+| Pieza | Cambio (2026-07-10) |
+|---|---|
+| Orquestadora (`implementar-feature-completa/SKILL.md`) | Fases 2, 3, 4 y 5: de `Invoca con Skill …` a `Lanza un subagente con Agent, subagent_type: pipeline-skill-runner` + task prompt; los args (rutas + `--out`/`--informe`/`--dir`) se trasladan **verbatim** al task prompt, así que la cadena de `.md` entre fases no cambia |
+| Las 4 skills de fase | Retirados `context: fork` + `agent: pipeline-skill-runner` del frontmatter. Generalizada la prosa que decía «fork» → «subagente aislado» (nota de cabecera en `reviewDiffsBeforeCommitAll`; paréntesis en `validar`/`aplicar`), conservando intacta la lógica de *foreground* de review |
+
+**Pendiente:** `flow-diagram.svg` puede seguir mostrando el mecanismo anterior; **no** se ha regenerado en esta revisión.

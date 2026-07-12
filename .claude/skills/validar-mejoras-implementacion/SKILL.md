@@ -4,15 +4,13 @@ description: "Validación crítica de las mejoras propuestas por un informe de r
 argument-hint: ruta al .md con el informe de review cuyas mejoras hay que validar; opcionalmente '--out <ruta.md>' con el destino del informe de validación y '--informe <ruta.md>' con el informe final del pipeline al que añadir la sección de subagentes lanzados/caídos
 user-invocable: false
 allowed-tools: Agent, Read, Grep, Glob, Write, Bash
-context: fork
-agent: pipeline-skill-runner
 model: opus
 effort: max
 ---
 
 # Validar Mejoras (pipeline) — Validación crítica con subagentes aislados
 
-Variante del validador de mejoras integrada en el pipeline `/implementar-feature-completa`. Corres en contexto aislado (`context: fork`): **no ves ninguna conversación previa**, así que la única fuente de hallazgos es el archivo `.md` recibido como argumento, y el único canal de salida de valor es el `.md` de validación que persistes. No analizas los hallazgos tú mismo en línea: cada hallazgo lo valida un **subagente independiente que corre en su propio contexto aislado**, de modo que cada juicio se emite en fresco contra el código real.
+Variante del validador de mejoras integrada en el pipeline `/implementar-feature-completa`. Corres en contexto aislado (subagente `pipeline-skill-runner` lanzado por el orquestador con la herramienta Agent): **no ves ninguna conversación previa**, así que la única fuente de hallazgos es el archivo `.md` recibido como argumento, y el único canal de salida de valor es el `.md` de validación que persistes. No analizas los hallazgos tú mismo en línea: cada hallazgo lo valida un **subagente independiente que corre en su propio contexto aislado**, de modo que cada juicio se emite en fresco contra el código real.
 
 ## Tu rol — orquestador de la validación
 

@@ -13,7 +13,7 @@ Encadenas de principio a fin las seis fases de implementación de una feature. *
 ## Reglas del orquestador (innegociables)
 
 1. **Contexto mínimo.** Nunca leas el contenido de los artefactos `.md` de las fases (planes, informes, validaciones): tu sesión solo debe contener lanzamientos, respuestas cortas del protocolo, el relay de preguntas y tu resumen final. Para la reanudación compruebas la **existencia** de archivos (Glob / Test-Path), jamás su contenido. Única excepción de escritura: `INFORME` — lo creas y le **añades** secciones al final (append: PowerShell `Add-Content -Encoding utf8` o Bash `cat >>`), pero jamás lo lees ni lo reescribes.
-2. **Estrictamente secuencial.** Lanza una fase, espera en silencio su resultado (sin ejecutar ninguna otra herramienta ni hacer trabajo paralelo mientras tanto) y solo entonces decide la siguiente. Nunca dos fases a la vez: todas operan sobre el mismo working tree.
+2. **Estrictamente secuencial, y cada fase en background.** Lanza cada una de las seis fases (1-6) con la herramienta `Agent` **siempre en segundo plano** (`run_in_background: true`), nunca en primer plano — bloquear la sesión esperando en foreground no funciona de forma fiable. Tras lanzar la fase, **termina tu turno y quédate libre/parada**: no ejecutes ninguna otra herramienta ni hagas trabajo paralelo del pipeline mientras esa fase corre. El sistema te re-invocará con la notificación de finalización del subagente (y, en la FASE 1, con cada bloque `PREGUNTAS-PENDIENTES` que emita); solo entonces decides la transición a la fase siguiente. Quedarte en background mantiene además la sesión disponible para que el usuario pueda hablarte mientras tanto. Nunca dos fases a la vez: todas operan sobre el mismo working tree.
 3. **Parada ante bloqueo.** Si una fase devuelve `BLOQUEO: …` / `FALLO: …` — o un mensaje que no encaje en ningún formato del protocolo (trátalo como fallo) — detén el pipeline, reporta la fase, el motivo **literal**, y recuérdale al usuario el comando exacto de reanudación: `/implementar-feature-completa continuar <slug> desde <fase>`. Además, si `DIR` ya existe, **persiste la interrupción en `INFORME`** (créalo antes con la cabecera de la FASE 1 si faltara): añade al final una sección `## Interrupción — FASE <n> (<nombre>)` con la fecha, el motivo literal y el comando de reanudación. Esto aplica a TODA parada: bloqueos, fallos y los dos gates de seguridad.
 4. **No repitas trabajo.** Una fase que respondió `OK` no se relanza jamás dentro de la misma ejecución.
 
@@ -74,14 +74,30 @@ Sigue sus instrucciones al pie de la letra. Su sección «Modo orquestado» defi
 
 ## FASE 2 — Implementación
 
-Invoca con la herramienta `Skill` la skill `implementar-funcionalidad` con args = la ruta absoluta de `DIR` (contiene exactamente un trío de documentos). Corre forkeada por su propio frontmatter; espera su línea:
+Lanza un subagente con `Agent`, `subagent_type: pipeline-skill-runner`, con este task prompt (sustituye `<DIR>` por la ruta absoluta de `DIR`, que contiene exactamente un trío de documentos):
+
+```
+Ejecuta con la herramienta Skill la skill `implementar-funcionalidad` pasando como args EXACTAMENTE:
+<DIR>
+Sigue sus instrucciones al pie de la letra. Tu mensaje final debe ser EXACTAMENTE la línea de resultado que devuelva la skill (`OK | resumen: <ruta>` o `BLOQUEO: <motivo>`), sin añadir nada.
+```
+
+Espera su línea:
 
 - `OK | resumen: <ruta>` → FASE 3.
 - `BLOQUEO: …` → parada ante bloqueo.
 
 ## FASE 3 — Review de diffs
 
-Invoca con `Skill` la skill `reviewDiffsBeforeCommitAll` con args: `--out <DIR>/review-pre-commit.md --informe <INFORME>`. Espera su línea:
+Lanza un subagente con `Agent`, `subagent_type: pipeline-skill-runner`, con este task prompt (sustituye `<DIR>` e `<INFORME>` por sus rutas absolutas):
+
+```
+Ejecuta con la herramienta Skill la skill `reviewDiffsBeforeCommitAll` pasando como args EXACTAMENTE:
+--out <DIR>/review-pre-commit.md --informe <INFORME>
+Sigue sus instrucciones al pie de la letra. Tu mensaje final debe ser EXACTAMENTE la línea que devuelva la skill (`OK | informe: <ruta> | overall: <verdict> | validables: <n> | reviewers-caidos: <m>`, o `OK | sin-diffs`, o `FALLO: <motivo>`), sin añadir nada.
+```
+
+Espera su línea:
 
 - `OK | informe: <ruta> | overall: <verdict> | validables: <n> | reviewers-caidos: <m>`:
   - Si `m > 0` → **gate de seguridad: detén el pipeline SIN ejecutar la fase 4.** La cobertura del review quedó incompleta (`m` reviewers crashearon; cuáles eran y qué revisaban está en la sección de la fase 3 de `INFORME` — no lo leas tú). Persiste la interrupción en `INFORME` (regla 3) y recuérdame los dos cierres posibles: `/implementar-feature-completa continuar <slug> desde review` (relanza el review completo) o `… desde validar` (acepto la cobertura parcial del informe ya persistido).
@@ -92,7 +108,15 @@ Invoca con `Skill` la skill `reviewDiffsBeforeCommitAll` con args: `--out <DIR>/
 
 ## FASE 4 — Validación de mejoras
 
-Invoca con `Skill` la skill `validar-mejoras-implementacion` con args: `<DIR>/review-pre-commit.md --out <DIR>/validacion-mejoras.md --informe <INFORME>`. Espera su línea:
+Lanza un subagente con `Agent`, `subagent_type: pipeline-skill-runner`, con este task prompt (sustituye `<DIR>` e `<INFORME>` por sus rutas absolutas):
+
+```
+Ejecuta con la herramienta Skill la skill `validar-mejoras-implementacion` pasando como args EXACTAMENTE:
+<DIR>/review-pre-commit.md --out <DIR>/validacion-mejoras.md --informe <INFORME>
+Sigue sus instrucciones al pie de la letra. Tu mensaje final debe ser EXACTAMENTE la línea que devuelva la skill (`OK | validacion: <ruta> | necesarias: <a> | condicionales: <b> | falsos-positivos: <c>`, o `FALLO: <motivo>`), sin añadir nada.
+```
+
+Espera su línea:
 
 - `OK | validacion: <ruta> | necesarias: <a> | condicionales: <b> | falsos-positivos: <c>`:
   - Si `a + b = 0` → **salta la fase 5** (anótalo) y ve a la FASE 6.
@@ -101,7 +125,15 @@ Invoca con `Skill` la skill `validar-mejoras-implementacion` con args: `<DIR>/re
 
 ## FASE 5 — Aplicación de mejoras validadas
 
-Invoca con `Skill` la skill `aplicar-mejoras-validadas` con args: `<DIR>/validacion-mejoras.md --dir <DIR> --informe <INFORME>`. Espera su línea:
+Lanza un subagente con `Agent`, `subagent_type: pipeline-skill-runner`, con este task prompt (sustituye `<DIR>` e `<INFORME>` por sus rutas absolutas):
+
+```
+Ejecuta con la herramienta Skill la skill `aplicar-mejoras-validadas` pasando como args EXACTAMENTE:
+<DIR>/validacion-mejoras.md --dir <DIR> --informe <INFORME>
+Sigue sus instrucciones al pie de la letra. Tu mensaje final debe ser EXACTAMENTE la línea que devuelva la skill (`OK | aplicadas: <n> | descartadas: <m> | necesarias-sin-aplicar: <k> | detalle: <ruta> | decisiones: <ruta>`, o `FALLO: <motivo>`), sin añadir nada.
+```
+
+Espera su línea:
 
 - `OK | aplicadas: <n> | descartadas: <m> | necesarias-sin-aplicar: <k> | detalle: <ruta> | decisiones: <ruta>` (en el pipeline, `decisiones` apunta a `INFORME`):
   - Si `k = 0` → FASE 6.

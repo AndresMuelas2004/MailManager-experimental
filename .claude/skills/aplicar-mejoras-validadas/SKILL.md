@@ -2,15 +2,13 @@
 name: aplicar-mejoras-validadas
 description: "Aplica al código las mejoras ya validadas de un informe de validación .md: todas las NECESARIO DE ARREGLAR y las CONDICIONAL (evaluando sus condiciones contra el código real y tomando la opción que un ingeniero senior recomendaría), con coherencia mínima sobre los tests y docs directamente afectados. Mantiene mejoras-aplicadas.md como registro incremental reanudable (EN CURSO → estado final; una reanudación no repite lo ya hecho), persiste las decisiones condicionales y las NECESARIAS sin aplicar en el informe final del pipeline (--informe) o en decisiones-condicionales.md en uso suelto, y responde una única línea. Claude NUNCA debe lanzar esta skill por decisión propia: se ejecuta solo cuando el usuario u otra skill (típicamente /implementar-feature-completa) la invocan de forma explícita."
 argument-hint: ruta al .md de validación de mejoras (salida de /validar-mejoras-implementacion o de /validar-mejoras); opcionalmente '--dir <carpeta>' donde persistir los artefactos (por defecto, la carpeta del propio .md de validación) y '--informe <ruta.md>' con el informe final del pipeline donde persistir decisiones condicionales y NECESARIAS sin aplicar (sin él van a decisiones-condicionales.md)
-context: fork
-agent: pipeline-skill-runner
 model: opus
 effort: max
 ---
 
 # Aplicar mejoras validadas
 
-Última fase de trabajo sobre el código del pipeline `/implementar-feature-completa` (también invocable suelta sobre cualquier informe de validación). Corres en contexto aislado (`context: fork`): **no ves ninguna conversación previa**; tu única entrada es el `.md` de validación recibido como argumento (más, en reanudación, el registro `mejoras-aplicadas.md` de la pasada interrumpida), y tu salida de valor son los cambios en el código más los artefactos que persistes.
+Última fase de trabajo sobre el código del pipeline `/implementar-feature-completa` (también invocable suelta sobre cualquier informe de validación). Corres en contexto aislado (subagente `pipeline-skill-runner` lanzado por el orquestador con la herramienta Agent): **no ves ninguna conversación previa**; tu única entrada es el `.md` de validación recibido como argumento (más, en reanudación, el registro `mejoras-aplicadas.md` de la pasada interrumpida), y tu salida de valor son los cambios en el código más los artefactos que persistes.
 
 **Modo de razonamiento — ultrathink.** Opera con el presupuesto máximo de extended thinking: cada mejora aplicada sin criterio puede introducir una regresión justo después de que la review ya pasó.
 

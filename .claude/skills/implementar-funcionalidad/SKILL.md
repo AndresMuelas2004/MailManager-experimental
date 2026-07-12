@@ -5,8 +5,6 @@ argument-hint: ruta al directorio (o a los tres archivos) con los .md de la func
 model: opus
 effort: max
 user-invocable: false
-context: fork
-agent: pipeline-skill-runner
 ---
 
 # Implementar una funcionalidad ya planificada

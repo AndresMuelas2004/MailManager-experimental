@@ -2,9 +2,9 @@
 name: reviewDiffsBeforeCommitAll
 description: "Full pre-commit review orchestrator: runs the two child skills /reviewDiffsBeforeCommitBackend and /reviewDiffsBeforeCommitFrontend concurrently (all their reviewers run as foreground subagents launched concurrently in one go and returning their results to this fork's own execution), consolidates them without yielding its turn, persists the full consolidated report to a .md file and replies with a single short line. NEVER invoke this skill on your own initiative — it runs only when the user invokes /reviewDiffsBeforeCommitAll directly, or when another skill or resource explicitly invokes it."
 argument-hint: "[opcional] flags del hijo backend (--tests dir1 ... / --md path1 ...), '--out <ruta.md>' con el destino del informe persistido y/o '--informe <ruta.md>' con el informe final del pipeline al que añadir la sección de subagentes lanzados/caídos"
-context: fork
-agent: pipeline-skill-runner
 ---
+
+> **Note (`/implementar-feature-completa` pipeline):** this skill no longer declares `context: fork` in its frontmatter; the orchestrator now runs it inside a `pipeline-skill-runner` subagent launched with the `Agent` tool. Wherever the text below says "fork", read it as "the isolated subagent you run in": the discipline of launching every reviewer in the **foreground** and consolidating **without yielding your turn remains mandatory**, because a subagent is likewise not re-woken after ceding its turn (exactly like a fork). Invoked standalone, it runs inline in the calling conversation.
 
 Orchestrates the two child pre-commit skills so backend and frontend are reviewed concurrently. All heavy work runs in foreground subagents launched by the children; this skill only coordinates the combined launch, waits for their results within its own execution (never yielding its turn, because a fork is not re-woken after ceding its turn), merges the verdicts, **persists the full consolidated report to a `.md` file and replies with a single short line** (this skill runs in an isolated forked context: its response is data for the caller, and the report's value lives in the persisted file).
 
