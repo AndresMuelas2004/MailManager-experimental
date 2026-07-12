@@ -62,6 +62,10 @@ from api.routers.emails_routers import (
     router as emails_router,
 )
 from api.routers.health_routers import router as health_router
+from api.routers.image_proxy_routers import (
+    image_proxy_admin_router,
+    image_proxy_router,
+)
 from api.routers.mailboxes_routers import router as mailboxes_router
 from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.routers_helpers import rate_limit_by_ip
@@ -143,6 +147,13 @@ def create_app() -> FastAPI:
     app.include_router(health_router)  # exempt
     app.include_router(auth_router, dependencies=global_rate_limit)
     app.include_router(oauth_callback_router)  # exempt
+    # Exempt like the callbacks: the browser hits /image-proxy once per image
+    # (a newsletter can carry dozens), so the global bucket would trip on a
+    # single email open. The HMAC signature (only URLs our sanitiser minted) +
+    # the anti-SSRF guard are the real abuse gate. Because it is unthrottled,
+    # a strong IMAGE_PROXY_SIGNING_KEY in production is load-bearing, not just a
+    # footgun — a predictable key would turn this into an open image relay.
+    app.include_router(image_proxy_router)  # exempt
     app.include_router(mailboxes_router, dependencies=global_rate_limit)
     app.include_router(accounts_router, dependencies=global_rate_limit)
     app.include_router(account_quota_router, dependencies=global_rate_limit)
@@ -153,6 +164,7 @@ def create_app() -> FastAPI:
     app.include_router(drafts_router, dependencies=global_rate_limit)
     app.include_router(email_attachments_router, dependencies=global_rate_limit)
     app.include_router(attachments_admin_router, dependencies=global_rate_limit)
+    app.include_router(image_proxy_admin_router, dependencies=global_rate_limit)
     return app
 
 

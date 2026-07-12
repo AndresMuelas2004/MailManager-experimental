@@ -68,6 +68,9 @@ from api.errors.exceptions import (
     EnvVarError,
     ExternalAPIError,
     Forbidden,
+    ImageProxyBlockedTarget,
+    ImageProxyForbidden,
+    ImageProxyUpstreamError,
     InvalidAdminToken,
     MailboxLookupError,
     MailboxNotFound,
@@ -187,6 +190,10 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     ServiceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # Rate limiting
     TooManyRequests: status.HTTP_429_TOO_MANY_REQUESTS,
+    # Remote-email-image proxy
+    ImageProxyForbidden: status.HTTP_403_FORBIDDEN,
+    ImageProxyBlockedTarget: status.HTTP_403_FORBIDDEN,
+    ImageProxyUpstreamError: status.HTTP_502_BAD_GATEWAY,
 }
 
 

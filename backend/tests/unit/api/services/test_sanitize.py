@@ -8,6 +8,9 @@ tests import the legacy alias to exercise the full pipeline end-to-end.
 
 from __future__ import annotations
 
+import re
+
+from api.services.image_proxy_signing import SENTINEL_PREFIX, verify_and_extract
 from api.services.services_helpers import sanitize_email_html
 
 
@@ -620,7 +623,10 @@ def test_mjml_pattern_with_doctype_title_meta_keeps_body_content():
     assert "NEWSLETTER HERO" in result
     assert "Este es uno GRANDE" in result
     assert "Keep reading" in result
-    assert 'src="https://cdn.example.com/hero.png"' in result
+    # The hero image survives — but as a signed proxy sentinel, not the raw
+    # remote URL (the inbound sanitiser now rewrites remote images for privacy).
+    assert f'src="{SENTINEL_PREFIX}' in result
+    assert "cdn.example.com/hero.png" not in result
 
 
 def test_tracking_pixel_does_not_replace_body():
@@ -644,8 +650,10 @@ def test_tracking_pixel_does_not_replace_body():
     assert "The ultimate guide to Seedance 2.0" in result
     assert "See what the new model can do" in result
     assert "Read more" in result
-    # Tracking pixel still present but is NOT the only thing left
-    assert 'src="https://clicks.artlist.io/pixel.gif"' in result
+    # Tracking pixel still present (as a proxy sentinel, not the raw URL) but is
+    # NOT the only thing left.
+    assert f'src="{SENTINEL_PREFIX}' in result
+    assert "clicks.artlist.io" not in result
 
 
 def test_head_with_font_description_does_not_leak_into_body():
@@ -748,13 +756,18 @@ def test_preserves_background_attribute_on_td():
         'style="background-size:cover;background-color:rgba(0,0,0,0.2)">.</td></tr></table>'
     )
     result = sanitize_email_html(html)
-    assert 'background="https://ae01.alicdn.com/kf/thumb.png"' in result
+    # The ``background`` attribute is still allow-listed (not dropped to a grey
+    # box), but the remote URL is rewritten to a signed proxy sentinel.
+    assert f'background="{SENTINEL_PREFIX}' in result
+    assert "ae01.alicdn.com" not in result
 
 
 def test_preserves_background_attribute_on_table():
     html = '<table background="https://cdn.example.com/bg.png"><tr><td>x</td></tr></table>'
     result = sanitize_email_html(html)
-    assert 'background="https://cdn.example.com/bg.png"' in result
+    # Allow-listed attribute survives; the remote URL becomes a proxy sentinel.
+    assert f'background="{SENTINEL_PREFIX}' in result
+    assert "cdn.example.com/bg.png" not in result
 
 
 def test_preserves_data_url_background_attribute_from_resolved_cid():
@@ -897,3 +910,83 @@ def test_keeps_fragment_href_on_anchor():
     # and stay untouched.
     result = sanitize_email_html('<a href="#seccion">ir</a>')
     assert 'href="#seccion"' in result
+
+
+# ---------------------------------------------------------------------------
+# Remote-image proxy rewrite — ``sanitize_email_html`` is no longer a pure alias
+# of ``prepare_email_html``: it composes the pipeline with the remote-image
+# rewrite, so every cached body carries signed proxy sentinels instead of raw
+# remote image URLs (privacy). These pin the end-to-end round trip through the
+# real signer, across all four rewrite surfaces.
+# ---------------------------------------------------------------------------
+
+
+# Matches the sentinel in either an attribute (``&amp;`` between params) or a
+# ``<style>`` rawtext ``url(...)`` (raw ``&``), capturing the ``u`` / ``s`` pair.
+_SENTINEL_US_RE = re.compile(
+    re.escape(SENTINEL_PREFIX) + r"\?u=([^&\"'<>)\s]+)(?:&amp;|&)s=([^&\"'<>)\s]+)"
+)
+
+
+def _extract_original_url(result: str) -> str:
+    """Pull the sentinel out of a sanitised body and verify+decode it back."""
+    match = _SENTINEL_US_RE.search(result)
+    assert match, f"no sentinel found in: {result}"
+    original = verify_and_extract(match.group(1), match.group(2))
+    assert original is not None, "sentinel signature failed to verify"
+    return original
+
+
+def test_remote_img_src_rewritten_to_verifiable_sentinel():
+    result = sanitize_email_html('<img src="https://cdn.example.com/logo.png">')
+    assert SENTINEL_PREFIX in result
+    assert _extract_original_url(result) == "https://cdn.example.com/logo.png"
+
+
+def test_remote_td_background_rewritten_to_verifiable_sentinel():
+    result = sanitize_email_html(
+        '<table><tr><td background="https://cdn.example.com/bg.png">.</td></tr></table>'
+    )
+    assert _extract_original_url(result) == "https://cdn.example.com/bg.png"
+
+
+def test_inline_style_background_url_rewritten_to_verifiable_sentinel():
+    result = sanitize_email_html(
+        '<div style="background-image:url(https://cdn.example.com/hero.png)">x</div>'
+    )
+    assert _extract_original_url(result) == "https://cdn.example.com/hero.png"
+
+
+def test_style_block_url_query_ampersand_round_trips_unescaped():
+    """The load-bearing ``<style>`` trap: bleach HTML-escapes ``<style>`` content
+    (``&`` → ``&amp;``) and lxml hands it back verbatim, so the rewrite must
+    UNESCAPE the URL before signing. A background URL carrying ``?a=1&b=2`` must
+    verify back to exactly ``?a=1&b=2`` (raw ``&``), never ``?a=1&amp;b=2``.
+    The URL lives inside ``@media`` so premailer does not inline it away.
+    """
+    html = (
+        "<html><head><style>"
+        "@media screen{.hero{background:url(https://cdn.example.com/bg.png?a=1&b=2)}}"
+        "</style></head><body><div class=\"hero\">x</div></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert _extract_original_url(result) == "https://cdn.example.com/bg.png?a=1&b=2"
+
+
+def test_cid_and_data_images_are_not_proxied():
+    """Only remote ``http(s)`` images are rewritten — ``cid:`` / ``data:`` stay."""
+    html = (
+        '<img src="cid:logo@x">'
+        '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==">'
+    )
+    result = sanitize_email_html(html)
+    assert SENTINEL_PREFIX not in result
+    assert 'src="cid:logo@x"' in result
+    assert 'src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="' in result
+
+
+def test_remote_anchor_href_is_not_proxied():
+    """Only images are rewritten — a remote ``<a href>`` link is left intact."""
+    result = sanitize_email_html('<a href="https://example.com/page">link</a>')
+    assert SENTINEL_PREFIX not in result
+    assert 'href="https://example.com/page"' in result

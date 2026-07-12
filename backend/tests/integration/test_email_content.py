@@ -718,7 +718,7 @@ def test_sync_metadata_prefetch_best_effort_does_not_fail_sync(
 
 
 # ==================================================================
-# Sync-time purge — expired cached bodies (idle 30+ days) of the SYNCED
+# Sync-time purge — expired cached bodies (idle 7+ days) of the SYNCED
 # accounts are evicted; a row of a non-synced account is untouched (per-account).
 # ==================================================================
 
@@ -726,7 +726,7 @@ def test_sync_metadata_prefetch_best_effort_does_not_fail_sync(
 def test_sync_metadata_purges_expired_content_for_synced_account_only(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
-    """The post-sync purge deletes ``email_content`` rows idle 30+ days for the
+    """The post-sync purge deletes ``email_content`` rows idle 7+ days for the
     synced account, but leaves a different (non-synced) account's expired row
     intact — the eviction is scoped per account, not global."""
     synced_mid, synced_aid = setup_mailbox_and_account(test_client)
@@ -765,3 +765,75 @@ def test_sync_metadata_purges_expired_content_for_synced_account_only(
     # The synced account's stale body was evicted; the other account's survives.
     assert synced_row is None
     assert other_row is not None
+
+
+def test_sync_metadata_purges_content_idle_over_7_days_keeps_recent(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    """The body TTL is now 7 days (deliberately shorter than the 30-day
+    attachment-blob TTL). A body idle 10 days is purged; a body idle 3 days
+    survives. Under the old 30-day TTL BOTH would have survived — the 10-day
+    eviction is what pins the moved threshold. Both rows are ``is_read=TRUE`` so
+    the post-purge prefetch does not resurrect the just-evicted body."""
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    with isolated_db.cursor() as cur:
+        _seed_metadata(cur, aid, "idle-10d", received_at="now()", is_read=True)
+        _seed_metadata(cur, aid, "idle-3d", received_at="now()", is_read=True)
+        for pmid, age_days in (("idle-10d", 10), ("idle-3d", 3)):
+            cur.execute(
+                f"""
+                INSERT INTO email_content (
+                    provider_message_id, account_id, html_body, text_body,
+                    fetched_at, last_accessed_at
+                )
+                VALUES (%(pmid)s, %(aid)s::uuid, '<p>body</p>', 'body',
+                        now() - INTERVAL '{age_days} days',
+                        now() - INTERVAL '{age_days} days')
+                """,
+                {"pmid": pmid, "aid": aid},
+            )
+
+    resp = test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+    assert resp.status_code == 200
+
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        idle_10d = _fetch_content_row(cur, aid, "idle-10d")
+        idle_3d = _fetch_content_row(cur, aid, "idle-3d")
+    # 10 days > 7-day TTL → purged; 3 days < 7-day TTL → kept.
+    assert idle_10d is None
+    assert idle_3d is not None
+
+
+# ==================================================================
+# Cache-miss sanitisation — the persisted body carries signed image-proxy
+# sentinels, never a raw remote image URL (privacy).
+# ==================================================================
+
+
+def test_get_email_content_cache_miss_rewrites_remote_images_to_proxy(
+    test_client, setup_mailbox_and_account, monkeypatch,
+):
+    """A cache-miss viewer read runs the inbound sanitiser, which rewrites remote
+    image URLs to fail-closed proxy sentinels. The returned (and persisted)
+    ``html_body`` must carry the sentinel prefix, never the raw remote URL."""
+    mid, aid = setup_mailbox_and_account(test_client)
+    # sample_metadata (m1) is 2024-dated, so sync neither prefetches nor caches
+    # its body — the GET below is a genuine cache miss.
+    test_client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata")
+
+    # Re-point the provider read to return HTML carrying a remote tracking image.
+    _patch_content_manager(
+        monkeypatch,
+        html_body='<p>hola</p><img src="https://cdn.example.com/tracker.png">',
+        text_body="hola",
+    )
+
+    resp = test_client.get(_content_url(mid, "m1", aid))
+    assert resp.status_code == 200, resp.text
+    html = resp.json()["html_body"]
+    assert html is not None
+    # The remote image is rewritten to the fail-closed sentinel host and the raw
+    # remote URL never survives in the cached body.
+    assert "mm-image-proxy.invalid/img" in html
+    assert "cdn.example.com/tracker.png" not in html

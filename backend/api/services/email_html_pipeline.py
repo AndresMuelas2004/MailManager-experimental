@@ -42,7 +42,8 @@ from __future__ import annotations
 import logging
 import re
 from html import escape as html_escape
-from typing import Any
+from html import unescape as html_unescape
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -728,3 +729,187 @@ def prepare_email_html(html: str) -> str:
     html = _mirror_geometry_to_attributes(html)
     html = _strip_script_blocks(html)
     return _clean_with_bleach(html)
+
+
+# ---------------------------------------------------------------------------
+# Remote-image rewriting (runs AFTER the pure pipeline; injected rewriter)
+# ---------------------------------------------------------------------------
+
+# Only ``http(s)`` targets are rewritten. ``cid:`` / ``data:`` / relative /
+# fragment URLs are left untouched — the proxy is for remote images only.
+_REMOTE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+# A CSS ``url(...)`` target, quoted or not. ``[^'")]+`` stops at the closing
+# quote or paren so it never over-runs the declaration.
+_CSS_URL_RE = re.compile(
+    r"""url\(\s*(?P<q>['"]?)(?P<url>[^'")]+)(?P=q)\s*\)""",
+    re.IGNORECASE,
+)
+
+# CSS properties whose ``url(...)`` is an IMAGE inside a ``<style>`` block.
+# ``@font-face { src: url(…) }`` is deliberately excluded: a font is not an
+# image and the proxy only serves ``image/*``, so a proxied font would break.
+_IMAGE_CSS_URL_PROPERTIES: frozenset[str] = frozenset(
+    {"background", "background-image", "list-style", "list-style-image"}
+)
+
+# Safety-net for the (rare) case the structured lxml pass raises: rewrite
+# ``src=`` / ``background=`` attributes carrying a remote URL. Post-bleach,
+# ``src`` only exists on ``<img>`` and ``background`` only on
+# ``td``/``th``/``table`` (allowlist scoping), so a bare attribute regex is
+# safe. The captured URL is HTML-escaped in the raw string, so it is
+# unescaped before signing and the sentinel is re-escaped for the attribute.
+_IMG_URL_ATTR_RE = re.compile(
+    r"""(?P<pre>\b(?:src|background)\s*=\s*)(?P<q>["'])(?P<url>https?://[^"'<>]*)(?P=q)""",
+    re.IGNORECASE,
+)
+
+
+def _rewrite_css_url_values(css_value: str, url_rewriter: Callable[[str], str]) -> str:
+    """Rewrite every remote ``url(...)`` target in a raw CSS value string."""
+    def _replace(match: re.Match[str]) -> str:
+        raw = match.group("url").strip()
+        if not _REMOTE_URL_RE.match(raw):
+            return match.group(0)
+        q = match.group("q")
+        return f"url({q}{url_rewriter(raw)}{q})"
+
+    return _CSS_URL_RE.sub(_replace, css_value)
+
+
+def _rewrite_style_declarations_images(
+    style: Any, url_rewriter: Callable[[str], str],
+) -> None:
+    """Rewrite remote ``url(...)`` in image-property declarations, in place."""
+    for name in [p.name for p in style.getProperties(all=True)]:
+        if name.lower() not in _IMAGE_CSS_URL_PROPERTIES:
+            continue
+        value = style.getPropertyValue(name) or ""
+        if "http://" not in value and "https://" not in value:
+            continue
+        new_value = _rewrite_css_url_values(value, url_rewriter)
+        if new_value != value:
+            style.setProperty(name, new_value)
+
+
+def _rewrite_style_rules_images(rules: Any, url_rewriter: Callable[[str], str]) -> None:
+    """Recurse a ``CSSRuleList`` rewriting image ``url(...)``; skip ``@font-face``."""
+    from cssutils.css import CSSRule  # lazy — transitive dep of premailer
+
+    for rule in rules:
+        rule_type = getattr(rule, "type", None)
+        if rule_type == CSSRule.STYLE_RULE:
+            _rewrite_style_declarations_images(rule.style, url_rewriter)
+        elif rule_type == CSSRule.MEDIA_RULE:
+            _rewrite_style_rules_images(rule.cssRules, url_rewriter)
+        elif type(rule).__name__ == "CSSSupportsRule":
+            _rewrite_style_rules_images(rule.cssRules, url_rewriter)
+        # FONT_FACE_RULE / import / etc. are intentionally left untouched.
+
+
+def _rewrite_style_block(css: str, url_rewriter: Callable[[str], str]) -> str:
+    """Rewrite remote image ``url(...)`` inside a ``<style>`` block via cssutils.
+
+    Unlike attributes (which lxml decodes on read), ``<style>`` is a rawtext
+    element: bleach HTML-escapes its content (``&`` -> ``&amp;``) and lxml hands
+    it back verbatim. So the URL sitting in a declaration here is HTML-escaped;
+    it is unescaped before signing (or the proxy would fetch a ``?a=1&amp;b=2``
+    URL) and the sentinel is emitted with a raw ``&`` — valid in a CSS ``url()``
+    and correct whether the viewer iframe reads the block as rawtext or decodes
+    it via ``srcdoc``.
+    """
+    def _unescaping_rewriter(url: str) -> str:
+        return url_rewriter(html_unescape(url))
+
+    try:
+        import cssutils  # lazy — transitive dep of premailer
+
+        cssutils.log.setLevel(logging.CRITICAL)
+        sheet = cssutils.parseString(css, validate=False)
+        _rewrite_style_rules_images(sheet.cssRules, _unescaping_rewriter)
+        text = sheet.cssText
+        return text.decode("utf-8") if isinstance(text, bytes) else text
+    except Exception as exc:
+        logger.warning(
+            "style-block image rewrite failed (%s): %s — leaving block unchanged",
+            type(exc).__name__, exc,
+        )
+        return css
+
+
+def _rewrite_images_structured(html: str, url_rewriter: Callable[[str], str]) -> str:
+    """Rewrite remote images via lxml: ``img@src`` / ``td|th|table@background`` /
+    inline ``style`` ``url(...)`` / ``<style>`` image ``url(...)``.
+
+    lxml decodes entities on read and re-encodes on write, so the ``&`` in a
+    query string round-trips correctly per context (``&amp;`` in attributes,
+    raw ``&`` in ``<style>`` rawtext) without any manual escaping here.
+    """
+    from lxml import html as lxml_html  # lazy — transitive dep of premailer
+
+    tree = lxml_html.fragment_fromstring(html, create_parent="div")
+    for element in tree.iter():
+        tag = element.tag
+        if not isinstance(tag, str):
+            continue
+        tag = tag.lower()
+        if tag == "img":
+            _rewrite_url_attr(element, "src", url_rewriter)
+        elif tag in ("td", "th", "table"):
+            _rewrite_url_attr(element, "background", url_rewriter)
+        if tag == "style":
+            css = element.text
+            if css and ("http://" in css or "https://" in css):
+                element.text = _rewrite_style_block(css, url_rewriter)
+        else:
+            inline = element.get("style")
+            if inline and ("http://" in inline or "https://" in inline):
+                element.set("style", _rewrite_css_url_values(inline, url_rewriter))
+
+    inner = "".join(
+        lxml_html.tostring(child, encoding="unicode", with_tail=True) for child in tree
+    )
+    if tree.text:
+        inner = tree.text + inner
+    return inner
+
+
+def _rewrite_url_attr(
+    element: Any, attr: str, url_rewriter: Callable[[str], str],
+) -> None:
+    value = element.get(attr)
+    if value and _REMOTE_URL_RE.match(value.strip()):
+        element.set(attr, url_rewriter(value.strip()))
+
+
+def _rewrite_image_attrs_regex(html: str, url_rewriter: Callable[[str], str]) -> str:
+    """Regex fallback for ``src=`` / ``background=`` (used only if lxml raises)."""
+    def _replace(match: re.Match[str]) -> str:
+        raw = html_unescape(match.group("url"))
+        sentinel = html_escape(url_rewriter(raw), quote=True)
+        return f'{match.group("pre")}{match.group("q")}{sentinel}{match.group("q")}'
+
+    return _IMG_URL_ATTR_RE.sub(_replace, html)
+
+
+def rewrite_remote_images(html: str, url_rewriter: Callable[[str], str]) -> str:
+    """Rewrite remote image references to the signed proxy sentinel.
+
+    Runs on the already-sanitised (post-bleach) fragment. ``url_rewriter``
+    maps a raw remote URL to its sentinel (injected so this stays pure and
+    testable). Idempotent when ``url_rewriter`` is (the sentinel prefix is
+    itself ``https://`` so a naive re-run must not double-wrap). Fail-soft:
+    if the structured lxml pass raises, a regex fallback still rewrites the
+    ``src=`` / ``background=`` attributes (a pathological email may then leak
+    a rare ``url(...)`` the fallback does not cover — accepted residual).
+    """
+    if not html or ("http://" not in html and "https://" not in html):
+        return html
+    try:
+        return _rewrite_images_structured(html, url_rewriter)
+    except Exception as exc:
+        logger.warning(
+            "structured remote-image rewrite failed (%s): %s — using regex fallback",
+            type(exc).__name__, exc,
+        )
+        return _rewrite_image_attrs_regex(html, url_rewriter)

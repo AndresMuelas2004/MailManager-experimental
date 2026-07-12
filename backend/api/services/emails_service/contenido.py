@@ -85,7 +85,7 @@ def _fetch_and_persist_email_content(
     sanitized_html = sanitize_email_html(content.html_body) if content.html_body else None
 
     # The upsert stamps ``last_accessed_at = now()`` for the new row, so a
-    # fresh cache entry starts its 30-day TTL on persist (no separate touch).
+    # fresh cache entry starts its 7-day TTL on persist (no separate touch).
     try:
         persist_email_content(
             account_id, provider_message_id, sanitized_html, content.text_body,

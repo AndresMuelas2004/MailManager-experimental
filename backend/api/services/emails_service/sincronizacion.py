@@ -50,8 +50,8 @@ from .contenido import _fetch_and_persist_email_content
 
 
 # Sync-time content prefetch: at most the 50 most-recent unread (<=48h) inbox
-# messages per account per sync (D6). The TTL (30 days) and the recency window
-# (48 hours) live in the SQL strings (``PURGE_EXPIRED_FOR_ACCOUNTS`` /
+# messages per account per sync (D6). The body TTL (7 days) and the recency
+# window (48 hours) live in the SQL strings (``PURGE_EXPIRED_FOR_ACCOUNTS`` /
 # ``LIST_UNREAD_RECENT_UNCACHED``) — the only value the Python passes is this
 # cap. The target box is ``ALL_MAIL`` (inbox), fixed inside the query.
 _PREFETCH_LIMIT = 50
@@ -370,7 +370,7 @@ def _run_content_prefetch_and_purge(
     Entirely best-effort — every failure is logged and swallowed so it can
     never affect the already-sent response nor abort the remaining work:
 
-    1. Purge cached bodies idle for 30+ days for the synced accounts (one
+    1. Purge cached bodies idle for 7+ days for the synced accounts (one
        indexed DELETE, frees space before the prefetch refills it).
     2. Prefetch, sequentially and message-by-message (D2 — sidesteps both
        providers' per-user / per-mailbox concurrency 429s), the body +

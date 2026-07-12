@@ -489,3 +489,32 @@ class TooManyRequests(ApiError):
     Mapped to HTTP 429.
     """
     code = "rate_limit_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Remote-email-image proxy (GET /image-proxy + admin purge).
+# Consumed from an <img> tag, so the browser only distinguishes 2xx from
+# non-2xx; the granular codes below matter for logs / monitoring / tests.
+# ---------------------------------------------------------------------------
+
+
+class ImageProxyForbidden(ApiError):
+    """The image proxy request carried an invalid or missing HMAC signature.
+
+    Mapped to HTTP 403 — the sentinel URL was not minted by our sanitiser
+    (or was tampered with), so the proxy refuses to fetch it."""
+    code = "image_proxy_forbidden"
+
+
+class ImageProxyBlockedTarget(ApiError):
+    """The remote image target was blocked by the anti-SSRF policy (private /
+    loopback / link-local / metadata / CGNAT address, bad scheme, or an unsafe
+    redirect hop). Mapped to HTTP 403."""
+    code = "image_proxy_blocked_target"
+
+
+class ImageProxyUpstreamError(ApiError):
+    """The image proxy could not serve the remote image: an upstream fetch
+    failure, a non-image / oversized response, or a cache read error. Mapped
+    to HTTP 502 (the failure is on the upstream/proxy side, not the client)."""
+    code = "image_proxy_upstream_error"

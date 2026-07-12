@@ -193,3 +193,24 @@ def test_non_auth_routers_carry_the_global_per_ip_rate_limit(monkeypatch):
         and _has_ip_rate_limit_dep(route)
     ]
     assert covered, "expected non-auth routers to carry the global per-IP rate limit"
+
+
+def test_image_proxy_get_is_exempt_but_admin_purge_is_rate_limited(monkeypatch):
+    """``GET /image-proxy`` must carry NO per-IP dependency (a newsletter can
+    reference dozens of images, so one bucket per image would trip the global
+    limit on a single email open; the HMAC signature + anti-SSRF guard bound
+    abuse instead). The admin purge under ``/admin`` keeps the global net like
+    the other admin routes.
+    """
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    app = create_app()
+    routes = {r.path: r for r in app.routes if isinstance(r, APIRoute)}
+
+    assert "/image-proxy" in routes
+    assert not _has_ip_rate_limit_dep(routes["/image-proxy"]), (
+        "/image-proxy must stay exempt from the global per-IP rate limit"
+    )
+    assert "/admin/image-proxy/purge" in routes
+    assert _has_ip_rate_limit_dep(routes["/admin/image-proxy/purge"]), (
+        "/admin/image-proxy/purge must carry the global per-IP rate limit"
+    )

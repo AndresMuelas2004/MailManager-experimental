@@ -8,8 +8,10 @@ internos.
 
 from __future__ import annotations
 
-# Sanitizadores HTML (re-exports directos de sus pipelines dedicados)
-from api.services.email_html_pipeline import prepare_email_html as sanitize_email_html
+# Sanitizadores HTML. ``sanitize_outbound_html`` es un re-export directo del
+# pipeline saliente; ``sanitize_email_html`` (entrante) YA NO es un alias puro:
+# compone el pipeline con la reescritura de imágenes remotas al proxy y su
+# cuerpo vive en ``.contenido`` (re-exportado más abajo).
 from api.services.outbound_html_pipeline import sanitize_outbound_html
 
 # Content-Disposition de adjuntos (re-export de core.email; lo usa attachments_routers)
@@ -59,12 +61,13 @@ from .papelera import (
     restore_from_trash_discovered_batch,
 )
 
-# Contenido de correos (cuerpos cacheados, TTL, prefetch)
+# Contenido de correos (cuerpos cacheados, TTL, prefetch, saneamiento entrante)
 from .contenido import (
     get_email_content,
     list_unread_recent_uncached,
     persist_email_content,
     purge_expired_email_content,
+    sanitize_email_html,
     touch_email_content_last_accessed,
 )
 

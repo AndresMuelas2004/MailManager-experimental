@@ -29,6 +29,7 @@ from database.repositories import draft_sync_repository as draft_sync_repo_modul
 from database.repositories import email_attachment_repository as email_attachment_repo_module
 from database.repositories import email_content_repository as email_content_repo_module
 from database.repositories import email_metadata_repository as email_metadata_repo_module
+from database.repositories import image_proxy_cache_repository as image_proxy_cache_repo_module
 from database.repositories import mailbox_repository as mailbox_repo_module
 from database.repositories import session_repository as session_repo_module
 from database.repositories import user_repository as user_repo_module
@@ -223,6 +224,12 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(session_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(email_metadata_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(email_content_repo_module.connection, "get_connection", _get_conn)
+    # Image-proxy cache repository (Trap 1): the /image-proxy endpoint reads and
+    # writes image_proxy_cache — without this patch cached image rows use the
+    # real pool instead of the per-test transaction and leak across tests (the
+    # cache key is global, so a leaked row would turn a later cache-miss test
+    # into a false cache-hit).
+    monkeypatch.setattr(image_proxy_cache_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(draft_repo_module.connection, "get_connection", _get_conn)
     # Attachments repositories must also be patched per integration_guide
     # Trap 1 — otherwise data persisted by attachment endpoints leaks across
