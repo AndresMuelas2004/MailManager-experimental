@@ -17,18 +17,23 @@ logger = logging.getLogger(__name__)
 
 
 _DELTA_SELECT_FIELDS = (
-    "id,conversationId,from,toRecipients,subject,receivedDateTime,isRead"
+    "id,conversationId,from,toRecipients,subject,receivedDateTime,isRead,flag"
 )
 _DELTA_PAGE_SIZE = 100
 
 
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
-    "receivedDateTime,isRead,parentFolderId"
+    "receivedDateTime,isRead,parentFolderId,flag,isDraft"
 )
 
 
-_DELTA_FOLDERS = ("inbox", "sentitems", "drafts", "deleteditems", "junkemail", "archive")
+# ``drafts`` is deliberately absent: drafts sync into their own ``drafts`` table
+# and must not leak into ``email_metadata``. Dropping it here means the delta
+# anchor (``capture_backfill_anchor`` / ``_prime_folder_delta_cursors``) never
+# primes nor walks the drafts folder. ``_incremental_email_metadata`` also skips
+# a stale ``drafts`` cursor inherited from a pre-change ``sync_cursor``.
+_DELTA_FOLDERS = ("inbox", "sentitems", "deleteditems", "junkemail", "archive")
 
 
 _FOLDER_TO_BOX: dict[str, str] = {
@@ -96,6 +101,7 @@ class OutlookSincronizacionMixin:
             received_at=received_at,
             is_read=msg.get("isRead", False),
             box=box,
+            is_favorite=(msg.get("flag") or {}).get("flagStatus") == "flagged",
             to_email=to_email,
             to_name=to_name,
         )
@@ -137,10 +143,22 @@ class OutlookSincronizacionMixin:
                                 folder_name, msg_id,
                             )
                     elif "from" not in msg and label_updates is not None:
+                        # Partial delta object (only isRead/labels changed).
+                        # Carry ``is_favorite`` ONLY when ``flag`` is present in
+                        # the partial payload; otherwise leave it None so the
+                        # COALESCE in UPDATE_LABELS_BATCH keeps the stored value
+                        # (an out-of-band favourite change on Outlook normally
+                        # arrives as a full upsert, not a partial label update).
+                        is_favorite = (
+                            (msg.get("flag") or {}).get("flagStatus") == "flagged"
+                            if "flag" in msg
+                            else None
+                        )
                         label_updates.append(LabelUpdate(
                             provider_message_id=msg["id"],
                             is_read=msg.get("isRead", False),
                             box=box,
+                            is_favorite=is_favorite,
                         ))
                         logger.debug(
                             "Outlook delta [%s] LABEL id=%s is_read=%s",
@@ -220,6 +238,11 @@ class OutlookSincronizacionMixin:
             for msg in response.get("value", []):
                 if len(upserts) >= max_total:
                     break
+                # Drafts belong to the ``drafts`` table, not ``email_metadata``.
+                # Filtering client-side (not via $filter=isDraft eq false, which
+                # collides with $orderby — see plan §0).
+                if msg.get("isDraft") is True:
+                    continue
                 parent_folder_id = msg.get("parentFolderId", "")
                 box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
                 try:
@@ -334,6 +357,9 @@ class OutlookSincronizacionMixin:
 
         upserts: list[EmailMetadata] = []
         for msg in response.get("value", []):
+            # Drafts sync into their own table — keep them out of the backfill.
+            if msg.get("isDraft") is True:
+                continue
             parent_folder_id = msg.get("parentFolderId", "")
             box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
             try:
@@ -362,6 +388,14 @@ class OutlookSincronizacionMixin:
         all_failed = True
 
         for folder, delta_link in folder_cursors.items():
+            # Defensive skip: an account synced before drafts were excluded
+            # still carries a ``drafts`` cursor in its stored ``sync_cursor``.
+            # Drop it here (and from ``new_cursors``) so those accounts stop
+            # pulling drafts into ``email_metadata`` without waiting for a
+            # re-bootstrap. ``drafts`` is no longer in ``_DELTA_FOLDERS``, so
+            # freshly primed cursors never carry it in the first place.
+            if folder == "drafts":
+                continue
             try:
                 new_delta = self._fetch_folder_delta(
                     folder, delta_link, upserts, deletes,

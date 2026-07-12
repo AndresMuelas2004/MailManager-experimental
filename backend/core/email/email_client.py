@@ -18,6 +18,15 @@ class EmailMetadata:
     promoting this to a list is a non-destructive future migration.
     Empty strings (default) when the provider response carries no ``To``
     (rare; service-side notifications mass-mailed via Bcc).
+
+    ``is_favorite`` is captured during sync from the provider's favourite
+    flag (Gmail ``STARRED`` label / Outlook ``flag.flagStatus``) and the
+    metadata upsert persists it — the provider is the source of truth.
+    **Every sync path that builds EmailMetadata MUST set it**: the upsert
+    overwrites ``is_favorite`` on conflict, so a path that leaves the
+    default ``False`` would silently un-favourite an existing row. A
+    freshly-sent message (envío path) is legitimately ``False`` — a new
+    row, never a conflict.
     """
     provider_message_id: str
     thread_id: str
@@ -27,6 +36,7 @@ class EmailMetadata:
     received_at: datetime
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
+    is_favorite: bool = False
     to_email: str = ""
     to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
@@ -34,10 +44,19 @@ class EmailMetadata:
 
 @dataclass
 class LabelUpdate:
-    """Partial update carrying only label-derived fields for an existing message."""
+    """Partial update carrying only label-derived fields for an existing message.
+
+    ``is_favorite`` closes the Gmail incremental favourite gap: a star/unstar on
+    an existing message arrives via the label-update path (labelsAdded/Removed),
+    not as a full upsert. ``None`` means "do not touch the stored favourite" —
+    the persistence layer COALESCEs it, so an Outlook partial delta object that
+    carries no ``flag`` leaves the value intact. Gmail always populates a
+    concrete bool (``format=minimal`` returns the full labelIds).
+    """
     provider_message_id: str
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
+    is_favorite: bool | None = None
 
 
 @dataclass
@@ -148,14 +167,11 @@ class ConversationMessage:
     when "completing the mailbox" with the messages a thread carries
     that were never synced locally.
 
-    The one field that justifies a dedicated dataclass instead of
-    reusing ``EmailMetadata`` is ``is_favorite``: the favourite mark
-    lives on the ``email_metadata.is_favorite`` column, not on the sync
-    dataclass, so the provider's fresh favourite state for each message
-    would be lost otherwise. The service maps ``ConversationMessage →
-    EmailMetadata`` dropping ``is_favorite`` (applied separately via
-    ``update_favorite``) and uses the value directly for the viewer
-    response.
+    ``is_favorite`` is carried through the ``ConversationMessage →
+    EmailMetadata`` mapping (the metadata upsert persists it now, so the
+    thread's favourite state stays correct after "completing the mailbox")
+    and is also used directly for the viewer response as the provider's
+    fresh favourite state for each message on this open.
 
     No body is carried — each message body is fetched lazily via the
     existing ``fetch_email_content`` cache-aside path when the viewer

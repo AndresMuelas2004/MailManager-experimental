@@ -15,10 +15,10 @@ from .transporte import GRAPH_BASE_URL, _PREFER_IMMUTABLE_HEADERS, _parse_graph_
 logger = logging.getLogger(__name__)
 
 
-_DRAFTS_PAGE_SIZE = 100
+_DRAFTS_PAGE_SIZE = 500
 _DRAFTS_MAX_RETRIES = 4
 _DRAFTS_RETRY_DELAY = 1.0  # seconds
-_DRAFTS_MAX_TOTAL = 100
+_DRAFTS_MAX_TOTAL = 500
 
 
 class OutlookBorradoresMixin:
@@ -315,8 +315,9 @@ class OutlookBorradoresMixin:
         is sequential by design (each page yields the URL of the next one).
 
         Uses $orderby=lastModifiedDateTime desc so the most recently edited
-        drafts come first — with a cap of 100, this means the caller always
-        receives the 100 most recently modified drafts.
+        drafts come first — with a cap of 500, this means the caller always
+        receives the 500 most recently modified drafts (Graph accepts
+        $top<=1000, so a single page covers the cap).
 
         Each page fetch is retried up to _DRAFTS_MAX_RETRIES times on
         transient EmailExternalAPIError before giving up.

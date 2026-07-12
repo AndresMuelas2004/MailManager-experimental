@@ -41,6 +41,13 @@ def _gmail_draft_response(draft_id: str, subject: str = "Hello") -> dict:
 
 
 class TestFetchDrafts:
+    def test_max_total_cap_is_500(self):
+        # The per-account draft fetch cap was raised 100 -> 500. This constant is
+        # the single source of truth the cap tests below assert against, so pin
+        # its value explicitly (a silent revert would otherwise pass every
+        # symbolic assertion while halving the real cap).
+        assert _DRAFTS_MAX_TOTAL == 500
+
     def test_not_authenticated_raises(self, client: GmailClient):
         client.service = None
         with pytest.raises(EmailNotAuthenticatedError):
@@ -88,8 +95,8 @@ class TestFetchDrafts:
     def test_caps_at_max_total_single_page(self, client: GmailClient):
         """If a single page returns > _DRAFTS_MAX_TOTAL IDs, the cap is enforced."""
         client.service = MagicMock()
-        # Simulate Gmail returning 150 IDs in the first page.
-        big_page = [{"id": f"d{i}"} for i in range(150)]
+        # Simulate Gmail returning 600 IDs in the first page (> the 500 cap).
+        big_page = [{"id": f"d{i}"} for i in range(600)]
         (
             client.service.users.return_value
             .drafts.return_value.list.return_value.execute
@@ -109,8 +116,8 @@ class TestFetchDrafts:
     def test_caps_across_pages(self, client: GmailClient):
         """If pagination is needed, the cap stops collection across pages."""
         client.service = MagicMock()
-        page_one = {"drafts": [{"id": f"d{i}"} for i in range(80)], "nextPageToken": "abc"}
-        page_two = {"drafts": [{"id": f"d{i}"} for i in range(80, 160)]}
+        page_one = {"drafts": [{"id": f"d{i}"} for i in range(300)], "nextPageToken": "abc"}
+        page_two = {"drafts": [{"id": f"d{i}"} for i in range(300, 600)]}
         page_three_should_not_happen = {"drafts": [{"id": "should-never-see"}]}
 
         call_count = {"n": 0}
@@ -136,7 +143,7 @@ class TestFetchDrafts:
             result = client.fetch_drafts()
 
         assert len(result) == _DRAFTS_MAX_TOTAL
-        # Exactly 2 list calls were made (page 1 = 80, page 2 adds 20 more to reach 100).
+        # Exactly 2 list calls were made (page 1 = 300, page 2 adds 200 more to reach 500).
         assert call_count["n"] == 2
         passed_ids = mock_batch.call_args[0][0]
         assert len(passed_ids) == _DRAFTS_MAX_TOTAL

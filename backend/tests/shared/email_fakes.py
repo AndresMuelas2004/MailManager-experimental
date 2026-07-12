@@ -35,6 +35,7 @@ def build_metadata(
     received_at: datetime | None = None,
     is_read: bool = False,
     box: str = "ALL_MAIL",
+    is_favorite: bool = False,
     account_id: str = "",
 ) -> EmailMetadata:
     """Build a normalized ``EmailMetadata`` with sensible defaults."""
@@ -49,6 +50,7 @@ def build_metadata(
         received_at=received_at,
         is_read=is_read,
         box=box,
+        is_favorite=is_favorite,
         account_id=account_id,
     )
 

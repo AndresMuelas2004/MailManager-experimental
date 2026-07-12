@@ -102,6 +102,13 @@ class GmailSincronizacionMixin:
             "userId": "me",
             "maxResults": min(page_size, 500),
             "includeSpamTrash": True,
+            # Exclude drafts from the listing: they live in their own table
+            # (``drafts``) and must not leak into ``email_metadata``. ``in:drafts``
+            # (plural) is the functional operator for the DRAFT system label.
+            # The ``"DRAFT" in labelIds`` filter in ``fetch_messages_metadata``
+            # is the universal safety net (covers the incremental path too);
+            # this ``q`` also stops drafts from spending ``messages.get`` quota.
+            "q": "-in:drafts",
         }
         if page_token:
             list_kwargs["pageToken"] = page_token
@@ -443,6 +450,13 @@ class GmailSincronizacionMixin:
             if msg is None:
                 skipped_ids.append(msg_id)
                 continue
+            # Universal draft exclusion (covers the incremental path, where the
+            # ``q="-in:drafts"`` listing filter does not apply): a message the
+            # provider labels DRAFT belongs to the ``drafts`` table, never to
+            # ``email_metadata``. Silently drop it (not a skip/error).
+            if "DRAFT" in (msg.get("labelIds") or []):
+                logger.debug("Gmail skipping draft message %s (excluded from email_metadata).", msg_id)
+                continue
             try:
                 results.append(self._parse_metadata_response(msg))
             except Exception as exc:
@@ -485,7 +499,9 @@ class GmailSincronizacionMixin:
 
         to_name, to_email = _first_recipient_from_to_header(headers.get("To", ""))
 
-        is_read, box = GmailSincronizacionMixin._resolve_labels(msg.get("labelIds") or [])
+        label_ids = msg.get("labelIds") or []
+        is_read, box = GmailSincronizacionMixin._resolve_labels(label_ids)
+        is_favorite = "STARRED" in label_ids
 
         internal_date = msg.get("internalDate")
         if internal_date:
@@ -505,6 +521,7 @@ class GmailSincronizacionMixin:
             received_at=received_at,
             is_read=is_read,
             box=box,
+            is_favorite=is_favorite,
             to_email=to_email,
             to_name=to_name,
         )
@@ -655,11 +672,17 @@ class GmailSincronizacionMixin:
             if msg is None:
                 skipped_ids.append(msg_id)
                 continue
-            is_read, box = self._resolve_labels(msg.get("labelIds") or [])
+            label_ids = msg.get("labelIds") or []
+            is_read, box = self._resolve_labels(label_ids)
             results.append(LabelUpdate(
                 provider_message_id=msg.get("id", msg_id),
                 is_read=is_read,
                 box=box,
+                # Close the Gmail incremental favourite gap: a star/unstar on an
+                # existing message arrives here (labelsAdded/Removed), so carry
+                # the current STARRED state. ``format=minimal`` returns the full
+                # labelIds, so Gmail ALWAYS populates a concrete bool (never None).
+                is_favorite="STARRED" in label_ids,
             ))
         _log_skipped_messages("label sync", skipped_ids, message_ids)
         return results

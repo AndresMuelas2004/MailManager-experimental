@@ -10,7 +10,8 @@ import pytest
 
 from core.email.email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from core.email.errors import EmailExternalAPIError, EmailNotAuthenticatedError
-from core.email.outlook_client import OutlookClient, _DELTA_FOLDERS
+from core.email.outlook_client import OutlookClient, _DELTA_FOLDERS, _DELTA_SELECT_FIELDS
+from core.email.outlook_client.sincronizacion import _BOOTSTRAP_SELECT_FIELDS
 
 from ._helpers import _make_authenticated_client, _make_folder_cursor, _make_graph_message
 
@@ -60,6 +61,26 @@ class TestDecodeFolderCursors:
         assert OutlookClient._decode_folder_cursors(cursor) is None
 
 
+# ── draft-exclusion + favourite select-field contracts ──────────────
+
+
+class TestDraftExclusionContracts:
+    def test_drafts_folder_dropped_from_delta_folders(self):
+        # drafts sync into their own table; walking the drafts folder would leak
+        # them into email_metadata, so it must be absent from the delta anchor.
+        assert "drafts" not in _DELTA_FOLDERS
+
+    def test_bootstrap_select_carries_isdraft_and_flag(self):
+        # isDraft lets the client filter drafts; flag lets it capture favourites.
+        assert "isDraft" in _BOOTSTRAP_SELECT_FIELDS
+        assert "flag" in _BOOTSTRAP_SELECT_FIELDS
+
+    def test_delta_select_carries_flag(self):
+        # The delta $select must include flag so an out-of-band favourite change
+        # that re-parses the full message picks it up.
+        assert "flag" in _DELTA_SELECT_FIELDS
+
+
 # ── _parse_graph_message ────────────────────────────────────────────
 
 
@@ -107,6 +128,23 @@ class TestParseGraphMessage:
         assert OutlookClient._parse_graph_message(msg, "SENT").box == "SENT"
         # ARCHIVE is the new box, classified when parentFolderId == archive.
         assert OutlookClient._parse_graph_message(msg, "ARCHIVE").box == "ARCHIVE"
+
+    def test_flagged_message_is_favorite(self):
+        # flag.flagStatus == "flagged" is captured into is_favorite during sync
+        # (flag is now in the $select of both bootstrap and delta).
+        msg = _make_graph_message()
+        msg["flag"] = {"flagStatus": "flagged"}
+        assert OutlookClient._parse_graph_message(msg, "ALL_MAIL").is_favorite is True
+
+    def test_not_flagged_message_is_not_favorite(self):
+        msg = _make_graph_message()
+        msg["flag"] = {"flagStatus": "notFlagged"}
+        assert OutlookClient._parse_graph_message(msg, "ALL_MAIL").is_favorite is False
+
+    def test_missing_flag_is_not_favorite(self):
+        msg = _make_graph_message()
+        msg.pop("flag", None)
+        assert OutlookClient._parse_graph_message(msg, "ALL_MAIL").is_favorite is False
 
 
 # ── fetch_email_metadata routing ────────────────────────────────────
@@ -262,6 +300,17 @@ class TestFetchRecentMessages:
         with patch.object(client, "_graph_request", return_value={"value": messages}):
             result = client._fetch_recent_messages(500, self._FOLDER_MAP)
         assert result[0].box == "ALL_MAIL"
+
+    def test_skips_drafts(self):
+        # A draft surfaced by GET /me/messages is filtered client-side (drafts
+        # sync into their own table, never email_metadata).
+        client = _make_authenticated_client()
+        draft = _make_graph_message(msg_id="d1", parent_folder_id="id-inbox")
+        draft["isDraft"] = True
+        normal = _make_graph_message(msg_id="m1", parent_folder_id="id-inbox")
+        with patch.object(client, "_graph_request", return_value={"value": [draft, normal]}):
+            result = client._fetch_recent_messages(500, self._FOLDER_MAP)
+        assert [m.provider_message_id for m in result] == ["m1"]
 
 
 class TestBootstrapEmailMetadata:
@@ -543,6 +592,74 @@ class TestIncrementalEmailMetadata:
             with pytest.raises(EmailExternalAPIError, match="all folder"):
                 client._incremental_email_metadata(cursor)
 
+    @pytest.mark.parametrize(
+        "flag_status, expected",
+        [("flagged", True), ("notFlagged", False)],
+    )
+    def test_partial_delta_carries_favorite_when_flag_present(self, flag_status, expected):
+        # A partial delta object (no ``from`` field — only isRead/labels changed)
+        # becomes a LabelUpdate. When ``flag`` IS present in the partial payload,
+        # its state rides through as a concrete bool.
+        client = _make_authenticated_client()
+        cursor = _make_folder_cursor()
+
+        def mock_graph(method, url, body=None):
+            if "delta-inbox" in url:
+                return {
+                    "value": [{"id": "m1", "isRead": True, "flag": {"flagStatus": flag_status}}],
+                    "@odata.deltaLink": "https://new-delta-inbox",
+                }
+            return {"value": [], "@odata.deltaLink": url.replace("delta-", "new-delta-")}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client._incremental_email_metadata(cursor)
+
+        lu = next(lu for lu in result.label_updates if lu.provider_message_id == "m1")
+        assert lu.is_favorite is expected
+
+    def test_partial_delta_leaves_favorite_none_without_flag(self):
+        # Without ``flag`` in the partial payload, is_favorite is None so the
+        # COALESCE in UPDATE_LABELS_BATCH keeps the stored favourite untouched.
+        client = _make_authenticated_client()
+        cursor = _make_folder_cursor()
+
+        def mock_graph(method, url, body=None):
+            if "delta-inbox" in url:
+                return {
+                    "value": [{"id": "m1", "isRead": True}],
+                    "@odata.deltaLink": "https://new-delta-inbox",
+                }
+            return {"value": [], "@odata.deltaLink": url.replace("delta-", "new-delta-")}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client._incremental_email_metadata(cursor)
+
+        lu = next(lu for lu in result.label_updates if lu.provider_message_id == "m1")
+        assert lu.is_favorite is None
+
+    def test_skips_stale_drafts_cursor_inherited_from_pre_change_sync(self):
+        # An account synced before drafts were excluded still carries a ``drafts``
+        # cursor in its stored sync_cursor. The incremental must NOT walk it and
+        # must drop it from the new cursor so drafts stop leaking without waiting
+        # for a re-bootstrap.
+        client = _make_authenticated_client()
+        cursor = OutlookClient._encode_folder_cursors({
+            "inbox": "https://delta-inbox",
+            "drafts": "https://delta-drafts",
+        })
+
+        def mock_graph(method, url, body=None):
+            if "delta-drafts" in url:
+                raise AssertionError("the stale drafts cursor must not be walked")
+            return {"value": [], "@odata.deltaLink": "https://new-delta-inbox"}
+
+        with patch.object(client, "_graph_request", side_effect=mock_graph):
+            result = client._incremental_email_metadata(cursor)
+
+        new_cursors = json.loads(result.new_cursor)
+        assert "drafts" not in new_cursors["folders"]
+        assert new_cursors["folders"]["inbox"] == "https://new-delta-inbox"
+
     def test_box_mapping_from_folder_name(self):
         """deleteditems→TRASH, junkemail→SPAM, sentitems→SENT, archive→ARCHIVE, others→ALL_MAIL."""
         client = _make_authenticated_client()
@@ -565,7 +682,8 @@ class TestIncrementalEmailMetadata:
         assert by_id["msg-junkemail"].box == "SPAM"
         assert by_id["msg-inbox"].box == "ALL_MAIL"
         assert by_id["msg-sentitems"].box == "SENT"
-        assert by_id["msg-drafts"].box == "ALL_MAIL"
+        # ``drafts`` is no longer a delta folder (drafts sync into their own
+        # table), so it is absent from _DELTA_FOLDERS and never walked here.
         # The archive folder delta now classifies into ARCHIVE (out-of-band
         # archives surface on the next sync).
         assert by_id["msg-archive"].box == "ARCHIVE"
@@ -914,6 +1032,18 @@ class TestFetchBackfillPage:
         client = OutlookClient(account_label="mb__outlook")
         with pytest.raises(EmailNotAuthenticatedError):
             client.fetch_backfill_page(None, 1000)
+
+    def test_skips_drafts(self):
+        # Drafts belong to their own table — the backfill filters them client-side.
+        client = _make_authenticated_client()
+        draft = _make_graph_message(msg_id="d1", parent_folder_id="id-inbox")
+        draft["isDraft"] = True
+        normal = _make_graph_message(msg_id="m1", parent_folder_id="id-inbox")
+        response = {"value": [draft, normal]}
+        with patch.object(client, "_folder_id_to_box_cached", return_value=self._FOLDER_MAP), \
+             patch.object(client, "_graph_request_json_with_retries", return_value=response):
+            page = client.fetch_backfill_page(None, 1000)
+        assert [u.provider_message_id for u in page.upserts] == ["m1"]
 
 
 # ── verify_message_existence ───────────────────────────────────────

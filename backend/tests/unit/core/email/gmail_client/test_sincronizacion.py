@@ -133,6 +133,31 @@ class TestParseMetadataResponse:
         assert result.from_email == "bare@example.com"
         assert result.from_name == ""
 
+    def test_starred_label_sets_favorite(self):
+        # The STARRED label is captured into is_favorite during sync, so a
+        # freshly synced/backfilled account shows its favourites without a
+        # separate /favorites/sync.
+        msg = {
+            "id": "msg6",
+            "threadId": "t6",
+            "internalDate": "1700000000000",
+            "labelIds": ["INBOX", "STARRED"],
+            "payload": {"headers": []},
+        }
+        result = GmailClient._parse_metadata_response(msg)
+        assert result.is_favorite is True
+
+    def test_no_starred_label_is_not_favorite(self):
+        msg = {
+            "id": "msg7",
+            "threadId": "t7",
+            "internalDate": "1700000000000",
+            "labelIds": ["INBOX"],
+            "payload": {"headers": []},
+        }
+        result = GmailClient._parse_metadata_response(msg)
+        assert result.is_favorite is False
+
 
 # ── _resolve_labels ──────────────────────────────────────────────────
 
@@ -389,6 +414,54 @@ class TestBatchFetchLabelUpdates:
         assert result[0].provider_message_id == "m2"
         assert result[0].box == "TRASH"
 
+    def test_carries_starred_favorite_state(self, client: GmailClient):
+        # A star/unstar of an existing message arrives via the label-update path,
+        # so the LabelUpdate must carry the current STARRED state. format=minimal
+        # returns the full labelIds → Gmail ALWAYS populates a concrete bool.
+        mock_service = MagicMock()
+        batch_instance = MagicMock()
+        mock_service.new_batch_http_request.return_value = batch_instance
+
+        def fake_execute():
+            cb = mock_service.new_batch_http_request.call_args[1]["callback"]
+            cb("m1", {"id": "m1", "labelIds": ["INBOX", "STARRED"]}, None)
+            cb("m2", {"id": "m2", "labelIds": ["INBOX"]}, None)
+        batch_instance.execute.side_effect = fake_execute
+
+        client.service = mock_service
+        result = client._batch_fetch_label_updates(["m1", "m2"])
+
+        lu1 = next(lu for lu in result if lu.provider_message_id == "m1")
+        lu2 = next(lu for lu in result if lu.provider_message_id == "m2")
+        assert lu1.is_favorite is True
+        assert lu2.is_favorite is False
+
+
+# ── fetch_messages_metadata draft exclusion ─────────────────────────
+
+
+class TestFetchMessagesMetadataDraftExclusion:
+    def test_drops_draft_labeled_messages(self, client: GmailClient):
+        # The DRAFT-labelled message belongs to the drafts table, never to
+        # email_metadata — the universal safety net that covers the incremental
+        # path where the ``q="-in:drafts"`` listing filter does not apply.
+        normal = {
+            "id": "m1", "threadId": "t1", "internalDate": "1700000000000",
+            "labelIds": ["INBOX"], "payload": {"headers": []},
+        }
+        draft = {
+            "id": "d1", "threadId": "t2", "internalDate": "1700000000000",
+            "labelIds": ["DRAFT"], "payload": {"headers": []},
+        }
+        client.service = MagicMock()  # non-None satisfies the auth guard
+        with patch.object(
+            client, "_execute_batch_get", return_value={"m1": normal, "d1": draft},
+        ):
+            result = client.fetch_messages_metadata(["m1", "d1"])
+
+        ids = [r.provider_message_id for r in result]
+        assert ids == ["m1"]
+
 
 # ── _list_message_ids ─────────────────────────────────────────────
 
@@ -402,6 +475,20 @@ class TestListMessageIds:
         client.service = mock_service
         ids = client._list_message_ids(500)
         assert ids == ["m1", "m2"]
+
+    def test_listing_excludes_drafts_and_includes_spam_trash(self, client: GmailClient):
+        # The metadata listing must carry ``q="-in:drafts"`` (plural — the
+        # functional operator for the DRAFT label) so drafts never leak into
+        # email_metadata nor spend messages.get quota, while spam/trash stay in.
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {
+            "messages": [{"id": "m1"}],
+        }
+        client.service = mock_service
+        client._list_message_ids(500)
+        kwargs = mock_service.users().messages().list.call_args.kwargs
+        assert kwargs["q"] == "-in:drafts"
+        assert kwargs["includeSpamTrash"] is True
 
     def test_pagination_with_max_total(self, client: GmailClient):
         mock_service = MagicMock()
