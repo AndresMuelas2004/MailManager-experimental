@@ -14,6 +14,7 @@ import { syncEmailMetadata } from '../../../api/endpoints/emails';
 import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
+import useEmailContentPrefetch from './useEmailContentPrefetch';
 import type { AccountOut, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
@@ -68,6 +69,9 @@ export default function useVirtualMailboxEmails(
     refetchOnMount: 'always',
     staleTime: 0,
   });
+
+  // Warm the in-memory body cache for this page's recent-unread INBOX rows (F2).
+  useEmailContentPrefetch(emailsQuery.data?.items ?? []);
 
   // Accounts are required for the resolveAccount() lookup on the email
   // table — they are fetched across every mailbox the user owns

@@ -420,3 +420,72 @@ describe('useEmailList — manual refresh & sync mark', () => {
     expect(result.current.lastSyncedAt).toBeNull();
   });
 });
+
+describe('useEmailList — content prefetch (F2)', () => {
+  // A row that satisfies isPrefetchTarget: unread, ALL_MAIL, and dated within
+  // the 48h window. The date MUST be computed relative to Date.now() — a
+  // hardcoded 2024 timestamp never satisfies the window and the test would go
+  // vacuously green without ever exercising the prefetch.
+  function makeRecentUnread(id: string) {
+    return {
+      ...makeEmail(id),
+      is_read: false,
+      box: 'ALL_MAIL',
+      received_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    };
+  }
+
+  it('warms the body cache for a recent-unread ALL_MAIL row with its own ids', async () => {
+    const contentReqs: Array<{ mailboxId: string; pmid: string; accountId: string | null }> = [];
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: [makeRecentUnread('recent_1')],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/:mailboxId/emails/:pmid/content`, ({ params, request }) => {
+        contentReqs.push({
+          mailboxId: String(params.mailboxId),
+          pmid: String(params.pmid),
+          accountId: new URL(request.url).searchParams.get('account_id'),
+        });
+        return HttpResponse.json({ html_body: null, text_body: null, attachments: [] });
+      }),
+    );
+
+    renderHook(() => useEmailList('mb_1', 'ALL_MAIL', 'a_1', undefined, undefined, 1), { wrapper });
+
+    // The listing hook schedules the prefetch off an idle callback (a macrotask
+    // under jsdom), so a proactive GET /content fires for the eligible row using
+    // the row's own mailbox_id / account_id (not the route's).
+    await waitFor(() => expect(contentReqs).toHaveLength(1));
+    expect(contentReqs[0]).toEqual({ mailboxId: 'mb_1', pmid: 'recent_1', accountId: 'a_1' });
+  });
+
+  it('schedules no prefetch for a non-recent row (Favoritos / older listings)', async () => {
+    const contentReqs: string[] = [];
+    server.use(
+      // makeEmail is 2024-dated (outside the 48h window) → not a prefetch target.
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({ items: [makeEmail('old_1')], total: 1, limit: 50, offset: 0 }),
+      ),
+      http.get(`${API_BASE}/mailboxes/:mailboxId/emails/:pmid/content`, ({ params }) => {
+        contentReqs.push(String(params.pmid));
+        return HttpResponse.json({ html_body: null, text_body: null, attachments: [] });
+      }),
+    );
+
+    const { result } = renderHook(
+      () => useEmailList('mb_1', 'ALL_MAIL', 'a_1', undefined, undefined, 1),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.emails).toHaveLength(1));
+    // Drain any pending idle/macrotask, then assert nothing was prefetched.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(contentReqs).toEqual([]);
+  });
+});

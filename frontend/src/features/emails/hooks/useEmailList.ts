@@ -7,6 +7,7 @@ import { toUiError } from '../../../api/client/errors';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import { readLastSyncedAt, writeLastSyncedAt } from '../../../lib/lastSync';
 import { DEFAULT_LIST_CONTROLS } from '../../../lib/listControls';
+import useEmailContentPrefetch from './useEmailContentPrefetch';
 import type { AccountOut, AccountSyncFailure, EmailMetadataOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 import type { EmailBox } from '../../../lib/types';
@@ -91,6 +92,10 @@ export default function useEmailList(
     enabled: mailboxId.length > 0,
     placeholderData: keepPreviousData,
   });
+
+  // Warm the in-memory body cache for this page's recent-unread INBOX rows (F2).
+  // No-op for read / non-INBOX / >48h rows, so Favoritos schedules nothing.
+  useEmailContentPrefetch(emailsQuery.data?.items ?? []);
 
   const accountsQuery = useQuery({
     queryKey: accountsKey,
