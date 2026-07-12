@@ -18,7 +18,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 - [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md) — Ordenar el listado de las bandejas reales por fecha / remitente / asunto (asc o desc) y filtrar de un clic por no leídos / con adjuntos / destacados, combinables y compatibles con la búsqueda.
 - [contador-no-leidos.md](contador-no-leidos.md) — El badge numérico de correos sin leer en el menú lateral (según el ámbito activo: buzón completo o una cuenta) y el título del navegador; cuenta mensajes individuales (no conversaciones) de la copia sincronizada y se actualiza solo.
 - [conversaciones.md](conversaciones.md) — Vista de conversación: los mensajes de un hilo colapsados en una fila agrupada (con selección en la bandeja de cuenta y la unificada) y el visor que reconstruye la cadena completa del proveedor.
-- [visualizacion-de-correos.md](visualizacion-de-correos.md) — Abrir un correo: render del HTML saneado, imágenes embebidas (`cid:`→`data:`) y caché tras la primera apertura.
+- [visualizacion-de-correos.md](visualizacion-de-correos.md) — Abrir un correo: render del HTML saneado, imágenes embebidas (`cid:`→`data:`), proxy de privacidad para las imágenes remotas, y caché (en base de datos y en la memoria del navegador) para abrir al instante.
 - [lupa.md](lupa.md) — Búsqueda local sobre asunto y remitente (texto libre insensible a tildes) más operadores estilo Gmail (`from: to: subject: has: before: after: is: in:`) combinables con AND.
 - [favoritos.md](favoritos.md) — La estrella (Gmail) / bandera (Outlook), la pestaña de Favoritos y la captura automática del estado desde el proveedor en cada sincronización.
 
