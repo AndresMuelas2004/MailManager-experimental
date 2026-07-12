@@ -18,6 +18,8 @@ _ALL_VARS = [
     "BACKFILL_WORKER_ENABLED",
     "BACKFILL_MAX_EMAILS_PER_ACCOUNT",
     "BACKFILL_MAX_CONCURRENT",
+    "BACKFILL_DB_WRITE_CONCURRENCY",
+    "BACKFILL_MAX_ATTEMPTS",
     "BACKFILL_GMAIL_GETS_PER_MINUTE",
     "BACKFILL_OUTLOOK_PAGE_DELAY_MS",
     "BACKFILL_POLL_INTERVAL_S",
@@ -56,7 +58,13 @@ class TestIntAccessors:
         "func, default",
         [
             (backfill_config.backfill_max_emails_per_account, 100000),
-            (backfill_config.backfill_max_concurrent, 2),
+            # Raised 2 -> 15 (aligned with MAX_ACCOUNTS_PER_USER) so every account
+            # a user connects downloads its history in parallel.
+            (backfill_config.backfill_max_concurrent, 15),
+            # DB-write semaphore bound, kept safely below DB_POOL_MAX_CONN (25).
+            (backfill_config.backfill_db_write_concurrency, 8),
+            # Auto-retry budget consumed by the reaper before a job stays failed.
+            (backfill_config.backfill_max_attempts, 5),
             (backfill_config.backfill_gmail_gets_per_minute, 300),
             (backfill_config.backfill_outlook_page_delay_ms, 300),
         ],
@@ -68,10 +76,21 @@ class TestIntAccessors:
         monkeypatch.setenv("BACKFILL_MAX_EMAILS_PER_ACCOUNT", "25000")
         assert backfill_config.backfill_max_emails_per_account() == 25000
 
+    @pytest.mark.parametrize(
+        "env, func, override",
+        [
+            ("BACKFILL_DB_WRITE_CONCURRENCY", backfill_config.backfill_db_write_concurrency, 12),
+            ("BACKFILL_MAX_ATTEMPTS", backfill_config.backfill_max_attempts, 9),
+        ],
+    )
+    def test_new_int_overrides_are_read(self, monkeypatch, env, func, override):
+        monkeypatch.setenv(env, str(override))
+        assert func() == override
+
     def test_invalid_value_falls_back_without_raising(self, monkeypatch):
         monkeypatch.setenv("BACKFILL_MAX_CONCURRENT", "not-a-number")
         # Must NOT raise — a bad env var would otherwise strand the worker.
-        assert backfill_config.backfill_max_concurrent() == 2
+        assert backfill_config.backfill_max_concurrent() == 15
 
     def test_blank_value_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv("BACKFILL_GMAIL_GETS_PER_MINUTE", "   ")

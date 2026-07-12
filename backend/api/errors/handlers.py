@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from api.errors.exceptions import (
     AccountConnectAuthError,
+    AccountLimitExceeded,
     AccountMisconfigured,
     AccountNotConnected,
     AccountNotFound,
@@ -110,6 +111,7 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     AppCredentialsMissing: status.HTTP_500_INTERNAL_SERVER_ERROR,
     AccountConnectAuthError: status.HTTP_401_UNAUTHORIZED,
     AccountNotConnected: status.HTTP_409_CONFLICT,
+    AccountLimitExceeded: status.HTTP_409_CONFLICT,
     EmailContentFetchError: status.HTTP_502_BAD_GATEWAY,
     EmailReplyContextError: status.HTTP_502_BAD_GATEWAY,
     ConversationFetchError: status.HTTP_502_BAD_GATEWAY,

@@ -16,6 +16,7 @@ from api.schemas.draft import (
     DraftsSyncResultOut,
 )
 from api.services.services_helpers import (
+    build_draft_rows,
     build_manager_for_accounts,
     ensure_mailbox_access,
     raise_on_silent_auth_errors,
@@ -44,7 +45,7 @@ def sync_drafts(
     only that specific account. Ownership enforced via ensure_mailbox_access.
     Per account, the full provider draft list replaces the local rows
     atomically (upsert + delete-missing). Both providers cap the fetch
-    at _DRAFTS_MAX_TOTAL = 100 drafts per account.
+    at _DRAFTS_MAX_TOTAL = 500 drafts per account.
     """
     ensure_mailbox_access(mailbox_id, user_id)
 
@@ -136,19 +137,7 @@ def sync_drafts(
             if not ids:
                 continue
             _, account_id_inner, provider = ids
-            rows = [
-                {
-                    "provider_draft_id": d.provider_draft_id,
-                    "to_recipients": list(d.to_recipients),
-                    "cc_recipients": list(d.cc_recipients),
-                    "bcc_recipients": list(d.bcc_recipients),
-                    "subject": d.subject,
-                    "body": d.body,
-                    "created_at": d.created_at,
-                    "updated_at": d.updated_at,
-                }
-                for d in drafts
-            ]
+            rows = build_draft_rows(drafts)
             try:
                 synced_count = draft_store.replace_all_for_account(account_id_inner, rows)
             except DatabaseError as exc:

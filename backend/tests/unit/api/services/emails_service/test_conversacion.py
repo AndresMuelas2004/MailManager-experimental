@@ -39,20 +39,31 @@ _CONVERSATION_BASE_ROW = {
 }
 
 
+def test_conversation_message_maps_is_favorite_through():
+    # is_favorite must survive the ConversationMessage → EmailMetadata mapping:
+    # the metadata upsert now persists it, so dropping it (the old behaviour)
+    # would silently un-favourite the row when the viewer completes the mailbox.
+    result = conversacion._conversation_message_to_metadata(
+        build_conversation_message(is_favorite=True), _ACCOUNT_ID,
+    )
+    assert result.is_favorite is True
+    assert result.account_id == _ACCOUNT_ID
+
+
 def _patch_get_conversation_common(
     monkeypatch,
     *,
     base_row="default",
     fake_client_kwargs=None,
     persist_exc=None,
-    favorite_calls=None,
+    persist_calls=None,
 ):
     """Common monkeypatches for ``get_conversation`` tests.
 
-    Patches the base-message read (``get_metadata``), the lazy-sync persist
-    helper (``persist_email_metadata_batch``) and the batched favourite
-    re-apply (``email_metadata_store.set_favorites_true_batch``) — the
-    dependency set of the conversation path, narrower than ``_patch_common``.
+    Patches the base-message read (``get_metadata``) and the lazy-sync
+    persist helper (``persist_email_metadata_batch``, recording into
+    ``persist_calls`` when given) — the dependency set of the conversation
+    path, narrower than ``_patch_common``.
     """
     monkeypatch.setattr(
         conversacion, "ensure_mailbox_access",
@@ -103,19 +114,11 @@ def _patch_get_conversation_common(
             raise persist_exc
         monkeypatch.setattr(conversacion, "persist_email_metadata_batch", _persist)
     else:
-        monkeypatch.setattr(
-            conversacion, "persist_email_metadata_batch",
-            lambda _aid, _meta, **_kw: len(_meta),
-        )
-
-    def _set_favorites_true_batch(account_id, provider_message_ids):
-        if favorite_calls is not None:
-            favorite_calls.append((account_id, list(provider_message_ids)))
-        return len(provider_message_ids)
-    monkeypatch.setattr(
-        conversacion.email_metadata_store, "set_favorites_true_batch",
-        _set_favorites_true_batch,
-    )
+        def _persist(_aid, _meta, **_kw):
+            if persist_calls is not None:
+                persist_calls.append((_aid, list(_meta)))
+            return len(_meta)
+        monkeypatch.setattr(conversacion, "persist_email_metadata_batch", _persist)
 
 
 class TestGetConversation:
@@ -171,8 +174,8 @@ class TestGetConversation:
         assert m_new.mailbox_id == _MAILBOX_ID
         assert all(m.has_attachments is False for m in result.messages)
 
-    def test_lazy_sync_applies_favorite_per_message(self, monkeypatch):
-        favorite_calls: list = []
+    def test_lazy_sync_upserts_members_with_is_favorite(self, monkeypatch):
+        persist_calls: list = []
         members = [
             build_conversation_message(provider_message_id="m_fav", is_favorite=True),
             build_conversation_message(provider_message_id="m_plain", is_favorite=False),
@@ -180,12 +183,15 @@ class TestGetConversation:
         _patch_get_conversation_common(
             monkeypatch,
             fake_client_kwargs={"fetch_conversation_return": members},
-            favorite_calls=favorite_calls,
+            persist_calls=persist_calls,
         )
         conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
-        # A SINGLE batch re-apply carries only the favourite member's id (the
-        # shared upsert does not carry is_favorite); the plain one is excluded.
-        assert favorite_calls == [(_ACCOUNT_ID, ["m_fav"])]
+        # The lazy-sync upserts every member with its provider-fresh is_favorite
+        # (the shared upsert is now provider-authoritative for favourites — no
+        # separate re-apply): m_fav → True, m_plain → False.
+        persisted = {m.provider_message_id: m for call in persist_calls for m in call[1]}
+        assert persisted["m_fav"].is_favorite is True
+        assert persisted["m_plain"].is_favorite is False
 
     def test_persist_failure_is_best_effort(self, monkeypatch):
         # A lazy-sync persist failure must NOT abort the viewer response.

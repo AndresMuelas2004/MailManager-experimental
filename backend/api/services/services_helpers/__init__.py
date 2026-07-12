@@ -38,6 +38,7 @@ from .contexto_cuentas import (  # _wrap_secret: privado re-exportado — lo imp
 
 # Persistencia y actualización de metadatos + cursores de sync
 from .persistencia_metadatos import (
+    build_draft_rows,
     delete_email_metadata_batch,
     load_suspect_message_ids,
     load_sync_cursors,

@@ -43,8 +43,9 @@ def _conversation_message_to_metadata(
     message: ConversationMessage, account_id: str,
 ) -> EmailMetadata:
     """Convert a provider ``ConversationMessage`` into a syncable
-    ``EmailMetadata`` (drops ``is_favorite`` — applied separately via
-    ``update_favorite`` — and stamps ``account_id`` like the sync path)."""
+    ``EmailMetadata`` — carries ``is_favorite`` through (the metadata upsert
+    now persists it; dropping it here would un-favourite the row) and stamps
+    ``account_id`` like the sync path."""
     return EmailMetadata(
         provider_message_id=message.provider_message_id,
         thread_id=message.thread_id,
@@ -54,6 +55,7 @@ def _conversation_message_to_metadata(
         received_at=message.received_at,
         is_read=message.is_read,
         box=message.box,
+        is_favorite=message.is_favorite,
         to_email=message.to_email,
         to_name=message.to_name,
         account_id=account_id,
@@ -218,12 +220,12 @@ def _lazy_sync_conversation(
     """Best-effort persistence of a fetched conversation's messages.
 
     Upserts every message into ``email_metadata`` (inserting the ones never
-    synced, refreshing ``is_read`` / ``box`` / ``to_*`` of existing ones —
-    the shared upsert never touches ``thread_id`` / ``is_favorite`` /
-    ``has_attachments``) and re-applies the provider's favourite flag in a
-    single batch UPDATE over the thread's favourite members (one-directional
-    — never clears FALSE). Every step is swallowed on failure (logged) so a
-    cache-fill hiccup never aborts the viewer.
+    synced, refreshing ``is_read`` / ``box`` / ``is_favorite`` / ``to_*`` of
+    existing ones — the shared upsert still never touches ``thread_id`` /
+    ``has_attachments``). ``is_favorite`` is now provider-authoritative on
+    each open (both directions), so no separate favourite re-apply is needed.
+    Swallowed on failure (logged) so a cache-fill hiccup never aborts the
+    viewer.
 
     NOTE: this only affects the LISTING's thread row on the next list; it
     does NOT change the ``ConversationOut`` of this call (the viewer reads
@@ -242,22 +244,6 @@ def _lazy_sync_conversation(
         logger.warning(
             "Conversation lazy-sync metadata persist failed for account '%s' (%s): %s",
             account_id, type(exc).__name__, exc,
+            exc_info=exc,
         )
         return
-
-    # The shared upsert does not touch ``is_favorite``; re-apply the
-    # provider's favourite state so the listing's thread-level favourite
-    # aggregate is correct on the next list. A SINGLE batch statement marks
-    # every favourite thread member TRUE (avoids an UPDATE per message — the
-    # old N+1). One-directional by design: un-starring is reconciled by the
-    # favourites toggle / sync, never by opening a conversation. Soft-fail.
-    favourite_ids = [m.provider_message_id for m in members if m.is_favorite]
-    if not favourite_ids:
-        return
-    try:
-        email_metadata_store.set_favorites_true_batch(account_id, favourite_ids)
-    except Exception as exc:
-        logger.warning(
-            "Conversation lazy-sync favourite batch apply failed for account '%s' (%s): %s",
-            account_id, type(exc).__name__, exc,
-        )

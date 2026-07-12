@@ -28,6 +28,8 @@ def _insert_backfill_job(
     provider: str = "gmail",
     target_total: int = 100000,
     fetched_count: int = 0,
+    attempts: int = 0,
+    stale_minutes: int | None = None,
 ) -> None:
     with isolated_db.cursor() as cur:
         cur.execute(
@@ -46,6 +48,60 @@ def _insert_backfill_job(
                 "fetched_count": fetched_count,
             },
         )
+        # ``now()`` is constant within the per-test transaction, so a freshly
+        # inserted row's ``updated_at`` equals the reaper query's ``now()`` and
+        # would never satisfy ``updated_at < now() - backoff``. Push it into the
+        # past explicitly to exercise the cool-off gate.
+        if attempts or stale_minutes is not None:
+            cur.execute(
+                "UPDATE account_backfill_jobs "
+                "SET attempts = %(attempts)s, "
+                "    updated_at = now() - (%(mins)s * interval '1 minute') "
+                "WHERE account_id = %(account_id)s::uuid",
+                {"attempts": attempts, "mins": stale_minutes or 0, "account_id": account_id},
+            )
+
+
+def _insert_draft_sync_job(
+    isolated_db,
+    *,
+    account_id: str,
+    mailbox_id: str,
+    status: str = "pending",
+    provider: str = "gmail",
+    attempts: int = 0,
+    stale_minutes: int | None = None,
+) -> None:
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO draft_sync_jobs (account_id, mailbox_id, provider, status)
+            VALUES (%(account_id)s::uuid, %(mailbox_id)s::uuid, %(provider)s, %(status)s)
+            """,
+            {
+                "account_id": account_id,
+                "mailbox_id": mailbox_id,
+                "provider": provider,
+                "status": status,
+            },
+        )
+        if attempts or stale_minutes is not None:
+            cur.execute(
+                "UPDATE draft_sync_jobs "
+                "SET attempts = %(attempts)s, "
+                "    updated_at = now() - (%(mins)s * interval '1 minute') "
+                "WHERE account_id = %(account_id)s::uuid",
+                {"attempts": attempts, "mins": stale_minutes or 0, "account_id": account_id},
+            )
+
+
+def _draft_sync_row(isolated_db, account_id: str):
+    with isolated_db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM draft_sync_jobs WHERE account_id = %s::uuid",
+            (account_id,),
+        )
+        return cur.fetchone()
 
 
 def _job_row(isolated_db, account_id: str):
@@ -250,7 +306,10 @@ def test_connect_enqueues_pending_job_for_new_account(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):
     monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "true")
-    monkeypatch.setenv("BACKFILL_MAX_EMAILS_PER_ACCOUNT", "100000")
+    # A NON-default value (default is 100000) so the assertion is load-bearing:
+    # it proves the env → target_total wiring end-to-end (callback → enqueue),
+    # not just that the default happens to match.
+    monkeypatch.setenv("BACKFILL_MAX_EMAILS_PER_ACCOUNT", "54321")
     mid, aid = setup_mailbox_and_account(test_client)
 
     _run_connect_callback(test_client, mid, aid)
@@ -258,7 +317,7 @@ def test_connect_enqueues_pending_job_for_new_account(
     row = _job_row(isolated_db, aid)
     assert row is not None
     assert row["status"] == "pending"
-    assert row["target_total"] == 100000
+    assert row["target_total"] == 54321
     assert row["provider"] == "gmail"
 
 
@@ -314,3 +373,190 @@ def test_enqueue_revives_failed_job_but_not_running(
         )
     account_backfill_store.enqueue(aid, mid, "gmail", 100000)
     assert _job_row(isolated_db, aid)["status"] == "running"  # untouched
+
+
+# ==================================================================
+# reset_retriable_failed_to_pending — backfill reaper
+# ==================================================================
+
+
+def test_backfill_reaper_revives_retriable_failed_job(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import account_backfill_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    # Failed, attempts < max, sat failed longer than the cool-off → revived.
+    _insert_backfill_job(
+        isolated_db, account_id=aid, mailbox_id=mid,
+        status="failed", attempts=2, stale_minutes=5,
+    )
+
+    revived = account_backfill_store.reset_retriable_failed_to_pending(5, 60)
+
+    assert revived == 1
+    assert _job_row(isolated_db, aid)["status"] == "pending"
+
+
+def test_backfill_reaper_leaves_permanently_failed_and_fresh_jobs(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import account_backfill_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    # attempts >= max → permanently failed, must NOT be revived.
+    _insert_backfill_job(
+        isolated_db, account_id=aid, mailbox_id=mid,
+        status="failed", attempts=5, stale_minutes=5,
+    )
+
+    revived = account_backfill_store.reset_retriable_failed_to_pending(5, 60)
+
+    assert revived == 0
+    assert _job_row(isolated_db, aid)["status"] == "failed"
+
+
+def test_backfill_reaper_leaves_fresh_failed_within_cooloff(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import account_backfill_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    # Failed, attempts < max, but only just failed (updated_at == now(), the
+    # per-transaction constant) → still inside the 60s cool-off, so the reaper
+    # must NOT revive it yet. This is the cool-off-by-time negative the test name
+    # above ("...and_fresh_jobs") promises but does not itself assert.
+    _insert_backfill_job(
+        isolated_db, account_id=aid, mailbox_id=mid,
+        status="failed", attempts=1,
+    )
+
+    revived = account_backfill_store.reset_retriable_failed_to_pending(5, 60)
+
+    assert revived == 0
+    assert _job_row(isolated_db, aid)["status"] == "failed"
+
+
+# ==================================================================
+# Migration 0042 — draft_sync_jobs table + enqueue idempotency + reaper
+# ==================================================================
+
+
+def test_migration_0042_creates_draft_sync_table_and_index(test_client, isolated_db):
+    with isolated_db.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.draft_sync_jobs')")
+        assert cur.fetchone()[0] is not None
+        cur.execute(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'draft_sync_jobs'",
+        )
+        indexes = {row[0] for row in cur.fetchall()}
+    assert "idx_draft_sync_jobs_active" in indexes
+
+
+def test_draft_sync_enqueue_resets_any_status_unconditionally(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    # UNLIKE the backfill ENQUEUE (which revives only ``failed``), the draft-sync
+    # ENQUEUE has no ``WHERE status='failed'`` guard: a reconnection must always
+    # refresh the drafts, so a completed OR a running job is reset to pending.
+    from database import draft_sync_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    _insert_draft_sync_job(isolated_db, account_id=aid, mailbox_id=mid, status="completed")
+    draft_sync_store.enqueue(aid, mid, "gmail")
+    assert _draft_sync_row(isolated_db, aid)["status"] == "pending"
+
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE draft_sync_jobs SET status = 'running' WHERE account_id = %s::uuid",
+            (aid,),
+        )
+    draft_sync_store.enqueue(aid, mid, "gmail")
+    # A running job is ALSO reset — the load-bearing asymmetry vs the backfill.
+    assert _draft_sync_row(isolated_db, aid)["status"] == "pending"
+
+
+def test_draft_sync_enqueue_clears_last_error(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import draft_sync_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft_sync_job(isolated_db, account_id=aid, mailbox_id=mid, status="failed")
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            "UPDATE draft_sync_jobs SET last_error = 'boom' WHERE account_id = %s::uuid",
+            (aid,),
+        )
+
+    draft_sync_store.enqueue(aid, mid, "gmail")
+
+    row = _draft_sync_row(isolated_db, aid)
+    assert row["status"] == "pending"
+    assert row["last_error"] is None
+
+
+def test_draft_sync_reaper_revives_only_retriable_failed(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import draft_sync_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft_sync_job(
+        isolated_db, account_id=aid, mailbox_id=mid,
+        status="failed", attempts=1, stale_minutes=5,
+    )
+
+    revived = draft_sync_store.reset_retriable_failed_to_pending(5, 60)
+    assert revived == 1
+    assert _draft_sync_row(isolated_db, aid)["status"] == "pending"
+
+
+def test_draft_sync_reaper_leaves_permanently_failed(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    from database import draft_sync_store
+
+    mid, aid = setup_mailbox_and_account(test_client)
+    # attempts >= max → permanently failed, never revived (mirrors the backfill
+    # reaper's permanent-failure negative — the draft-sync reaper otherwise only
+    # had its positive case covered).
+    _insert_draft_sync_job(
+        isolated_db, account_id=aid, mailbox_id=mid,
+        status="failed", attempts=5, stale_minutes=5,
+    )
+
+    revived = draft_sync_store.reset_retriable_failed_to_pending(5, 60)
+    assert revived == 0
+    assert _draft_sync_row(isolated_db, aid)["status"] == "failed"
+
+
+def test_draft_sync_fk_cascade_deletes_job_when_account_deleted(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    mid, aid = setup_mailbox_and_account(test_client)
+    _insert_draft_sync_job(isolated_db, account_id=aid, mailbox_id=mid)
+    assert _draft_sync_row(isolated_db, aid) is not None
+
+    with isolated_db.cursor() as cur:
+        cur.execute("DELETE FROM accounts WHERE account_id = %s::uuid", (aid,))
+
+    # ON DELETE CASCADE (mirrors the backfill table) removes the job.
+    assert _draft_sync_row(isolated_db, aid) is None
+
+
+def test_connect_enqueues_draft_sync_job(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    # The OAuth callback enqueues a server-side draft sync on every connect when
+    # the worker is enabled (in lockstep with the backfill enqueue gate).
+    monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "true")
+    mid, aid = setup_mailbox_and_account(test_client)
+
+    _run_connect_callback(test_client, mid, aid)
+
+    row = _draft_sync_row(isolated_db, aid)
+    assert row is not None
+    assert row["status"] == "pending"
+    assert row["provider"] == "gmail"

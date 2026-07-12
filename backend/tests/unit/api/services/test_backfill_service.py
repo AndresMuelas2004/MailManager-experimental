@@ -9,6 +9,7 @@ from api.errors.exceptions import (
     ApiError,
     BackfillJobError,
     BackfillStatusError,
+    DraftSyncError,
     Forbidden,
     MailboxNotFound,
 )
@@ -216,3 +217,61 @@ class TestEnqueueBackfillOnConnect:
 
         with pytest.raises(BackfillJobError):
             backfill_service.enqueue_backfill_on_connect(_MAILBOX_ID, _ACCOUNT_ID, "gmail")
+
+
+# ===== enqueue_draft_sync_on_connect =====
+
+
+class _FakeDraftSyncStore:
+    def __init__(self, *, enqueue_exc=None):
+        self._enqueue_exc = enqueue_exc
+        self.enqueue_calls: list[tuple] = []
+
+    def enqueue(self, account_id, mailbox_id, provider):
+        if self._enqueue_exc:
+            raise self._enqueue_exc
+        self.enqueue_calls.append((account_id, mailbox_id, provider))
+
+
+class TestEnqueueDraftSyncOnConnect:
+
+    def test_enqueues_on_every_connect(self, monkeypatch):
+        # Unlike the backfill, the draft sync is enqueued unconditionally — no
+        # sync_cursor lookup — so a reconnection also refreshes the drafts.
+        monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "true")
+        store = _FakeDraftSyncStore()
+        monkeypatch.setattr(backfill_service, "draft_sync_store", store)
+
+        backfill_service.enqueue_draft_sync_on_connect(_MAILBOX_ID, _ACCOUNT_ID, "gmail")
+
+        assert store.enqueue_calls == [(_ACCOUNT_ID, _MAILBOX_ID, "gmail")]
+
+    def test_worker_disabled_never_enqueues(self, monkeypatch):
+        # Gated by the same flag as the worker in lockstep: with the worker off
+        # nothing is enqueued and the frontend POST /drafts/sync stays the fallback.
+        monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "false")
+        store = _FakeDraftSyncStore()
+        monkeypatch.setattr(backfill_service, "draft_sync_store", store)
+
+        backfill_service.enqueue_draft_sync_on_connect(_MAILBOX_ID, _ACCOUNT_ID, "gmail")
+
+        assert store.enqueue_calls == []
+
+    def test_database_error_is_translated_to_api_error(self, monkeypatch):
+        monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "true")
+        monkeypatch.setattr(
+            backfill_service, "draft_sync_store",
+            _FakeDraftSyncStore(enqueue_exc=DatabaseError("insert failed")),
+        )
+        with pytest.raises(ApiError) as exc_info:
+            backfill_service.enqueue_draft_sync_on_connect(_MAILBOX_ID, _ACCOUNT_ID, "gmail")
+        assert not isinstance(exc_info.value, DatabaseError)
+
+    def test_unexpected_error_becomes_draft_sync_error(self, monkeypatch):
+        monkeypatch.setenv("BACKFILL_WORKER_ENABLED", "true")
+        monkeypatch.setattr(
+            backfill_service, "draft_sync_store",
+            _FakeDraftSyncStore(enqueue_exc=RuntimeError("boom")),
+        )
+        with pytest.raises(DraftSyncError):
+            backfill_service.enqueue_draft_sync_on_connect(_MAILBOX_ID, _ACCOUNT_ID, "gmail")

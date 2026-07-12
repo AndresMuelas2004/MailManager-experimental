@@ -8,6 +8,7 @@ import pytest
 
 from api.errors.exceptions import ApiError, DatabaseQueryError
 from api.services.services_helpers import (
+    build_draft_rows,
     delete_email_metadata_batch,
     load_suspect_message_ids,
     load_sync_cursors,
@@ -18,9 +19,9 @@ from api.services.services_helpers import (
     update_email_spam_status_batch,
     update_sync_cursor,
 )
-from core.email import LabelUpdate, SpamMoveResult
+from core.email import DraftMetadata, LabelUpdate, SpamMoveResult
 from database import QueryError
-from tests.shared.email_fakes import build_metadata
+from tests.shared.email_fakes import DEFAULT_RECEIVED_AT, build_metadata
 
 
 # ------------------------------------------------------------------
@@ -46,6 +47,19 @@ class TestPersistEmailMetadataBatch:
         rows = call_args[0][1]
         assert len(rows) == 2
         assert rows[0][0] == "m1"
+
+    def test_carries_is_favorite_into_row(self):
+        # is_favorite is now part of the upsert tuple (position 9, after box) so
+        # a synced/backfilled starred message persists its favourite state.
+        metadata = [build_metadata(provider_message_id="m1", is_favorite=True)]
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            mock_store.upsert_batch.return_value = 1
+            persist_email_metadata_batch("acc-1", metadata)
+        row = mock_store.upsert_batch.call_args[0][1][0]
+        # (provider_message_id, account_id, thread_id, from_email, from_name,
+        #  subject, received_at, is_read, box, is_favorite, to_email, to_name)
+        assert row[8] == "ALL_MAIL"
+        assert row[9] is True
 
     def test_database_error_translated(self):
         metadata = [build_metadata()]
@@ -111,7 +125,25 @@ class TestUpdateEmailMetadataLabelsBatch:
         call_args = mock_store.update_labels_batch.call_args
         rows = call_args[0][1]
         assert len(rows) == 2
-        assert rows[0] == ("m1", "acc-1", True, "INBOX")
+        # The helper now emits a 5-tuple: is_favorite is trailing. A LabelUpdate
+        # with no favourite carries None so UPDATE_LABELS_BATCH COALESCEs it
+        # (leaving the stored favourite untouched).
+        assert rows[0] == ("m1", "acc-1", True, "INBOX", None)
+
+    def test_carries_is_favorite_when_set(self):
+        # Gmail always populates a concrete bool on the label-update path (a
+        # star/unstar of an existing message), so the favourite must ride
+        # through as the 5th tuple element.
+        updates = [
+            LabelUpdate(provider_message_id="m1", is_read=True, box="ALL_MAIL", is_favorite=True),
+            LabelUpdate(provider_message_id="m2", is_read=True, box="ALL_MAIL", is_favorite=False),
+        ]
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            mock_store.update_labels_batch.return_value = 2
+            update_email_metadata_labels_batch("acc-1", updates)
+        rows = mock_store.update_labels_batch.call_args[0][1]
+        assert rows[0][4] is True
+        assert rows[1][4] is False
 
     def test_database_error_translated(self):
         updates = [LabelUpdate(provider_message_id="m1", is_read=True, box="INBOX")]
@@ -326,3 +358,53 @@ class TestLoadSuspectMessageIds:
             mock_store.list_provider_message_ids_not_in.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to load suspect message IDs"):
                 load_suspect_message_ids("acc-1", [])
+
+
+# ------------------------------------------------------------------
+# build_draft_rows (shared row-shape mapper — HTTP sync + worker)
+# ------------------------------------------------------------------
+
+class TestBuildDraftRows:
+
+    @staticmethod
+    def _draft(provider_draft_id="d1") -> DraftMetadata:
+        return DraftMetadata(
+            provider_draft_id=provider_draft_id,
+            to_recipients=["to@example.com"],
+            cc_recipients=["cc@example.com"],
+            bcc_recipients=[],
+            subject="Subject",
+            body="<p>body</p>",
+            created_at=DEFAULT_RECEIVED_AT,
+            updated_at=DEFAULT_RECEIVED_AT,
+        )
+
+    def test_empty_list_returns_empty(self):
+        assert build_draft_rows([]) == []
+
+    def test_maps_every_field_to_the_persist_row_shape(self):
+        rows = build_draft_rows([self._draft("d1")])
+        assert rows == [
+            {
+                "provider_draft_id": "d1",
+                "to_recipients": ["to@example.com"],
+                "cc_recipients": ["cc@example.com"],
+                "bcc_recipients": [],
+                "subject": "Subject",
+                "body": "<p>body</p>",
+                "created_at": DEFAULT_RECEIVED_AT,
+                "updated_at": DEFAULT_RECEIVED_AT,
+            }
+        ]
+
+    def test_copies_recipient_lists_defensively(self):
+        # The row must own its recipient lists (list(...)) so a later mutation of
+        # the DraftMetadata's list can't leak into the persisted row.
+        draft = self._draft()
+        rows = build_draft_rows([draft])
+        draft.to_recipients.append("mutated@example.com")
+        assert rows[0]["to_recipients"] == ["to@example.com"]
+
+    def test_preserves_order_across_multiple_drafts(self):
+        rows = build_draft_rows([self._draft("d1"), self._draft("d2")])
+        assert [r["provider_draft_id"] for r in rows] == ["d1", "d2"]

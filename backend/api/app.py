@@ -46,7 +46,10 @@ from database import (
     warmup_connection,
 )
 from api.errors.handlers import register_error_handlers
-from api.routers.accounts_routers import router as accounts_router
+from api.routers.accounts_routers import (
+    account_quota_router,
+    router as accounts_router,
+)
 from api.routers.attachments_routers import (
     admin_router as attachments_admin_router,
     email_attachments_router,
@@ -142,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(oauth_callback_router)  # exempt
     app.include_router(mailboxes_router, dependencies=global_rate_limit)
     app.include_router(accounts_router, dependencies=global_rate_limit)
+    app.include_router(account_quota_router, dependencies=global_rate_limit)
     app.include_router(emails_router, dependencies=global_rate_limit)
     app.include_router(favorites_router, dependencies=global_rate_limit)
     app.include_router(virtual_mailboxes_router, dependencies=global_rate_limit)

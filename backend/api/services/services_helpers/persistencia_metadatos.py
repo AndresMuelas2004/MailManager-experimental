@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from api.errors.exceptions import ApiError
-from core.email import EmailMetadata, LabelUpdate, SpamMoveResult
+from core.email import DraftMetadata, EmailMetadata, LabelUpdate, SpamMoveResult
 from database import (
     account_store,
     email_metadata_store,
@@ -15,6 +15,25 @@ from database import (
 )
 
 from .traduccion_errores import translate_database_error
+
+
+def build_draft_rows(drafts: list[DraftMetadata]) -> list[dict]:
+    """Map provider ``DraftMetadata`` to the row dicts ``replace_all_for_account``
+    persists. Shared by ``drafts_service`` (HTTP draft sync) and the background
+    draft-sync worker so the row shape stays in lockstep across both callers."""
+    return [
+        {
+            "provider_draft_id": d.provider_draft_id,
+            "to_recipients": list(d.to_recipients),
+            "cc_recipients": list(d.cc_recipients),
+            "bcc_recipients": list(d.bcc_recipients),
+            "subject": d.subject,
+            "body": d.body,
+            "created_at": d.created_at,
+            "updated_at": d.updated_at,
+        }
+        for d in drafts
+    ]
 
 
 def persist_email_metadata_batch(
@@ -30,7 +49,7 @@ def persist_email_metadata_batch(
         (
             m.provider_message_id, account_id, m.thread_id, m.from_email,
             m.from_name, m.subject, m.received_at, m.is_read, m.box,
-            m.to_email, m.to_name,
+            m.is_favorite, m.to_email, m.to_name,
         )
         for m in metadata_list
     ]
@@ -96,11 +115,16 @@ def update_email_metadata_labels_batch(
     *,
     fallback: type[ApiError] = ApiError,
 ) -> int:
-    """Update only is_read and box for specific messages. Returns rows updated."""
+    """Update is_read, box and (COALESCEd) is_favorite for specific messages.
+
+    ``lu.is_favorite`` may be ``None`` (Outlook partial delta with no ``flag``),
+    in which case ``UPDATE_LABELS_BATCH`` keeps the stored favourite untouched.
+    Returns rows updated.
+    """
     if not label_updates:
         return 0
     rows = [
-        (lu.provider_message_id, account_id, lu.is_read, lu.box)
+        (lu.provider_message_id, account_id, lu.is_read, lu.box, lu.is_favorite)
         for lu in label_updates
     ]
     try:

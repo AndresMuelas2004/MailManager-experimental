@@ -240,6 +240,12 @@ class AccountOperationError(ApiError):
     code = "account_operation_error"
 
 
+class AccountLimitExceeded(ApiError):
+    """The user already owns the maximum number of connected accounts allowed."""
+
+    code = "account_limit_exceeded"
+
+
 class SessionOperationError(ApiError):
     code = "session_operation_error"
 

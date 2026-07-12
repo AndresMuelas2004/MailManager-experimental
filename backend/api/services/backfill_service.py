@@ -1,10 +1,12 @@
-"""Service layer for the background initial mass backfill.
+"""Service layer for the background initial mass backfill + draft sync enqueue.
 
-Two responsibilities:
+Responsibilities:
 - ``get_backfill_status`` — the mailbox-scoped read backing the live
   "loading…" counter (``GET /mailboxes/{id}/backfill-status``). Local-only.
 - ``enqueue_backfill_on_connect`` — enqueues a first-connection backfill from
   the OAuth callback (``complete_account_connect``), gated by the worker flag.
+- ``enqueue_draft_sync_on_connect`` — enqueues a draft sync on EVERY connect
+  (first + reconnection) from the same callback, gated by the same flag.
 """
 
 from __future__ import annotations
@@ -13,7 +15,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from api.errors.exceptions import BackfillJobError, BackfillStatusError
+from api.errors.exceptions import (
+    BackfillJobError,
+    BackfillStatusError,
+    DraftSyncError,
+)
 from api.schemas.backfill import BackfillAccountStatus, BackfillStatusListOut
 from api.services.backfill_config import (
     backfill_max_emails_per_account,
@@ -27,6 +33,7 @@ from database import (
     DatabaseError,
     account_backfill_store,
     account_store,
+    draft_sync_store,
 )
 
 
@@ -92,3 +99,28 @@ def enqueue_backfill_on_connect(mailbox_id: str, account_id: str, provider: str)
     except Exception as exc:
         logger.warning("Unexpected backfill enqueue error (%s): %s", type(exc).__name__, exc)
         raise BackfillJobError("Failed to enqueue the first-connection backfill job.") from exc
+
+
+def enqueue_draft_sync_on_connect(mailbox_id: str, account_id: str, provider: str) -> None:
+    """Enqueue a server-side draft sync for a freshly connected account.
+
+    Gated by ``BACKFILL_WORKER_ENABLED`` in lockstep with the worker: when the
+    worker is off nothing is enqueued and the frontend's ``POST /drafts/sync``
+    stays the fallback. UNLIKE the backfill, this enqueues on EVERY connect —
+    including reconnections — so the drafts are always refreshed; the store's
+    ``ENQUEUE`` unconditionally resets the row to ``pending``. Independent of the
+    mail backfill: it fires at connect, not on backfill completion (which may
+    take hours), so the 500 drafts are available promptly.
+
+    Raises on failure — the caller (``complete_account_connect``) wraps this in
+    a try/except that swallows (best-effort, must not fail the OAuth callback).
+    """
+    if not is_backfill_worker_enabled():
+        return
+    try:
+        draft_sync_store.enqueue(account_id, mailbox_id, provider)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected draft sync enqueue error (%s): %s", type(exc).__name__, exc)
+        raise DraftSyncError("Failed to enqueue the draft sync job on connect.") from exc

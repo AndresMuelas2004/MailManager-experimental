@@ -55,6 +55,18 @@ class AccountOut(BaseModel):
     signature_html: str | None = None
 
 
+class AccountQuotaOut(BaseModel):
+    """Response model for the per-user connected-account quota.
+
+    ``connected`` is the number of accounts the user currently owns across all
+    their mailboxes (expired-token accounts included); ``limit`` is the
+    configured maximum (``MAX_ACCOUNTS_PER_USER``, default 15).
+    """
+
+    connected: int
+    limit: int
+
+
 class AccountConnectStartResponse(BaseModel):
     """
     Response model for starting the interactive account-connect flow.

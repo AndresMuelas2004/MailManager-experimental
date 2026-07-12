@@ -10,11 +10,14 @@ import pytest
 from pydantic import SecretStr
 
 # The background backfill worker thread starts in the app lifespan (which the
-# session-scoped TestClient enters). Default it OFF for the integration suite so
-# no daemon thread polls the DB during tests (§4.8). The sync guard is
+# session-scoped TestClient enters). Force it OFF for the integration suite so
+# no daemon thread polls the DB during tests (§4.8) — a HARD assignment (not
+# setdefault) so an ambient BACKFILL_WORKER_ENABLED=true in the shell can't turn
+# the daemon on and make the suite non-deterministic. The sync guard is
 # independent of this flag, so the guard tests still exercise it fully; the
-# enqueue-on-connect tests flip it true per-case via monkeypatch.setenv.
-os.environ.setdefault("BACKFILL_WORKER_ENABLED", "false")
+# enqueue-on-connect tests flip it true per-case via monkeypatch.setenv (which
+# overrides and restores per test).
+os.environ["BACKFILL_WORKER_ENABLED"] = "false"
 
 from database import connection as connection_module
 from database.migrations.runner import ensure_schema_at_head
@@ -22,6 +25,7 @@ from database.repositories import account_backfill_repository as account_backfil
 from database.repositories import account_repository as account_repo_module
 from database.repositories import draft_attachment_repository as draft_attachment_repo_module
 from database.repositories import draft_repository as draft_repo_module
+from database.repositories import draft_sync_repository as draft_sync_repo_module
 from database.repositories import email_attachment_repository as email_attachment_repo_module
 from database.repositories import email_content_repository as email_content_repo_module
 from database.repositories import email_metadata_repository as email_metadata_repo_module
@@ -210,6 +214,11 @@ def isolated_db(monkeypatch):
     # + backfill status/guard reads use the real pool instead of the per-test
     # transaction, leaking committed job rows across tests.
     monkeypatch.setattr(account_backfill_repo_module.connection, "get_connection", _get_conn)
+    # Draft-sync job repository (Trap 1): the connect callback now enqueues a
+    # server-side draft sync, and the dedicated draft_sync_jobs tests read/write
+    # it — without this patch those rows use the real pool instead of the
+    # per-test transaction and leak across tests.
+    monkeypatch.setattr(draft_sync_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(user_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(session_repo_module.connection, "get_connection", _get_conn)
     monkeypatch.setattr(email_metadata_repo_module.connection, "get_connection", _get_conn)

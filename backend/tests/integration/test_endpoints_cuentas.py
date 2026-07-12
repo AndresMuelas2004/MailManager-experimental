@@ -98,6 +98,58 @@ def test_connect_account_two_phase_flow(test_client, setup_mailbox_and_account):
 
 
 # ==================================================================
+# Account quota + per-user limit (GET /accounts/quota, 409 on create)
+# ==================================================================
+
+_QUOTA_URL = "/accounts/quota"
+
+
+def test_get_account_quota_reports_seeded_count(seeded_test_client, monkeypatch):
+    # The seed (migration 0010) gives the seeded user exactly two accounts
+    # (one gmail + one outlook), and the default cap is 15.
+    monkeypatch.delenv("MAX_ACCOUNTS_PER_USER", raising=False)
+    resp = seeded_test_client.get(_QUOTA_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": 2, "limit": 15}
+
+
+def test_get_account_quota_reflects_created_accounts(test_client, monkeypatch):
+    # The default test user owns no accounts until one is created (the seed is
+    # under a different user), so the counter is a live COUNT.
+    monkeypatch.delenv("MAX_ACCOUNTS_PER_USER", raising=False)
+    assert test_client.get(_QUOTA_URL).json() == {"connected": 0, "limit": 15}
+
+    mid = test_client.post(_MAILBOX_URL, json={"display_name": "QuotaMB"}).json()["mailbox_id"]
+    test_client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "gmail", "display_label": "acc1"},
+    )
+    assert test_client.get(_QUOTA_URL).json() == {"connected": 1, "limit": 15}
+
+
+def test_create_account_over_limit_returns_409(test_client, monkeypatch):
+    # With the cap lowered to 1, the second account creation is rejected with a
+    # 409 ``account_limit_exceeded`` carrying the numbers for the UI counter.
+    monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "1")
+    mid = test_client.post(_MAILBOX_URL, json={"display_name": "LimitMB"}).json()["mailbox_id"]
+
+    first = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "gmail", "display_label": "acc1"},
+    )
+    assert first.status_code == 200
+
+    second = test_client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "outlook", "display_label": "acc2"},
+    )
+    assert second.status_code == 409
+    body = second.json()["error"]
+    assert body["code"] == "account_limit_exceeded"
+    assert body["detail"] == {"limit": 1, "connected": 1}
+
+
+# ==================================================================
 # Partial update
 # ==================================================================
 

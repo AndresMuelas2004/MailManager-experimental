@@ -5,6 +5,7 @@ Service layer for account operations.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any
 from uuid import uuid4
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 from api.errors.exceptions import (
     AccountConnectAuthError,
+    AccountLimitExceeded,
     AccountNotFound,
     AccountOperationError,
     ApiError,
@@ -22,10 +24,14 @@ from api.schemas.account import (
     AccountConnectStartResponse,
     AccountCreate,
     AccountOut,
+    AccountQuotaOut,
     AccountUpdate,
 )
 from api.services import oauth_pending
-from api.services.backfill_service import enqueue_backfill_on_connect
+from api.services.backfill_service import (
+    enqueue_backfill_on_connect,
+    enqueue_draft_sync_on_connect,
+)
 from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
@@ -41,6 +47,27 @@ from database import (
     get_frontend_origin,
     get_google_oauth_redirect_uri,
 )
+
+
+_DEFAULT_MAX_ACCOUNTS_PER_USER = 15
+
+
+def _max_accounts_per_user() -> int:
+    """Per-user connected-account limit (env ``MAX_ACCOUNTS_PER_USER``, default
+    15). Single source of truth for both the ``create_account`` guard and
+    ``GET /accounts/quota`` — read at the point of use (same pattern as the
+    backfill config) so tests can toggle it with ``monkeypatch.setenv``."""
+    raw = os.environ.get("MAX_ACCOUNTS_PER_USER")
+    if raw is None or not raw.strip():
+        return _DEFAULT_MAX_ACCOUNTS_PER_USER
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid MAX_ACCOUNTS_PER_USER=%r, defaulting to %d",
+            raw, _DEFAULT_MAX_ACCOUNTS_PER_USER,
+        )
+        return _DEFAULT_MAX_ACCOUNTS_PER_USER
 
 
 def _resolve_display_label(record: dict) -> str:
@@ -72,6 +99,28 @@ def list_accounts(mailbox_id: str, user_id: str) -> list[AccountOut]:
 
 def create_account(mailbox_id: str, payload: AccountCreate, user_id: str) -> AccountOut:
     ensure_mailbox_access(mailbox_id, user_id)
+    # Per-user account limit (decision 3A). ``create_account`` is the ONLY INSERT
+    # into ``accounts`` (connect/callback only UPDATE tokens), so the guard here
+    # is complete and race-free in practice. Counts ALL owned accounts, expired
+    # tokens included.
+    try:
+        current = account_store.count_accounts_by_user(user_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account count error during creation (%s): %s",
+            type(exc).__name__, exc,
+        )
+        raise AccountOperationError(
+            "Failed to count user accounts before creating a new account."
+        ) from exc
+    limit = _max_accounts_per_user()
+    if current >= limit:
+        raise AccountLimitExceeded(
+            f"User already owns the maximum of {limit} connected accounts; cannot create another.",
+            {"limit": limit, "connected": current},
+        )
     account_id = str(uuid4())
     record = {
         "account_id": account_id,
@@ -88,6 +137,25 @@ def create_account(mailbox_id: str, payload: AccountCreate, user_id: str) -> Acc
         logger.warning("Unexpected account creation error (%s): %s", type(exc).__name__, exc)
         raise AccountOperationError("Failed to create account.") from exc
     return _build_response(created)
+
+
+def get_account_quota(user_id: str) -> AccountQuotaOut:
+    """Return the user's connected-account usage vs the configured limit.
+
+    User-scoped (no mailbox): counts every account the user owns across all
+    their mailboxes. Reuses the SAME limit function as the create_account guard
+    (single source of truth). Local-only (one indexed COUNT, no provider call).
+    """
+    try:
+        connected = account_store.count_accounts_by_user(user_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Unexpected account quota count error (%s): %s", type(exc).__name__, exc,
+        )
+        raise AccountOperationError("Failed to count user accounts for quota.") from exc
+    return AccountQuotaOut(connected=connected, limit=_max_accounts_per_user())
 
 
 def get_account(mailbox_id: str, account_id: str, user_id: str) -> AccountOut:
@@ -315,6 +383,17 @@ def complete_account_connect(
     except Exception as exc:
         logger.warning(
             "Backfill enqueue on connect failed (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
+
+    # Enqueue the server-side draft sync (best-effort, soft-fail — same rule: a
+    # failure here must NOT flip the callback to ok:False). Fires on every
+    # connect, independent of the mail backfill, so the drafts refresh promptly.
+    try:
+        enqueue_draft_sync_on_connect(pending.mailbox_id, pending.account_id, pending.provider)
+    except Exception as exc:
+        logger.warning(
+            "Draft sync enqueue on connect failed (%s): %s",
             type(exc).__name__, exc, exc_info=exc,
         )
 

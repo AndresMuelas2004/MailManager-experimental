@@ -52,8 +52,37 @@ def backfill_max_emails_per_account() -> int:
 
 
 def backfill_max_concurrent() -> int:
-    """Number of accounts backfilled in parallel by the worker pool."""
-    return _int_env("BACKFILL_MAX_CONCURRENT", 2)
+    """Number of accounts backfilled in parallel by the worker pool.
+
+    Raised from 2 to 15 (aligned with MAX_ACCOUNTS_PER_USER) so every account a
+    user connects downloads its history simultaneously — provider limits are
+    per-account, so parallel downloads are safe. The only shared resource is the
+    DB, decoupled from this via ``backfill_db_write_concurrency`` (the download
+    fan-out is 15; the DB-write fan-out is a smaller semaphore).
+    """
+    return _int_env("BACKFILL_MAX_CONCURRENT", 15)
+
+
+def backfill_db_write_concurrency() -> int:
+    """Max concurrent backfill DB writes (module semaphore).
+
+    Kept safely below ``DB_POOL_MAX_CONN`` (default 25) so the parallel backfill
+    never starves the pool of the connections user requests need — psycopg2's
+    ``getconn()`` RAISES on exhaustion rather than waiting, so jobs wait on this
+    semaphore instead. Invariant: DB_POOL_MAX_CONN >= this + reserve_for_requests.
+    """
+    return _int_env("BACKFILL_DB_WRITE_CONCURRENCY", 8)
+
+
+def backfill_max_attempts() -> int:
+    """Auto-retry budget for a failed job before it stays failed permanently.
+
+    The reaper (``reset_retriable_failed_to_pending``) revives a failed job for
+    a fresh attempt until ``attempts`` reaches this ceiling; after that the job
+    stays ``failed`` (visible in GET /backfill-status; the user reconnects).
+    Shared by the backfill and draft-sync reapers.
+    """
+    return _int_env("BACKFILL_MAX_ATTEMPTS", 5)
 
 
 def backfill_gmail_gets_per_minute() -> int:

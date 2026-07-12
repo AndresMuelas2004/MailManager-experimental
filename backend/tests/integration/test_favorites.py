@@ -63,6 +63,85 @@ def test_emails_listing_exposes_is_favorite_default_false(seeded_test_client):
     assert all(row["is_favorite"] is False for row in rows)
 
 
+def test_sync_persists_is_favorite_and_does_not_wipe(
+    test_client, setup_mailbox_and_account, isolated_db,
+):
+    # A synced/backfilled starred message lands with is_favorite=True in the DB
+    # (proves the metadata upsert tuple aligns with its is_favorite column), and
+    # a subsequent sync of the same still-starred message does NOT wipe it.
+    from api.services.services_helpers import persist_email_metadata_batch
+    from tests.shared.email_fakes import build_metadata
+
+    _mailbox_id, account_id = setup_mailbox_and_account(test_client, "gmail")
+
+    persist_email_metadata_batch(
+        account_id, [build_metadata(provider_message_id="fav1", is_favorite=True)],
+    )
+    assert _select_is_favorite(isolated_db, account_id, "fav1") is True
+
+    persist_email_metadata_batch(
+        account_id, [build_metadata(provider_message_id="fav1", is_favorite=True)],
+    )
+    assert _select_is_favorite(isolated_db, account_id, "fav1") is True
+
+
+def test_incremental_label_update_reflects_out_of_band_star(
+    configurable_test_client, isolated_db,
+):
+    # Gmail now propagates the star through the incremental label-update path, so
+    # an out-of-band star of an OLD existing message surfaces on the next sync
+    # WITHOUT any /favorites/sync call.
+    from core.email import LabelUpdate
+    from tests.shared.email_fakes import build_metadata
+
+    client, config = configurable_test_client
+    mid = client.post(_MAILBOX_URL, json={"display_name": "FavSyncMB"}).json()["mailbox_id"]
+    aid = client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "gmail", "display_label": "g"},
+    ).json()["account_id"]
+
+    # Phase 1: a non-favourite row is synced.
+    config["metadata"] = [build_metadata("m1", is_favorite=False)]
+    config["is_full_sync"] = False
+    assert client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata").status_code == 200
+    assert _select_is_favorite(isolated_db, aid, "m1") is False
+
+    # Phase 2: an incremental label-update stars the existing row.
+    config["metadata"] = []
+    config["label_updates"] = [LabelUpdate("m1", is_read=True, box="ALL_MAIL", is_favorite=True)]
+    assert client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata").status_code == 200
+    assert _select_is_favorite(isolated_db, aid, "m1") is True
+
+
+def test_incremental_label_update_null_favorite_preserves_stored(
+    configurable_test_client, isolated_db,
+):
+    # An Outlook partial delta with no ``flag`` sends is_favorite=None. The
+    # UPDATE_LABELS_BATCH COALESCE must leave the stored favourite untouched.
+    from core.email import LabelUpdate
+    from tests.shared.email_fakes import build_metadata
+
+    client, config = configurable_test_client
+    mid = client.post(_MAILBOX_URL, json={"display_name": "FavCoalesceMB"}).json()["mailbox_id"]
+    aid = client.post(
+        f"{_MAILBOX_URL}/{mid}/accounts",
+        json={"provider": "outlook", "display_label": "o"},
+    ).json()["account_id"]
+
+    # Phase 1: a FAVOURITE row is synced.
+    config["metadata"] = [build_metadata("m1", is_favorite=True)]
+    config["is_full_sync"] = False
+    assert client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata").status_code == 200
+    assert _select_is_favorite(isolated_db, aid, "m1") is True
+
+    # Phase 2: a partial label-update with is_favorite=None must NOT clear it.
+    config["metadata"] = []
+    config["label_updates"] = [LabelUpdate("m1", is_read=False, box="ALL_MAIL", is_favorite=None)]
+    assert client.post(f"{_MAILBOX_URL}/{mid}/emails/sync-metadata").status_code == 200
+    assert _select_is_favorite(isolated_db, aid, "m1") is True
+
+
 def test_set_favorite_toggles_persist_locally(
     test_client, setup_mailbox_and_account, isolated_db,
 ):
