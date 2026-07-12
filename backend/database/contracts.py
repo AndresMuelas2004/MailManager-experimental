@@ -612,13 +612,54 @@ class EmailContentStore(ABC):
 
     @abstractmethod
     def purge_expired_for_accounts(self, account_ids: list[str]) -> int:
-        """Delete cached bodies idle for 30+ days for the given accounts.
+        """Delete cached bodies idle for 7+ days for the given accounts.
 
         Scoped to the accounts synced in the current request (auto-cleanup
-        on sync, no scheduler — same 30-day TTL as the attachment-blob
-        purge). Returns the number of rows deleted. Returns ``0`` without
-        touching the database when ``account_ids`` is empty.
+        on sync, no scheduler). The 7-day body TTL is deliberately shorter
+        than the attachment-blob purge (30 days) — the two no longer match.
+        Returns the number of rows deleted. Returns ``0`` without touching
+        the database when ``account_ids`` is empty.
         """
+        raise NotImplementedError
+
+
+class ImageProxyCacheStore(ABC):
+    """
+    Contract for the remote-email-image proxy cache.
+
+    One row per distinct remote image URL, keyed by the SHA-256 hex of the
+    original URL (global — shared across accounts / users so the same CDN
+    image is fetched from the sender only once). The binary lives inline in
+    the row. Backs the ``GET /image-proxy`` endpoint and its admin TTL purge.
+    """
+
+    @abstractmethod
+    def get(self, url_hash: str) -> dict[str, Any] | None:
+        """Return ``{"content_type": str, "image_bytes": bytes}`` or ``None``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert(
+        self, url_hash: str, url: str, content_type: str, image_bytes: bytes,
+    ) -> None:
+        """Cache a fetched image. Idempotent: a second upsert for the same
+        ``url_hash`` refreshes the bytes / content type and both timestamps."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def touch_last_accessed(self, url_hash: str) -> None:
+        """Refresh ``last_accessed_at = now()`` on a cache HIT (sliding TTL).
+
+        Best-effort at the service layer: a failure must never block the
+        image response. Touches ONLY ``last_accessed_at`` — never
+        ``fetched_at`` (the bytes are immutable; a serve is not a re-fetch).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def purge_expired(self) -> tuple[int, int]:
+        """Delete rows not accessed in 30+ days. Returns ``(purged_count,
+        freed_bytes)``. Backs the manual admin purge (no scheduler)."""
         raise NotImplementedError
 
 

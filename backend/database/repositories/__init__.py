@@ -12,6 +12,7 @@ from database.repositories.draft_sync_repository import draft_sync_store
 from database.repositories.email_attachment_repository import email_attachment_store
 from database.repositories.email_content_repository import email_content_store
 from database.repositories.email_metadata_repository import email_metadata_store
+from database.repositories.image_proxy_cache_repository import image_proxy_cache_store
 from database.repositories.mailbox_repository import mailbox_store
 from database.repositories.session_repository import session_store
 from database.repositories.user_repository import user_store
@@ -26,6 +27,7 @@ __all__ = [
     "email_attachment_store",
     "email_content_store",
     "email_metadata_store",
+    "image_proxy_cache_store",
     "mailbox_store",
     "session_store",
     "user_store",

@@ -31,12 +31,13 @@ TOUCH_LAST_ACCESSED = """
       AND provider_message_id = %(provider_message_id)s
 """
 
-# Per-account eviction of bodies idle for 30+ days (same TTL as the
-# attachment-blob purge ``PURGE_EXPIRED_BLOBS``). Scoped to the accounts
-# synced in this request (auto-cleanup, no scheduler). Row count via
-# ``cur.rowcount`` — no ``RETURNING`` needed.
+# Per-account eviction of bodies idle for 7+ days. This TTL is deliberately
+# SHORTER than the attachment-blob purge (``PURGE_EXPIRED_BLOBS``, 30 days) —
+# the two no longer share a plazo. Scoped to the accounts synced in this
+# request (auto-cleanup, no scheduler). Row count via ``cur.rowcount`` — no
+# ``RETURNING`` needed.
 PURGE_EXPIRED_FOR_ACCOUNTS = """
     DELETE FROM email_content
     WHERE account_id = ANY(%(account_ids)s::uuid[])
-      AND last_accessed_at < (now() - INTERVAL '30 days')
+      AND last_accessed_at < (now() - INTERVAL '7 days')
 """

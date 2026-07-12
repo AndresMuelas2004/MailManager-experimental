@@ -581,6 +581,27 @@ _DDL_STATEMENTS = [
     "ON draft_sync_jobs (status) "
     "WHERE status IN ('pending', 'running');",
     "UPDATE alembic_version SET version_num = '0042_create_draft_sync_jobs';",
+    # Migration 0043: image_proxy_cache — one row per distinct remote email
+    # image URL, keyed by the SHA-256 hex of the URL (global cache; the binary
+    # lives inline in image_bytes). last_accessed_at drives the sliding-TTL
+    # admin purge. Combines the CREATE-TABLE pattern (0041/0042) with the
+    # email_content TRUNCATE pattern (0035/0036/0040) in the same block: the
+    # inbound sanitiser now rewrites remote image URLs to proxy sentinels, so
+    # cached bodies change shape and must be re-fetched (no-op on a fresh boot).
+    """
+    CREATE TABLE IF NOT EXISTS image_proxy_cache (
+        url_hash          TEXT         PRIMARY KEY,
+        url               TEXT         NOT NULL,
+        content_type      TEXT         NOT NULL,
+        image_bytes       BYTEA        NOT NULL,
+        fetched_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+        last_accessed_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_image_proxy_cache_last_accessed "
+    "ON image_proxy_cache (last_accessed_at);",
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = '0043_image_proxy_cache_and_invalidate_content';",
 ]
 
 
