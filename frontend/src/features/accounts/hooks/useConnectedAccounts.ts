@@ -199,6 +199,9 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
     // refetchInterval (idle otherwise — the counter would not appear until a
     // page remount).
     void queryClient.invalidateQueries({ queryKey: ['backfill-status', mailboxId] });
+    // Refresh the per-user quota so the counter and the disabled state of the
+    // "Add account" button update immediately (useAccountQuota).
+    void queryClient.invalidateQueries({ queryKey: ['accounts-quota'] });
     void syncDrafts(mailboxId, accountId).catch(() => {});
   }, [canAdd, mailboxId, selectedProvider, displayLabel, t, queryClient]);
 
@@ -209,6 +212,9 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         await deleteAccount(mailboxId, accountId);
         setEntries((prev) => prev.filter((e) => e.account.account_id !== accountId));
         void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
+        // Deleting frees a quota slot — refresh the counter and re-enable the
+        // "Add account" button if the user was at the cap.
+        void queryClient.invalidateQueries({ queryKey: ['accounts-quota'] });
       } catch (err) {
         setError(toUiError(err));
       }

@@ -88,6 +88,8 @@ export const en: EsDictionary = {
     customNameLabel: 'Custom name',
     customNamePlaceholder: 'E.g. Main account (optional)',
     addButton: 'Add account',
+    limitReached: 'You have reached the maximum of {max} connected accounts.',
+    quotaCount: '{connected} / {max} accounts',
     providerLabel: 'Provider',
     providerPlaceholder: 'Select a provider...',
     reconnect: 'Reconnect account',

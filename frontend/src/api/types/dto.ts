@@ -98,6 +98,16 @@ export const accountConnectStartResponseSchema = z.object({
 });
 export type AccountConnectStartResponse = z.infer<typeof accountConnectStartResponseSchema>;
 
+// Per-user account quota — response of ``GET /accounts/quota``. ``connected``
+// counts every account the user owns across all their mailboxes (a
+// disconnected/expired account still counts until deleted); ``limit`` is the
+// configurable server-side cap. User-level endpoint (no mailbox prefix).
+export const accountQuotaSchema = z.object({
+  connected: z.number(),
+  limit: z.number(),
+});
+export type AccountQuota = z.infer<typeof accountQuotaSchema>;
+
 // Background bulk-load (backfill) progress — response of
 // ``GET /mailboxes/{mid}/backfill-status``. ``accounts`` lists ONLY the
 // accounts that currently have a backfill job (pending/running/completed/failed);

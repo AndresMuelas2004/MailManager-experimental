@@ -90,6 +90,8 @@ export const es = {
     customNameLabel: 'Nombre personalizado',
     customNamePlaceholder: 'Ej: Cuenta principal (opcional)',
     addButton: 'Añadir cuenta',
+    limitReached: 'Has alcanzado el máximo de {max} cuentas conectadas.',
+    quotaCount: '{connected} / {max} cuentas',
     providerLabel: 'Proveedor',
     providerPlaceholder: 'Selecciona un proveedor...',
     reconnect: 'Reconectar cuenta',

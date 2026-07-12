@@ -96,6 +96,24 @@ describe('toUiError', () => {
     expect(toUiError(null)).toEqual({ message: 'Unexpected error' });
   });
 
+  it('maps the account_limit_exceeded code to a localized message', () => {
+    // The backend message leaks the internal cap wording; toUiError replaces it
+    // with a user-facing localized string keyed off the CODE (second-line
+    // defence behind the disabled "Add account" button).
+    const ui = toUiError(
+      new ApiError(
+        'User already owns the maximum of 15 connected accounts; cannot create another.',
+        'account_limit_exceeded',
+        409,
+        { limit: 15, connected: 15 },
+      ),
+    );
+    expect(ui).toEqual({
+      code: 'account_limit_exceeded',
+      message: 'Has alcanzado el máximo de cuentas conectadas.',
+    });
+  });
+
   it('builds a countdown message for a rate-limit error with retry_after', () => {
     const ui = toUiError(
       new ApiError('whatever', 'rate_limit_exceeded', 429, {
