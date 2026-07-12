@@ -10,15 +10,15 @@ Los límites de **adjuntos** de un borrador (tamaño por archivo, total del mens
 
 | Concepto | Valor exacto | Notas |
 |---|---|---|
-| Borradores que se bajan por cuenta y sincronización | **100** (los más recientes) | Mismo tope en Gmail y Outlook. Es un tope de **bajada**, no de visualización ni de cuántos puede tener la cuenta. |
-| Tamaño de página de Outlook al paginar borradores | **100** por página (`$top=100`) | Outlook ordena por fecha de modificación descendente (`$orderby=lastModifiedDateTime desc`). Se pagina hasta llegar al tope de 100. |
-| Tamaño de página de Gmail al listar ids de borradores | hasta **500** por página (o lo que reste hasta 100) | Gmail lista ids paginando y luego pide cada borrador completo; el tope efectivo total sigue siendo 100. |
+| Borradores que se bajan por cuenta y sincronización | **500** (los más recientes) | Mismo tope en Gmail y Outlook (subido desde 100). Es un tope de **bajada**, no de visualización ni de cuántos puede tener la cuenta. |
+| Tamaño de página de Outlook al paginar borradores | **500** por página (`$top=500`) | Outlook ordena por fecha de modificación descendente (`$orderby=lastModifiedDateTime desc`). Una sola página cubre el tope de 500 (Graph acepta `$top`≤1000). |
+| Tamaño de página de Gmail al listar ids de borradores | hasta **500** por página (o lo que reste hasta 500) | Gmail lista ids en una sola página de 500 (su máximo por página) y luego pide cada borrador completo en 5 lotes paralelos de 100; el tope efectivo total es 500. |
 | ¿Se incluye el cuerpo en la sincronización? | **Sí** | A diferencia del listado de correos (donde el cuerpo se baja solo al abrir), la sincronización de borradores trae el cuerpo completo de cada borrador. |
 
 Asimetría de "los más recientes":
 
 - **Outlook**: orden explícito y garantizado por la API (por fecha de última modificación).
-- **Gmail**: orden **por convención** (cronológico inverso observado); la API de borradores de Gmail no expone parámetro de ordenación. Si esa convención dejara de cumplirse, la semántica del tope de 100 se rompería. Es una dependencia frágil, documentada como tal.
+- **Gmail**: orden **por convención** (cronológico inverso observado); la API de borradores de Gmail no expone parámetro de ordenación. Si esa convención dejara de cumplirse, la semántica del tope de 500 se rompería. Es una dependencia frágil, documentada como tal.
 
 Asimetría de marcas de tiempo (afecta al orden del listado local, §5): la `Message` de Gmail **no** expone una marca de tiempo estable de creación/modificación del borrador, así que al sincronizar se sella `created_at` = `updated_at` = "ahora" (momento de la sincronización). Outlook sí devuelve `createdDateTime` / `lastModifiedDateTime` reales y se persisten tal cual. Consecuencia observable: tras sincronizar, el orden por `created_at DESC` de los borradores Gmail refleja el orden en que Gmail los devolvió en esa sincronización, no su cronología real de creación; para Outlook sí es cronología real.
 
@@ -33,6 +33,8 @@ Asimetría de marcas de tiempo (afecta al orden del listado local, §5): la `Mes
 | Metadata de respuesta/reenvío (threading) | Se **preserva** la local cuando la sincronización trae esos campos vacíos. El proveedor no expone el threading como propiedad del borrador, así que cada sincronización los pasa vacíos; sin la preservación, se borrarían en cada refresco. |
 | Alcance | Una cuenta concreta, o **todas** las del mailbox si se entra en la vista de mailbox. |
 | Errores por cuenta (vista mailbox) | Se acumulan por cuenta; **no abortan** la sincronización de las demás. |
+
+> **Disparo desde el servidor al conectar.** Además del disparo desde el navegador (al abrir la vista de Borradores o con el botón "Sincronizar"), la sincronización de borradores de una cuenta se **encola en el servidor en cada conexión** (primera y reconexión) y la ejecuta el trabajador en segundo plano, con **reintento automático hasta 5 intentos** si falla — el mismo mecanismo de recuperación que la descarga masiva inicial. Así los borradores llegan al día sin depender de que el usuario abra esa sección. Detalle en [sincronizacion.md](sincronizacion.md) § 8.4. Requiere el trabajador encendido (`BACKFILL_WORKER_ENABLED`); apagado, el fallback es el disparo desde el navegador.
 
 ---
 
@@ -104,7 +106,7 @@ El detalle técnico de un `502` (clase de excepción, error concreto del proveed
 | No soportado | Porqué breve |
 |---|---|
 | **Imágenes incrustadas / colores / tamaños / tablas en el cuerpo del borrador** | El cuerpo del borrador es HTML con formato (negrita, cursiva, subrayado, listas, enlaces), pero el editor y el saneador no admiten imágenes inline, color, tamaño de letra ni tablas. Catálogo completo del formato admitido y de lo que se limpia: [composicion-y-envio.md](./composicion-y-envio.md). |
-| **Bajar más de 100 borradores por cuenta** | La sincronización se queda con los 100 más recientes. Borradores antiguos más allá de ese tope no se traen. Suficiente para el MVP; subir el tope multiplicaría las llamadas al proveedor. |
+| **Bajar más de 500 borradores por cuenta** | La sincronización se queda con los 500 más recientes. Borradores antiguos más allá de ese tope no se traen. Suficiente para el MVP; subir el tope multiplicaría las llamadas al proveedor. |
 | **Cambiar la cuenta de origen de un borrador existente** | Implicaría mover el borrador y sus adjuntos a otra cuenta del proveedor. La app bloquea el selector; la alternativa es descartar y empezar de cero. |
 | **Merge en la sincronización** | La sincronización es un espejo del proveedor (replace): no fusiona estados ni resuelve conflictos campo a campo. El proveedor es la fuente de verdad. |
 | **Editar el threading de una respuesta/reenvío desde el cliente** | Los campos de threading se leen de la fila local en el envío; el cliente los omite a propósito. Evita que un cliente manipulado reescriba el hilo. Ver [responder-y-reenviar.md](../features/responder-y-reenviar.md). |

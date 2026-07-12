@@ -13,7 +13,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Draft creation that mirrors the draft at the provider (Gmail and Outlook).
 - Draft update that replaces draft content at the provider (PATCH, Provider-First).
 - Draft deletion at the provider with local cleanup (Provider-First Rule).
-- Draft synchronization pulls the most recent drafts from every connected account into the local database (capped at 100 per account).
+- Draft synchronization pulls the most recent drafts from every connected account into the local database (capped at 500 per account). Also runs reliably server-side: a draft-sync job is enqueued on every account connection (first and reconnection) and processed by the background worker, so drafts refresh without an explicit request.
 - Attachments support across received emails (cache-aside download) and outgoing drafts (lazy push, atomic Gmail send / partial-resume Outlook send).
 - Reply / Reply All / Forward composer flow with provider-native threading (Gmail `threadId` + RFC 5322 headers; Outlook `createReply` / `createReplyAll` / `createForward`) and server-side attachment inheritance on Outlook forwards / explicit copy on Gmail forwards.
 - Conversation view: account, unified, and virtual listings collapse each thread into one row (count of the thread's messages in that box), and opening a row fetches the full message chain from the provider with cache-aside persistence ("complete the mailbox"). Favourites is the exception — it stays per-message, not grouped.
@@ -23,7 +23,7 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Trash management: move emails to trash, permanently delete, or restore.
 - Spam operations: move to spam and restore from spam with cross-provider support.
 - Archive: move emails out of the inbox to an "Archived" view and back, with cross-provider support (Gmail removes the `INBOX` label keeping the same id; Outlook moves to the `archive` folder, rewriting the id). The main inbox (`ALL_MAIL`) no longer surfaces archived mail; a dedicated `box=ARCHIVE` view lists it.
-- Favourites: per-email star/flag toggle (Provider-First) plus a provider-truth sync and a dedicated favourites listing.
+- Favourites: per-email star/flag toggle (Provider-First) and a dedicated favourites listing. The star/flag state is captured automatically on every sync — including out-of-band changes that arrive through the incremental path — so the manual "sync favourites" button was removed; the reconciliation endpoint survives backend-only.
 - Email search with Gmail-style operators (`from:`, `to:`, `subject:`, `has:attachment`, `before:`/`after:`, `is:`, `in:`) on top of free-text substring matching, all over the locally synced metadata.
 - Sort + quick-filter controls on the inbox listing: order by date / sender / subject (ascending or descending) and narrow with one-click chips (unread, with attachments, starred). Applies to the unified and per-account inbox views (not favourites or virtual mailboxes); all SQL over the locally synced metadata, no provider call.
 - Virtual mailboxes ("bandejas ficticias"): saved filtered views over the stored metadata of a chosen set of accounts.
@@ -36,7 +36,8 @@ It lets you group Gmail and Outlook accounts under mailbox entities, connect the
 - Dev-login backdoor for local development (localhost-only, opt-in via env var), with optional DEV auto-login that skips the login screen entirely (`VITE_DEV_AUTO_LOGIN`).
 - Containerised local stack with Podman Compose (PostgreSQL + backend + frontend).
 - OAuth 2.0 interactive connect flow (browser popup + API-side redirect callback, container-friendly) plus silent re-authentication and a manual "Reconnect account" action that re-runs consent to recover a revoked/expired account without deleting its synced mail.
-- Background initial bulk-load ("backfill"): the first time an account is connected, its history (up to 100,000 messages, configurable) downloads in the background in resumable, rate-paced waves, so emails appear progressively in the listings — replacing the old synchronous 500-message bootstrap. Runs in an in-process worker (single uvicorn worker, no extra infrastructure) driven by a checkpoint table; progress is polled via `GET /mailboxes/{id}/backfill-status`. Disable the worker (`BACKFILL_WORKER_ENABLED=false`) and a newly connected account falls back to the classic synchronous 500-message bootstrap.
+- Per-user connected-account limit (default 15, configurable): the "Add account" button disables at the cap, and `GET /accounts/quota` reports `{ connected, limit }`. Attempting to exceed it returns 409 `account_limit_exceeded`.
+- Background initial bulk-load ("backfill"): the first time an account is connected, its history (up to 100,000 messages, configurable) downloads in the background — in parallel across all the user's connected accounts — in resumable, rate-paced waves, so emails appear progressively in the listings — replacing the old synchronous 500-message bootstrap. Runs in an in-process worker (single uvicorn worker, no extra infrastructure) driven by a checkpoint table (a failed job auto-retries a bounded number of times before staying failed); progress is polled via `GET /mailboxes/{id}/backfill-status`. Disable the worker (`BACKFILL_WORKER_ENABLED=false`) and a newly connected account falls back to the classic synchronous 500-message bootstrap.
 - PostgreSQL persistence for mailboxes, accounts, and tokens.
 - Strict layered architecture with centralized API error mapping.
 
@@ -206,7 +207,7 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 |---|---|---|
 | `DATABASE_URL` | Yes | PostgreSQL DSN used by connection pool and Alembic migrations. |
 | `DB_POOL_MIN_CONN` | No | Minimum pooled DB connections. Default: `1`. |
-| `DB_POOL_MAX_CONN` | No | Maximum pooled DB connections. Default: `10`. |
+| `DB_POOL_MAX_CONN` | No | Maximum pooled DB connections. Raised to cover the parallel background backfill — keep it `>= BACKFILL_DB_WRITE_CONCURRENCY` plus headroom for user requests. Default: `25`. |
 | `DB_CONNECT_TIMEOUT_SECONDS` | No | Connection timeout for PostgreSQL. Default: `10`. |
 | `DB_APPLICATION_NAME` | No | PostgreSQL `application_name`. Default: `mailmanager-api`. |
 | `DB_AUTO_MIGRATE` | No | If `true`, API startup runs `alembic upgrade head`. Default: `false`. |
@@ -223,10 +224,13 @@ Production runs a separate, self-contained `compose.prod.yml` (nginx-built front
 | `GMAIL_BATCH_MAX_WORKERS` | No | Max parallel workers for Gmail batch operations. Default: `5`. |
 | `BACKFILL_WORKER_ENABLED` | No | Kill-switch for the background initial-bulk-load (backfill) worker. Truthy (default) starts the in-process worker thread AND enqueues a backfill on each first account connection (in lockstep); falsy disables both, so a newly connected account falls back to the synchronous 500-message bootstrap on its first sync. Default: `true`. |
 | `BACKFILL_MAX_EMAILS_PER_ACCOUNT` | No | Per-account cap on the background backfill. Default: `100000`. |
-| `BACKFILL_MAX_CONCURRENT` | No | Accounts backfilled in parallel by the worker pool. The worker adds up to this many + 1 concurrent DB consumers, so raise `DB_POOL_MAX_CONN` alongside it. Default: `2`. |
+| `BACKFILL_MAX_CONCURRENT` | No | Accounts backfilled in parallel by the worker pool. Default: `15`. |
+| `BACKFILL_DB_WRITE_CONCURRENCY` | No | Max concurrent backfill / draft-sync DB writes (a semaphore bounding pool usage independently of `BACKFILL_MAX_CONCURRENT`). Keep `DB_POOL_MAX_CONN >=` this + headroom for user requests. Default: `8`. |
+| `BACKFILL_MAX_ATTEMPTS` | No | Auto-retry budget for a failed backfill / draft-sync job before it stays permanently failed. Default: `5`. |
 | `BACKFILL_GMAIL_GETS_PER_MINUTE` | No | Target Gmail `messages.get` rate during backfill (fixed conservative pacing, not adaptive). Default: `300`. |
 | `BACKFILL_OUTLOOK_PAGE_DELAY_MS` | No | Delay between Outlook backfill pages. Default: `300`. |
-| `BACKFILL_POLL_INTERVAL_S` | No | Dispatcher poll interval (seconds) for claiming pending backfill jobs. Default: `5`. |
+| `BACKFILL_POLL_INTERVAL_S` | No | Dispatcher poll interval (seconds) for claiming pending backfill / draft-sync jobs. Default: `5`. |
+| `MAX_ACCOUNTS_PER_USER` | No | Per-user connected-account limit enforced by `create_account` (409 `account_limit_exceeded` when exceeded) and reported by `GET /accounts/quota`. Counts all owned accounts, expired tokens included. Default: `15`. |
 | `AUTH_SESSION_LIFETIME_DAYS` | No | Session duration in days. Default: `7`. |
 | `AUTH_COOKIE_SECURE` | No | HTTPS-only session cookies. Default: `false`. |
 | `AUTH_COOKIE_SAMESITE` | No | Session cookie `SameSite` policy: `lax` / `strict` / `none`. `none` requires `AUTH_COOKIE_SECURE=true`. Default: `lax`. |
@@ -279,7 +283,8 @@ Mailboxes:
 Accounts:
 
 - `GET /mailboxes/{mailbox_id}/accounts`
-- `POST /mailboxes/{mailbox_id}/accounts`
+- `POST /mailboxes/{mailbox_id}/accounts` — Create an account record (the only INSERT into `accounts`). Returns 409 `account_limit_exceeded` when the user is already at `MAX_ACCOUNTS_PER_USER`.
+- `GET /accounts/quota` — User-level (no mailbox prefix): the user's connected-account usage `{ connected, limit }` aggregated across every mailbox they own (expired-token accounts included). Local-only, no provider call.
 - `GET /mailboxes/{mailbox_id}/accounts/{account_id}`
 - `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}` — Update `display_label`, `config`, and/or `signature_html` (per-account email signature, HTML, ≤10,000 chars; sanitised on save; `""` clears it, an omitted field is left untouched). `AccountOut` returns `signature_html`.
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}`
@@ -311,7 +316,7 @@ Emails:
 Favourites:
 
 - `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{provider_message_id}/favorite` — Toggle the favourite flag (Provider-First: Gmail `STARRED`, Outlook `flag`). Body `{ "favorite": true|false }`. A local existence pre-check returns 404 `email_not_found` before any provider round trip; a zero-row update after a successful provider call (race) also collapses to 404.
-- `POST /mailboxes/{mailbox_id}/favorites/sync` — Reconcile `is_favorite` from provider truth for one account (`account_id` query param) or every account in the mailbox. `total_synced` is the rowcount across the touched accounts; each `accounts[i].favorites_synced` is the count of favourites the provider reported.
+- `POST /mailboxes/{mailbox_id}/favorites/sync` — Reconcile `is_favorite` from provider truth for one account (`account_id` query param) or every account in the mailbox. `total_synced` is the rowcount across the touched accounts; each `accounts[i].favorites_synced` is the count of favourites the provider reported. Now largely redundant — favourites are captured automatically on every sync — and no longer surfaced in the UI; kept as a manual reconciliation.
 
 Virtual mailboxes (saved filtered views — "bandejas ficticias"):
 
@@ -327,7 +332,7 @@ Drafts:
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts` — Create a draft at the provider and persist it locally (Provider-First; Outlook uses `Prefer: IdType="ImmutableId"`).
 - `PATCH /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}` — Replace an existing draft's content at the provider (full-field replacement) and persist the new values locally. Provider-First with a pre-check: the draft must exist in the local DB (404 `draft_not_found` otherwise) before any provider call. Gmail uses `users().drafts().update()`; Outlook uses `PATCH /me/messages/{id}` with `Prefer: IdType="ImmutableId"` repeated on every call. `created_at` is preserved; `updated_at` is refreshed.
 - `DELETE /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{draft_id}` — Delete a draft at the provider and remove the local row (Provider-First). Returns `{"status": "deleted"}`.
-- `POST /mailboxes/{mailbox_id}/drafts/sync` — Fetch the most recent drafts from the provider(s) into the local database (full replace per account, capped at 100 drafts per account most recent by date). Optional query param `account_id`: when provided, syncs only that account; when omitted, syncs every account in the mailbox. Gmail uses parallel batched `drafts.get` calls (workers configurable via `GMAIL_BATCH_MAX_WORKERS`, default 5); Outlook uses `$top=100` + `$orderby=lastModifiedDateTime desc` paginated fetch with per-page retries.
+- `POST /mailboxes/{mailbox_id}/drafts/sync` — Fetch the most recent drafts from the provider(s) into the local database (full replace per account, capped at 500 drafts per account most recent by date). Optional query param `account_id`: when provided, syncs only that account; when omitted, syncs every account in the mailbox. Gmail uses parallel batched `drafts.get` calls (workers configurable via `GMAIL_BATCH_MAX_WORKERS`, default 5); Outlook uses `$top=500` + `$orderby=lastModifiedDateTime desc` paginated fetch with per-page retries. The same sync also runs server-side automatically — enqueued on every account connection and processed by the background worker — so this HTTP endpoint is the on-demand / fallback trigger.
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/send` — Send an existing draft at the provider and remove it from local storage. Provider-First with 3-attempt retry in the client layer. On success: deletes the local `drafts` row and persists the sent email metadata to `email_metadata` (both best-effort). Gmail returns a new `message_id`; Outlook keeps the same ID (ImmutableId). Pushes any locally-stored draft attachments to the provider as part of the send (atomic for Gmail, non-atomic for Outlook with D-27 partial-resume).
 - `GET /mailboxes/{mailbox_id}/drafts` — List drafts for the mailbox (DB-only, no provider calls). Optional query param `account_id`: when provided, returns drafts of that account; when omitted, returns the unified view across all accounts in the mailbox. Ordered by `created_at DESC`. `DraftOut.body` is sanitised HTML (the rich-text composer; legacy plain-text drafts were converted by migration 0034); each draft carries `attachments[]`.
 - `POST /mailboxes/{mailbox_id}/accounts/{account_id}/drafts/{provider_draft_id}/attachments` — Multipart upload (`file` field). Local-only (D-07 lazy push) — the provider draft is not touched; the bytes live in `draft_attachments` until Save/Send. Server-side validation: extension blocklist (D-04a), 25 MB per-file (D-01), 25 MB cumulative per draft (D-02), max 25 attachments per draft (D-03). Multipart bodies > 30 MB are rejected upstream as 413 `request_too_large`.
@@ -380,6 +385,7 @@ Each API error code maps to a fixed HTTP status. The list below shows every code
 - `forbidden` — 403
 - `dev_login_not_localhost` — 403
 - `account_not_connected` — 409
+- `account_limit_exceeded` — 409
 - `email_not_in_trash` — 409
 - `app_credentials_invalid` — 500
 - `app_credentials_missing` — 500

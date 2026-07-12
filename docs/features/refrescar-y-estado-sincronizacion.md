@@ -42,7 +42,7 @@ El control se añade a las **tres** vistas de listado de correo que ya se sincro
 
 **Dónde NO cambia nada:**
 
-- **Favoritos** (global y por cuenta) conserva su botón **"Sincronizar favoritos"** de siempre. Es una acción de **semántica distinta**: reconcilia el estado de las estrellas/banderas contra el proveedor, no busca correo nuevo (ver [favoritos.md](favoritos.md)). No se le añade un segundo botón para no confundir las dos acciones.
+- **Favoritos** (global y por cuenta) **no** recibe este control de refresco. Además, **ya no lleva ningún botón de sincronización**: los favoritos se capturan solos en la sincronización general y el antiguo botón **"Sincronizar favoritos"** se **retiró** de la página (ver [favoritos.md](favoritos.md)).
 - **Ajustes → Datos** mantiene su botón **"Sincronizar todo"**, que recorre **todas** las bandejas del usuario (ver [ajustes.md](ajustes.md) § 5). El nuevo botón es complementario y de alcance opuesto: refresca **solo la vista visible**, no el buzón entero.
 
 ---

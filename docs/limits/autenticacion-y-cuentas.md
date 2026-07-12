@@ -17,9 +17,9 @@ Conviene distinguir dos planos a lo largo de este documento:
 | Proveedores de correo soportados | **2: `gmail`, `outlook`** | Frontend (desplegable) + backend (restricción a nivel de base de datos) | Cualquier otro valor de proveedor se rechaza al guardar la cuenta. |
 | Longitud de la etiqueta de cuenta (`display_label`) | **1 a 120 caracteres** | Frontend (campo limitado) + backend (validación) + base de datos | Mínimo 1 carácter (no puede ser cadena vacía). El input del formulario corta a 120. |
 | Etiqueta de cuenta obligatoria internamente | **NOT NULL** | Base de datos | En el formulario es **opcional**; si se deja vacío, se rellena con el nombre del proveedor antes de guardar. Nunca se persiste una cuenta sin etiqueta. |
-| Cuentas de correo por buzón | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
-| Cuentas de correo por usuario | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
-| Buzones por usuario | **Sin límite** | — | No hay tope codificado. Ver sección 5. |
+| Cuentas de correo por buzón | **Sin límite** | — | No hay tope codificado por buzón; el freno es el tope por usuario de abajo. Ver sección 6. |
+| Cuentas de correo por usuario | **15** (por defecto, configurable) | Frontend (contador + botón "Añadir cuenta" deshabilitado) + backend (guarda en la creación de cuenta) | Tope de cuentas conectadas por usuario **sumando todas sus bandejas**, configurable con `MAX_ACCOUNTS_PER_USER`. Cuenta **todas** las cuentas del usuario, incluidas las de token caducado. Ver sección 6. |
+| Buzones por usuario | **Sin límite** | — | No hay tope codificado de bandejas: el usuario puede crear todas las que quiera. Ver sección 6. |
 | Margen de desfase de reloj al verificar el token de Google | **10 segundos** | Backend (verificación OIDC de Google) | Tolerancia para relojes ligeramente desincronizados; evita rechazar logins legítimos por unos segundos de diferencia. |
 | Margen de desfase de reloj al verificar el token de Microsoft | **60 segundos** | Backend (verificación OIDC de Microsoft) | Más holgado que el de Google (Microsoft no fija un valor); aplica a `exp` / `nbf`. |
 | Espera máxima del resultado de la ventana emergente OAuth | **5 minutos (300 segundos)** | Frontend (página de cuentas, ambos proveedores) | Si la ventana de consentimiento no comunica resultado ni se cierra en ese plazo, el intento se da por fallido y el registro de la cuenta se deshace (rollback). |
@@ -136,17 +136,21 @@ El código y el estado HTTP del rechazo (`429 rate_limit_exceeded`) están en §
 
 ---
 
-## 6. "Sin límite" — qué significa exactamente
+## 6. El límite de cuentas conectadas por usuario
 
-No existe ningún tope codificado para:
+| Aspecto | Valor exacto | Detalle |
+|---|---|---|
+| Tope de cuentas de correo por usuario | **15** por defecto | Configurable con la variable de entorno `MAX_ACCOUNTS_PER_USER`. Un valor no numérico o vacío cae al **15** por defecto (se lee en el punto de uso, no valida al arrancar). |
+| Ámbito del recuento | **Todas las bandejas del usuario** | El tope suma las cuentas de **todos** sus buzones, no por buzón. |
+| Qué cuenta | **Todas las cuentas**, incluidas las de **token caducado** | Una cuenta desconectada (token muerto) sigue ocupando su hueco hasta que se **elimine**; reconectarla no la libera, borrarla sí. Mide "cuántas cuentas ocupan almacenamiento", no "cuántas están sanas". |
+| Dónde se aplica | **Frontend** (contador «conectadas / máximo», botón "Añadir cuenta" deshabilitado al llegar al tope) **y backend** (guarda en la creación de cuenta) | La guarda del backend es la defensa real: `create_account` es el único punto que inserta cuentas. |
+| Rechazo del backend | **409 `account_limit_exceeded`** | Si se intenta crear la cuenta que excede el tope, el servidor la rechaza con detalle `{limit, connected}`; el frontend muestra un mensaje localizado. La cuenta **no** se crea ni queda a medias. |
+| Buzones (bandejas) por usuario | **Sin límite** | El usuario puede crear todas las bandejas unificadas que quiera; solo el total de cuentas de correo está acotado. |
+| Cuentas por buzón | **Sin límite propio** | No hay tope por buzón; el único freno es el total de 15 por usuario. |
 
-- **Número de cuentas de correo por buzón.**
-- **Número de cuentas de correo por usuario.**
-- **Número de buzones por usuario.**
+El porqué: proteger el **almacenamiento** del servicio (cada cuenta sincroniza hasta decenas de miles de cabeceras más cuerpos/adjuntos cacheados). El comportamiento observable está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md) § 2.8.
 
-Es una decisión del MVP: no se ha implementado ninguna cuota porque el producto asume un único usuario / pocas cuentas. El único freno real es práctico (cada cuenta conectada consume cuota del proveedor al sincronizar y ocupa almacenamiento local), no una validación. Si en el futuro se quisiera limitar, sería una restricción nueva a añadir tanto en el frontend como en el servicio de creación de cuentas.
-
-> Nota: existe un tope no relacionado de **100 borradores por cuenta** en la sincronización de borradores, pero pertenece a otra feature (composición/borradores), no a la gestión de cuentas.
+> Nota: existe un tope no relacionado de **500 borradores por cuenta** en la sincronización de borradores, pero pertenece a otra feature (composición/borradores), no a la gestión de cuentas — ver [borradores.md](borradores.md).
 
 ---
 
@@ -202,6 +206,7 @@ Correspondencia exacta entre cada situación y la respuesta de la API. El compor
 | Login con Microsoft sin configurar (`MICROSOFT_CLIENT_ID` ausente) | `env_var_error` | 500 |
 | Fallo de autorización al **conectar** una cuenta | `account_connect_auth_error` | **401** (no 409 — evita el bucle de reintentos sobre el mismo paso) |
 | Cuenta no conectada al operar sobre ella | `account_not_connected` | 409 |
+| Crear una cuenta habiendo alcanzado el tope por usuario (§ 6) | `account_limit_exceeded` | 409 |
 | Buzón inexistente | `mailbox_not_found` | 404 |
 | Buzón ajeno (no eres el dueño) | `forbidden` | 403 |
 | Cuenta inexistente (get / update / delete / connect) | `account_not_found` | 404 |
@@ -223,7 +228,7 @@ Estos valores son **configuración de despliegue/operación**, no topes que perc
 | Parámetro | Valor por defecto | Variable de entorno | Detalle |
 |-----------|-------------------|---------------------|---------|
 | Conexiones mínimas del pool de BD | **1** | `DB_POOL_MIN_CONN` | Conexiones que el pool mantiene abiertas como mínimo. |
-| Conexiones máximas del pool de BD | **10** | `DB_POOL_MAX_CONN` | Techo de conexiones concurrentes a PostgreSQL. El mínimo no puede ser mayor que el máximo: si lo es, el arranque falla. |
+| Conexiones máximas del pool de BD | **25** | `DB_POOL_MAX_CONN` | Techo de conexiones concurrentes a PostgreSQL (subido de 10 para dar cabida a la descarga masiva en paralelo — ver [sincronizacion.md](sincronizacion.md) § 8). El mínimo no puede ser mayor que el máximo: si lo es, el arranque falla. |
 | Timeout de conexión a la BD | **10 segundos** | `DB_CONNECT_TIMEOUT_SECONDS` | Tiempo máximo para establecer una conexión nueva antes de fallar. |
 
 ### Configuración del login con Microsoft
@@ -237,4 +242,4 @@ Estos valores son **configuración de despliegue/operación**, no topes que perc
 
 ---
 
-> La autenticación y las cuentas llegan hasta: **login con Google OIDC o Microsoft OIDC** (única vía de alta de usuario; sin enlace de cuentas entre ambos, y el de Microsoft no exige email verificado), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** sin tope de cuentas ni de buzones, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). Como endurecimiento previo al despliegue, un **rate limiting opt-in (apagado por defecto)** pone topes de frecuencia por cliente sobre login, envío y sincronizaciones más una red global por IP, devolviendo `429 rate_limit_exceeded` con `Retry-After` cuando se superan. El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).
+> La autenticación y las cuentas llegan hasta: **login con Google OIDC o Microsoft OIDC** (única vía de alta de usuario; sin enlace de cuentas entre ambos, y el de Microsoft no exige email verificado), **sesión en cookie `HttpOnly` de 7 días fijos sin renovación por actividad**, **solo proveedores Gmail y Outlook** con un **tope de 15 cuentas de correo por usuario** (por defecto, configurable; cuenta también las de token caducado) pero **bandejas ilimitadas**, **etiqueta de 1–120 caracteres** (opcional en la UI pero obligatoria internamente), **email de cuenta best-effort que puede quedar `NULL`**, **tokens cifrados en reposo** y nunca expuestos al cliente, y un **dev login de desarrollo tras tres barreras** que jamás crea usuarios; con Gmail pidiendo un permiso único y Outlook cuatro permisos separados (el envío entre ellos). Como endurecimiento previo al despliegue, un **rate limiting opt-in (apagado por defecto)** pone topes de frecuencia por cliente sobre login, envío y sincronizaciones más una red global por IP, devolviendo `429 rate_limit_exceeded` con `Retry-After` cuando se superan. El comportamiento completo está en [../features/autenticacion-y-cuentas.md](../features/autenticacion-y-cuentas.md).

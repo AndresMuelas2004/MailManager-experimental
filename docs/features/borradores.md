@@ -116,12 +116,13 @@ La tabla permite seleccionar borradores con casillas, incluida una casilla de ca
 
 Sincronizar trae los borradores **desde el proveedor** y los vuelca en la base local. Es lo que mantiene a MailManager al día con cambios hechos fuera de la app: borradores creados o editados en Gmail/Outlook web, en el móvil, etc.
 
-La sincronización se dispara de dos formas:
+La sincronización se dispara de tres formas:
 
+- **Desde el servidor, al conectar la cuenta** (primera conexión **y** reconexión). Es la vía **fiable** y la novedad importante: en cuanto una cuenta se conecta, el propio servidor encola su sincronización de borradores y la ejecuta en segundo plano, **con reintento automático si falla**, sin depender de que el navegador siga abierto ni de que el usuario llegue a abrir la sección de Borradores. Es independiente de la descarga masiva de correo (que puede tardar horas): los borradores llegan pronto. Antes esta sincronización al conectar dependía del navegador y era poco fiable.
 - **Automáticamente al entrar** en la vista de borradores (al montar la pantalla).
 - **Manualmente** con el botón "Sincronizar" de la cabecera de la tabla (que gira mientras trabaja).
 
-Si se entra en la vista de una cuenta concreta, sincroniza solo esa cuenta; si se entra en la vista del mailbox, sincroniza **todas** las cuentas del mailbox.
+Si se entra en la vista de una cuenta concreta, sincroniza solo esa cuenta; si se entra en la vista del mailbox, sincroniza **todas** las cuentas del mailbox. El detalle del trabajador de fondo y sus reintentos está en [sincronizacion.md](sincronizacion.md) § 2.2 (comportamiento) y las cifras exactas en [../limits/sincronizacion.md](../limits/sincronizacion.md) § 8.4.
 
 ### 5.2 Es una sincronización "espejo" (replace), no un merge
 

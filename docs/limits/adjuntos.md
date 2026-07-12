@@ -94,7 +94,7 @@ Nota de memoria: el binario se carga completo en RAM del proceso al servirlo (el
 | Gmail — tamaño de chunk resumable | **4 MB** (`4 * 1024 * 1024`, múltiplo de 256 KB) | Backend |
 | Outlook — umbral de subida por adjunto | **≥ 3 MB** (`3 * 1024 * 1024`) usa `createUploadSession` + PUT por trozos; por debajo de 3 MB, `POST /attachments` directo | Backend (decisión **por adjunto**, no por mensaje) |
 | Reintentos del envío de borrador | **3 intentos**, espera base **1 s** | Backend (Gmail reintenta solo en `429`/`5xx`; Outlook reintenta todo `EmailExternalAPIError`) |
-| Fetch de borradores por sincronización | **100 borradores** por cuenta (los más recientes) | Backend (ambos proveedores) |
+| Fetch de borradores por sincronización | **500 borradores** por cuenta (los más recientes) | Backend (ambos proveedores) — ver [borradores.md](./borradores.md) |
 
 ### 5.1 Atomicidad del envío con adjuntos
 
