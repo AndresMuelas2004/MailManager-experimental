@@ -167,7 +167,17 @@ describe('AccountInboxPage — conversation view', () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
         HttpResponse.json({
-          items: [makeMessage('rep', { subject: 'Open thread', thread_message_count: 2 })],
+          // The grouped listing representative IS the thread's most-recent
+          // message (Gmail: its id matches the newest member); the row opens it.
+          items: [
+            makeMessage('m_new', {
+              subject: 'Open thread',
+              thread_message_count: 2,
+              is_read: false,
+              from_name: 'Newe',
+              received_at: '2024-01-11T09:00:00Z',
+            }),
+          ],
           total: 1,
           limit: 50,
           offset: 0,
@@ -178,8 +188,16 @@ describe('AccountInboxPage — conversation view', () => {
         HttpResponse.json({
           thread_id: 't_1',
           messages: [
-            makeMessage('m_old', { from_name: 'Olde', is_read: false }),
-            makeMessage('m_new', { from_name: 'Newe', is_read: false }),
+            makeMessage('m_old', {
+              from_name: 'Olde',
+              is_read: false,
+              received_at: '2024-01-10T09:00:00Z',
+            }),
+            makeMessage('m_new', {
+              from_name: 'Newe',
+              is_read: false,
+              received_at: '2024-01-11T09:00:00Z',
+            }),
           ],
         }),
       ),
@@ -199,24 +217,26 @@ describe('AccountInboxPage — conversation view', () => {
     const user = userEvent.setup();
     await user.click(screen.getByText('Open thread'));
 
-    // Both message headers render (From label).
+    // Both message headers render (From label). The opened email (the newest,
+    // m_new) is merged with the chain; its same-id conversation twin is deduped.
     await waitFor(() => {
       expect(screen.getByText(/Olde/)).toBeInTheDocument();
       expect(screen.getByText(/Newe/)).toBeInTheDocument();
     });
 
-    // Ascending order: the older card precedes the newer one in the DOM.
+    // Ascending order: the older card precedes the newer (opened) one in the DOM.
     const olde = screen.getByText(/Olde/);
     const newe = screen.getByText(/Newe/);
     expect(olde.compareDocumentPosition(newe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     // The whole thread's unread messages are marked read on open — one PATCH
-    // for the single mailbox, carrying both message refs.
+    // for the single mailbox. The opened row (m_new) leads, then the older
+    // member; the opened row's conversation twin is deduped by id.
     await waitFor(() => expect(readBodies).toHaveLength(1));
     expect(readBodies[0].mailbox).toBe('mb_1');
     expect(readBodies[0].items).toEqual([
-      { account_id: 'a_1', provider_message_id: 'm_old' },
       { account_id: 'a_1', provider_message_id: 'm_new' },
+      { account_id: 'a_1', provider_message_id: 'm_old' },
     ]);
   });
 
@@ -279,7 +299,15 @@ describe('AccountInboxPage — conversation view', () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
         HttpResponse.json({
-          items: [makeMessage('rep', { subject: 'Lazy thread', thread_message_count: 2 })],
+          // Opened row = the newest thread member (m_new), expanded by default.
+          items: [
+            makeMessage('m_new', {
+              subject: 'Lazy thread',
+              thread_message_count: 2,
+              from_name: 'Newe',
+              received_at: '2024-01-11T09:00:00Z',
+            }),
+          ],
           total: 1,
           limit: 50,
           offset: 0,
@@ -290,8 +318,8 @@ describe('AccountInboxPage — conversation view', () => {
         HttpResponse.json({
           thread_id: 't_1',
           messages: [
-            makeMessage('m_old', { from_name: 'Olde' }),
-            makeMessage('m_new', { from_name: 'Newe' }),
+            makeMessage('m_old', { from_name: 'Olde', received_at: '2024-01-10T09:00:00Z' }),
+            makeMessage('m_new', { from_name: 'Newe', received_at: '2024-01-11T09:00:00Z' }),
           ],
         }),
       ),
@@ -306,8 +334,8 @@ describe('AccountInboxPage — conversation view', () => {
     const user = userEvent.setup();
     await user.click(screen.getByText('Lazy thread'));
 
-    // Only the most-recent message's body is fetched on open; the older
-    // (collapsed) card's content is NOT requested yet.
+    // Only the opened (most-recent) message's body is fetched on open, under its
+    // own listing id; the older (collapsed) card's content is NOT requested yet.
     await waitFor(() => expect(contentCalls).toContain('m_new'));
     expect(contentCalls).not.toContain('m_old');
 
@@ -321,7 +349,14 @@ describe('AccountInboxPage — conversation view', () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
         HttpResponse.json({
-          items: [makeMessage('rep', { subject: 'Reply thread', thread_message_count: 2 })],
+          // Opened row = the newest thread member (m_new).
+          items: [
+            makeMessage('m_new', {
+              subject: 'Reply thread',
+              thread_message_count: 2,
+              received_at: '2024-01-11T09:00:00Z',
+            }),
+          ],
           total: 1,
           limit: 50,
           offset: 0,
@@ -331,7 +366,10 @@ describe('AccountInboxPage — conversation view', () => {
       http.get(`${API_BASE}/mailboxes/mb_1/accounts/a_1/emails/:pmid/conversation`, () =>
         HttpResponse.json({
           thread_id: 't_1',
-          messages: [makeMessage('m_old'), makeMessage('m_new')],
+          messages: [
+            makeMessage('m_old', { received_at: '2024-01-10T09:00:00Z' }),
+            makeMessage('m_new', { received_at: '2024-01-11T09:00:00Z' }),
+          ],
         }),
       ),
     );
@@ -361,7 +399,15 @@ describe('AccountInboxPage — conversation view', () => {
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
         HttpResponse.json({
-          items: [makeMessage('rep', { subject: 'Degraded thread', thread_message_count: 2 })],
+          // Opened row = the newest thread member (m_new), auto-expanded.
+          items: [
+            makeMessage('m_new', {
+              subject: 'Degraded thread',
+              thread_message_count: 2,
+              from_name: 'Newe',
+              received_at: '2024-01-11T09:00:00Z',
+            }),
+          ],
           total: 1,
           limit: 50,
           offset: 0,
@@ -372,13 +418,13 @@ describe('AccountInboxPage — conversation view', () => {
         HttpResponse.json({
           thread_id: 't_1',
           messages: [
-            makeMessage('m_old', { from_name: 'Olde' }),
-            makeMessage('m_new', { from_name: 'Newe' }),
+            makeMessage('m_old', { from_name: 'Olde', received_at: '2024-01-10T09:00:00Z' }),
+            makeMessage('m_new', { from_name: 'Newe', received_at: '2024-01-11T09:00:00Z' }),
           ],
         }),
       ),
-      // The most-recent message (auto-expanded) fails its content fetch; the
-      // older one would succeed when expanded.
+      // The opened (most-recent) message, auto-expanded, fails its content
+      // fetch; the older one would succeed when expanded.
       http.get(`${API_BASE}/mailboxes/mb_1/emails/m_new/content`, () =>
         HttpResponse.json(
           { error: { code: 'email_not_found', message: 'No encontrado' } },
@@ -408,20 +454,27 @@ describe('AccountInboxPage — cross-mailbox per-message content (virtual-style 
     server.use(
       http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
         HttpResponse.json({
-          items: [makeMessage('rep', { subject: 'Mixed thread', thread_message_count: 1 })],
+          // The opened row's REAL mailbox is mb_2 (a cross-mailbox representative,
+          // the trap a virtual bandeja surfaces). Its per-message content must be
+          // fetched against mb_2 (EmailMetadataOut.mailbox_id), not the route mb_1.
+          items: [
+            makeMessage('m_x', {
+              mailbox_id: 'mb_2',
+              subject: 'Mixed thread',
+              thread_message_count: 1,
+              from_name: 'Cross',
+            }),
+          ],
           total: 1,
           limit: 50,
           offset: 0,
         }),
       ),
       http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
-      http.get(`${API_BASE}/mailboxes/mb_1/accounts/a_1/emails/:pmid/conversation`, () =>
+      http.get(`${API_BASE}/mailboxes/:mailboxId/accounts/a_1/emails/:pmid/conversation`, () =>
         HttpResponse.json({
           thread_id: 't_1',
-          // The most-recent message lives in a DIFFERENT real mailbox (mb_2),
-          // as happens in a cross-mailbox thread. Its content must be fetched
-          // against mb_2, not the route's mb_1.
-          messages: [makeMessage('m_new', { mailbox_id: 'mb_2', from_name: 'Newe' })],
+          messages: [makeMessage('m_x', { mailbox_id: 'mb_2', from_name: 'Cross' })],
         }),
       ),
       http.get(`${API_BASE}/mailboxes/:mailboxId/emails/:pmid/content`, ({ params }) => {
@@ -435,6 +488,8 @@ describe('AccountInboxPage — cross-mailbox per-message content (virtual-style 
     const user = userEvent.setup();
     await user.click(screen.getByText('Mixed thread'));
 
+    // The opened email's body is fetched against ITS OWN mailbox (mb_2), never
+    // the route's mb_1.
     await waitFor(() => expect(contentMailboxes).toContain('mb_2'));
     expect(contentMailboxes).not.toContain('mb_1');
   });

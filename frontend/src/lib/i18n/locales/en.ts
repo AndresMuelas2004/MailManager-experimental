@@ -302,6 +302,8 @@ export const en: EsDictionary = {
     title: 'Conversation',
     ariaLabel: 'Conversation: {subject}',
     empty: 'This conversation no longer has any messages.',
+    threadLoading: 'Loading the conversation…',
+    threadError: 'Could not load the rest of the conversation.',
     unread: 'Unread',
     favorite: 'Favorite',
     removeFavorite: 'Remove from favorites',

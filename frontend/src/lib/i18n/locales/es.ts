@@ -305,6 +305,8 @@ export const es = {
     title: 'Conversación',
     ariaLabel: 'Conversación: {subject}',
     empty: 'Esta conversación ya no tiene mensajes.',
+    threadLoading: 'Cargando la conversación…',
+    threadError: 'No se pudo cargar el resto de la conversación.',
     unread: 'No leído',
     favorite: 'Favorito',
     removeFavorite: 'Quitar de favoritos',

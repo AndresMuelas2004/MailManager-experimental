@@ -10,7 +10,14 @@ import type { EmailMetadataOut } from '../../../api/types/dto';
 
 type Props = {
   messages: EmailMetadataOut[];
-  loading: boolean;
+  // Key of the message expanded by default — the email the user opened, not the
+  // most-recent one. Stable across the chain arriving, so the opened email stays
+  // expanded while the rest fill in collapsed.
+  defaultExpandedKey: string;
+  // The conversation chain is still loading in the background. Non-blocking: the
+  // opened email's body is already visible; this only drives a discreet footer
+  // indicator.
+  threadLoading: boolean;
   error: UiError | null;
   onClose: () => void;
   onReply: (email: EmailMetadataOut) => void | Promise<void>;
@@ -24,14 +31,24 @@ function messageKey(message: EmailMetadataOut): string {
 
 // Presentational conversation viewer: a Modal with the thread header (base
 // subject + Reply / Reply All / Forward that act on the most-recent message)
-// and the chain of message cards in chronological ascending order. Expansion
-// is local UI state: the last (most-recent) message starts expanded, the rest
-// collapsed; clicking a header toggles it. The data-fetching and mutations
-// live in the container (``ConversationViewerMount``) and the per-card body
-// container — this component never fetches.
+// and the chain of message cards in chronological ascending order.
+//
+// The opened email's body is NOT gated behind the chain fetch: ``messages``
+// always includes the opened email (merged by the container), so the card list
+// renders immediately and the opened email's body paints from the warmed cache
+// while ``/conversation`` is still loading. A discreet footer indicator shows
+// the chain is filling in; a chain-fetch error is a non-blocking notice (the
+// opened email stays visible) instead of replacing the whole viewer.
+//
+// Expansion is local UI state: the OPENED message starts expanded (its
+// ``defaultExpandedKey``), the rest collapsed; clicking a header toggles it.
+// The data-fetching and mutations live in the container
+// (``ConversationViewerMount``) and the per-card body container — this component
+// never fetches.
 export default function ConversationViewer({
   messages,
-  loading,
+  defaultExpandedKey,
+  threadLoading,
   error,
   onClose,
   onReply,
@@ -39,20 +56,17 @@ export default function ConversationViewer({
   onForward,
 }: Props) {
   const { t } = useTranslation();
-  const lastKey = messages.length > 0 ? messageKey(messages[messages.length - 1]) : null;
 
-  // Expansion is derived at render time, not seeded by an effect: the most-
-  // recent message is expanded BY DEFAULT and every other one is collapsed.
+  // Expansion is derived at render time, not seeded by an effect: the opened
+  // message is expanded BY DEFAULT and every other one is collapsed.
   // ``toggledIds`` records only the keys the user explicitly flipped, so a
   // card is expanded when its default differs from whether the user toggled
-  // it (XOR). This sidesteps the "useState initializer runs once with an empty
-  // messages prop" trap (the viewer mounts while loading) without a
-  // setState-in-effect, and the most-recent card opens as soon as the chain
-  // arrives.
+  // it (XOR). ``defaultExpandedKey`` is stable across the chain arriving, so
+  // the opened email stays expanded without a setState-in-effect.
   const [toggledIds, setToggledIds] = useState<Set<string>>(() => new Set());
 
   const isExpanded = (key: string): boolean => {
-    const defaultExpanded = key === lastKey;
+    const defaultExpanded = key === defaultExpandedKey;
     return toggledIds.has(key) ? !defaultExpanded : defaultExpanded;
   };
 
@@ -70,44 +84,11 @@ export default function ConversationViewer({
     return normaliseSubject(messages[messages.length - 1].subject);
   }, [messages, t]);
 
+  // Reply / Reply All / Forward act on the most-recent message of the chain.
+  // Since ``messages`` always includes the opened email, before the chain loads
+  // this is the opened email itself (natural fallback), and after it loads it is
+  // the thread's newest message.
   const last = messages.length > 0 ? messages[messages.length - 1] : null;
-
-  let body: React.ReactNode;
-  if (loading) {
-    body = (
-      <div className="flex h-[60vh] items-center justify-center">
-        <Spinner />
-      </div>
-    );
-  } else if (error) {
-    body = (
-      <div className="flex h-[60vh] items-center justify-center px-6 text-center text-sm text-red-600">
-        {error.message}
-      </div>
-    );
-  } else if (messages.length === 0) {
-    body = (
-      <div className="flex h-[40vh] items-center justify-center text-sm text-zinc-400">
-        {t('conversation.empty')}
-      </div>
-    );
-  } else {
-    body = (
-      <div className="flex flex-col gap-2 px-6 py-4">
-        {messages.map((message) => {
-          const key = messageKey(message);
-          return (
-            <ConversationMessageCard
-              key={key}
-              message={message}
-              expanded={isExpanded(key)}
-              onToggle={() => toggle(key)}
-            />
-          );
-        })}
-      </div>
-    );
-  }
 
   return (
     <Modal
@@ -152,7 +133,38 @@ export default function ConversationViewer({
           </div>
         )}
       </div>
-      <div className="flex flex-1 flex-col overflow-auto bg-[#F9FAFB]">{body}</div>
+      <div className="flex flex-1 flex-col overflow-auto bg-[#F9FAFB]">
+        {error && (
+          <div className="px-6 pt-3 text-[13px] text-amber-700">
+            {t('conversation.threadError')}
+          </div>
+        )}
+        {messages.length === 0 ? (
+          <div className="flex h-[40vh] items-center justify-center text-sm text-zinc-400">
+            {t('conversation.empty')}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 px-6 py-4">
+            {messages.map((message) => {
+              const key = messageKey(message);
+              return (
+                <ConversationMessageCard
+                  key={key}
+                  message={message}
+                  expanded={isExpanded(key)}
+                  onToggle={() => toggle(key)}
+                />
+              );
+            })}
+          </div>
+        )}
+        {threadLoading && (
+          <div className="flex items-center justify-center gap-2 px-6 pb-4 text-[12px] text-zinc-500">
+            <Spinner size="sm" />
+            {t('conversation.threadLoading')}
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }
