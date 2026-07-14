@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import urllib.parse
 from typing import Any
 
@@ -42,6 +44,21 @@ _FOLDER_TO_BOX: dict[str, str] = {
     "sentitems": "SENT",
     "archive": "ARCHIVE",
 }
+
+
+# Process-level cache of the special-folder id -> box map, keyed by the stable
+# ``account_label`` ("{mailbox_id}__{account_id}"). ``OutlookClient`` is rebuilt
+# per request (``build_manager_for_accounts`` makes fresh clients each time), so
+# a per-instance cache never survives between conversation opens — only a
+# module-level (process) cache does. Single uvicorn worker (MVP), same profile
+# as ``api/rate_limit.py`` and the backfill worker. Graph returns a STABLE id
+# for each well-known folder of a mailbox, so caching the map is safe; the TTL
+# only bounds the rare case of a recreated mailbox. Values are
+# ``(monotonic_ts, map)``. An EMPTY resolution is deliberately NOT cached — see
+# ``_resolve_special_folder_ids``.
+_SPECIAL_FOLDER_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+_SPECIAL_FOLDER_CACHE_LOCK = threading.Lock()
+_SPECIAL_FOLDER_TTL_S = 3600.0  # 1 hour (conservative; the ids are stable anyway)
 
 
 class OutlookSincronizacionMixin:
@@ -197,7 +214,20 @@ class OutlookSincronizacionMixin:
         parentFolderId can be classified into SENT, TRASH, SPAM or ARCHIVE.
         Any folder not in this mapping defaults to ALL_MAIL. The set of
         folders resolved is driven dynamically by ``_FOLDER_TO_BOX``.
+
+        Backed by a process-level TTL cache keyed on ``account_label`` so the
+        4 Graph calls run at most once per account per TTL — the hot path is
+        ``fetch_conversation``, which resolves these on every conversation open
+        and would otherwise pay 4 round trips each time. A fresh copy is
+        returned on every call so a caller can never mutate the cached map.
         """
+        account_label = self._account_label
+        now = time.monotonic()
+        with _SPECIAL_FOLDER_CACHE_LOCK:
+            entry = _SPECIAL_FOLDER_CACHE.get(account_label)
+            if entry is not None and now - entry[0] < _SPECIAL_FOLDER_TTL_S:
+                return dict(entry[1])
+
         folder_id_to_box: dict[str, str] = {}
         for folder_name, box in _FOLDER_TO_BOX.items():
             try:
@@ -211,6 +241,14 @@ class OutlookSincronizacionMixin:
                     "Outlook bootstrap: failed to resolve folder '%s', skipping.",
                     folder_name,
                 )
+
+        # Cache only a non-empty result. An empty map means every folder call
+        # failed (a transient auth/throttle blip) — caching it would misclassify
+        # every message as ALL_MAIL for a whole TTL. Skipping the write lets the
+        # next call retry cheaply and self-heal.
+        if folder_id_to_box:
+            with _SPECIAL_FOLDER_CACHE_LOCK:
+                _SPECIAL_FOLDER_CACHE[account_label] = (now, dict(folder_id_to_box))
         return folder_id_to_box
 
     def _fetch_recent_messages(

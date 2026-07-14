@@ -11,9 +11,29 @@ import pytest
 from core.email.email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from core.email.errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from core.email.outlook_client import OutlookClient, _DELTA_FOLDERS, _DELTA_SELECT_FIELDS
+from core.email.outlook_client import sincronizacion
 from core.email.outlook_client.sincronizacion import _BOOTSTRAP_SELECT_FIELDS
 
 from ._helpers import _make_authenticated_client, _make_folder_cursor, _make_graph_message
+
+
+@pytest.fixture(autouse=True)
+def _clear_special_folder_cache():
+    """Isolate the process-level special-folder cache between tests.
+
+    ``_resolve_special_folder_ids`` now memoises its ``{folder_id: box}`` map in
+    a module-level dict keyed by ``account_label`` (TTL). Every class here that
+    drives the real resolution (``TestResolveSpecialFolderIds``,
+    ``TestBootstrapEmailMetadata``, ``TestFetchMessagesMetadata``,
+    ``TestBootstrapIsFullSync``) shares the label ``mb__outlook``, so without
+    this reset the first test's cached map is served to the rest and their
+    per-test Graph mocks never run — their assertions (partial / empty / failing
+    folders) then read a stale full map instead. Clearing before AND after each
+    test keeps the cache from leaking into or out of the file.
+    """
+    sincronizacion._SPECIAL_FOLDER_CACHE.clear()
+    yield
+    sincronizacion._SPECIAL_FOLDER_CACHE.clear()
 
 
 # ── _encode_folder_cursors / _decode_folder_cursors ──────────────────
@@ -245,6 +265,122 @@ class TestResolveSpecialFolderIds:
         ):
             result = client._resolve_special_folder_ids()
         assert result == {}
+
+    @staticmethod
+    def _resolving_mock(calls):
+        """A ``_graph_request`` side_effect that resolves the 4 special folders
+        and records each URL into ``calls`` so a test can count Graph round trips."""
+
+        def _mock(method, url, body=None):
+            calls.append(url)
+            if "/mailFolders/sentitems?" in url:
+                return {"id": "id-sent"}
+            if "/mailFolders/deleteditems?" in url:
+                return {"id": "id-trash"}
+            if "/mailFolders/junkemail?" in url:
+                return {"id": "id-spam"}
+            if "/mailFolders/archive?" in url:
+                return {"id": "id-archive"}
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        return _mock
+
+    _RESOLVED = {
+        "id-sent": "SENT",
+        "id-trash": "TRASH",
+        "id-spam": "SPAM",
+        "id-archive": "ARCHIVE",
+    }
+
+    def test_second_open_reuses_cached_map_across_client_instances(self):
+        # The OutlookClient is rebuilt per request, so the map must survive across
+        # instances sharing an account_label — that is what makes a repeated
+        # conversation open skip the 4 folder round trips (the hot-path fix).
+        calls: list[str] = []
+        first_client = _make_authenticated_client()
+        with patch.object(first_client, "_graph_request", side_effect=self._resolving_mock(calls)):
+            first = first_client._resolve_special_folder_ids()
+
+        second_client = _make_authenticated_client()  # same account_label
+        with patch.object(
+            second_client, "_graph_request",
+            side_effect=AssertionError("cache hit must issue zero Graph calls"),
+        ):
+            second = second_client._resolve_special_folder_ids()
+
+        assert first == second == self._RESOLVED
+        # Only the first resolution hit Graph (4 folders); the second was cached.
+        assert len(calls) == 4
+
+    def test_returns_a_fresh_copy_so_a_caller_cannot_mutate_the_cache(self):
+        # A cache hit hands back a COPY — mutating the returned map must not
+        # poison the next reader's view.
+        client = _make_authenticated_client()
+        with patch.object(client, "_graph_request", side_effect=self._resolving_mock([])):
+            first = client._resolve_special_folder_ids()
+        first["id-sent"] = "TAMPERED"
+
+        with patch.object(
+            client, "_graph_request",
+            side_effect=AssertionError("cache hit must issue zero Graph calls"),
+        ):
+            second = client._resolve_special_folder_ids()
+        assert second == self._RESOLVED
+
+    def test_distinct_account_labels_do_not_share_cache(self):
+        # The cache is keyed by account_label, so a second account resolves on its
+        # own — one account's map must never leak into another's.
+        client_a = OutlookClient(account_label="mb__acct-a")
+        client_a._access_token = "token"
+        client_b = OutlookClient(account_label="mb__acct-b")
+        client_b._access_token = "token"
+
+        a_calls: list[str] = []
+        b_calls: list[str] = []
+        with patch.object(client_a, "_graph_request", side_effect=self._resolving_mock(a_calls)):
+            client_a._resolve_special_folder_ids()
+        with patch.object(client_b, "_graph_request", side_effect=self._resolving_mock(b_calls)):
+            client_b._resolve_special_folder_ids()
+
+        assert len(a_calls) == 4
+        assert len(b_calls) == 4  # b resolved independently — no shared entry
+
+    def test_expired_entry_triggers_re_resolution(self, monkeypatch):
+        # The TTL is measured on time.monotonic(); once it elapses the entry is
+        # stale and the next call re-resolves (the ids are stable, so this only
+        # bounds the rare recreated-mailbox case).
+        client = _make_authenticated_client()
+        fake_now = {"t": 1000.0}
+        monkeypatch.setattr(sincronizacion.time, "monotonic", lambda: fake_now["t"])
+
+        calls: list[str] = []
+        with patch.object(client, "_graph_request", side_effect=self._resolving_mock(calls)):
+            client._resolve_special_folder_ids()               # caches at t=1000
+            fake_now["t"] += sincronizacion._SPECIAL_FOLDER_TTL_S + 1  # entry now stale
+            client._resolve_special_folder_ids()               # re-resolves
+
+        assert len(calls) == 8  # 4 + 4: the stale entry forced a fresh resolution
+
+    def test_total_failure_does_not_cache_and_retries_next_call(self):
+        # An empty map means every folder call failed (a transient blip). Caching
+        # it would misclassify every message as ALL_MAIL for a whole TTL, so the
+        # empty result is deliberately NOT cached and the next call retries.
+        client = _make_authenticated_client()
+        call_count = {"n": 0}
+
+        def _all_fail(method, url, body=None):
+            call_count["n"] += 1
+            raise EmailExternalAPIError("down")
+
+        with patch.object(client, "_graph_request", side_effect=_all_fail):
+            first = client._resolve_special_folder_ids()
+            assert first == {}
+            assert client._account_label not in sincronizacion._SPECIAL_FOLDER_CACHE
+            second = client._resolve_special_folder_ids()
+            assert second == {}
+
+        # Both calls retried all 4 folders — the degraded map was never pinned.
+        assert call_count["n"] == 8
 
 
 class TestFetchRecentMessages:
