@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -56,6 +57,55 @@ _EXTRA_BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ..
     ipaddress.ip_network("169.254.169.254/32"),   # cloud metadata (IPv4)
     ipaddress.ip_network("fd00:ec2::254/128"),    # AWS IMDS (IPv6)
 )
+
+
+# ---------------------------------------------------------------------------
+# Shared HTTP client (connection pool with keep-alive).
+#
+# The proxy endpoint is synchronous, so several anyio threadpool threads share
+# this one client. ``httpx.Client`` is safe for concurrent use across threads —
+# its connection pool does its own locking — so reusing a single module-level
+# client lets images from the same CDN reuse a live TCP+TLS connection instead
+# of paying a fresh handshake per image (the dominant cost in image-heavy
+# newsletters). Created lazily under a lock (double-checked) and closed from the
+# app lifespan on shutdown. ``follow_redirects=False`` stays baked in here: we
+# revalidate every hop by hand, so redirects must never be delegated to httpx.
+# ---------------------------------------------------------------------------
+_client: httpx.Client | None = None
+_client_lock = threading.Lock()
+
+
+def _get_client() -> httpx.Client:
+    """Return the shared pooled client, creating it lazily (thread-safe)."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client(
+                    timeout=httpx.Timeout(_TIMEOUT_S),
+                    follow_redirects=False,
+                    headers=_REQUEST_HEADERS,
+                    limits=httpx.Limits(
+                        max_keepalive_connections=20,
+                        max_connections=100,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+    return _client
+
+
+def close_client() -> None:
+    """Close the shared client and drop it so the next fetch recreates one.
+
+    Called from the app lifespan on shutdown (and by tests to isolate the
+    module-level pool between cases). A dropped client is recreated lazily by
+    the next :func:`fetch_remote_image`.
+    """
+    global _client
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -138,60 +188,56 @@ def fetch_remote_image(url: str) -> FetchedImage:
     :py:class:`ImageProxyNotAnImage` otherwise.
     """
     current = url
-    with httpx.Client(
-        timeout=httpx.Timeout(_TIMEOUT_S),
-        follow_redirects=False,
-        headers=_REQUEST_HEADERS,
-    ) as client:
-        for _ in range(_MAX_REDIRECTS + 1):
-            try:
-                _assert_public_url(current)
-                with client.stream("GET", current) as response:
-                    if response.is_redirect:
-                        location = response.headers.get("location")
-                        if not location:
-                            raise ImageProxyUnfetchable(
-                                "Image proxy upstream sent a redirect without a Location header."
-                            )
-                        current = str(httpx.URL(current).join(location))
-                        continue
-                    if response.status_code >= 400:
+    client = _get_client()
+    for _ in range(_MAX_REDIRECTS + 1):
+        try:
+            _assert_public_url(current)
+            with client.stream("GET", current) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
                         raise ImageProxyUnfetchable(
-                            f"Image proxy upstream returned status {response.status_code}."
+                            "Image proxy upstream sent a redirect without a Location header."
                         )
-                    content_type = (
-                        response.headers.get("content-type", "").split(";")[0].strip().lower()
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                if response.status_code >= 400:
+                    raise ImageProxyUnfetchable(
+                        f"Image proxy upstream returned status {response.status_code}."
                     )
-                    if not content_type.startswith("image/"):
+                content_type = (
+                    response.headers.get("content-type", "").split(";")[0].strip().lower()
+                )
+                if not content_type.startswith("image/"):
+                    raise ImageProxyNotAnImage(
+                        f"Image proxy upstream returned non-image Content-Type: {content_type!r}."
+                    )
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        declared_length: int | None = int(declared)
+                    except ValueError:
+                        declared_length = None  # unparseable header — the streaming cap still applies
+                    if declared_length is not None and declared_length > _MAX_BYTES:
                         raise ImageProxyNotAnImage(
-                            f"Image proxy upstream returned non-image Content-Type: {content_type!r}."
+                            "Image proxy upstream declared an oversized Content-Length."
                         )
-                    declared = response.headers.get("content-length")
-                    if declared is not None:
-                        try:
-                            declared_length: int | None = int(declared)
-                        except ValueError:
-                            declared_length = None  # unparseable header — the streaming cap still applies
-                        if declared_length is not None and declared_length > _MAX_BYTES:
-                            raise ImageProxyNotAnImage(
-                                "Image proxy upstream declared an oversized Content-Length."
-                            )
-                    data = _read_capped_body(response)
-                    return FetchedImage(content_type=content_type, data=data)
-            except ImageProxyError:
-                # Re-raise typed domain errors (SSRF block, non-image, upstream
-                # failure) intact so the service maps each to its own HTTP status.
-                raise
-            except (httpx.HTTPError, httpx.InvalidURL) as exc:
-                raise ImageProxyUnfetchable(
-                    "Image proxy could not fetch the remote image from upstream."
-                ) from exc
-            except Exception as exc:
-                # Anything untyped escaping the SSRF frontier (a malformed port
-                # raising ValueError, a host failing IDNA raising UnicodeError,
-                # a body-streaming error) must not leak out of core untyped.
-                raise ImageProxyUnfetchable(
-                    "Image proxy hit an unexpected error fetching the remote image."
-                ) from exc
+                data = _read_capped_body(response)
+                return FetchedImage(content_type=content_type, data=data)
+        except ImageProxyError:
+            # Re-raise typed domain errors (SSRF block, non-image, upstream
+            # failure) intact so the service maps each to its own HTTP status.
+            raise
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise ImageProxyUnfetchable(
+                "Image proxy could not fetch the remote image from upstream."
+            ) from exc
+        except Exception as exc:
+            # Anything untyped escaping the SSRF frontier (a malformed port
+            # raising ValueError, a host failing IDNA raising UnicodeError,
+            # a body-streaming error) must not leak out of core untyped.
+            raise ImageProxyUnfetchable(
+                f"Image proxy unexpected fetch error ({type(exc).__name__}): {exc}"
+            ) from exc
 
     raise ImageProxyUnfetchable("Image proxy exceeded the maximum number of redirects.")

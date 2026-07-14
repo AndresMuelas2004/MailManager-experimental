@@ -39,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional local dependency
                 loaded = True
         return loaded
 
+from core.image_proxy import close_client
 from database import (
     close_pool,
     run_startup_migrations_if_enabled,
@@ -102,6 +103,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(
             "Backfill worker failed to stop cleanly (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
+    # Close the shared image-proxy HTTP client (keep-alive pool). Best-effort:
+    # the OS reclaims sockets on process exit, but closing here keeps the dev
+    # --reload cycle and the tests clean. A close failure must not abort shutdown.
+    try:
+        close_client()
+    except Exception as exc:
+        logger.warning(
+            "Image proxy client failed to close cleanly (%s): %s",
             type(exc).__name__, exc, exc_info=exc,
         )
     close_pool()

@@ -13,7 +13,7 @@ from core.image_proxy.errors import (
     ImageProxyNotAnImage,
     ImageProxyUnfetchable,
 )
-from core.image_proxy.fetcher import FetchedImage, fetch_remote_image
+from core.image_proxy.fetcher import FetchedImage, close_client, fetch_remote_image
 
 __all__ = [
     "FetchedImage",
@@ -21,5 +21,6 @@ __all__ = [
     "ImageProxyError",
     "ImageProxyNotAnImage",
     "ImageProxyUnfetchable",
+    "close_client",
     "fetch_remote_image",
 ]

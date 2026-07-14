@@ -26,18 +26,41 @@ from core.image_proxy import (
 from core.image_proxy import fetcher
 
 
+# ── module-state isolation ─────────────────────────────────────────
+# ``fetch_remote_image`` now reuses a module-level pooled client (keep-alive).
+# That client persists across calls, so the fake cached by the FIRST
+# ``fetch_remote_image`` of one test would otherwise be reused by the next — its
+# queued responses already drained — turning the whole file red even though no
+# assertion changed. Reset ``_client`` to ``None`` directly, NOT via
+# ``close_client()``: the ``_FakeClient`` has no ``.close()`` method, so
+# ``close_client()`` would ``AttributeError`` on the fake.
+
+
+@pytest.fixture(autouse=True)
+def _reset_pooled_client():
+    fetcher._client = None
+    yield
+    fetcher._client = None
+
+
 # ── fakes ──────────────────────────────────────────────────────────
 
 
 def _patch_resolution(monkeypatch, ip_or_map):
     """Patch ``getaddrinfo``. ``ip_or_map`` is a single public/private IP string,
-    a ``{host: ip}`` map (``None`` value → DNS failure), or ``None`` (failure)."""
+    a list of IP strings (a host resolving to MULTIPLE addresses), a
+    ``{host: ip|list}`` map (``None`` value → DNS failure), or ``None``
+    (failure)."""
 
     def _fake(host, port, proto=0):
         ip = ip_or_map.get(host) if isinstance(ip_or_map, dict) else ip_or_map
         if ip is None:
             raise socket.gaierror("name resolution failed")
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))]
+        ips = [ip] if isinstance(ip, str) else list(ip)
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port or 0))
+            for addr in ips
+        ]
 
     monkeypatch.setattr(fetcher.socket, "getaddrinfo", _fake)
 
@@ -85,6 +108,18 @@ def _patch_client(monkeypatch, queue):
     client = _FakeClient(queue)
     monkeypatch.setattr(fetcher.httpx, "Client", lambda **_kwargs: client)
     return client
+
+
+class _ClosableFakeClient(_FakeClient):
+    """A ``_FakeClient`` that also exposes ``.close()`` so ``close_client()`` can
+    be exercised (the plain fake has none — see the module-state fixture)."""
+
+    def __init__(self, queue):
+        super().__init__(queue)
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
 
 # ── _is_blocked_ip (security-critical, tested in isolation) ─────────
@@ -141,6 +176,18 @@ def test_assert_public_url_public_ip_passes(monkeypatch):
     _patch_resolution(monkeypatch, "93.184.216.34")
     # No raise.
     fetcher._assert_public_url("https://cdn.example.com/x.png")
+
+
+def test_assert_public_url_blocks_a_host_resolving_to_a_mixed_address_set(monkeypatch):
+    # A host resolving to BOTH a public and a private IP must be blocked: the
+    # reject-if-any loop over every resolved address is what defends against a
+    # DNS answer that mixes a decoy public address with a private one
+    # (DNS-rebinding-style). Narrowing the loop to a single element would pass
+    # this suite while silently reopening the SSRF hole. The public IP is listed
+    # first to prove the reject fires even after a public address is seen.
+    _patch_resolution(monkeypatch, ["93.184.216.34", "10.0.0.5"])
+    with pytest.raises(ImageProxyBlocked):
+        fetcher._assert_public_url("https://mixed.example.com/x.png")
 
 
 # ── fetch_remote_image — happy paths ───────────────────────────────
@@ -262,6 +309,18 @@ def test_fetch_transport_error_is_unfetchable(monkeypatch):
         fetch_remote_image("https://cdn.example.com/x.png")
 
 
+def test_fetch_out_of_range_port_is_unfetchable(monkeypatch):
+    # An out-of-range port makes ``urlsplit(...).port`` raise ``ValueError`` when
+    # accessed inside ``_assert_public_url`` — untyped, and NOT a socket.gaierror
+    # nor an httpx error — so it funnels through the generic ``except Exception``
+    # guard (the ONLY branch none of the other tests reach) into
+    # ImageProxyUnfetchable. The client is patched but never used: the ValueError
+    # fires before getaddrinfo or any request.
+    _patch_client(monkeypatch, [])
+    with pytest.raises(ImageProxyUnfetchable):
+        fetch_remote_image("https://cdn.example.com:99999/logo.png")
+
+
 # ── privacy: neutral request headers ───────────────────────────────
 
 
@@ -271,3 +330,97 @@ def test_request_headers_carry_no_cookies_or_referer():
     assert fetcher._REQUEST_HEADERS == {"User-Agent": "MailManager-ImageProxy/1.0"}
     assert "Cookie" not in fetcher._REQUEST_HEADERS
     assert "Referer" not in fetcher._REQUEST_HEADERS
+
+
+# ── shared pooled client (keep-alive) + close_client ────────────────
+
+
+def test_get_client_creates_the_pooled_client_once(monkeypatch):
+    # Lazy singleton: the module client is constructed on first use and reused
+    # thereafter — the same instance, never a fresh one per call.
+    created: list[object] = []
+
+    def _factory(**_kwargs):
+        client = _FakeClient([])
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _factory)
+    first = fetcher._get_client()
+    second = fetcher._get_client()
+    assert first is second
+    assert len(created) == 1
+
+
+def test_pooled_client_carries_keepalive_limits_and_no_redirect_following(monkeypatch):
+    # The pooled client MUST enable connection keep-alive (the whole point of
+    # sharing it) and MUST NOT follow redirects (every hop is re-validated by
+    # hand — delegating to httpx would skip the anti-SSRF re-check).
+    captured: dict = {}
+
+    def _factory(**kwargs):
+        captured.update(kwargs)
+        return _FakeClient([])
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _factory)
+    fetcher._get_client()
+    assert captured["follow_redirects"] is False
+    limits = captured["limits"]
+    assert limits.max_keepalive_connections == 20
+    assert limits.keepalive_expiry == 30.0
+
+
+def test_fetch_reuses_a_single_pooled_client_across_calls(monkeypatch):
+    # Two images (same host) must ride ONE pooled client so the second reuses the
+    # live TCP+TLS connection — the pre-fix code built a fresh client per image.
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    created: list[_FakeClient] = []
+    fake = _FakeClient([
+        _FakeStreamResponse(headers={"content-type": "image/png"}, chunks=(b"A",)),
+        _FakeStreamResponse(headers={"content-type": "image/png"}, chunks=(b"B",)),
+    ])
+
+    def _factory(**_kwargs):
+        created.append(fake)
+        return fake
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _factory)
+    first = fetch_remote_image("https://cdn.example.com/a.png")
+    second = fetch_remote_image("https://cdn.example.com/b.png")
+    assert first.data == b"A"
+    assert second.data == b"B"
+    # One construction for two images — the client was pooled, not recreated.
+    assert len(created) == 1
+
+
+def test_close_client_closes_and_drops_the_pooled_client(monkeypatch):
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    created: list[_ClosableFakeClient] = []
+
+    def _factory(**_kwargs):
+        client = _ClosableFakeClient([
+            _FakeStreamResponse(headers={"content-type": "image/png"}, chunks=(b"X",)),
+        ])
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _factory)
+    fetch_remote_image("https://cdn.example.com/a.png")
+    assert fetcher._client is created[0]
+
+    fetcher.close_client()
+    assert created[0].closed is True
+    assert fetcher._client is None
+
+    # A subsequent fetch lazily recreates a fresh pooled client.
+    fetch_remote_image("https://cdn.example.com/b.png")
+    assert len(created) == 2
+    assert fetcher._client is created[1]
+
+
+def test_close_client_is_a_noop_when_no_pooled_client_exists():
+    # Shutdown may run with no image ever proxied (``_client`` is None). The
+    # lifespan calls this best-effort, but the guard lives here: it must not raise.
+    assert fetcher._client is None
+    fetcher.close_client()
+    assert fetcher._client is None
