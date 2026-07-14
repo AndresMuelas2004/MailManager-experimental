@@ -44,6 +44,7 @@ El visor pide al proveedor la cadena completa del hilo. Es un flujo de **lectura
 | Cuerpo de los mensajes | **No** se trae aquí | La respuesta del hilo es solo metadata + estado, sin cuerpos. Cada cuerpo se baja **al expandir** su mensaje, por el camino de caché de [visualizacion-de-correos.md](visualizacion-de-correos.md). |
 | Estado de cada mensaje en el visor | El **fresco del proveedor** en esa apertura | Bandeja / leído / favorito se toman de lo que el proveedor devuelve **ahora**, no de una re-lectura de la base de datos: un mensaje movido o leído fuera de la app se refleja al instante. |
 | Persistencia del hilo (lazy sync) | **Best-effort** | Se guardan los mensajes del hilo (insertando los nunca sincronizados, refrescando `is_read` / `box` / `is_favorite` / destinatario de los existentes desde el estado fresco del provider). Si falla, se registra y el visor **se abre igual**. La persistencia **no** altera la respuesta de esta apertura (solo acelera la siguiente y actualiza la fila del listado). |
+| Reconciliación de ids al persistir (Outlook) | Por **identidad física** `(received_at, from_email, subject)` | Outlook devuelve un id **distinto** para el mismo mensaje físico en el endpoint de sincronización de bandeja (lo que se guardó) y en el de conversación (lo que trae el visor), y `Prefer: IdType="ImmutableId"` **no** los reconcilia. Antes de guardar, el lazy-sync reasigna el id traído al id **estable ya almacenado** del mismo mensaje físico → **actualiza** la fila en vez de **insertar** una duplicada por apertura. Reutiliza el mismo id representante que elige el listado agrupado (`received_at DESC`, luego menor `provider_message_id`) — el id bajo el que el frontend pide el contenido, de modo que reabrir es acierto de caché. **Gmail: no-op** (ids estables). Best-effort: si la lectura de reconciliación falla, guarda los mensajes tal cual (comportamiento previo). **Sin migración nueva**: reutiliza el índice `idx_email_metadata_account_thread (account_id, thread_id, received_at DESC)` (migración 0033). Narrativa en [../features/conversaciones.md](../features/conversaciones.md) § 6. |
 | Frescura (caché del frontend) | `staleTime: 0` + refetch al montar | Reabrir el visor **siempre** vuelve a pedir el hilo (misma política agresiva que las bandejas ficticias); nunca se sirve una foto de hace 30 s. |
 | Efecto secundario en los listados | Invalida `['emails']` y `['virtual-mailbox-emails']` | Cada reconstrucción puede cambiar contadores / orden de las filas, así que tras una apertura con éxito los listados se refrescan. |
 
@@ -52,6 +53,7 @@ El visor pide al proveedor la cadena completa del hilo. Es un flujo de **lectura
 | Aspecto | Gmail | Outlook |
 |---|---|---|
 | Llamada | **Una** `users.threads.get(format=metadata)`: el hilo trae todos sus mensajes embebidos (Enviados / Spam / Papelera incluidos — son cambios de etiqueta, no hilos aparte). | `$filter=conversationId eq '<id>'` sobre `/me/messages` (abarca todas las carpetas). El `conversationId` se percent-encodea una vez antes de envolverlo en comillas. |
+| Resolución de carpetas especiales (clasificar el `box` de cada mensaje) | No aplica (el hilo trae la etiqueta directamente). | **4 llamadas** a Graph (SENT / TRASH / SPAM / ARCHIVE) para mapear `parentFolderId`→`box`, ahora **cacheadas por cuenta a nivel de proceso** (clave `account_label`), **TTL 1 h**. Antes se resolvían en **cada** apertura de conversación (~4 idas y vueltas extra por apertura, la causa principal de la lentitud de Outlook al abrir); ahora, como mucho una vez por cuenta y hora. Un resultado **vacío no se cachea** (reintenta y se auto-cura tras un fallo transitorio de auth/throttle). |
 | Paginación de la API | No aplica (un solo objeto hilo). | Páginas de **`$top=50`** mensajes, siguiendo `@odata.nextLink` hasta agotar el hilo. |
 | Ordenación | Cliente, por `internalDate` (el proveedor no garantiza orden). | `$orderby` **omitido a propósito** (combinarlo con `$filter=conversationId` devuelve `400 InefficientFilter`); se ordena en cliente por `receivedDateTime`, con respaldo en `sentDateTime` para los enviados que no traen el primero. |
 | Favorito por mensaje | Etiqueta `STARRED`. | `flag.flagStatus == "flagged"`. |
@@ -106,6 +108,8 @@ Endpoint del visor: `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{p
 
 > El listado agrupado (`group_by_thread=true`) **no** añade códigos nuevos: comparte los del listado normal (la consulta lee solo de la copia local, sin llamada al proveedor). Sus errores son los de [listado-de-correos.md](listado-de-correos.md).
 
+> Un fallo genuino al reconstruir el hilo (**502** `external_api_error` / `conversation_fetch_error`) es ahora **no bloqueante en el visor**: el correo que abriste sigue visible —su cuerpo ya se pintó desde la caché— y solo se muestra un aviso discreto, en vez de reemplazar toda la ventana por el error (ver [../features/conversaciones.md](../features/conversaciones.md) § 3 y § 9). El código HTTP no cambia; lo que cambia es cómo lo presenta el frontend.
+
 ---
 
 ## 7. Qué NO soporta (limitaciones aceptadas)
@@ -120,6 +124,7 @@ Endpoint del visor: `GET /mailboxes/{mailbox_id}/accounts/{account_id}/emails/{p
 | **Re-sincronización masiva del histórico para completar hilos** | El hilo completo se trae **bajo demanda** al abrir cada conversación, no de golpe para todo el buzón: descargar todos los hilos completos de antemano gastaría cuota del proveedor sin que el usuario lo pida. |
 | **Indicador "este correo fue reenviado" en la fila** | Gmail no expone el estado "Forwarded" por API y Outlook no ofrece un equivalente fiable; queda fuera (ver también [responder-y-reenviar.md](responder-y-reenviar.md)). |
 | **Clip por mensaje dentro del visor (cabecera colapsada)** | Dentro de la cadena, el adjunto de cada mensaje se descubre al expandir su cuerpo (estrategia "lazy" de [adjuntos.md](adjuntos.md)); mostrar el clip antes sería un indicador muerto. El clip **agregado** sí aparece en la fila del listado. |
+| **Auto-limpieza de las filas duplicadas dejadas por aperturas de Outlook anteriores a esta corrección** | La reconciliación por identidad física (§ 3) evita crear **nuevos** duplicados al reabrir una conversación de Outlook, pero **no borra** los que ya dejaron aperturas pasadas: no se guarda un marcador que permita localizarlos con seguridad. Un re-bootstrap futuro los sustituiría. |
 
 ---
 
