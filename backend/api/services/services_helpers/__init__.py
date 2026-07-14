@@ -44,6 +44,7 @@ from .persistencia_metadatos import (
     delete_email_metadata_batch,
     load_suspect_message_ids,
     load_sync_cursors,
+    load_thread_metadata,
     persist_email_metadata_batch,
     update_email_metadata_labels_batch,
     update_email_read_status_batch,

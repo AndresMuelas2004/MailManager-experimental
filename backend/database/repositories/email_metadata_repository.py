@@ -450,6 +450,33 @@ class PgEmailMetadataStore(EmailMetadataStore):
             ) from exc
         return dict(row) if row is not None else None
 
+    def list_metadata_by_thread(
+        self, account_id: str, thread_id: str,
+    ) -> list[dict[str, Any]]:
+        # Lean read of a thread's rows (identity columns only) for the
+        # conversation viewer's id reconciliation — see LIST_METADATA_BY_THREAD.
+        if not thread_id:
+            return []
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        queries.LIST_METADATA_BY_THREAD,
+                        {"account_id": account_id, "thread_id": thread_id},
+                    )
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list email metadata by thread.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected list email metadata by thread error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return [dict(row) for row in rows]
+
     def get_trash_emails_by_ids(self, account_id: str, message_ids: list[str]) -> list[dict[str, Any]]:
         if not message_ids:
             return []

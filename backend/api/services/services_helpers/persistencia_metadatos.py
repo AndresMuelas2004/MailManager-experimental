@@ -62,6 +62,31 @@ def persist_email_metadata_batch(
         raise fallback("Failed to persist email metadata.") from exc
 
 
+def load_thread_metadata(
+    account_id: str,
+    thread_id: str,
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> list[dict]:
+    """Load the identity columns of a thread's rows for id reconciliation.
+
+    Returns each stored row's ``provider_message_id`` + the endpoint-
+    independent ``(received_at, from_email, subject)`` triple. Used by the
+    conversation lazy-sync to remap Outlook's non-deterministic conversation
+    ids onto the stored (stable) row of the same physical message. Returns
+    ``[]`` for an empty ``thread_id`` without touching the DB.
+    """
+    if not thread_id:
+        return []
+    try:
+        return email_metadata_store.list_metadata_by_thread(account_id, thread_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected thread metadata load error (%s): %s", type(exc).__name__, exc)
+        raise fallback("Failed to load thread metadata for conversation id reconciliation.") from exc
+
+
 def load_sync_cursors(
     label_lookup: dict[str, tuple[str, str, str]],
     *,

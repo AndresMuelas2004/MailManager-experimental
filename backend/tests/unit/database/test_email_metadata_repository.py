@@ -887,6 +887,83 @@ def test_get_metadata_propagates_connection_pool_error(monkeypatch):
         em_module.email_metadata_store.get_metadata("acc1", "m1")
 
 
+# ===== list_metadata_by_thread =====
+# Lean projection of a thread's identity columns (provider_message_id +
+# received_at/from_email/subject) ordered ``received_at DESC, provider_message_id``.
+# Backs the conversation lazy-sync's id reconciliation: Outlook hands the same
+# physical message different REST ids per endpoint, so the viewer maps each
+# fetched member onto the stored row of the same physical message. An empty
+# thread_id short-circuits to [] WITHOUT touching the DB; a malformed UUID
+# collapses to [] (like ``exists`` / the other lean list reads).
+
+
+def test_list_metadata_by_thread_returns_rows_as_dicts(monkeypatch):
+    rows = [
+        {
+            "provider_message_id": "A",
+            "received_at": datetime(2025, 1, 2, 10, 0, tzinfo=timezone.utc),
+            "from_email": "a@b.com",
+            "subject": "Hi",
+        },
+        {
+            "provider_message_id": "B",
+            "received_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "from_email": "a@b.com",
+            "subject": "Hi",
+        },
+    ]
+    cursor = FakeCursor(fetchall_results=[rows])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.list_metadata_by_thread("acc1", "thr-1")
+    assert result == rows
+    assert all(isinstance(r, dict) for r in result)
+    sql, params = cursor.executed[0]
+    # Runs exactly LIST_METADATA_BY_THREAD with the thread-scoped params.
+    assert sql == em_module.queries.LIST_METADATA_BY_THREAD
+    assert params == {"account_id": "acc1", "thread_id": "thr-1"}
+
+
+def test_list_metadata_by_thread_empty_thread_id_short_circuits(monkeypatch):
+    # A threadless base row must not hit the DB: an empty thread_id returns []
+    # BEFORE touching the connection — mirrors the empty-account_ids guard.
+    def _explode():
+        raise AssertionError("get_connection must not be called for an empty thread_id")
+
+    monkeypatch.setattr(em_module.connection, "get_connection", _explode)
+    assert em_module.email_metadata_store.list_metadata_by_thread("acc1", "") == []
+
+
+def test_list_metadata_by_thread_invalid_uuid_returns_empty(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.list_metadata_by_thread("not-a-uuid", "thr-1") == []
+
+
+def test_list_metadata_by_thread_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to list email metadata by thread"):
+        em_module.email_metadata_store.list_metadata_by_thread("acc1", "thr-1")
+
+
+def test_list_metadata_by_thread_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.list_metadata_by_thread("acc1", "thr-1")
+
+
+def test_list_metadata_by_thread_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.list_metadata_by_thread("acc1", "thr-1")
+
+
 # ===== update_has_attachments (D-09) =====
 # Recomputes ``email_metadata.has_attachments`` from the live count of
 # non-inline rows in ``email_attachments``. The query is idempotent so

@@ -635,6 +635,30 @@ LIST_RECIPIENT_SUGGESTIONS = """
     LIMIT %(limit)s
 """
 
+# Lean projection of every row sharing ``thread_id`` for one account, used by
+# the conversation viewer's lazy-sync to reconcile provider message ids.
+# Outlook returns a DIFFERENT REST id for the SAME physical message on the
+# folder-delta endpoint (what sync persisted) vs the mailbox-wide
+# ``$filter=conversationId`` endpoint (what ``fetch_conversation`` returns), and
+# ``Prefer: IdType="ImmutableId"`` does NOT reconcile the two (verified live —
+# see external-apis-used/Outlook/08). The viewer maps each fetched member back
+# onto the stored row of the SAME physical message — keyed by the endpoint-
+# independent ``(received_at, from_email, subject)`` triple — so reopening a
+# thread UPDATEs the existing row instead of INSERTing a duplicate per open.
+# Ordered ``received_at DESC, provider_message_id`` so that, when past opens
+# left duplicate rows, the reused id is deterministically the SAME representative
+# the grouped listing picks (received_at DESC, then min provider_message_id) —
+# the id the frontend requests content under, so reopening is a cache hit.
+# Backed by ``idx_email_metadata_account_thread (account_id, thread_id,
+# received_at DESC)`` (migration 0033). Callers pass a NON-empty ``thread_id``.
+LIST_METADATA_BY_THREAD = """
+    SELECT provider_message_id, received_at, from_email, subject
+    FROM email_metadata
+    WHERE account_id = %(account_id)s
+      AND thread_id  = %(thread_id)s
+    ORDER BY received_at DESC, provider_message_id
+"""
+
 # Recompute has_attachments from email_attachments (D-09). The
 # subquery counts non-inline rows; ``COUNT(*) > 0`` is true if and
 # only if at least one downloadable attachment row exists. Idempotent

@@ -527,6 +527,26 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_metadata_by_thread(
+        self, account_id: str, thread_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return the identity columns of every row sharing ``thread_id``.
+
+        Projects ``provider_message_id`` + the endpoint-independent
+        ``(received_at, from_email, subject)`` triple of each row for
+        ``account_id``, ordered ``received_at DESC, provider_message_id``.
+        Backs the conversation lazy-sync's id reconciliation: Outlook hands
+        the same physical message different REST ids on the folder-delta
+        endpoint (what sync stored) vs the mailbox-wide conversationId
+        endpoint (what ``fetch_conversation`` returns), so the viewer maps
+        each fetched member back onto the stored row of the same physical
+        message to avoid inserting a duplicate row per open. ``thread_id``
+        MUST be non-empty. Malformed UUIDs collapse to ``[]`` (treated as
+        "no results"), consistent with ``exists``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def list_unread_recent_uncached(
         self, account_id: str, limit: int,
     ) -> list[str]:

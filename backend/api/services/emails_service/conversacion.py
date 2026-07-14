@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ from api.schemas.email import (
 from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
+    load_thread_metadata,
     persist_email_metadata_batch,
     raise_on_silent_auth_errors,
     row_to_email_metadata_out,
@@ -40,14 +42,23 @@ from ._comunes import _build_auth_context, _persist_refreshed_tokens
 
 
 def _conversation_message_to_metadata(
-    message: ConversationMessage, account_id: str,
+    message: ConversationMessage,
+    account_id: str,
+    *,
+    provider_message_id: str | None = None,
 ) -> EmailMetadata:
     """Convert a provider ``ConversationMessage`` into a syncable
     ``EmailMetadata`` — carries ``is_favorite`` through (the metadata upsert
     now persists it; dropping it here would un-favourite the row) and stamps
-    ``account_id`` like the sync path."""
+    ``account_id`` like the sync path.
+
+    ``provider_message_id`` overrides the message's own id when the lazy-sync
+    reconciled it to the stable id already stored for the same physical
+    message (Outlook hands the same message different ids per endpoint —
+    see ``_build_id_remap``). ``None`` keeps the message's own id (Gmail, and
+    genuinely-new Outlook messages with no stored twin)."""
     return EmailMetadata(
-        provider_message_id=message.provider_message_id,
+        provider_message_id=provider_message_id or message.provider_message_id,
         thread_id=message.thread_id,
         from_email=message.from_email,
         from_name=message.from_name,
@@ -191,8 +202,11 @@ def get_conversation(
 
         # Lazy sync ("complete the mailbox"): persist every thread message so
         # reopening serves from DB and the bodies pre-check passes. Best-effort
-        # — the viewer must open even if the cache-fill fails.
-        _lazy_sync_conversation(account_id, members)
+        # — the viewer must open even if the cache-fill fails. ``thread_id`` is
+        # the authoritative thread of the clicked (base) row; the lazy-sync
+        # reconciles each fetched member against the rows already stored under
+        # it so Outlook's per-endpoint id drift does not duplicate rows.
+        _lazy_sync_conversation(account_id, thread_id, members)
 
         # Map the response from the provider's fresh state (NOT a DB re-read):
         # a message that moved box / was read out-of-band is reflected even if
@@ -214,8 +228,95 @@ def get_conversation(
         raise ConversationFetchError("Failed to fetch conversation.") from exc
 
 
+def _physical_message_identity(
+    received_at: Any, from_email: str | None, subject: str | None,
+) -> tuple[Any, str, str]:
+    """Endpoint-independent identity of a physical message within a thread.
+
+    Outlook returns a DIFFERENT REST id for the same physical message on the
+    folder-delta endpoint (what sync stored) vs the mailbox-wide
+    ``$filter=conversationId`` endpoint (what ``fetch_conversation`` returns),
+    and ``Prefer: IdType="ImmutableId"`` does NOT reconcile the two (verified
+    live — external-apis-used/Outlook/08). These three fields are parsed
+    identically on both endpoints (both go through ``_parse_graph_message``),
+    so together they identify the same physical message across them.
+    ``received_at`` (a tz-aware datetime; equal instants hash equal even from
+    different tzinfo) is the real discriminator within a thread — two distinct
+    messages differ by send time — and ``from_email`` + ``subject`` harden it.
+    """
+    return (
+        received_at,
+        (from_email or "").strip().lower(),
+        (subject or "").strip(),
+    )
+
+
+def _build_id_remap(
+    existing_rows: list[dict[str, Any]],
+    members: list[ConversationMessage],
+) -> dict[str, str]:
+    """Map a fetched member's provider id to the stable stored id of the same
+    physical message, for members whose OWN id is not already stored.
+
+    ``existing_rows`` are ``list_metadata_by_thread``'s rows, ordered
+    ``received_at DESC, provider_message_id``, so ``setdefault`` deterministically
+    keeps — when past opens left duplicate rows for one physical message — the
+    SAME representative id the grouped listing picks (received_at DESC, then min
+    provider_message_id). That is the id the frontend requests content under, so
+    folding new opens onto it makes reopening a cache hit.
+
+    A member already stored under its own id (every Gmail member — Gmail ids are
+    stable across endpoints; and an already-reconciled Outlook row) is left
+    untouched, so Gmail is a strict no-op and only new/unstable Outlook ids are
+    rewritten. Returns only the entries that need remapping.
+    """
+    stored_ids = {r["provider_message_id"] for r in existing_rows}
+    identity_to_id: dict[tuple[Any, str, str], str] = {}
+    for row in existing_rows:
+        identity_to_id.setdefault(
+            _physical_message_identity(
+                row["received_at"], row.get("from_email"), row.get("subject"),
+            ),
+            row["provider_message_id"],
+        )
+    remap: dict[str, str] = {}
+    for m in members:
+        if m.provider_message_id in stored_ids:
+            continue
+        stable = identity_to_id.get(
+            _physical_message_identity(m.received_at, m.from_email, m.subject),
+        )
+        if stable and stable != m.provider_message_id:
+            remap[m.provider_message_id] = stable
+    return remap
+
+
+def _reconcile_thread_ids(
+    account_id: str, thread_id: str, members: list[ConversationMessage],
+) -> dict[str, str]:
+    """Best-effort id-remap for the lazy-sync (see ``_build_id_remap``).
+
+    Reads the thread's stored rows and returns the member→stable-id remap.
+    Any read failure returns ``{}`` (logged) so the lazy-sync degrades to
+    persisting the members verbatim — no worse than before — instead of
+    aborting the viewer.
+    """
+    try:
+        existing_rows = load_thread_metadata(
+            account_id, thread_id, fallback=ConversationFetchError,
+        )
+        return _build_id_remap(existing_rows, members)
+    except Exception as exc:
+        logger.warning(
+            "Conversation lazy-sync id reconciliation failed for account '%s' (%s): %s",
+            account_id, type(exc).__name__, exc,
+            exc_info=exc,
+        )
+        return {}
+
+
 def _lazy_sync_conversation(
-    account_id: str, members: list[ConversationMessage],
+    account_id: str, thread_id: str, members: list[ConversationMessage],
 ) -> None:
     """Best-effort persistence of a fetched conversation's messages.
 
@@ -227,18 +328,35 @@ def _lazy_sync_conversation(
     Swallowed on failure (logged) so a cache-fill hiccup never aborts the
     viewer.
 
+    Each member's provider id is first reconciled against the ids already
+    stored for ``thread_id`` (``_reconcile_thread_ids``): Outlook returns a
+    non-deterministic id for the same physical message on the conversation
+    endpoint, so persisting members verbatim INSERTs a duplicate row per open
+    (inflating ``thread_message_count`` and leaving the grouped-listing
+    representative — hence the cached body — under an unstable id). Remapping
+    onto the stored stable id turns those inserts into UPDATEs. Gmail ids are
+    stable, so the remap is empty and behaviour is unchanged.
+
     NOTE: this only affects the LISTING's thread row on the next list; it
     does NOT change the ``ConversationOut`` of this call (the viewer reads
     per-message state from the provider members, not from the DB).
     """
     if not members:
         return
-    metadata_list = [
-        _conversation_message_to_metadata(m, account_id) for m in members
-    ]
+    id_remap = _reconcile_thread_ids(account_id, thread_id, members)
+    # Dedupe by the FINAL id, keeping the newest member for a key (members
+    # arrive oldest-first): two members can only collapse to one id in the rare
+    # physical-key collision, and the batch upsert rejects the same conflict key
+    # twice ("cannot affect row a second time").
+    by_id: dict[str, EmailMetadata] = {}
+    for m in members:
+        pmid = id_remap.get(m.provider_message_id, m.provider_message_id)
+        by_id[pmid] = _conversation_message_to_metadata(
+            m, account_id, provider_message_id=pmid,
+        )
     try:
         persist_email_metadata_batch(
-            account_id, metadata_list, fallback=ConversationFetchError,
+            account_id, list(by_id.values()), fallback=ConversationFetchError,
         )
     except Exception as exc:
         logger.warning(

@@ -12,6 +12,7 @@ from api.services.services_helpers import (
     delete_email_metadata_batch,
     load_suspect_message_ids,
     load_sync_cursors,
+    load_thread_metadata,
     persist_email_metadata_batch,
     update_email_metadata_labels_batch,
     update_email_read_status_batch,
@@ -74,6 +75,43 @@ class TestPersistEmailMetadataBatch:
             mock_store.upsert_batch.side_effect = RuntimeError("boom")
             with pytest.raises(ApiError, match="Failed to persist email metadata"):
                 persist_email_metadata_batch("acc-1", metadata)
+
+
+# ------------------------------------------------------------------
+# load_thread_metadata (conversation id reconciliation read)
+# ------------------------------------------------------------------
+
+class TestLoadThreadMetadata:
+
+    def test_empty_thread_id_returns_empty_without_db_call(self):
+        # A threadless base row must not hit the store: an empty thread_id
+        # short-circuits to [] before ``list_metadata_by_thread`` is called.
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            result = load_thread_metadata("acc-1", "")
+        assert result == []
+        mock_store.list_metadata_by_thread.assert_not_called()
+
+    def test_happy_path_returns_store_rows(self):
+        rows = [{"provider_message_id": "A", "received_at": None, "from_email": "a@b.com", "subject": "Hi"}]
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            mock_store.list_metadata_by_thread.return_value = rows
+            result = load_thread_metadata("acc-1", "thr-1")
+        assert result == rows
+        mock_store.list_metadata_by_thread.assert_called_once_with("acc-1", "thr-1")
+
+    def test_database_error_translated(self):
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            mock_store.list_metadata_by_thread.side_effect = QueryError("DB fail")
+            with pytest.raises(DatabaseQueryError):
+                load_thread_metadata("acc-1", "thr-1")
+
+    def test_generic_exception_raises_api_error(self):
+        with patch("api.services.services_helpers.persistencia_metadatos.email_metadata_store") as mock_store:
+            mock_store.list_metadata_by_thread.side_effect = RuntimeError("boom")
+            with pytest.raises(
+                ApiError, match="Failed to load thread metadata for conversation id reconciliation",
+            ):
+                load_thread_metadata("acc-1", "thr-1")
 
 
 # ------------------------------------------------------------------
