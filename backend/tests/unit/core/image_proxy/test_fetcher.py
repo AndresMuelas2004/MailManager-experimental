@@ -364,10 +364,16 @@ def test_fetch_releases_the_download_gate_on_error(monkeypatch):
 
 def test_request_headers_carry_no_cookies_or_referer():
     """The whole point of the proxy is that the sender only ever sees the
-    backend — a fixed UA, and nothing that could leak the end user's identity."""
-    assert fetcher._REQUEST_HEADERS == {"User-Agent": "MISSELA-ImageProxy/1.0"}
+    backend — FIXED headers (never the end user's real UA), and nothing that
+    could leak the end user's identity. The UA is browser-like on purpose:
+    CDN bot protection (Vercel — ideabrowser logo) answers 429 to unknown
+    UAs, and the image ``Accept`` unblocks content-negotiating CDNs."""
+    assert set(fetcher._REQUEST_HEADERS) == {"User-Agent", "Accept"}
+    assert fetcher._REQUEST_HEADERS["User-Agent"].startswith("Mozilla/5.0 ")
+    assert fetcher._REQUEST_HEADERS["Accept"].startswith("image/")
     assert "Cookie" not in fetcher._REQUEST_HEADERS
     assert "Referer" not in fetcher._REQUEST_HEADERS
+    assert "Authorization" not in fetcher._REQUEST_HEADERS
 
 
 # ── shared pooled client (keep-alive) + close_client ────────────────

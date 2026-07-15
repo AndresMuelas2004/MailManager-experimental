@@ -600,8 +600,12 @@ _DDL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_image_proxy_cache_last_accessed "
     "ON image_proxy_cache (last_accessed_at);",
+    # The TRUNCATE below also covers migration 0044 (one-shot email_content
+    # invalidation after the inbound sanitiser disabled premailer's network
+    # access) — a single truncate serves every collapsed invalidation.
     "TRUNCATE TABLE email_content;",
-    "UPDATE alembic_version SET version_num = '0043_image_proxy_cache_and_invalidate_content';",
+    "UPDATE alembic_version SET version_num = "
+    "'0044_invalidate_email_content_cache_premailer_no_network';",
 ]
 
 

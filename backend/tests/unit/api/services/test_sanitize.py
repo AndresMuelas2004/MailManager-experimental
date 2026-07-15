@@ -990,3 +990,85 @@ def test_remote_anchor_href_is_not_proxied():
     result = sanitize_email_html('<a href="https://example.com/page">link</a>')
     assert SENTINEL_PREFIX not in result
     assert 'href="https://example.com/page"' in result
+
+
+# ---------------------------------------------------------------------------
+# Premailer network isolation — ``allow_network=False`` is load-bearing: the
+# default downloads every ``<link rel="stylesheet">`` the sender planted
+# (server-side, unguarded — SSRF + read tracking) and, with
+# ``keep_style_tags=True``, injects the downloaded body VERBATIM as ``<style>``
+# text. A downloaded HTML page then escapes the block on the next reparse and
+# leaks as visible markup (the real-world Eurofirms/Google-Fonts "texto
+# extraño" bug).
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_never_fetches_link_stylesheets(monkeypatch):
+    """The pipeline must not perform ANY network fetch for sender stylesheets.
+
+    The fake records every ``get`` and returns valid CSS (never raises), so a
+    regression to ``allow_network=True`` cannot hide behind the pipeline's
+    fail-soft premailer wrapper — the recorded call itself is the failure.
+    """
+    import premailer.premailer as premailer_module
+
+    calls: list[str] = []
+
+    class _FakeResponse:
+        text = "p{color:red}"
+
+        def raise_for_status(self):
+            return None
+
+    class _RecordingRequests:
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return _FakeResponse()
+
+    monkeypatch.setattr(premailer_module, "requests", _RecordingRequests())
+    html = (
+        "<html><head>"
+        '<link rel="stylesheet" href="https://sender-tracker.example/style.css">'
+        "</head><body><p>Cuerpo real del correo</p></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert calls == [], f"el saneado descargó URLs del remitente: {calls}"
+    assert "Cuerpo real del correo" in result
+    assert "sender-tracker.example" not in result
+
+
+def test_link_stylesheet_content_is_never_injected(monkeypatch):
+    """Even if a fetch were attempted, no downloaded markup may reach the body.
+
+    Simulates the old failure end-to-end: a ``<link>`` whose target returns an
+    HTML page containing ``</style>`` (the escape vector). With
+    ``allow_network=False`` premailer never consumes it, so none of the fetched
+    content — visible text nor markup — can appear in the sanitised body.
+    """
+    import premailer.premailer as premailer_module
+
+    fetched = (
+        "<html><body><style>.x{color:red}</style>"
+        "<h1>Quicksand</h1><p>Quicksand is a display sans serif.</p></body></html>"
+    )
+
+    class _FakeResponse:
+        text = fetched
+
+        def raise_for_status(self):
+            return None
+
+    class _FakeRequests:
+        def get(self, url, **kwargs):
+            return _FakeResponse()
+
+    monkeypatch.setattr(premailer_module, "requests", _FakeRequests())
+    html = (
+        "<html><head>"
+        '<link rel="stylesheet" href="https://fonts.example/specimen.css">'
+        "</head><body><p>Oferta de empleo</p></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "Oferta de empleo" in result
+    assert "Quicksand" not in result
+    assert "sans serif" not in result

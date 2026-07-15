@@ -498,7 +498,20 @@ def _sanitize_style_blocks(html: str) -> str:
 
 
 def _inline_css_via_premailer(html: str) -> str:
-    """Inline style rules into ``style=""`` attrs, keep residual ``<style>`` intact."""
+    """Inline style rules into ``style=""`` attrs, keep residual ``<style>`` intact.
+
+    ``allow_network=False`` is load-bearing: premailer's default downloads any
+    ``<link rel="stylesheet" href="…">`` the sender put in the email (an SSRF +
+    read-tracking vector — the fetch happens server-side, unguarded, with no
+    timeout) and, with ``keep_style_tags=True``, plants the downloaded body
+    VERBATIM as ``<style>`` text. When that body is an HTML page (Google Fonts
+    specimen pages in the wild), its ``</style>`` closes the block on the next
+    reparse and the rest leaks into the email as visible markup ("texto
+    extraño" antes de las imágenes — Eurofirms). Real mail clients (Gmail,
+    Outlook web) never load external stylesheets either, so disabling the
+    network is also rendering parity. The untouched ``<link>`` tags are
+    stripped later by ``_flatten_document_wrappers``.
+    """
     try:
         from premailer import transform  # lazy — avoids startup cost
         return transform(
@@ -507,6 +520,7 @@ def _inline_css_via_premailer(html: str) -> str:
             remove_classes=False,
             cssutils_logging_level="CRITICAL",
             disable_validation=True,
+            allow_network=False,
         )
     except Exception as exc:
         logger.warning("premailer failed (%s): %s", type(exc).__name__, exc)

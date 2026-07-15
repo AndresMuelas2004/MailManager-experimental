@@ -41,7 +41,14 @@ _MAX_BYTES = 10 * 1024 * 1024        # 10 MB hard cap on the decoded image
 _TIMEOUT_S = 10.0                    # per-phase timeout (connect / read / write / pool)
 _MAX_REDIRECTS = 3
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
-_USER_AGENT = "MISSELA-ImageProxy/1.0"
+# A browser-like UA is load-bearing, not cosmetic: CDN bot-protection layers
+# (Vercel on ideabrowser.com, verified live) answer 429/403 to unknown or
+# missing UAs, silently breaking those images in the viewer. The string is
+# FIXED (never the end user's real UA) so it identifies nothing about the user.
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
 
 # Cap on concurrent remote downloads across the whole process. The proxy
 # endpoint is synchronous, so every in-flight fetch occupies one anyio
@@ -57,10 +64,15 @@ _USER_AGENT = "MISSELA-ImageProxy/1.0"
 _MAX_CONCURRENT_DOWNLOADS = 8
 _DOWNLOAD_GATE = threading.BoundedSemaphore(_MAX_CONCURRENT_DOWNLOADS)
 
-# Neutral request headers: a fixed UA, and deliberately NO cookies, NO
-# credentials, NO Referer, and nothing that could leak the end user's IP —
-# the whole point of the proxy is that the sender only ever sees the backend.
-_REQUEST_HEADERS = {"User-Agent": _USER_AGENT}
+# Neutral request headers: a fixed browser-like UA plus an image ``Accept``
+# (some CDNs content-negotiate or reject requests without it), and
+# deliberately NO cookies, NO credentials, NO Referer, and nothing that could
+# leak the end user's IP or identity — the whole point of the proxy is that
+# the sender only ever sees the backend.
+_REQUEST_HEADERS = {
+    "User-Agent": _USER_AGENT,
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+}
 
 # Networks blocked in addition to the ``ipaddress`` boolean properties below.
 # ``is_link_local`` / ``is_private`` already cover the metadata addresses and
