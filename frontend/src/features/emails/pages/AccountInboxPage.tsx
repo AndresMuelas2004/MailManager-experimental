@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useBackfillStatus from '../hooks/useBackfillStatus';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput, { MAX_SEARCH_LENGTH } from '../components/SearchInput';
@@ -60,6 +61,18 @@ export default function AccountInboxPage({ box }: Props) {
     lastSyncedAt,
     syncError,
   } = useEmailList(mailboxId!, box, accountId!, debouncedQ, undefined, page, true, controls);
+
+  // Mount the twin here so it polls + invalidates ['emails'] while the user
+  // watches this account's inbox — its emails surface as the worker fills the
+  // local copy. Scope is the single route account; show its live counter in the
+  // header (§9), a separate channel from the sync/refresh notices.
+  const { statuses: backfillStatuses } = useBackfillStatus(mailboxId!);
+  const accountBackfill = backfillStatuses.get(accountId!);
+  const backfillNotice =
+    accountBackfill &&
+    (accountBackfill.status === 'pending' || accountBackfill.status === 'running')
+      ? t('inbox.backfillNotice', { count: accountBackfill.fetched_count.toLocaleString() })
+      : null;
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
@@ -151,6 +164,7 @@ export default function AccountInboxPage({ box }: Props) {
           syncing={syncing}
           lastSyncedAt={lastSyncedAt}
           hasError={Boolean(syncError)}
+          backfillNotice={backfillNotice}
         />
       </div>
 

@@ -1108,6 +1108,8 @@ def test_34_sync_drafts_gmail_single_account(e2e_client):
     assert data["accounts"][0]["account_id"] == GMAIL_ACCOUNT_ID
     assert data["accounts"][0]["provider"] == "gmail"
     assert data["accounts"][0]["drafts_synced"] == data["total_synced"]
+    # The per-account draft fetch is capped at _DRAFTS_MAX_TOTAL (raised to 500).
+    assert data["accounts"][0]["drafts_synced"] <= 500
 
     row = _find_local_draft(created_id, GMAIL_ACCOUNT_ID)
     assert row is not None, "Created draft should be present in DB after sync"
@@ -2722,6 +2724,98 @@ def test_46p_unread_count_outlook_and_full_breakdown(e2e_client):
         assert {a["account_id"] for a in body["accounts"]} == mailbox_account_ids
         entry = next(a for a in body["accounts"] if a["account_id"] == OUTLOOK_ACCOUNT_ID)
         assert entry["unread"] == expected
+
+
+# ===================================================================
+# Section 5x: Backfill status — background bulk-load progress
+# ===================================================================
+# The interactive OAuth connect that enqueues a backfill is excluded from E2E,
+# and a real 100k backfill runs for hours, so the loop itself is covered by the
+# unit + integration suites. Here we only verify the read endpoint's contract
+# against a pre-existing account: it already has a sync_cursor and no job, so it
+# reports no active backfill. This also protects that mounting the endpoint on
+# the real mailboxes_router (global rate-limit only, no provider_sync bucket)
+# works end-to-end.
+
+
+def test_46q_backfill_status_no_active_backfill(e2e_client):
+    resp = e2e_client.get(f"/mailboxes/{GMAIL_MAILBOX_ID}/backfill-status")
+    _assert_ok(resp)
+    data = resp.json()
+    assert isinstance(data["accounts"], list)
+    # A long-synced test account is never mid-backfill: nothing pending/running.
+    assert data["active"] is False
+    # Defensive per-entry guard: accounts is normally empty here (a long-synced
+    # account has no job); the per-account contract is covered in unit+integration.
+    for entry in data["accounts"]:
+        assert entry["status"] in ("completed", "failed")
+        assert entry["done"] is True
+
+
+def test_46r_account_quota(e2e_client):
+    """GET /accounts/quota is DB-only: it counts every account the seeded user
+    owns across all their mailboxes (Gmail + Outlook) against the configured
+    cap. Read-only — no provider call, no mutation."""
+    resp = e2e_client.get("/accounts/quota")
+    _assert_ok(resp)
+    data = resp.json()
+    # The seeded E2E user owns at least the Gmail and Outlook test accounts.
+    assert data["connected"] >= 2
+    assert data["limit"] >= 1
+    # Usage never exceeds the cap on a healthy seeded account set.
+    assert data["connected"] <= data["limit"]
+
+
+def test_46s_account_limit_exceeded(e2e_client, monkeypatch):
+    """POST /mailboxes/{id}/accounts returns 409 account_limit_exceeded once the
+    per-user cap is reached. Forced deterministically by lowering
+    MAX_ACCOUNTS_PER_USER below the seeded account count; the guard fires BEFORE
+    any INSERT, so no account row is created (the sacred seeded data is
+    untouched)."""
+    monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "1")
+    resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts",
+        json={"provider": "gmail", "display_label": "e2e-limit-probe"},
+    )
+    _assert_ok(resp, expected=409)
+    error = resp.json()["error"]
+    assert error["code"] == "account_limit_exceeded"
+    # The 409 detail carries the numbers the frontend counter reads.
+    assert error["detail"]["limit"] == 1
+    assert error["detail"]["connected"] >= 1
+
+
+def test_46t_drafts_excluded_from_email_metadata_gmail(e2e_client):
+    """A Gmail draft must never leak into email_metadata: after a metadata sync
+    the draft's unique subject is absent from the /emails listing — proving the
+    ``-in:drafts`` query filter plus the ``DRAFT`` labelIds guard end-to-end. The
+    provider draft is deleted and local draft rows cleared in a finally."""
+    ts = datetime.now(timezone.utc).isoformat()
+    subject = f"E2E draft-exclusion {ts}"
+    create_resp = e2e_client.post(
+        f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}/drafts",
+        json={"to_recipients": [SEND_RECIPIENT], "subject": subject, "body": "draft-exclusion"},
+    )
+    _assert_ok(create_resp)
+    draft_id = create_resp.json()["provider_draft_id"]
+    try:
+        sync_resp = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata?account_id={GMAIL_ACCOUNT_ID}",
+        )
+        _assert_ok(sync_resp)
+        list_resp = e2e_client.get(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/emails",
+            params={"box": "ALL_MAIL", "account_id": GMAIL_ACCOUNT_ID, "q": subject},
+        )
+        _assert_ok(list_resp)
+        items = list_resp.json()["items"]
+        # The draft's subject must not surface — drafts are kept out of email_metadata.
+        assert all(subject not in (it.get("subject") or "") for it in items)
+    finally:
+        e2e_client.delete(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}/drafts/{draft_id}",
+        )
+        _clear_local_drafts(GMAIL_ACCOUNT_ID)
 
 
 # ===================================================================

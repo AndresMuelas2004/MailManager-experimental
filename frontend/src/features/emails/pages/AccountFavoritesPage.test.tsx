@@ -7,9 +7,8 @@
  * pin the regression-prone contract that distinguishes it from its siblings:
  * the listing request carries BOTH ``account_id`` and ``favorite=true`` and
  * NEVER ``group_by_thread`` (favourites never group, so the row star stays
- * clickable), the "Sincronizar favoritos" button reconciles only the current
- * account (``?account_id=...``), and the per-row toggle routes to the email's
- * REAL ``mailbox_id`` rather than the route mailbox. HTTP is intercepted at
+ * clickable), and the per-row toggle routes to the email's REAL ``mailbox_id``
+ * rather than the route mailbox. HTTP is intercepted at
  * MSW; the real hooks / endpoints / cache run. The page consumes the
  * draft-composer context, provided here as a benign no-op value (not a hook
  * mock).
@@ -202,33 +201,6 @@ describe('AccountFavoritesPage', () => {
 
     // Once the PATCH settles the star is interactive again.
     await waitFor(() => expect(star).not.toBeDisabled());
-  });
-
-  it('syncs only the current account (carries ?account_id on the sync request)', async () => {
-    let syncAccount: string | null = null;
-    server.use(
-      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
-        HttpResponse.json({ items: [makeFavorite('f1')], total: 1, limit: 50, offset: 0 }),
-      ),
-      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
-      http.post(`${API_BASE}/mailboxes/mb_1/favorites/sync`, ({ request }) => {
-        syncAccount = new URL(request.url).searchParams.get('account_id');
-        return HttpResponse.json({
-          total_synced: 0,
-          accounts: [{ account_id: 'a_1', provider: 'gmail', favorites_synced: 0 }],
-        });
-      }),
-    );
-
-    renderAccountFavorites();
-    const user = userEvent.setup();
-
-    await waitFor(() => expect(screen.getByText('Subject f1')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: 'Sincronizar favoritos' }));
-
-    // Per-account reconciliation: the sync must scope to a_1, never the whole
-    // mailbox (omitting account_id would be a silent regression).
-    await waitFor(() => expect(syncAccount).toBe('a_1'));
   });
 
   it('routes the favourite PATCH to the email own mailbox_id, not the route mailbox', async () => {

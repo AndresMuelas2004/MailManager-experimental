@@ -88,6 +88,8 @@ export const en: EsDictionary = {
     customNameLabel: 'Custom name',
     customNamePlaceholder: 'E.g. Main account (optional)',
     addButton: 'Add account',
+    limitReached: 'You have reached the maximum of {max} connected accounts.',
+    quotaCount: '{connected} / {max} accounts',
     providerLabel: 'Provider',
     providerPlaceholder: 'Select a provider...',
     reconnect: 'Reconnect account',
@@ -97,6 +99,7 @@ export const en: EsDictionary = {
     editLabelPlaceholder: 'Account name',
     syncingEmails: 'Syncing email, one moment...',
     syncError: 'Sync error',
+    backfillLoading: 'Loading… {count} emails',
     noEmailsYet: 'No email yet',
     confirmDeleteTitle: 'Delete this account?',
     confirmDeleteDescription: 'The email and drafts associated with this account will be deleted.',
@@ -108,6 +111,7 @@ export const en: EsDictionary = {
     emptyDefault: 'No email in this mailbox',
     emptySearch: 'No email found for your search.',
     emptyFiltered: 'No emails match the filters',
+    backfillNotice: 'Loading your history… {count} emails',
   },
 
   listControls: {
@@ -298,6 +302,8 @@ export const en: EsDictionary = {
     title: 'Conversation',
     ariaLabel: 'Conversation: {subject}',
     empty: 'This conversation no longer has any messages.',
+    threadLoading: 'Loading the conversation…',
+    threadError: 'Could not load the rest of the conversation.',
     unread: 'Unread',
     favorite: 'Favorite',
     removeFavorite: 'Remove from favorites',

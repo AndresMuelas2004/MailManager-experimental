@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from core.email.email_client import EmailMetadata, SyncResult
+from core.email.email_client import BackfillPage, EmailMetadata, SyncResult
 from core.email.errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from core.email.gmail_client import GmailClient, _INCREMENTAL_EVENT_THRESHOLD
 
@@ -132,6 +132,31 @@ class TestParseMetadataResponse:
         result = GmailClient._parse_metadata_response(msg)
         assert result.from_email == "bare@example.com"
         assert result.from_name == ""
+
+    def test_starred_label_sets_favorite(self):
+        # The STARRED label is captured into is_favorite during sync, so a
+        # freshly synced/backfilled account shows its favourites without a
+        # separate /favorites/sync.
+        msg = {
+            "id": "msg6",
+            "threadId": "t6",
+            "internalDate": "1700000000000",
+            "labelIds": ["INBOX", "STARRED"],
+            "payload": {"headers": []},
+        }
+        result = GmailClient._parse_metadata_response(msg)
+        assert result.is_favorite is True
+
+    def test_no_starred_label_is_not_favorite(self):
+        msg = {
+            "id": "msg7",
+            "threadId": "t7",
+            "internalDate": "1700000000000",
+            "labelIds": ["INBOX"],
+            "payload": {"headers": []},
+        }
+        result = GmailClient._parse_metadata_response(msg)
+        assert result.is_favorite is False
 
 
 # ── _resolve_labels ──────────────────────────────────────────────────
@@ -389,6 +414,54 @@ class TestBatchFetchLabelUpdates:
         assert result[0].provider_message_id == "m2"
         assert result[0].box == "TRASH"
 
+    def test_carries_starred_favorite_state(self, client: GmailClient):
+        # A star/unstar of an existing message arrives via the label-update path,
+        # so the LabelUpdate must carry the current STARRED state. format=minimal
+        # returns the full labelIds → Gmail ALWAYS populates a concrete bool.
+        mock_service = MagicMock()
+        batch_instance = MagicMock()
+        mock_service.new_batch_http_request.return_value = batch_instance
+
+        def fake_execute():
+            cb = mock_service.new_batch_http_request.call_args[1]["callback"]
+            cb("m1", {"id": "m1", "labelIds": ["INBOX", "STARRED"]}, None)
+            cb("m2", {"id": "m2", "labelIds": ["INBOX"]}, None)
+        batch_instance.execute.side_effect = fake_execute
+
+        client.service = mock_service
+        result = client._batch_fetch_label_updates(["m1", "m2"])
+
+        lu1 = next(lu for lu in result if lu.provider_message_id == "m1")
+        lu2 = next(lu for lu in result if lu.provider_message_id == "m2")
+        assert lu1.is_favorite is True
+        assert lu2.is_favorite is False
+
+
+# ── fetch_messages_metadata draft exclusion ─────────────────────────
+
+
+class TestFetchMessagesMetadataDraftExclusion:
+    def test_drops_draft_labeled_messages(self, client: GmailClient):
+        # The DRAFT-labelled message belongs to the drafts table, never to
+        # email_metadata — the universal safety net that covers the incremental
+        # path where the ``q="-in:drafts"`` listing filter does not apply.
+        normal = {
+            "id": "m1", "threadId": "t1", "internalDate": "1700000000000",
+            "labelIds": ["INBOX"], "payload": {"headers": []},
+        }
+        draft = {
+            "id": "d1", "threadId": "t2", "internalDate": "1700000000000",
+            "labelIds": ["DRAFT"], "payload": {"headers": []},
+        }
+        client.service = MagicMock()  # non-None satisfies the auth guard
+        with patch.object(
+            client, "_execute_batch_get", return_value={"m1": normal, "d1": draft},
+        ):
+            result = client.fetch_messages_metadata(["m1", "d1"])
+
+        ids = [r.provider_message_id for r in result]
+        assert ids == ["m1"]
+
 
 # ── _list_message_ids ─────────────────────────────────────────────
 
@@ -402,6 +475,20 @@ class TestListMessageIds:
         client.service = mock_service
         ids = client._list_message_ids(500)
         assert ids == ["m1", "m2"]
+
+    def test_listing_excludes_drafts_and_includes_spam_trash(self, client: GmailClient):
+        # The metadata listing must carry ``q="-in:drafts"`` (plural — the
+        # functional operator for the DRAFT label) so drafts never leak into
+        # email_metadata nor spend messages.get quota, while spam/trash stay in.
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {
+            "messages": [{"id": "m1"}],
+        }
+        client.service = mock_service
+        client._list_message_ids(500)
+        kwargs = mock_service.users().messages().list.call_args.kwargs
+        assert kwargs["q"] == "-in:drafts"
+        assert kwargs["includeSpamTrash"] is True
 
     def test_pagination_with_max_total(self, client: GmailClient):
         mock_service = MagicMock()
@@ -1044,6 +1131,129 @@ class TestIncrementalThreshold:
 
 
 # ── fetch_messages_metadata (public) ─────────────────────────────
+
+
+# ── _list_message_ids_page (single-page primitive of the backfill) ──
+
+
+class TestListMessageIdsPage:
+    def test_returns_ids_and_next_token(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {
+            "messages": [{"id": "m1"}, {"id": "m2"}],
+            "nextPageToken": "tok2",
+        }
+        client.service = mock_service
+        ids, next_token = client._list_message_ids_page(None, 500)
+        assert ids == ["m1", "m2"]
+        assert next_token == "tok2"
+
+    def test_no_next_token_when_mailbox_exhausted(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {
+            "messages": [{"id": "m1"}],
+        }
+        client.service = mock_service
+        ids, next_token = client._list_message_ids_page("tok1", 500)
+        assert ids == ["m1"]
+        assert next_token is None
+
+    def test_page_size_clamped_to_gmail_max_500(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {"messages": []}
+        client.service = mock_service
+        client._list_message_ids_page(None, 1000)
+        # maxResults is clamped to the Gmail 500-per-page hard maximum.
+        _, kwargs = mock_service.users().messages().list.call_args
+        assert kwargs["maxResults"] == 500
+        assert kwargs["includeSpamTrash"] is True
+
+    def test_forwards_page_token(self, client: GmailClient):
+        mock_service = MagicMock()
+        mock_service.users().messages().list().execute.return_value = {"messages": []}
+        client.service = mock_service
+        client._list_message_ids_page("cursor-xyz", 500)
+        _, kwargs = mock_service.users().messages().list.call_args
+        assert kwargs["pageToken"] == "cursor-xyz"
+
+
+# ── capture_backfill_anchor (Gmail: historyId before listing) ──────
+
+
+class TestCaptureBackfillAnchor:
+    def test_returns_current_history_id(self, client: GmailClient):
+        client.service = MagicMock()
+        with patch.object(client, "_get_current_history_id", return_value="hist777") as mock_hist:
+            assert client.capture_backfill_anchor() == "hist777"
+        mock_hist.assert_called_once()
+
+    def test_requires_authentication(self, client: GmailClient):
+        assert client.service is None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.capture_backfill_anchor()
+
+
+# ── fetch_backfill_page (one wave: list page + batched metadata) ───
+
+
+class TestFetchBackfillPage:
+    @staticmethod
+    def _meta(msg_id: str, *, is_read: bool = False) -> EmailMetadata:
+        return EmailMetadata(
+            provider_message_id=msg_id,
+            thread_id="t1",
+            from_email="from@example.com",
+            from_name="From",
+            subject="subject",
+            received_at=datetime(2026, 1, 1),
+            is_read=is_read,
+            box="ALL_MAIL",
+        )
+
+    def test_first_page_lists_then_batches_metadata(self, client: GmailClient):
+        client.service = MagicMock()
+        meta1, meta2 = self._meta("m1"), self._meta("m2")
+        with patch.object(
+            client, "_list_message_ids_page", return_value=(["m1", "m2"], "tok2"),
+        ) as mock_list, patch.object(
+            client, "fetch_messages_metadata", return_value=[meta1, meta2],
+        ) as mock_batch:
+            page = client.fetch_backfill_page(None, 500)
+
+        # cursor=None → first page; page_size clamped to the Gmail 500 max.
+        mock_list.assert_called_once_with(None, 500)
+        mock_batch.assert_called_once_with(["m1", "m2"])
+        assert isinstance(page, BackfillPage)
+        assert page.upserts == [meta1, meta2]
+        assert page.next_cursor == "tok2"
+
+    def test_forwards_cursor_as_page_token(self, client: GmailClient):
+        client.service = MagicMock()
+        with patch.object(
+            client, "_list_message_ids_page", return_value=([], None),
+        ) as mock_list, patch.object(client, "fetch_messages_metadata", return_value=[]):
+            client.fetch_backfill_page("tok1", 500)
+        mock_list.assert_called_once_with("tok1", 500)
+
+    def test_next_cursor_none_when_mailbox_exhausted(self, client: GmailClient):
+        client.service = MagicMock()
+        with patch.object(client, "_list_message_ids_page", return_value=(["m1"], None)), \
+             patch.object(client, "fetch_messages_metadata", return_value=[self._meta("m1")]):
+            page = client.fetch_backfill_page("tok9", 500)
+        assert page.next_cursor is None
+
+    def test_dedupes_page_keeping_newest(self, client: GmailClient):
+        client.service = MagicMock()
+        stale, fresh = self._meta("m1", is_read=False), self._meta("m1", is_read=True)
+        with patch.object(client, "_list_message_ids_page", return_value=(["m1", "m1"], None)), \
+             patch.object(client, "fetch_messages_metadata", return_value=[stale, fresh]):
+            page = client.fetch_backfill_page(None, 500)
+        assert page.upserts == [fresh]
+
+    def test_requires_authentication(self, client: GmailClient):
+        assert client.service is None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.fetch_backfill_page(None, 500)
 
 
 class TestFetchMessagesMetadata:

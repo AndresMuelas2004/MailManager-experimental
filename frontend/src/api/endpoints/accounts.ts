@@ -3,15 +3,24 @@ import {
   accountConnectStartResponseSchema,
   accountListSchema,
   accountOutSchema,
+  accountQuotaSchema,
   statusResponseSchema,
   type AccountConnectStartResponse,
   type AccountCreate,
   type AccountOut,
+  type AccountQuota,
   type AccountUpdate,
   type StatusResponse,
 } from '../types/dto';
 
 export { getApiOrigin } from '../client/http';
+
+// User-level (no mailbox prefix): counts every account the user owns across
+// all their mailboxes. Accepts an optional ``signal`` like the other GETs so an
+// in-flight request is aborted when the query is cancelled/unmounted.
+export function getAccountQuota(signal?: AbortSignal): Promise<AccountQuota> {
+  return request('/accounts/quota', { schema: accountQuotaSchema, signal });
+}
 
 export function listAccounts(mailboxId: string): Promise<AccountOut[]> {
   return request(`/mailboxes/${mailboxId}/accounts`, { schema: accountListSchema });

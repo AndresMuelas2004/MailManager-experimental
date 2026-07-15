@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
-import { getEmailContent } from '../../../api/endpoints/emails';
 import { toUiError } from '../../../api/client/errors';
+import { emailContentQueryOptions } from './emailContentQueryOptions';
 import type { EmailContentOut } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
@@ -13,32 +13,19 @@ type UseEmailContentReturn = {
   error: UiError | null;
 };
 
+// Reads the sanitized body from the in-memory TanStack Query cache. Reopening
+// the same email (Favoritos viewer) or re-expanding a conversation message is a
+// cache hit — no spinner, no network — because the query is warmed by
+// ``useEmailContentPrefetch`` on listing load and kept fresh forever
+// (``staleTime: Infinity`` in ``emailContentQueryOptions``). The return shape is
+// unchanged from the previous useState/useEffect implementation so the two
+// consumers (ViewerWithDownloader, ConversationMessageBody) are untouched.
 export default function useEmailContent(mailboxId: string, target: Target): UseEmailContentReturn {
-  const [content, setContent] = useState<EmailContentOut | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<UiError | null>(null);
-
   const { account_id: accountId, provider_message_id: providerMessageId } = target;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    getEmailContent(mailboxId, providerMessageId, accountId)
-      .then((result) => {
-        if (cancelled) return;
-        setContent(result);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(toUiError(err));
-        setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mailboxId, accountId, providerMessageId]);
-
-  return { content, loading, error };
+  const query = useQuery(emailContentQueryOptions(mailboxId, accountId, providerMessageId));
+  return {
+    content: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error ? toUiError(query.error) : null,
+  };
 }

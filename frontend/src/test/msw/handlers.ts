@@ -122,6 +122,16 @@ export const handlers = [
       state: 'state-test',
     }),
   ),
+  // Backfill status (background bulk-load progress). Happy-path: no active
+  // backfill, so ``active: false`` stops the poll and no counter shows. Specs
+  // override with ``server.use(...)`` to return a running job.
+  http.get(`${API_BASE}/mailboxes/:mailboxId/backfill-status`, () =>
+    HttpResponse.json({ accounts: [], active: false }),
+  ),
+  // Per-user account quota (user-level, no mailbox prefix). Happy-path: well
+  // below the cap so ``atLimit`` is false and "Add account" stays enabled. Specs
+  // override with ``server.use(...)`` to exercise the at-limit state.
+  http.get(`${API_BASE}/accounts/quota`, () => HttpResponse.json({ connected: 0, limit: 15 })),
 
   // Recipient autocomplete (contacts) — user-level, no path params. Static
   // happy-path list; specs needing the empty / error case override inline.

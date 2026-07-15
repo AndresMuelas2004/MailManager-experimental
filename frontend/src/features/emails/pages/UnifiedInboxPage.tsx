@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useBackfillStatus from '../hooks/useBackfillStatus';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
 import SearchInput, { MAX_SEARCH_LENGTH } from '../components/SearchInput';
@@ -75,6 +76,25 @@ export default function UnifiedInboxPage({ box }: Props) {
             .join(', '),
         })
       : null;
+
+  // Background backfill progress: mounting the twin here (not just on the
+  // accounts page) is what polls + invalidates ['emails'] so new emails surface
+  // in this listing as the worker fills the local copy. Aggregate the live
+  // counter across every account of this mailbox still loading its history for
+  // the header notice — a separate channel from partialWarning (a backfilling
+  // account is excluded from sync, so it never overlaps).
+  const { statuses: backfillStatuses } = useBackfillStatus(mailboxId!);
+  let backfillCount = 0;
+  let anyBackfilling = false;
+  for (const s of backfillStatuses.values()) {
+    if (s.status === 'pending' || s.status === 'running') {
+      anyBackfilling = true;
+      backfillCount += s.fetched_count;
+    }
+  }
+  const backfillNotice = anyBackfilling
+    ? t('inbox.backfillNotice', { count: backfillCount.toLocaleString() })
+    : null;
 
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
@@ -163,6 +183,7 @@ export default function UnifiedInboxPage({ box }: Props) {
             lastSyncedAt={lastSyncedAt}
             hasError={Boolean(syncError)}
             partialWarning={partialWarning}
+            backfillNotice={backfillNotice}
           />
         </div>
         <div className="flex items-center gap-2 pt-2">

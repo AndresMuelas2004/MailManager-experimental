@@ -41,6 +41,49 @@ def test_create_app_accepts_explicit_origins(monkeypatch):
     assert app is not None
 
 
+def test_create_app_requires_image_proxy_key_when_flag_enabled(monkeypatch):
+    """With IMAGE_PROXY_REQUIRE_KEY on, a missing signing key fails to boot.
+
+    ``/image-proxy`` is rate-limit-exempt, so booting with the public dev
+    fallback key would be an open image relay. Production sets the flag; a
+    missing key must abort startup, mirroring the CORS wildcard guard."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.delenv("IMAGE_PROXY_SIGNING_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="IMAGE_PROXY_SIGNING_KEY"):
+        create_app()
+
+
+def test_create_app_rejects_dev_fallback_key_when_flag_enabled(monkeypatch):
+    """The public dev fallback key is treated as 'no secure key' under the flag."""
+    from api.services.image_proxy_signing import _DEV_FALLBACK_KEY
+
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.setenv("IMAGE_PROXY_SIGNING_KEY", _DEV_FALLBACK_KEY)
+    with pytest.raises(RuntimeError, match="IMAGE_PROXY_SIGNING_KEY"):
+        create_app()
+
+
+def test_create_app_accepts_strong_image_proxy_key_when_flag_enabled(monkeypatch):
+    """A strong, distinct key satisfies the guard and boots normally."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.setenv("IMAGE_PROXY_SIGNING_KEY", "a-strong-persistent-production-secret")
+    app = create_app()
+    assert app is not None
+
+
+def test_create_app_does_not_require_image_proxy_key_by_default(monkeypatch):
+    """With the flag off (the default), a missing key is fine — dev / tests keep
+    the fallback so nothing breaks without opting in."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.delenv("IMAGE_PROXY_REQUIRE_KEY", raising=False)
+    monkeypatch.delenv("IMAGE_PROXY_SIGNING_KEY", raising=False)
+    app = create_app()
+    assert app is not None
+
+
 def test_create_app_builds_with_rate_limiting_enabled(monkeypatch):
     """Adding the per-router rate-limit ``dependencies`` does not break boot.
 
@@ -193,3 +236,24 @@ def test_non_auth_routers_carry_the_global_per_ip_rate_limit(monkeypatch):
         and _has_ip_rate_limit_dep(route)
     ]
     assert covered, "expected non-auth routers to carry the global per-IP rate limit"
+
+
+def test_image_proxy_get_is_exempt_but_admin_purge_is_rate_limited(monkeypatch):
+    """``GET /image-proxy`` must carry NO per-IP dependency (a newsletter can
+    reference dozens of images, so one bucket per image would trip the global
+    limit on a single email open; the HMAC signature + anti-SSRF guard bound
+    abuse instead). The admin purge under ``/admin`` keeps the global net like
+    the other admin routes.
+    """
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    app = create_app()
+    routes = {r.path: r for r in app.routes if isinstance(r, APIRoute)}
+
+    assert "/image-proxy" in routes
+    assert not _has_ip_rate_limit_dep(routes["/image-proxy"]), (
+        "/image-proxy must stay exempt from the global per-IP rate limit"
+    )
+    assert "/admin/image-proxy/purge" in routes
+    assert _has_ip_rate_limit_dep(routes["/admin/image-proxy/purge"]), (
+        "/admin/image-proxy/purge must carry the global per-IP rate limit"
+    )

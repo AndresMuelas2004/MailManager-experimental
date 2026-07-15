@@ -13,6 +13,12 @@ type Props = {
   /** Non-blocking notice of a PARTIAL failure (accounts that did not sync),
    *  already composed by the page. Null/omitted when it does not apply. */
   partialWarning?: string | null;
+  /** Non-blocking "loading your history…" notice while a background backfill
+   *  runs, already composed by the page. A SEPARATE channel from
+   *  ``partialWarning``: a backfilling account is excluded from sync so it
+   *  never appears there — the two are disjoint and may show at once (different
+   *  accounts). Null/omitted when no backfill is active. */
+  backfillNotice?: string | null;
 };
 
 export default function RefreshControl({
@@ -21,6 +27,7 @@ export default function RefreshControl({
   lastSyncedAt,
   hasError = false,
   partialWarning = null,
+  backfillNotice = null,
 }: Props) {
   const { t, lang } = useTranslation();
   // Local UI ticker (impure by necessity) so the "time ago" text advances on
@@ -63,6 +70,10 @@ export default function RefreshControl({
           {partialWarning}
         </span>
       ) : null}
+      {/* Backfill progress: blue, informational, its own channel (independent of
+          hasError / partialWarning — a background history download is unrelated
+          to the manual sync outcome). */}
+      {backfillNotice ? <span className="text-[12px] text-blue-600">{backfillNotice}</span> : null}
     </div>
   );
 }

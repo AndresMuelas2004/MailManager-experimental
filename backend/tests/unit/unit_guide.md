@@ -97,11 +97,61 @@ Cuando `fetch_drafts_exc=RuntimeError(...)`, `EmailManager.fetch_all_drafts` cap
 
 ### Los tests del cap de drafts viven en la capa de cliente, no en el servicio
 
-`_DRAFTS_MAX_TOTAL = 100` se aplica dentro de `GmailClient._list_all_draft_ids` (página única + paginado) y dentro del bucle `$top=100` de `OutlookClient.fetch_drafts`. `TestSyncDrafts` usa `FakeEmailClient.fetch_drafts_return`, que salta ambos bucles por completo y no puede ejercitar el cap. Cualquier cambio a `_DRAFTS_MAX_TOTAL` requiere actualizar `gmail_client/test_borradores.py::TestFetchDrafts` y `outlook_client/test_borradores.py::TestFetchDrafts`.
+`_DRAFTS_MAX_TOTAL = 500` se aplica dentro de `GmailClient._list_all_draft_ids` (página única + paginado) y dentro del bucle `$top=500` de `OutlookClient.fetch_drafts`. `TestSyncDrafts` usa `FakeEmailClient.fetch_drafts_return`, que salta ambos bucles por completo y no puede ejercitar el cap. Cualquier cambio a `_DRAFTS_MAX_TOTAL` requiere actualizar `gmail_client/test_borradores.py::TestFetchDrafts` y `outlook_client/test_borradores.py::TestFetchDrafts`.
 
 ### `_make_favorite_client()` — asimetría de auth por provider (no es seguro copiar-pegar)
 
 `gmail_client/test_buzones.py` y `outlook_client/test_buzones.py` definen cada uno un `_make_favorite_client()` para los tests de favoritos, pero **no** son intercambiables: el de Outlook DEBE establecer `client._access_token = "token"` (Outlook gatea según `_access_token`), mientras que el de Gmail no establece nada (Gmail gatea según `client.service`, que cada test mockea). Copia el helper de Gmail en un test de Outlook y cada caso lanza `EmailNotAuthenticatedError` antes de alcanzar el código bajo prueba — aflorando como una aserción de excepción-equivocada que no apunta a ningún lugar cercano a la línea del token que falta. (Los casos `test_unauthenticated_raises` reinician `_access_token = None` precisamente porque el helper de Outlook está autenticado por defecto.)
+
+### `outlook_client/test_sincronizacion.py` — `fetch_backfill_page` va por el transporte con reintentos
+
+`fetch_backfill_page` DEBE emitir su GET por `_graph_request_json_with_retries` (consciente de `Retry-After`), NUNCA por el `_graph_request` pelado del sync ordinario — el test lo fija haciendo que `_graph_request` lance `AssertionError` si se invoca. Perder el `Retry-After` a lo largo de las muchas páginas de un backfill de 100k sería una regresión silenciosa que solo aflora contra un provider real. `_folder_id_to_box_cached` resuelve los folders especiales UNA vez por instancia (cachea en `_backfill_folder_map`, reutiliza entre oleadas); un test que espere una resolución por página verifica el contrato equivocado.
+
+### `test_backfill_worker.py` — orden de checkpoint, ancla única, y helpers locales
+
+`_run_backfill_job` se parchea sobre el propio módulo `backfill_worker` (regla del patch-target: los nombres se importan por-nombre, parchear la fachada no interceptaría). Trampas no obvias:
+
+- **Orden portante `cursor` ANTES de `completed`**: escribe `update_sync_cursor` (`accounts.sync_cursor` ← ancla) antes de `mark_completed`, fijado comparando el orden de invocación. Invertirlo abre una ventana en la que un sync concurrente ve la cuenta ya no-excluida pero sin cursor incremental y rehace el bootstrap sobre los 100k.
+- **El ancla se captura UNA vez**: un job sin `initial_sync_cursor` la captura antes de las oleadas; un job con checkpoint (`page_cursor` + `initial_sync_cursor`) reanuda SIN recapturarla y reutiliza el cursor almacenado. Un test de reanudación que espere `capture_anchor_calls >= 1` verifica lo contrario.
+- **Los fallos de auth silenciosos se detectan vía `get_last_errors()`, no por excepción** (`authenticate_all_silent` NO lanza; registra el error por-cuenta) → falla con razón `"auth"` sin oleada ni ancla.
+- **Cuenta borrada a mitad de vuelo** (`account_store.get` devuelve falsy) → salida limpia sin marcar y sin construir el manager (la cascada de la FK ya borró la fila del job).
+- **Un shutdown deja el job `'running'`** (nunca `failed`) para que `reset_running_to_pending` lo reanude desde su checkpoint en el siguiente arranque.
+- **`_pace_after_wave` es ASIMÉTRICO por provider**: Gmail duerme hasta una tasa objetivo restando el tiempo ya transcurrido de la oleada (sin sueño si ya fue lenta); Outlook usa un delay fijo por página, omitido cuando es 0.
+- **`_build_auth_context` / `_persist_refreshed_tokens` son COPIAS LOCALES del módulo `backfill_worker`** (se parchean como atributos suyos), no reexports: el worker NO importa de `emails_service._comunes` (disciplina de fachada — un módulo plano de `api/services/` no importa el submódulo privado de otro paquete). Parchear el `_comunes` de `emails_service` no interceptaría nada aquí.
+- **El gate de escritura (`_gated_db_write` / `_gate`) es un `nullcontext` cuando `_DB_WRITE_GATE` es None** (una llamada unitaria directa a una función de job, sin dispatcher que lo inicialice). El reintento breve se dispara SOLO ante agotamiento de pool — `_is_pool_exhaustion` camina la cadena `__cause__` y reconoce tanto el `ConnectionPoolError` crudo como el `DatabaseConnectionError` ya traducido; un error no-pool propaga en el primer intento. Inyectar un error no-pool esperando reintento pasa por la razón equivocada.
+- **El dispatcher y el ciclo de vida se testean SIN lanzar hilos de job reales**: un pool fake registra los `submit` y no ejecuta nada, y las iteraciones se acotan con un stub de `_reap_retriable_failed` que fija el `stop_event`. El estado a nivel de módulo (`_DB_WRITE_GATE`, `_dispatcher_thread`, `_stop_event`) DEBE restaurarse vía `monkeypatch.setattr` — el loop REASIGNA `_DB_WRITE_GATE` vía `global`, así que un test que lo deje sembrado rompe `test_returns_fn_result_without_a_gate` (que exige None). La guarda de dedup `account_id in in_flight` solo es observable con un future que reporta `done()=False` a lo largo de DOS iteraciones (un `done()=True` se limpia y se re-submitiría); y la resiliencia del hilo se fija haciendo que el cuerpo del loop lance y comprobando que sigue polleando.
+
+### `test_backfill_service.py` — `active` vs `done`, y el gate corta antes del lookup de cursor
+
+- **`get_backfill_status`**: `active=True` si algún job está `pending`/`running`; los terminales (`completed`/`failed`) marcan `done=True` por cuenta SIN contribuir a `active`. Un `DatabaseError` del store se traduce (familia 503) vía `translate_database_error`, NO al genérico `BackfillStatusError` (500) — el par `DatabaseError` vs `RuntimeError` fija que `except DatabaseError` va antes que `except Exception` (misma disciplina que `TestCountUnreadEmails`).
+- **`enqueue_backfill_on_connect`**: el gate `BACKFILL_WORKER_ENABLED` cortocircuita ANTES del lookup `get_sync_cursor` — con el worker apagado una cuenta nueva NO consulta el cursor y cae al bootstrap clásico (no queda varada con un job que ningún worker procesará). Y a diferencia del swallow de `accounts_service`, aquí el fallo del store se PROPAGA TIPADO: `DatabaseError` → `ApiError` traducido (503), inesperado → `BackfillJobError` (500). El contrato opuesto entre las dos capas es intencionado — el swallow best-effort vive un nivel arriba (ver `test_accounts_service.py`).
+- **`enqueue_draft_sync_on_connect` es asimétrico con su hermano de backfill**: gateado por el MISMO `BACKFILL_WORKER_ENABLED`, pero encola INCONDICIONALMENTE — sin lookup de `get_sync_cursor`, así que una reconexión SÍ re-encola el draft-sync (los borradores deben refrescarse siempre), a diferencia del backfill que se salta la reconexión. Mismo contrato de error tipado, con `DraftSyncError` (500) como fallback inesperado en vez de `BackfillJobError`.
+
+### `test_backfill_config.py` (NUEVO) — fallback silencioso ante valor inválido
+
+El parseo de cada env `BACKFILL_*` NUNCA lanza: un valor inválido o en blanco defaultea (y loguea un warning), porque una env var mal tecleada no debe varar el worker — los tests de valor inválido aseguran el default devuelto, nunca `pytest.raises`. `is_backfill_worker_enabled` es default-ON (sin definir → `True`, a diferencia del `RATE_LIMIT_ENABLED` default-OFF). El fixture `autouse` limpia TODAS las `BACKFILL_*` antes de cada test para que una env var real del entorno no se filtre y voltee una aserción.
+
+### `build_draft_rows` (`services_helpers`) — copia defensiva de las listas de destinatarios
+
+`TestBuildDraftRows` fija que cada fila persistida COPIA (`list(...)`) las listas de destinatarios del `DraftMetadata` de origen: una mutación posterior de la lista del dataclass no debe filtrarse a la fila ya construida. Quitar el `list(...)` comparte la referencia y regresiona en silencio (la fila muta cuando el llamador reusa el `DraftMetadata`).
+
+### `emails_service/test_sincronizacion.py` — la guarda de backfill se consulta en CADA sync
+
+`_patch_common` stubea `account_backfill_store.list_by_mailbox` a `[]` por defecto (los tests de la guarda lo sobreescriben por caso con filas que llevan `status` + `attempts`), porque el sync lo consulta en cada llamada — es la ÚNICA lectura de backfill, de la que el servicio deriva en memoria `exclude_ids` y `skip_reconciliation_ids`. Tres contratos gobernados por `status`/`attempts`:
+
+- **Excluida del sync** (`SyncResultOut` neutro, NO aparece en `failed_accounts` — una exclusión no es un fallo parcial; la variante de cuenta única devuelve `total_synced=0` / `accounts=[]` sin bootstrap): backfill `pending`/`running` **o** `failed` reintentable (`attempts < backfill_max_attempts()` — el reaper la revivirá).
+- **NO excluida, degradada:** un `failed` PERMANENTE (`attempts >= max`) SÍ se sincroniza (bootstrap degradado para que el usuario vea el error y reconecte) — la asimetría que un test de "`failed` siempre excluido" rompería.
+- **Salta la reconciliación de fantasmas** (`load_suspect_message_ids` nunca se llama), estrictamente por-cuenta, para CUALQUIER cuenta con fila en `account_backfill_jobs` sea cual sea su status (incluidos `completed` y el `failed` permanente de arriba) — un job de OTRA cuenta no exime a la que sí sincroniza. Sin esto, un cursor incremental caducado (o el bootstrap degradado del `failed`) trataría las decenas de miles de filas ya persistidas como fantasmas y las borraría en masa.
+
+El único lookup tiene su par `DatabaseError → ApiError traducido (503)` / `RuntimeError → EmailFetchError`.
+
+### `test_accounts_service.py` — el enqueue de backfill es best-effort/soft-fail
+
+`_patch_connect_deps` stubea `enqueue_backfill_on_connect` como no-op (el real alcanzaría `account_store.get_sync_cursor`, sacando de la BD a los tests de connect no relacionados). El contrato portante: el encolado ocurre TRAS persistir los tokens y es best-effort — un fallo del enqueue NO voltea el `ok:True` de `complete_account_connect` (los tokens ya están; el usuario reconecta y revive el job). Este es el swallow del que habla `test_backfill_service.py`: la capa de servicio de backfill lanza tipado, y este llamador lo traga.
+
+### `test_account_backfill_repository.py` — `enqueue` con cero filas NO es un error
+
+`PgAccountBackfillStore.enqueue` invierte la regla del repositorio: cero filas afectadas es un resultado válido, no un fallo. Lo protege el `ON CONFLICT ... WHERE status='failed'` (un job en conflicto que NO está `failed` no se pisa y upserta cero filas). El resto de mutaciones que hacen `UPDATE`/`RETURNING` sin fila lanzan `QueryError`; `enqueue` deliberadamente NO comprueba el rowcount — no añadas una aserción esperando que falle. (`ConnectionPoolError` se propaga sin envolver y un UUID inválido en los lectores devuelve lista/`None` vacíos, como el resto de stores.)
 
 ### Invariantes de envoltura de errores de `PgDraftStore`
 
@@ -145,3 +195,11 @@ Cuando la excepción de entrada no es de la clase base de capa esperada (p. ej. 
 `api.rate_limit` mantiene sus contadores en `TTLCache`s a nivel de módulo, así que sangran entre tests salvo que se limpien: ambos ficheros de test de rate-limit ejecutan un `rate_limit.reset()` `autouse` ANTES y DESPUÉS de cada caso (el `after` cubre un caso que falla a mitad de camino). Un fichero de test nuevo que ejercite el motor debe replicarlo — sin el reset un caso pasa a verde o rojo según el orden de los tests, no según el comportamiento.
 
 Dirige los límites mediante monkeypatch de `RATE_LIMITS` (un perfil diminuto y legible), nunca mockeando `check`: el motor relee `RATE_LIMITS` en cada llamada, así que mockear `check` borraría toda la cobertura del motor. Los tests de la factory de dependencias (`test_rate_limit_dependencies.py`) llaman al `_dep` devuelto directamente con un stub `Request` de `SimpleNamespace` e inyectan `user_id` a mano — fuera de FastAPI el default de `Depends(require_session)` es un objeto `Depends` sin resolver, no un valor.
+
+### `core/image_proxy/test_fetcher.py` — aislamiento del cliente pooled + doble frontera sin red
+
+El fetcher fakea DOS fronteras a la vez (`socket.getaddrinfo` **y** `httpx.Client`): un caso que solo parchea la resolución construye un `httpx.Client` real. El autouse `_reset_pooled_client` pone `fetcher._client = None` **directamente, nunca vía `close_client()`** — el `_FakeClient` no tiene `.close()`, así que `close_client()` haría `AttributeError` sobre el fake (misma familia de aislamiento de estado-de-módulo que el `reset()` de rate-limit y las fixtures de `backfill_config`). `_patch_resolution` acepta una **lista** de IPs para ejercitar el reject-if-any anti-SSRF sobre un set mixto público/privado — una sola IP nunca ejercita ese bucle, así que una regresión que lo estreche a un elemento pasaría la suite mientras reabre el agujero.
+
+### Reconciliación de ids de conversación (`test_conversacion.py`) + cache de special-folder (`outlook_client/test_sincronizacion.py`)
+
+El test de determinismo de `_build_id_remap` está **acoplado al `ORDER BY received_at DESC, provider_message_id` de `LIST_METADATA_BY_THREAD`**: el representante reusado que aserta (min `provider_message_id` entre los de `received_at` máximo) solo es correcto mientras ese ORDER BY se mantenga — cambiar la query rompe el test aunque `_build_id_remap` no cambie (invariante cross-file, no reconstruible desde ningún fichero por separado). `_patch_get_conversation_common` defaultea `load_thread_metadata → []` (sin BD real); siembra `thread_rows` / fuerza `thread_read_exc` por caso. La reconciliación es swallow best-effort: un fallo de lectura degrada a persistir verbatim y NUNCA aborta el visor (asegura el swallow, sin `pytest.raises`). El autouse `_clear_special_folder_cache` limpia el `_SPECIAL_FOLDER_CACHE` (TTL, a nivel de módulo) entre casos para que un mapa de folder-ids cacheado no sangre entre tests (misma familia de aislamiento que `_reset_pooled_client`).

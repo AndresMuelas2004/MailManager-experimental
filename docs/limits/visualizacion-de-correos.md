@@ -189,7 +189,7 @@ El cuerpo se renderiza dentro de un iframe con permisos mínimos.
 | Qué se cachea | El HTML **ya saneado** (no el original), más el texto plano, en la base de datos local. |
 | Cuándo se puebla | En la primera apertura del correo (cache-aside): miss → **una** descarga del proveedor (cuerpo + adjuntos en la misma consulta) → saneado → persistencia → entrega. |
 | Reaperturas | Instantáneas, **sin** llamada al proveedor ni re-saneamiento. |
-| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). El **último vaciado** acompañó a la ampliación de las listas blancas (etiquetas semánticas, atributos de geometría, CSS moderno), el endurecimiento de enlaces y la tolerancia de mayúsculas/percent-encoding en las imágenes `cid:` (migración `0040`). |
+| Invalidación por cambio de pipeline | Cuando la cadena de saneamiento cambia de forma relevante, la caché del contenido se vacía de golpe para forzar el re-procesado con las reglas nuevas. Transparente para el usuario (un correo concreto vuelve a tardar 1-2 s esa primera vez). El **último vaciado** acompañó a la introducción del **proxy de imágenes remotas** —el saneamiento reescribe ahora las URLs de imagen remota guardadas en el cuerpo cacheado, así que todo cuerpo previo cambia de forma (migración `0043`). |
 | Invalidación por borrado/desconexión | El borrado de un correo o la desconexión de una cuenta limpian su contenido cacheado automáticamente (cascada en la base de datos). |
 
 No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda completo. (El límite de tamaño relevante es el de los **adjuntos**, documentado en [adjuntos.md](adjuntos.md).)
@@ -198,7 +198,7 @@ No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda co
 
 | Aspecto | Valor / regla |
 |---------|---------------|
-| Vida útil del cuerpo cacheado | **30 días desde el último acceso** (columna `last_accessed_at` de `email_content`). Es el **mismo plazo** que el TTL del binario de los adjuntos descargados ([adjuntos.md](adjuntos.md)), pero con un mecanismo de purga distinto (ver más abajo). |
+| Vida útil del cuerpo cacheado | **7 días desde el último acceso** (columna `last_accessed_at` de `email_content`). Plazo **deliberadamente más corto** que el TTL del binario de los adjuntos descargados (**30 días**, [adjuntos.md](adjuntos.md)): **ya no comparten plazo** (antes ambos eran 30 días). Mecanismo de purga distinto (ver más abajo). |
 | Qué reinicia el contador | Cada apertura del correo (acierto de caché) sella `last_accessed_at = now()`. Toca **solo** ese campo, nunca `fetched_at` (el cuerpo es inmutable: una lectura no es una re-descarga). El sellado es best-effort: si falla, no rompe la lectura del correo. |
 | Cuándo arranca el contador | Al **persistir** la fila (cada fila de `email_content` es una entrada de caché creada al guardarse, así que `last_accessed_at` nunca es nulo). A diferencia del TTL de adjuntos, no hay guarda `IS NOT NULL` en la purga. |
 | Qué se purga | **Solo** el contenido caducado de `email_content`. Una re-apertura posterior lo vuelve a descargar (cache-aside) con el contador a cero. |
@@ -212,23 +212,109 @@ No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda co
 |---------|---------------|
 | Qué se pre-carga | Cuerpo **+ adjuntos** (la misma ruta que una apertura normal) de los correos **no leídos** (`is_read = FALSE`), de la **bandeja de entrada** (`box = 'ALL_MAIL'`). |
 | Ventana de "reciente" | Recibidos en las **últimas 48 horas** (`received_at >= now() - INTERVAL '48 hours'`). |
-| Tope por cuenta y sincronización | **50** correos como máximo (los **más recientes** primero, `ORDER BY received_at DESC`), por cuenta, en cada sincronización. Es el único valor que pasa el código Python; el TTL (30 días) y la ventana (48 h) viven en las propias consultas SQL. |
+| Tope por cuenta y sincronización | **50** correos como máximo (los **más recientes** primero, `ORDER BY received_at DESC`), por cuenta, en cada sincronización. Es el único valor que pasa el código Python; la ventana (48 h) y la bandeja objetivo (`ALL_MAIL`) viven en la propia consulta SQL. |
 | Qué se excluye | Los correos cuyo cuerpo **ya está cacheado** (`LEFT JOIN email_content … IS NULL`): nunca se re-descargan. También quedan fuera enviados, spam, papelera y los correos **ya leídos**. |
 | Concurrencia | **Secuencial**, mensaje a mensaje (no en paralelo), para no chocar con los topes de peticiones simultáneas por usuario/buzón de Gmail y Outlook (429). |
 | Tolerancia a fallos | Best-effort: corre en el `BackgroundTask` tras responder; un fallo en un correo no aborta el resto y nunca afecta a la respuesta de sincronización ya enviada. |
 | Reintentos | **Ninguno**: lo que falle se reintentará en la siguiente sincronización (si el correo sigue siendo no leído y reciente). |
 | Índices | No añade índice nuevo: la selección de objetivos reutiliza los índices existentes de `email_metadata` (volumen del MVP). |
 
+### 9.3 Pre-carga y caché en la memoria del navegador (segunda capa)
+
+Complementa la caché de la base de datos (§ 9) y la pre-carga de servidor (§ 9.2): guarda el cuerpo ya saneado en la **memoria del navegador** para que abrir/reabrir no muestre spinner. Es del lado **cliente**, no servidor.
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Qué guarda | El cuerpo ya saneado con sus **URLs de proxy ya resueltas** a la ruta absoluta del backend (listo para el iframe). La misma entrada la usan la apertura y la pre-carga. |
+| Vigencia de la entrada | `staleTime` **infinito** (el cuerpo es inmutable y sus URLs firmadas son estables: reabrir nunca revalida — acierto de caché, sin red). Se descarta de memoria tras **30 minutos** sin usarse (`gcTime`). |
+| Qué se pre-carga | Correos **no leídos**, de la **bandeja de entrada** (`box = ALL_MAIL`), recibidos en las **últimas 48 h**, presentes en la **página actual** del listado. Mismo alcance que la pre-carga de servidor (§ 9.2). |
+| Cuándo | Al cargar el listado (bandejas reales y virtuales), en segundo plano cuando el navegador está ocioso (`requestIdleCallback`, con fallback a `setTimeout`). |
+| Concurrencia | **3** peticiones `/content` en vuelo a la vez (`PREFETCH_CONCURRENCY`). Se calientan **todos** los objetivos, pero por «carriles»: un cursor compartido alimenta 3 peticiones simultáneas como máximo. Antes se lanzaba **una por objetivo sin límite** (hasta una página entera, ~50, de golpe), saturando el backend síncrono justo cuando el usuario abría un correo. Un cambio de página/objetivo o el desmontaje **aborta** el lanzamiento de nuevas peticiones (las ya en vuelo se dejan terminar; TanStack Query deduplica una entrada ya caliente). |
+| Privacidad | La pre-carga **solo** trae el HTML (JSON de `/content`) y resuelve sus URLs de proxy; **no** monta el iframe ni crea ningún `<img>`, así que **no descarga imágenes** ni contacta con ningún remitente (§ 10). |
+| Deduplicación | Una entrada ya fresca en caché es un no-op: nunca re-descarga un correo ya abierto o ya pre-cargado. |
+
 ---
 
-## 10. Qué NO soporta (limitaciones aceptadas)
+## 10. Proxy de imágenes remotas
+
+Las imágenes remotas `http(s)` del correo se sirven a través del backend (`GET /image-proxy`) en lugar de descargarse del servidor del remitente. El **comportamiento** (privacidad, pereza, caché de servidor) está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md) § 4.3; aquí van las cifras.
+
+### 10.1 Qué se reescribe hacia el proxy
+
+Al sanear el cuerpo (paso final, tras la lista blanca), estas referencias de imagen remota `http(s)` se reescriben a una URL firmada del proxy:
+
+| Referencia | ¿Se reescribe? |
+|------------|----------------|
+| `<img src="https://…">` | Sí |
+| `background="https://…"` en `td` / `th` / `table` | Sí |
+| `style="… url(https://…)"` inline (propiedades de imagen) | Sí |
+| Bloque `<style>` con `url(https://…)` en propiedades de imagen | Sí |
+| `@font-face { src: url(https://…) }` | **No** — una fuente no es imagen; el proxy solo sirve `image/*`, una fuente proxeada se rompería |
+| `cid:` / `data:` / URL relativa o de fragmento | **No** — no son remotas |
+
+Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `background`, `background-image`, `list-style`, `list-style-image`.
+
+**Reescritura resiliente:** la pasada estructurada (lxml) reescribe atributos y CSS; si tropieza con un HTML roto, un **fallback por regex** reescribe al menos los atributos `src=` / `background=`. En un correo patológico donde actúe el fallback, un `url(...)` raro podría quedar sin reescribir (se cargaría directo del remitente) — residuo aceptado.
+
+### 10.2 Firma y URL centinela
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Prefijo centinela en el HTML cacheado | `https://mm-image-proxy.invalid/img?u=<base64url(url)>&s=<firma>`. El host `.invalid` (RFC 6761) **nunca resuelve**: si el frontend no lo reescribe, la imagen simplemente se rompe (fail-closed, sin fuga de IP). |
+| Firma | **HMAC-SHA256** de la URL original, clave `IMAGE_PROXY_SIGNING_KEY` (env). El endpoint la verifica en tiempo constante; firma **presente pero inválida** → **403** `image_proxy_forbidden`. Params `u`/`s` **ausentes** → **422** (validación de FastAPI), no 403. |
+| Resolución en el cliente | El frontend cambia el prefijo centinela por la URL absoluta real del proxy (`{apiBase}/image-proxy`), conservando `?u=…&s=…`. |
+| La clave de firma es *load-bearing* | Como `/image-proxy` está **exento del rate limit**, una clave débil/predecible convertiría el endpoint en un relay abierto de imágenes. **Guarda de arranque:** con `IMAGE_PROXY_REQUIRE_KEY=true` (producción), el backend **rechaza arrancar** si la clave falta o es la de dev. Rotar la clave invalida todas las URLs ya firmadas; los correos abiertos con frecuencia **no** se auto-recuperan (nunca se purgan por inactividad), así que rotar exige `TRUNCATE email_content`. |
+
+### 10.3 Descarga (fetcher anti-SSRF)
+
+| Límite | Valor exacto | Nota |
+|--------|--------------|------|
+| Esquemas permitidos | `http`, `https` | Cualquier otro → bloqueado (403). |
+| Tamaño máximo de imagen | **10 MB** | Aplica al `Content-Length` declarado y al streaming real; excederlo → 502. |
+| Timeout | **10 s por fase** (connect / read / write / pool) | |
+| Redirecciones máximas | **3** (4 peticiones en total) | Cada salto se revalida anti-SSRF antes de la petición. |
+| Content-Type | Debe empezar por `image/` | Cualquier otro → 502 (no es imagen). |
+| Cabeceras hacia el remitente | Solo un `User-Agent` fijo | **Sin** cookies, credenciales, `Referer` ni nada que revele al usuario. |
+| Reutilización de conexiones (keep-alive) | Cliente `httpx` **compartido** a nivel de proceso | Varias imágenes del mismo host reutilizan una conexión TCP+TLS viva en lugar de un handshake nuevo por imagen (el coste dominante en newsletters con muchas imágenes). Pool: hasta **20** conexiones keep-alive, **100** conexiones en total como máximo, expiración **30 s** de inactividad. Se crea de forma perezosa y se cierra al apagar la app (best-effort). `follow_redirects=False` sigue fijo: cada salto se revalida a mano (anti-SSRF, más abajo). |
+
+**Destinos bloqueados por anti-SSRF** (cualquier host que resuelva a uno de estos → 403): direcciones privadas, loopback, link-local, reservadas, multicast, "unspecified", IPv4 mapeada en IPv6, más CGNAT (`100.64.0.0/10`), metadatos de nube IPv4 (`169.254.169.254`) e IMDS de AWS IPv6 (`fd00:ec2::254`). Cada salto de redirección se valida por separado.
+
+**Residuo TOCTOU aceptado (MVP):** entre validar el host y abrir la conexión, httpx re-resuelve el DNS; un registro con TTL de sub-segundo que pase de IP pública a privada podría colarse por esa ventana. Cerrarla del todo (fijar la conexión a la IP validada preservando el SNI de TLS) queda como endurecimiento futuro.
+
+### 10.4 Caché de servidor de imágenes proxeadas
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Tabla / clave | `image_proxy_cache`, keyeada por el **SHA-256 hex de la URL original**. Clave **global** (compartida entre cuentas y usuarios): la misma imagen de CDN referenciada desde muchos correos se descarga del remitente **una sola vez**. |
+| Almacenamiento | Binario inline en `image_bytes` (BYTEA); imágenes acotadas (10 MB) y servidas enteras. |
+| TTL | **30 días deslizantes** desde el último acceso (`last_accessed_at`). El refresco en cada servida está **limitado a un bump por URL cada 24 h** (throttle en memoria) para no abrir una conexión de BD por imagen servida; como el TTL es de 30 días, esa precisión sub-diaria es irrelevante. **Distinto** del TTL del cuerpo (`email_content`, 7 días — § 9.1); coincide con el de los binarios de adjuntos ([adjuntos.md](adjuntos.md)). |
+| Purga | **Manual**: `POST /admin/image-proxy/purge` (cabecera `X-Admin-Token` = env `IMAGE_PROXY_PURGE_TOKEN`). Sin cron/scheduler. Tres estados: env sin definir → **503** `purge_disabled`; token ausente/incorrecto → **401** `invalid_admin_token`; correcto → ejecuta y devuelve `{purged_count, freed_bytes}`. (Mismo modelo que la purga de adjuntos.) |
+
+### 10.5 Endpoint y caché del navegador
+
+| Aspecto | Valor / regla |
+|---------|---------------|
+| Endpoint | `GET /image-proxy?u=…&s=…` — **sin cookie de sesión** (el iframe del visor es de origen "null" y la petición es un subrecurso cross-site, así que la cookie nunca viaja; la firma HMAC es la puerta de acceso). |
+| Rate limit | **Exento** del límite global por-IP: un newsletter puede llevar docenas de imágenes, y un bucket por imagen dispararía el límite al abrir un solo correo. La firma + el anti-SSRF acotan el abuso. |
+| Caché del navegador | `Cache-Control: private, max-age=2592000, immutable` (**30 días**; la URL firmada es estable) + `X-Content-Type-Options: nosniff`. |
+| Códigos de estado | **403** firma inválida (`image_proxy_forbidden`) o destino bloqueado por anti-SSRF (`image_proxy_blocked_target`); **422** si faltan los params `u`/`s`; **502** fallo de descarga upstream, contenido no-imagen/sobredimensionado o error de lectura de caché (`image_proxy_upstream_error`). Desde un `<img>` el navegador solo distingue 2xx de no-2xx (imagen rota); los códigos importan para logs/tests. |
+
+---
+
+## 11. Qué NO soporta (limitaciones aceptadas)
 
 | No soporta | Por qué |
 |------------|---------|
 | **Ejecutar JavaScript del correo** | Intencional: se elimina todo `<script>` y el iframe no concede permiso de ejecución. Un correo no es una aplicación. |
 | **Cargar hojas de estilo o recursos externos vía CSS** (`@import`, `<link>`) | Evita fugas de privacidad y de recursos; el correo debe ser autocontenido. |
 | **Incrustar partes marcadas inline pero NO referenciadas** por el cuerpo | Por la regla estricta (D-13), si el cuerpo no usa la parte vía `cid:`, se promociona a adjunto descargable en vez de incrustarse en el HTML. |
-| **Bloqueo o proxy de imágenes remotas** (`<img src="https://…">`) | No hay protección anti-rastreo: los protocolos `http`/`https` se permiten en `src`, así que una imagen remota (incluidos los píxeles de seguimiento) se carga directa desde su servidor. Solo las imágenes `cid:` embebidas se resuelven a `data:`; las remotas no se tocan. |
+| **Proxy de fuentes web remotas** (`@font-face { src: url(https://…) }`) | El proxy solo sirve `image/*`; una fuente proxeada se rompería. Las fuentes remotas se cargan directas, como antes. |
+| **Cierre total de la ventana TOCTOU de DNS** | El anti-SSRF valida el host y luego httpx lo re-resuelve; un DNS con TTL de sub-segundo que pase de IP pública a privada podría colarse. Fijar la conexión a la IP validada queda como endurecimiento futuro (§ 10.3). |
+| **Fidelidad perfecta del cuerpo cuando lxml malinterpreta un fragmento** | Si la pasada estructurada de lxml pierde la mayoría de los elementos de layout (o lanza), se usa un fallback por regex que reescribe `src=` / `background=` **y** todos los `url(...)` remotos sobre la cadena original, sin reestructurar (no se pierde contenido). La **privacidad se preserva** (ninguna URL cruda sobrevive); el coste es que en ese caso raro un `@font-face src` remoto también se proxea y la fuente se rompe. |
+| **Purga del proxy de imágenes por cron o automática** | Solo hay purga manual vía `POST /admin/image-proxy/purge` (igual que los adjuntos). Sin programador en el MVP. |
+| **Descarga asíncrona o paralela del proxy en el servidor** | El endpoint `GET /image-proxy` es **síncrono** por decisión (MVP): la aceleración viene de reutilizar conexiones (keep-alive, § 10.3), no de paralelizar. Las descargas concurrentes están **acotadas por un semáforo (máx. 8)** para que abrir un correo con muchas imágenes nuevas no agote el threadpool compartido de la app. |
+| **Aislamiento por usuario de las imágenes proxeadas** | La caché del proxy es global (keyeada por hash de URL) para deduplicar y minimizar contactos con el remitente; no se particiona por usuario ni por correo (§ 10.4). |
+| **Persistencia de la caché en memoria del navegador entre sesiones** | La caché en memoria (§ 9.3) es efímera: se pierde al cerrar la pestaña y se descarta tras 30 min sin uso. La persistencia entre sesiones la aporta la caché de la base de datos, no esta capa. |
 | **Render del layout específico de Outlook de escritorio** | Los bloques solo-Outlook se descartan a propósito (duplicarían contenido en un visor no-Outlook). |
 | **Etiquetas/atributos fuera de la lista blanca** (formularios, `<iframe>` anidados, `<object>`, `<embed>`, manejadores de eventos…) | Solo se permite lo necesario para leer un correo; todo lo demás es superficie de ataque. |
 | **Edición del correo** | El visor es de **solo lectura**; no es un editor. |
@@ -241,4 +327,4 @@ No hay un tope de tamaño propio para el cuerpo del correo: el HTML se guarda co
 
 ---
 
-> El visor llega hasta: **solo 6 protocolos** (`http`, `https`, `mailto`, `tel`, `cid`, `data` — los dos últimos solo en imágenes, nunca en enlaces), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, cada enlace **endurecido** con `target="_blank"` + `rel="noopener noreferrer"`, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail** (con la codificación declarada primero para ISO-2022-*/HZ/UTF-7), imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa** (emparejando el `cid:` sin distinguir mayúsculas ni percent-encoding), todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura. La caché tiene un **TTL deslizante de 30 días** desde el último acceso (purgado **solo durante las sincronizaciones**, sobre las cuentas sincronizadas), y se **pre-cargan** los **no leídos de las últimas 48 h** de la bandeja de entrada, **hasta 50 por cuenta y sincronización**, en segundo plano y de forma secuencial. El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).
+> El visor llega hasta: **solo 6 protocolos** (`http`, `https`, `mailto`, `tel`, `cid`, `data` — los dos últimos solo en imágenes, nunca en enlaces), **3 at-rules CSS** conservadas (`@media`, `@supports`, `@font-face`) frente al resto descartadas, una **lista blanca acotada** de etiquetas y atributos, **cero JavaScript**, cada enlace **endurecido** con `target="_blank"` + `rel="noopener noreferrer"`, bloques **solo-Outlook descartados** (aviso por encima de 200 bytes descartados y menos de 50 caracteres visibles), corrección de codificación **UTF-8-first en Gmail** (con la codificación declarada primero para ISO-2022-*/HZ/UTF-7), imágenes embebidas resueltas a `data:` **solo si el cuerpo las usa** (emparejando el `cid:` sin distinguir mayúsculas ni percent-encoding), **imágenes remotas `http(s)` reescritas a un proxy propio del backend** (`GET /image-proxy`, firma **HMAC-SHA256**, fetcher **anti-SSRF**, tope de **10 MB**, timeout de **10 s**, máx. **3** redirecciones, **conexiones reutilizadas (keep-alive)** por un cliente HTTP compartido, caché de servidor **global** de **30 días**, endpoint **síncrono y exento del rate limit**) para que el remitente nunca vea la IP del usuario, todo dentro de un **iframe aislado** sin ejecución de scripts ni acceso a la sesión, y con el resultado **cacheado** tras la primera apertura —en la base de datos y en la memoria del navegador. La caché del cuerpo en base de datos tiene un **TTL deslizante de 7 días** desde el último acceso (purgado **solo durante las sincronizaciones**, sobre las cuentas sincronizadas; ya **no** coincide con los 30 días de los adjuntos), la caché en memoria del navegador dura mientras la pestaña siga abierta (**staleTime infinito**, **gcTime 30 min**), y se **pre-cargan** —sin descargar sus imágenes— los **no leídos de las últimas 48 h** de la bandeja de entrada, **hasta 50 por cuenta y sincronización** en base de datos (secuencial, en segundo plano) y también en memoria del navegador (los de la página actual, **hasta 3 a la vez**). El comportamiento completo está en [../features/visualizacion-de-correos.md](../features/visualizacion-de-correos.md).

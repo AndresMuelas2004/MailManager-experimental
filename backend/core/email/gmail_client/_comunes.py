@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from email.utils import getaddresses
@@ -30,17 +31,58 @@ _PARALLEL_MAX_WORKERS = _parse_max_workers()
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# Gmail surfaces per-user / per-project rate limiting under HTTP 403 (NOT 429),
+# tagged by these ``error.errors[].reason`` values. ``dailyLimitExceeded`` (also
+# 403) is deliberately NOT here — it is the exhausted daily quota, a hard wall
+# that retrying only burns.
+_RETRYABLE_403_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+
+
+def _gmail_error_reasons(exception: HttpError) -> set[str]:
+    """Extract the ``error.errors[].reason`` strings from a Gmail HttpError body.
+
+    Best-effort: returns an empty set on any parse failure (empty / malformed
+    body). ``http_error_detail`` cannot be reused — its ``reason`` is the HTTP
+    status phrase (``"Forbidden"``), not the JSON body reason.
+    """
+    raw = getattr(exception, "content", None)
+    if not raw:
+        return set()
+    try:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return set()
+    reasons: set[str] = set()
+    for item in error.get("errors") or []:
+        if isinstance(item, dict) and isinstance(item.get("reason"), str):
+            reasons.add(item["reason"])
+    return reasons
+
 
 def _is_retryable(exception: Any) -> bool:
     """Classify whether a batch callback exception is worth retrying.
 
     Returns True for rate-limit (429), server errors (5xx), and non-HTTP
-    exceptions (network timeouts, connection resets).  Returns False for
-    client errors like 404, 400, 403, 410 — those are permanent failures.
+    exceptions (network timeouts, connection resets). A 403 is retryable
+    ONLY when its JSON body carries a rate-limit reason (see
+    ``_RETRYABLE_403_REASONS``) — Gmail throttles under 403, not 429.
+    Other client errors (400, 401, 404, 410, and 403 ``dailyLimitExceeded``)
+    are permanent.
     """
     if isinstance(exception, HttpError):
         status = getattr(getattr(exception, "resp", None), "status", None)
-        return status in _RETRYABLE_STATUS_CODES
+        if status in _RETRYABLE_STATUS_CODES:
+            return True
+        if status == 403:
+            return bool(_gmail_error_reasons(exception) & _RETRYABLE_403_REASONS)
+        return False
     return True
 
 

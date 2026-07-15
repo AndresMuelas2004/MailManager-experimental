@@ -18,7 +18,9 @@ def test_get_database_settings_uses_defaults(monkeypatch):
     cfg = settings.get_database_settings()
 
     assert cfg.pool_min_conn == 1
-    assert cfg.pool_max_conn == 10
+    # Raised 10 -> 25 to cover the parallel background backfill's DB-write
+    # semaphore (BACKFILL_DB_WRITE_CONCURRENCY, default 8) plus request headroom.
+    assert cfg.pool_max_conn == 25
     assert cfg.connect_timeout_seconds == 10
     assert cfg.application_name == "mailmanager-api"
 

@@ -182,31 +182,27 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
       setAddingAccount(false);
     }
 
-    // Phase 2 — the account is connected: show its card and sync. Failures
-    // here never roll the account back.
+    // Phase 2 — the account is connected: show its card as ready. The initial
+    // history now downloads in the BACKGROUND (backfill), enqueued server-side
+    // by the OAuth callback — the frontend no longer syncs metadata here for the
+    // initial load. The live "Cargando… N correos" counter is server state
+    // driven by useBackfillStatus (not by ``entry.status``), so the entry lands
+    // directly in 'ready'. Drafts still sync best-effort.
     const account = connectedAccount;
     const accountId = account.account_id;
-    setEntries((prev) => [...prev, { account, status: 'syncing' }]);
+    setEntries((prev) => [...prev, { account, status: 'ready' }]);
     setSelectedProvider('');
     setDisplayLabel('');
     void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
-
-    try {
-      await Promise.all([
-        syncEmailMetadata(mailboxId, accountId),
-        syncDrafts(mailboxId, accountId).catch(() => {}),
-      ]);
-      setEntries((prev) =>
-        prev.map((e) => (e.account.account_id === accountId ? { ...e, status: 'ready' } : e)),
-      );
-    } catch (err) {
-      setError(toUiError(err));
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.account.account_id === accountId ? { ...e, status: 'error' as const } : e,
-        ),
-      );
-    }
+    // Kick the backfill-status poll: the job is already enqueued server-side, so
+    // this refetch sees it pending/running and re-arms useBackfillStatus's
+    // refetchInterval (idle otherwise — the counter would not appear until a
+    // page remount).
+    void queryClient.invalidateQueries({ queryKey: ['backfill-status', mailboxId] });
+    // Refresh the per-user quota so the counter and the disabled state of the
+    // "Add account" button update immediately (useAccountQuota).
+    void queryClient.invalidateQueries({ queryKey: ['accounts-quota'] });
+    void syncDrafts(mailboxId, accountId).catch(() => {});
   }, [canAdd, mailboxId, selectedProvider, displayLabel, t, queryClient]);
 
   const removeAccount = useCallback(
@@ -216,6 +212,9 @@ export default function useConnectedAccounts(mailboxId: string): UseConnectedAcc
         await deleteAccount(mailboxId, accountId);
         setEntries((prev) => prev.filter((e) => e.account.account_id !== accountId));
         void queryClient.invalidateQueries({ queryKey: ['accounts', mailboxId] });
+        // Deleting frees a quota slot — refresh the counter and re-enable the
+        // "Add account" button if the user was at the cap.
+        void queryClient.invalidateQueries({ queryKey: ['accounts-quota'] });
       } catch (err) {
         setError(toUiError(err));
       }

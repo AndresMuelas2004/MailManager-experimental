@@ -90,6 +90,8 @@ export const es = {
     customNameLabel: 'Nombre personalizado',
     customNamePlaceholder: 'Ej: Cuenta principal (opcional)',
     addButton: 'Añadir cuenta',
+    limitReached: 'Has alcanzado el máximo de {max} cuentas conectadas.',
+    quotaCount: '{connected} / {max} cuentas',
     providerLabel: 'Proveedor',
     providerPlaceholder: 'Selecciona un proveedor...',
     reconnect: 'Reconectar cuenta',
@@ -99,6 +101,7 @@ export const es = {
     editLabelPlaceholder: 'Nombre de la cuenta',
     syncingEmails: 'Sincronizando correos, un momento...',
     syncError: 'Error al sincronizar',
+    backfillLoading: 'Cargando… {count} correos',
     noEmailsYet: 'Sin correos todavía',
     confirmDeleteTitle: '¿Eliminar esta cuenta?',
     confirmDeleteDescription: 'Se eliminarán los correos y borradores asociados a esta cuenta.',
@@ -110,6 +113,7 @@ export const es = {
     emptyDefault: 'No hay correos en esta bandeja',
     emptySearch: 'No se encontraron correos para tu búsqueda.',
     emptyFiltered: 'No hay correos que coincidan con los filtros',
+    backfillNotice: 'Cargando tu histórico… {count} correos',
   },
 
   listControls: {
@@ -301,6 +305,8 @@ export const es = {
     title: 'Conversación',
     ariaLabel: 'Conversación: {subject}',
     empty: 'Esta conversación ya no tiene mensajes.',
+    threadLoading: 'Cargando la conversación…',
+    threadError: 'No se pudo cargar el resto de la conversación.',
     unread: 'No leído',
     favorite: 'Favorito',
     removeFavorite: 'Quitar de favoritos',

@@ -2,12 +2,14 @@
 
 import pytest
 
+from core.email import BackfillPage
 from core.email.email_manager import EmailManager
 from core.email.errors import (
     EmailAccountNotFoundError,
     EmailAccountRecordError,
     EmailDuplicateAccountLabelError,
     EmailExternalAPIError,
+    EmailNotAuthenticatedError,
     EmailProviderConfigError,
 )
 from core.email.outlook_client import OutlookClient
@@ -304,3 +306,63 @@ def test_move_to_trash_delegates_to_client(manager: EmailManager, fake_client_fa
 def test_move_to_trash_unknown_label_raises(manager: EmailManager):
     with pytest.raises(EmailAccountNotFoundError):
         manager.move_to_trash("nonexistent", ["m1"])
+
+
+# ── Background backfill delegation ─────────────────────────────────
+
+
+class TestBackfillDelegation:
+
+    def test_capture_backfill_anchor_delegates_to_client(
+        self, manager: EmailManager, fake_client_factory
+    ):
+        client = fake_client_factory("acct1", capture_backfill_anchor_return="anchor-xyz")
+        manager.add_client(client)
+        assert manager.capture_backfill_anchor("acct1") == "anchor-xyz"
+        assert client.capture_backfill_anchor_calls == 1
+
+    def test_capture_backfill_anchor_unknown_label_raises(self, manager: EmailManager):
+        with pytest.raises(EmailAccountNotFoundError):
+            manager.capture_backfill_anchor("missing")
+
+    def test_capture_backfill_anchor_reraises_core_error_unchanged(
+        self, manager: EmailManager, fake_client_factory
+    ):
+        # A CoreError subclass from the client is re-raised as-is, NOT rewrapped
+        # into EmailExternalAPIError (the guard clause).
+        client = fake_client_factory(
+            "acct1", capture_backfill_anchor_exc=EmailNotAuthenticatedError("no token"),
+        )
+        manager.add_client(client)
+        with pytest.raises(EmailNotAuthenticatedError):
+            manager.capture_backfill_anchor("acct1")
+
+    def test_capture_backfill_anchor_wraps_unexpected_error(
+        self, manager: EmailManager, fake_client_factory
+    ):
+        client = fake_client_factory("acct1", capture_backfill_anchor_exc=RuntimeError("boom"))
+        manager.add_client(client)
+        with pytest.raises(EmailExternalAPIError, match="capture_backfill_anchor"):
+            manager.capture_backfill_anchor("acct1")
+
+    def test_fetch_backfill_page_delegates_and_forwards_args(
+        self, manager: EmailManager, fake_client_factory
+    ):
+        page = BackfillPage(upserts=[], next_cursor="tok2")
+        client = fake_client_factory("acct1", fetch_backfill_page_return=page)
+        manager.add_client(client)
+        result = manager.fetch_backfill_page("acct1", "tok1", 500)
+        assert result is page
+        assert client.fetch_backfill_page_calls == [("tok1", 500)]
+
+    def test_fetch_backfill_page_unknown_label_raises(self, manager: EmailManager):
+        with pytest.raises(EmailAccountNotFoundError):
+            manager.fetch_backfill_page("missing", None, 500)
+
+    def test_fetch_backfill_page_wraps_unexpected_error(
+        self, manager: EmailManager, fake_client_factory
+    ):
+        client = fake_client_factory("acct1", fetch_backfill_page_exc=RuntimeError("boom"))
+        manager.add_client(client)
+        with pytest.raises(EmailExternalAPIError, match="fetch_backfill_page"):
+            manager.fetch_backfill_page("acct1", None, 500)

@@ -228,6 +228,27 @@ class PgAccountStore(AccountStore):
             ) from exc
         return [str(row["account_id"]) for row in rows if row.get("account_id") is not None]
 
+    def count_accounts_by_user(self, user_id: str) -> int:
+        try:
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        accounts.COUNT_ACCOUNTS_BY_USER,
+                        {"user_id": user_id},
+                    )
+                    row = cur.fetchone()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return 0
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to count accounts by user.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected account count_by_user error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return int(row["account_count"]) if row and row.get("account_count") is not None else 0
+
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         params = dict(account)
         if isinstance(params.get("config"), dict):

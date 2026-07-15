@@ -15,7 +15,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from ..email_client import EmailMetadata, LabelUpdate, SyncResult
+from ..email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from ..errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from ..helpers import dedupe_metadata_by_message_id, http_error_detail
 from ._comunes import (
@@ -88,47 +88,86 @@ class GmailSincronizacionMixin:
             is_full_sync=True,
         )
 
+    def _list_message_ids_page(
+        self, page_token: str | None, page_size: int,
+    ) -> tuple[list[str], str | None]:
+        """List ONE page of message IDs (incl. spam/trash).
+
+        Returns ``(ids, next_page_token)`` where ``next_page_token`` is
+        ``None`` when the mailbox is exhausted. Shared by the full bootstrap
+        loop and the paginated backfill wave. ``page_size`` is clamped to the
+        Gmail 500-per-page maximum.
+        """
+        list_kwargs: dict[str, Any] = {
+            "userId": "me",
+            "maxResults": min(page_size, 500),
+            "includeSpamTrash": True,
+            # Exclude drafts from the listing: they live in their own table
+            # (``drafts``) and must not leak into ``email_metadata``. ``in:drafts``
+            # (plural) is the functional operator for the DRAFT system label.
+            # The ``"DRAFT" in labelIds`` filter in ``fetch_messages_metadata``
+            # is the universal safety net (covers the incremental path too);
+            # this ``q`` also stops drafts from spending ``messages.get`` quota.
+            "q": "-in:drafts",
+        }
+        if page_token:
+            list_kwargs["pageToken"] = page_token
+
+        try:
+            response = self.service.users().messages().list(**list_kwargs).execute()
+        except HttpError as exc:
+            status, reason = http_error_detail(exc)
+            raise EmailExternalAPIError(
+                f"Gmail failed to fetch message list (HTTP {status}: {reason})."
+            ) from exc
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Gmail unexpected fetch message list error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+        ids: list[str] = []
+        for msg in response.get("messages", []):
+            msg_id = str(msg.get("id") or "").strip()
+            if msg_id:
+                ids.append(msg_id)
+        return ids, response.get("nextPageToken")
+
     def _list_message_ids(self, max_total: int) -> list[str]:
         """List message IDs using pagination, including spam and trash."""
         ids: list[str] = []
-        page_token = None
-        page_size = min(max_total, 500)
-
+        page_token: str | None = None
         while True:
-            list_kwargs: dict[str, Any] = {
-                "userId": "me",
-                "maxResults": page_size,
-                "includeSpamTrash": True,
-            }
-            if page_token:
-                list_kwargs["pageToken"] = page_token
-
-            try:
-                response = self.service.users().messages().list(**list_kwargs).execute()
-            except HttpError as exc:
-                status, reason = http_error_detail(exc)
-                raise EmailExternalAPIError(
-                    f"Gmail failed to fetch message list (HTTP {status}: {reason})."
-                ) from exc
-            except Exception as exc:
-                raise EmailExternalAPIError(
-                    f"Gmail unexpected fetch message list error ({type(exc).__name__}): {exc}"
-                ) from exc
-
-            for msg in response.get("messages", []):
-                msg_id = str(msg.get("id") or "").strip()
-                if msg_id:
-                    ids.append(msg_id)
-
+            page_ids, page_token = self._list_message_ids_page(page_token, max_total)
+            ids.extend(page_ids)
             if len(ids) >= max_total:
-                ids = ids[:max_total]
-                break
-
-            page_token = response.get("nextPageToken")
+                return ids[:max_total]
             if not page_token:
-                break
+                return ids
 
-        return ids
+    def capture_backfill_anchor(self) -> str:
+        """Gmail backfill anchor: the current ``historyId`` (before listing)."""
+        if self.service is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail capture_backfill_anchor requires authentication."
+            )
+        return self._get_current_history_id()
+
+    def fetch_backfill_page(
+        self, cursor: str | None, page_size: int,
+    ) -> BackfillPage:
+        """Fetch one backfill wave: one ``messages.list`` page + its batched
+        ``messages.get`` metadata. ``cursor`` is the ``messages.list``
+        pageToken (``None`` for the first page)."""
+        if self.service is None:
+            raise EmailNotAuthenticatedError(
+                "Gmail fetch_backfill_page requires authentication."
+            )
+        ids, next_token = self._list_message_ids_page(cursor, min(page_size, 500))
+        metadata = self.fetch_messages_metadata(ids)
+        return BackfillPage(
+            upserts=dedupe_metadata_by_message_id(metadata),
+            next_cursor=next_token,
+        )
 
     def _execute_single_chunk(
         self,
@@ -411,6 +450,13 @@ class GmailSincronizacionMixin:
             if msg is None:
                 skipped_ids.append(msg_id)
                 continue
+            # Universal draft exclusion (covers the incremental path, where the
+            # ``q="-in:drafts"`` listing filter does not apply): a message the
+            # provider labels DRAFT belongs to the ``drafts`` table, never to
+            # ``email_metadata``. Silently drop it (not a skip/error).
+            if "DRAFT" in (msg.get("labelIds") or []):
+                logger.debug("Gmail skipping draft message %s (excluded from email_metadata).", msg_id)
+                continue
             try:
                 results.append(self._parse_metadata_response(msg))
             except Exception as exc:
@@ -453,7 +499,9 @@ class GmailSincronizacionMixin:
 
         to_name, to_email = _first_recipient_from_to_header(headers.get("To", ""))
 
-        is_read, box = GmailSincronizacionMixin._resolve_labels(msg.get("labelIds") or [])
+        label_ids = msg.get("labelIds") or []
+        is_read, box = GmailSincronizacionMixin._resolve_labels(label_ids)
+        is_favorite = "STARRED" in label_ids
 
         internal_date = msg.get("internalDate")
         if internal_date:
@@ -473,6 +521,7 @@ class GmailSincronizacionMixin:
             received_at=received_at,
             is_read=is_read,
             box=box,
+            is_favorite=is_favorite,
             to_email=to_email,
             to_name=to_name,
         )
@@ -623,11 +672,17 @@ class GmailSincronizacionMixin:
             if msg is None:
                 skipped_ids.append(msg_id)
                 continue
-            is_read, box = self._resolve_labels(msg.get("labelIds") or [])
+            label_ids = msg.get("labelIds") or []
+            is_read, box = self._resolve_labels(label_ids)
             results.append(LabelUpdate(
                 provider_message_id=msg.get("id", msg_id),
                 is_read=is_read,
                 box=box,
+                # Close the Gmail incremental favourite gap: a star/unstar on an
+                # existing message arrives here (labelsAdded/Removed), so carry
+                # the current STARRED state. ``format=minimal`` returns the full
+                # labelIds, so Gmail ALWAYS populates a concrete bool (never None).
+                is_favorite="STARRED" in label_ids,
             ))
         _log_skipped_messages("label sync", skipped_ids, message_ids)
         return results

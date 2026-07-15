@@ -16,7 +16,7 @@ from ..helpers import build_mime_with_attachments, http_error_detail, plain_text
 logger = logging.getLogger(__name__)
 
 
-_DRAFTS_MAX_TOTAL = 100
+_DRAFTS_MAX_TOTAL = 500
 
 
 class GmailBorradoresMixin:
@@ -244,12 +244,11 @@ class GmailBorradoresMixin:
         """Fetch the most recent Gmail drafts (capped at _DRAFTS_MAX_TOTAL).
 
         Gmail requires two steps: (1) drafts.list (paginated) to collect up
-        to _DRAFTS_MAX_TOTAL (100) draft IDs; (2) drafts.get for each ID to
+        to _DRAFTS_MAX_TOTAL (500) draft IDs; (2) drafts.get for each ID to
         retrieve the full Message. Step (2) is executed via
         _execute_batch_get with resource="drafts" — same parallel-batches-of-100
         + 4-retries skeleton used by the email-metadata sync. With a cap of
-        100 drafts this degrades to a single batch chunk, but the skeleton
-        scales transparently if the cap is raised in the future.
+        500 drafts this fans out into 5 parallel batch chunks of 100.
 
         Gmail's drafts.list API does not support explicit ordering, but
         returns drafts in reverse chronological order by API convention
@@ -289,9 +288,9 @@ class GmailBorradoresMixin:
         and the remaining quota until _DRAFTS_MAX_TOTAL is reached. Stops
         paginating as soon as the total is hit.
 
-        With the current cap (100), this resolves in a single drafts.list
-        call — Gmail returns at most 100 IDs in one page and never follows
-        nextPageToken.
+        With the current cap (500), this resolves in a single drafts.list
+        page (500 == Gmail's per-page maximum); nextPageToken is followed
+        only if a page returns fewer IDs than requested.
         """
         ids: list[str] = []
         page_token: str | None = None

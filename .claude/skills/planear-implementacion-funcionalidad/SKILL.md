@@ -31,6 +31,7 @@ El único contador y su semántica — **el número siempre cuenta la pasada ini
 
 Reglas de interpretación:
 
+- **`N_md` cuenta solo pasadas de redacción — no acota nada más.** Frases como *«una iteración de la (primera) skill de planificación»*, *«solo una iteración de planear»* o *«haz N iteraciones»* fijan **exclusivamente** `N_md` (cuántas veces se redactan/repasan los tres `.md`), y nada más. En modo orquestado (`/implementar-feature-completa`) **no** significan «ejecuta solo esta primera skill y detén el pipeline»: el número de iteraciones y el alcance del pipeline —que tras planificar continúa por sí solo a implementación, review, etc.— son cosas independientes. El pipeline solo se detiene tras la planificación si el usuario lo pide de forma explícita («para tras planificar» / «solo planifica»), nunca por el mero hecho de fijar las iteraciones.
 - Nunca recibirás `0`: equivaldría a no crear nada.
 - Si la frase de iteraciones resulta ambigua o trae un valor fuera de rango, pregúntame con `AskUserQuestion` antes de arrancar.
 

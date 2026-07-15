@@ -91,6 +91,17 @@ class AccountStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def count_accounts_by_user(self, user_id: str) -> int:
+        """Count every account the user owns across all their mailboxes.
+
+        Backs the per-user account-limit guard (``create_account``) and the
+        ``GET /accounts/quota`` endpoint. Counts ALL account rows, including
+        those whose provider token has expired (decision 3A): a stale account
+        still occupies storage and counts against the limit until deleted.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def upsert(self, account: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -116,6 +127,148 @@ class AccountStore(ABC):
 
     @abstractmethod
     def update_sync_cursor(self, mailbox_id: str, account_id: str, cursor: str) -> None:
+        raise NotImplementedError
+
+
+class AccountBackfillStore(ABC):
+    """
+    Contract for the background initial-mass-backfill job checkpoint.
+
+    One row per account in ``account_backfill_jobs``. The row is the
+    resumable checkpoint the in-process backfill worker drives: it holds
+    the target size, the page cursor + fetched count (to resume after a
+    process restart), and the incremental cursor snapshotted at the start.
+    """
+
+    @abstractmethod
+    def enqueue(
+        self,
+        account_id: str,
+        mailbox_id: str,
+        provider: str,
+        target_total: int,
+    ) -> None:
+        """Create a backfill job for a first-connected account, or revive a
+        previously FAILED one back to ``pending``.
+
+        An existing ``pending`` / ``running`` / ``completed`` job is NOT
+        touched (a no-op) — a completed account already has its history and
+        must not be re-backfilled. Idempotent and safe to call on every
+        connect: only a ``failed`` row is revived.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_by_mailbox(self, mailbox_id: str) -> list[dict[str, Any]]:
+        """Return every job row for the accounts of ``mailbox_id``.
+
+        Backs the status endpoint, the sync guard (which derives the accounts
+        under active backfill), and the ghost-reconciliation guard (which needs
+        the set of ``completed`` accounts).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def claim_next_batch(self, limit: int) -> list[dict[str, Any]]:
+        """Atomically claim up to ``limit`` ``pending`` jobs, marking them
+        ``running``, and return the claimed rows. Used by the dispatcher."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_progress(
+        self, account_id: str, fetched_count: int, page_cursor: str | None,
+    ) -> None:
+        """Checkpoint the wave progress: fetched count + next page cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_anchor(self, account_id: str, initial_sync_cursor: str) -> None:
+        """Persist the incremental cursor captured at the start of the backfill."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_completed(self, account_id: str) -> None:
+        """Mark the job ``completed`` and clear ``page_cursor``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_failed(self, account_id: str, error: str) -> None:
+        """Mark the job ``failed``, store ``error`` and increment ``attempts``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_running_to_pending(self) -> None:
+        """Put every ``running`` job back to ``pending`` (startup recovery)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_retriable_failed_to_pending(
+        self, max_attempts: int, backoff_seconds: int,
+    ) -> int:
+        """Revive ``failed`` jobs with ``attempts < max_attempts`` back to
+        ``pending`` (auto-recovery reaper), skipping any job that has been
+        ``failed`` for less than ``backoff_seconds`` (avoids a tight retry
+        loop). Preserves the checkpoint so a revived job resumes rather than
+        restarts. Returns the number of jobs revived."""
+        raise NotImplementedError
+
+
+class DraftSyncStore(ABC):
+    """
+    Contract for the server-side draft-sync job queue.
+
+    One row per account in ``draft_sync_jobs`` — a simplified clone of
+    ``AccountBackfillStore`` WITHOUT the pagination checkpoint (the draft
+    sync is a single, non-paginated operation per account). Enqueued on
+    every connect (first + reconnection) so drafts always refresh; the
+    in-process worker's dispatcher claims and runs the jobs in the same
+    pool as the backfill jobs.
+    """
+
+    @abstractmethod
+    def enqueue(
+        self,
+        account_id: str,
+        mailbox_id: str,
+        provider: str,
+    ) -> None:
+        """Enqueue (or re-enqueue) a draft sync for an account.
+
+        Unlike the backfill enqueue this is unconditional: any existing
+        ``pending`` / ``running`` / ``completed`` / ``failed`` row is reset
+        to ``pending`` with a cleared error, because a reconnection must
+        always refresh the drafts. Idempotent and safe on every connect.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def claim_next_batch(self, limit: int) -> list[dict[str, Any]]:
+        """Atomically claim up to ``limit`` ``pending`` jobs, marking them
+        ``running``, and return the claimed rows. Used by the dispatcher."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_completed(self, account_id: str) -> None:
+        """Mark the job ``completed``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_failed(self, account_id: str, error: str) -> None:
+        """Mark the job ``failed``, store ``error`` and increment ``attempts``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_running_to_pending(self) -> None:
+        """Put every ``running`` job back to ``pending`` (startup recovery)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_retriable_failed_to_pending(
+        self, max_attempts: int, backoff_seconds: int,
+    ) -> int:
+        """Revive ``failed`` jobs with ``attempts < max_attempts`` (after the
+        ``backoff_seconds`` cool-off) back to ``pending``. Returns the number
+        of jobs revived."""
         raise NotImplementedError
 
 
@@ -353,23 +506,6 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def set_favorites_true_batch(
-        self,
-        account_id: str,
-        provider_message_ids: list[str],
-    ) -> int:
-        """Mark a SUBSET of an account's messages favourite in one statement.
-
-        Sets ``is_favorite = TRUE`` for every ``provider_message_id`` in
-        ``provider_message_ids`` belonging to ``account_id``. Unlike
-        ``sync_favorites_for_account`` it does NOT force the other rows to
-        ``FALSE`` — the conversation lazy-sync only knows the thread it just
-        fetched, so it must not clear favourites elsewhere in the account.
-        One-directional by design. Returns the number of rows updated.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def exists(self, account_id: str, provider_message_id: str) -> bool:
         """Return True iff a row with this (account_id, provider_message_id) pair exists."""
         raise NotImplementedError
@@ -387,6 +523,26 @@ class EmailMetadataStore(ABC):
         and to map the singleton viewer response when the message has no
         thread. Malformed UUIDs collapse to ``None`` (treated as "not
         found"), consistent with ``exists``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_metadata_by_thread(
+        self, account_id: str, thread_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return the identity columns of every row sharing ``thread_id``.
+
+        Projects ``provider_message_id`` + the endpoint-independent
+        ``(received_at, from_email, subject)`` triple of each row for
+        ``account_id``, ordered ``received_at DESC, provider_message_id``.
+        Backs the conversation lazy-sync's id reconciliation: Outlook hands
+        the same physical message different REST ids on the folder-delta
+        endpoint (what sync stored) vs the mailbox-wide conversationId
+        endpoint (what ``fetch_conversation`` returns), so the viewer maps
+        each fetched member back onto the stored row of the same physical
+        message to avoid inserting a duplicate row per open. ``thread_id``
+        MUST be non-empty. Malformed UUIDs collapse to ``[]`` (treated as
+        "no results"), consistent with ``exists``.
         """
         raise NotImplementedError
 
@@ -476,13 +632,54 @@ class EmailContentStore(ABC):
 
     @abstractmethod
     def purge_expired_for_accounts(self, account_ids: list[str]) -> int:
-        """Delete cached bodies idle for 30+ days for the given accounts.
+        """Delete cached bodies idle for 7+ days for the given accounts.
 
         Scoped to the accounts synced in the current request (auto-cleanup
-        on sync, no scheduler — same 30-day TTL as the attachment-blob
-        purge). Returns the number of rows deleted. Returns ``0`` without
-        touching the database when ``account_ids`` is empty.
+        on sync, no scheduler). The 7-day body TTL is deliberately shorter
+        than the attachment-blob purge (30 days) — the two no longer match.
+        Returns the number of rows deleted. Returns ``0`` without touching
+        the database when ``account_ids`` is empty.
         """
+        raise NotImplementedError
+
+
+class ImageProxyCacheStore(ABC):
+    """
+    Contract for the remote-email-image proxy cache.
+
+    One row per distinct remote image URL, keyed by the SHA-256 hex of the
+    original URL (global — shared across accounts / users so the same CDN
+    image is fetched from the sender only once). The binary lives inline in
+    the row. Backs the ``GET /image-proxy`` endpoint and its admin TTL purge.
+    """
+
+    @abstractmethod
+    def get(self, url_hash: str) -> dict[str, Any] | None:
+        """Return ``{"content_type": str, "image_bytes": bytes}`` or ``None``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert(
+        self, url_hash: str, url: str, content_type: str, image_bytes: bytes,
+    ) -> None:
+        """Cache a fetched image. Idempotent: a second upsert for the same
+        ``url_hash`` refreshes the bytes / content type and both timestamps."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def touch_last_accessed(self, url_hash: str) -> None:
+        """Refresh ``last_accessed_at = now()`` on a cache HIT (sliding TTL).
+
+        Best-effort at the service layer: a failure must never block the
+        image response. Touches ONLY ``last_accessed_at`` — never
+        ``fetched_at`` (the bytes are immutable; a serve is not a re-fetch).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def purge_expired(self) -> tuple[int, int]:
+        """Delete rows not accessed in 30+ days. Returns ``(purged_count,
+        freed_bytes)``. Backs the manual admin purge (no scheduler)."""
         raise NotImplementedError
 
 

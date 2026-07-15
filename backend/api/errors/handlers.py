@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from api.errors.exceptions import (
     AccountConnectAuthError,
+    AccountLimitExceeded,
     AccountMisconfigured,
     AccountNotConnected,
     AccountNotFound,
@@ -39,6 +40,8 @@ from api.errors.exceptions import (
     AttachmentSendFailed,
     AttachmentTooLarge,
     AttachmentUnavailable,
+    BackfillJobError,
+    BackfillStatusError,
     ConversationFetchError,
     CredentialFileError,
     DatabaseConnectionError,
@@ -65,6 +68,9 @@ from api.errors.exceptions import (
     EnvVarError,
     ExternalAPIError,
     Forbidden,
+    ImageProxyBlockedTarget,
+    ImageProxyForbidden,
+    ImageProxyUpstreamError,
     InvalidAdminToken,
     MailboxLookupError,
     MailboxNotFound,
@@ -108,6 +114,7 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     AppCredentialsMissing: status.HTTP_500_INTERNAL_SERVER_ERROR,
     AccountConnectAuthError: status.HTTP_401_UNAUTHORIZED,
     AccountNotConnected: status.HTTP_409_CONFLICT,
+    AccountLimitExceeded: status.HTTP_409_CONFLICT,
     EmailContentFetchError: status.HTTP_502_BAD_GATEWAY,
     EmailReplyContextError: status.HTTP_502_BAD_GATEWAY,
     ConversationFetchError: status.HTTP_502_BAD_GATEWAY,
@@ -176,10 +183,17 @@ _STATUS_MAP: dict[type[ApiError], int] = {
     VirtualMailboxListError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Contacts (recipient autocomplete)
     RecipientSuggestionsError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # Background initial mass backfill
+    BackfillStatusError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    BackfillJobError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     # Health / readiness
     ServiceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # Rate limiting
     TooManyRequests: status.HTTP_429_TOO_MANY_REQUESTS,
+    # Remote-email-image proxy
+    ImageProxyForbidden: status.HTTP_403_FORBIDDEN,
+    ImageProxyBlockedTarget: status.HTTP_403_FORBIDDEN,
+    ImageProxyUpstreamError: status.HTTP_502_BAD_GATEWAY,
 }
 
 

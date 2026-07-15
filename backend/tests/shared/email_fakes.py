@@ -8,6 +8,7 @@ from core.email import (
     AttachmentBinary,
     AttachmentMetadata,
     AttachmentUploadResult,
+    BackfillPage,
     ConversationMessage,
     DraftAttachmentInput,
     DraftMetadata,
@@ -34,6 +35,7 @@ def build_metadata(
     received_at: datetime | None = None,
     is_read: bool = False,
     box: str = "ALL_MAIL",
+    is_favorite: bool = False,
     account_id: str = "",
 ) -> EmailMetadata:
     """Build a normalized ``EmailMetadata`` with sensible defaults."""
@@ -48,6 +50,7 @@ def build_metadata(
         received_at=received_at,
         is_read=is_read,
         box=box,
+        is_favorite=is_favorite,
         account_id=account_id,
     )
 
@@ -147,6 +150,11 @@ class FakeEmailClient(EmailClient):
         update_draft_return: DraftMetadata | None = None,
         fetch_drafts_return: list[DraftMetadata] | None = None,
         send_draft_return: EmailMetadata | None = None,
+        capture_backfill_anchor_return: str = "backfill_anchor",
+        capture_backfill_anchor_exc: Exception | None = None,
+        fetch_backfill_page_return: BackfillPage | None = None,
+        fetch_backfill_pages: list[BackfillPage] | None = None,
+        fetch_backfill_page_exc: Exception | None = None,
     ) -> None:
         self._account_label = account_label
         self._auth_exc = auth_exc
@@ -174,6 +182,14 @@ class FakeEmailClient(EmailClient):
         self._fetch_drafts_return = list(fetch_drafts_return or [])
         self._send_draft_exc = send_draft_exc
         self._send_draft_return = send_draft_return
+        # Background backfill. ``fetch_backfill_pages`` is a queue popped one per
+        # call so a test can walk a paginated backfill (each element is a
+        # BackfillPage); it takes precedence over the single ``*_return``.
+        self._capture_backfill_anchor_return = capture_backfill_anchor_return
+        self._capture_backfill_anchor_exc = capture_backfill_anchor_exc
+        self._fetch_backfill_page_return = fetch_backfill_page_return
+        self._fetch_backfill_pages = list(fetch_backfill_pages or [])
+        self._fetch_backfill_page_exc = fetch_backfill_page_exc
         self._list_message_attachments_exc = list_message_attachments_exc
         self._fetch_attachment_binary_exc = fetch_attachment_binary_exc
         self._send_draft_with_attachments_exc = send_draft_with_attachments_exc
@@ -241,6 +257,12 @@ class FakeEmailClient(EmailClient):
         # ``fetch_conversation`` so a test can assert the service derived the
         # right thread from the base message row.
         self.fetch_conversation_calls: list[str] = []
+        # Background backfill bookkeeping. ``capture_backfill_anchor_calls`` is a
+        # counter; ``fetch_backfill_page_calls`` records each ``(cursor,
+        # page_size)`` so a test can assert the worker paginates with the
+        # returned ``next_cursor`` and clamps ``page_size`` to what remains.
+        self.capture_backfill_anchor_calls = 0
+        self.fetch_backfill_page_calls: list[tuple[str | None, int]] = []
         self.create_draft_reply_kwargs: list[dict] = []
         self.send_draft_with_attachments_reply_kwargs: list[dict] = []
         self.deleted_message_ids: list[str] = []
@@ -625,6 +647,36 @@ class FakeEmailClient(EmailClient):
         if self._fetch_conversation_return is not None:
             return list(self._fetch_conversation_return)
         return []
+
+    def capture_backfill_anchor(self) -> str:
+        """Return the injected backfill anchor (or a benign default).
+
+        The real ABC leaves this ``raise NotImplementedError``; the fake
+        overrides it so the manager-delegation tests (and any worker test that
+        drives the fake through the real EmailManager) can exercise the happy
+        path. Inject ``capture_backfill_anchor_exc`` for the failure path.
+        """
+        self.capture_backfill_anchor_calls += 1
+        if self._capture_backfill_anchor_exc:
+            raise self._capture_backfill_anchor_exc
+        return self._capture_backfill_anchor_return
+
+    def fetch_backfill_page(self, cursor: str | None, page_size: int) -> BackfillPage:
+        """Return the next injected backfill page (queue first, then single).
+
+        Records ``(cursor, page_size)`` so a test can assert the paginating
+        caller forwards the previous page's ``next_cursor`` and clamps
+        ``page_size``. Falls back to a single exhausting page built from
+        ``metadata`` (``next_cursor=None``) when nothing was injected.
+        """
+        self.fetch_backfill_page_calls.append((cursor, page_size))
+        if self._fetch_backfill_page_exc:
+            raise self._fetch_backfill_page_exc
+        if self._fetch_backfill_pages:
+            return self._fetch_backfill_pages.pop(0)
+        if self._fetch_backfill_page_return is not None:
+            return self._fetch_backfill_page_return
+        return BackfillPage(upserts=list(self._metadata), next_cursor=None)
 
     def get_account_label(self) -> str:
         return self._account_label

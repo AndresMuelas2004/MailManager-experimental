@@ -53,6 +53,15 @@ def _patch_common(monkeypatch, *, fake_client_kwargs=None):
         sincronizacion.account_store, "upsert_tokens",
         lambda *_a, **_kw: None,
     )
+    # The sync guard loads EVERY backfill job of the mailbox ONCE via
+    # ``list_by_mailbox``, deriving both the exclusion set and the
+    # ghost-reconciliation skip set in memory. Default it to "no backfill jobs"
+    # so the unrelated existing tests keep their prior behaviour; the guard
+    # tests override it per-case with rows carrying ``status`` + ``attempts``.
+    monkeypatch.setattr(
+        sincronizacion.account_backfill_store, "list_by_mailbox",
+        lambda _mb: [],
+    )
 
     kwargs = fake_client_kwargs or {}
 
@@ -569,3 +578,170 @@ class TestRunContentPrefetchAndPurge:
         )
         # m2 blew up but m3 was still attempted.
         assert attempted == ["m1", "m2", "m3"]
+
+
+class TestBackfillGuard:
+    """The sync loads every backfill job once (``list_by_mailbox``) and excludes
+    the accounts under an ACTIVE (pending/running) OR RETRIABLE-FAILED backfill
+    (§4.6.1). The guard is independent of BACKFILL_WORKER_ENABLED (a job that
+    exists is honoured). A PERMANENTLY failed job (attempts >= max) is NOT
+    excluded — the sync attends it in degraded bootstrap mode."""
+
+    def test_unified_sync_excludes_active_backfill_account(self, monkeypatch):
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        # acc2 has a running backfill → excluded; acc1 syncs normally.
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID_2, "status": "running", "attempts": 0}],
+        )
+
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+        assert [d.account_id for d in result.accounts] == [_ACCOUNT_ID]
+        assert result.total_synced == 1
+        # A backfilling account is an EXCLUSION, never a partial failure.
+        assert result.failed_accounts == []
+
+    def test_single_account_in_backfill_returns_neutral(self, monkeypatch):
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID, "status": "pending", "attempts": 0}],
+        )
+
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID, _ACCOUNT_ID)
+
+        # No bootstrap runs — the backfill owns the initial load.
+        assert result.total_synced == 0
+        assert result.accounts == []
+        assert result.failed_accounts == []
+
+    def test_all_accounts_in_backfill_returns_neutral(self, monkeypatch):
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [
+                {"account_id": _ACCOUNT_ID, "status": "running", "attempts": 0},
+                {"account_id": _ACCOUNT_ID_2, "status": "pending", "attempts": 0},
+            ],
+        )
+
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+        assert result.total_synced == 0
+        assert result.accounts == []
+
+    def test_retriable_failed_backfill_account_is_excluded(self, monkeypatch):
+        # A ``failed`` job with attempts < max is still owned by the worker (its
+        # reaper will revive it), so the sync must exclude it — otherwise the
+        # bootstrap(500) fallback would trigger the ghost-reconciliation
+        # mass-delete of the large partial history.
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(sincronizacion, "backfill_max_attempts", lambda: 5)
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID, "status": "failed", "attempts": 2}],
+        )
+
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID, _ACCOUNT_ID)
+
+        assert result.total_synced == 0
+        assert result.accounts == []
+
+    def test_permanently_failed_backfill_syncs_but_skips_reconciliation(self, monkeypatch):
+        # attempts >= max → NOT excluded (degraded bootstrap so the user sees the
+        # error to reconnect), but because it still HAS a backfill job it stays in
+        # ``skip_reconciliation_ids`` so the bootstrap does not mass-delete its
+        # large partial history as ghosts.
+        _patch_common(monkeypatch, fake_client_kwargs={
+            "is_full_sync": True,
+            "existing_message_ids": ["m1"],
+        })
+        monkeypatch.setattr(sincronizacion, "backfill_max_attempts", lambda: 5)
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID, "status": "failed", "attempts": 5}],
+        )
+        load_calls = []
+        monkeypatch.setattr(
+            sincronizacion, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: (load_calls.append(_aid), ["m_ghost"])[1],
+        )
+
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID, _ACCOUNT_ID)
+
+        # It synced (not excluded) but reconciliation was skipped for it.
+        assert [d.account_id for d in result.accounts] == [_ACCOUNT_ID]
+        assert load_calls == []
+
+    def test_backfill_lookup_database_error_translated(self, monkeypatch):
+        from database import DatabaseError
+        from api.errors.exceptions import ApiError
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            MagicMock(side_effect=DatabaseError("db down")),
+        )
+        with pytest.raises(ApiError):
+            sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+    def test_backfill_lookup_unexpected_error(self, monkeypatch):
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+        with pytest.raises(EmailFetchError, match="Failed to load backfill jobs"):
+            sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+
+
+class TestReconciliationBackfillGating:
+    """A completed backfill account skips ghost reconciliation (§4.6.2) so an
+    expired incremental cursor can't mass-delete the 100k history."""
+
+    def test_completed_backfill_skips_reconciliation(self, monkeypatch):
+        _patch_common(monkeypatch, fake_client_kwargs={
+            "is_full_sync": True,
+            "existing_message_ids": ["m1"],
+        })
+        # acc1 has a COMPLETED backfill → its full-sync must not reconcile.
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID, "status": "completed"}],
+        )
+        load_calls = []
+        monkeypatch.setattr(
+            sincronizacion, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: (load_calls.append(_aid), ["m_ghost"])[1],
+        )
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+        # The suspect loader was never consulted for the completed account.
+        assert load_calls == []
+        assert result.total_synced >= 0
+
+    def test_completed_backfill_for_other_account_still_reconciles(self, monkeypatch):
+        _patch_common(monkeypatch, fake_client_kwargs={
+            "is_full_sync": True,
+            "existing_message_ids": ["m1"],
+        })
+        # The completed job belongs to a DIFFERENT account, so acc1 (synced
+        # here) still reconciles — gating is per-account.
+        monkeypatch.setattr(
+            sincronizacion.account_backfill_store, "list_by_mailbox",
+            lambda _mb: [{"account_id": _ACCOUNT_ID_2, "status": "completed"}],
+        )
+        load_calls = []
+        monkeypatch.setattr(
+            sincronizacion, "load_suspect_message_ids",
+            lambda _aid, _boot, **_kw: (load_calls.append(_aid), [])[1],
+        )
+        sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+        assert load_calls == [_ACCOUNT_ID]

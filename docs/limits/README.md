@@ -7,7 +7,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 ## Índice por área
 
 ### Identidad, cuentas y buzones
-- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Duración de sesión, permisos OAuth exactos por proveedor (incluidos los scopes y el desfase de reloj del login con Microsoft), validaciones de cuenta, dev login, los topes del rate limiting (buckets, exenciones y Retry-After) e infraestructura de despliegue.
+- [autenticacion-y-cuentas.md](autenticacion-y-cuentas.md) — Duración de sesión, permisos OAuth exactos por proveedor (incluidos los scopes y el desfase de reloj del login con Microsoft), validaciones de cuenta, el límite de cuentas conectadas por usuario, dev login, los topes del rate limiting (buckets, exenciones y Retry-After) e infraestructura de despliegue.
 - [buzones-y-vista-unificada.md](buzones-y-vista-unificada.md) — Asimetrías multi-cuenta / multi-buzón y lo que la vista unificada no resuelve.
 - [ajustes.md](ajustes.md) — Longitud de nombres (renombrar bandeja, etiqueta de cuenta), versión fija de la app, persistencia del idioma (clave/valores/precedencia), el endpoint `PATCH` de renombrar bandeja y lo que el panel NO soporta.
 
@@ -18,7 +18,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 - [ordenar-y-filtrar-listado.md](ordenar-y-filtrar-listado.md) — Criterios de orden admitidos (fecha/remitente/asunto, asc/desc), los tres chips de filtro y su mapeo a operadores de la lupa, los parámetros de URL y qué NO soporta.
 - [contador-no-leidos.md](contador-no-leidos.md) — Bandejas con badge, qué se cuenta (mensajes, no hilos), tope visual «99+», formato del título, superficies, y por qué no lleva índice ni migración.
 - [conversaciones.md](conversaciones.md) — Reglas de agregación de la fila-conversación, tamaño de lote del hilo por proveedor, asimetrías Gmail/Outlook y códigos de error del visor.
-- [visualizacion-de-correos.md](visualizacion-de-correos.md) — Etiquetas, atributos, protocolos y reglas CSS permitidos, umbrales del saneamiento, y el TTL y la pre-carga del caché de contenido.
+- [visualizacion-de-correos.md](visualizacion-de-correos.md) — Etiquetas, atributos, protocolos y reglas CSS permitidos, umbrales del saneamiento, el TTL y la pre-carga del caché de contenido, y los límites del proxy de imágenes remotas (tamaños, anti-SSRF, firma, caché de servidor).
 - [lupa.md](lupa.md) — Mínimo de caracteres, debounce, topes de tokens y de operadores, catálogo cerrado de operadores y formatos de fecha aceptados.
 - [favoritos.md](favoritos.md) — Topes y asimetrías de conteo de la sincronización de favoritos.
 

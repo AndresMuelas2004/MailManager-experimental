@@ -14,7 +14,7 @@ from __future__ import annotations
 UPSERT_EMAIL_METADATA_BATCH = """
     INSERT INTO email_metadata
         (provider_message_id, account_id, thread_id, from_email, from_name,
-         subject, received_at, is_read, box, to_email, to_name)
+         subject, received_at, is_read, box, is_favorite, to_email, to_name)
     VALUES %s
     ON CONFLICT (provider_message_id, account_id) DO UPDATE SET
         is_read = EXCLUDED.is_read,
@@ -23,6 +23,7 @@ UPSERT_EMAIL_METADATA_BATCH = """
             THEN 'DELETED'
             ELSE EXCLUDED.box
         END,
+        is_favorite = EXCLUDED.is_favorite,
         to_email = EXCLUDED.to_email,
         to_name = EXCLUDED.to_name
 """
@@ -33,6 +34,12 @@ DELETE_BATCH_BY_MESSAGE_IDS = """
       AND provider_message_id = ANY(%(message_ids)s)
 """
 
+# ``is_favorite`` is updated through COALESCE so a NULL incoming value leaves
+# the stored favourite untouched. Gmail always sends a concrete bool (star
+# state read from labelIds); Outlook partial delta objects send NULL when the
+# ``flag`` field is absent from the partial payload. The ``::BOOLEAN`` cast is
+# required because ``execute_values`` sends Python ``None`` as an untyped NULL,
+# and ``COALESCE(NULL, em.is_favorite)`` needs the branch typed to BOOLEAN.
 UPDATE_LABELS_BATCH = """
     UPDATE email_metadata AS em
        SET is_read = v.is_read,
@@ -40,8 +47,9 @@ UPDATE_LABELS_BATCH = """
                WHEN em.box = 'DELETED' AND v.box = 'TRASH'
                THEN 'DELETED'
                ELSE v.box
-           END
-      FROM (VALUES %s) AS v(provider_message_id, account_id, is_read, box)
+           END,
+           is_favorite = COALESCE(v.is_favorite::BOOLEAN, em.is_favorite)
+      FROM (VALUES %s) AS v(provider_message_id, account_id, is_read, box, is_favorite)
      WHERE em.provider_message_id = v.provider_message_id::VARCHAR
        AND em.account_id          = v.account_id::UUID
 """
@@ -549,19 +557,6 @@ SYNC_FAVORITES_FOR_ACCOUNT = """
     WHERE account_id = %(account_id)s
 """
 
-# Conversation lazy-sync favourites: mark a SUBSET of an account's rows
-# (the thread members the provider reports as favourite) TRUE in a single
-# statement. Unlike SYNC_FAVORITES_FOR_ACCOUNT it does NOT touch rows
-# outside ``true_ids`` — the conversation sync only knows the thread it
-# just fetched, so it must never clear favourites elsewhere in the account.
-# One-directional by design (never sets FALSE).
-UPDATE_FAVORITES_TRUE_BATCH = """
-    UPDATE email_metadata
-    SET is_favorite = TRUE
-    WHERE account_id = %(account_id)s
-      AND provider_message_id = ANY(%(true_ids)s)
-"""
-
 EXISTS_BY_MESSAGE_ID = """
     SELECT 1 FROM email_metadata
     WHERE provider_message_id = %(provider_message_id)s
@@ -638,6 +633,30 @@ LIST_RECIPIENT_SUGGESTIONS = """
     GROUP BY lower(c.email)
     ORDER BY frequency DESC, last_seen DESC, email ASC
     LIMIT %(limit)s
+"""
+
+# Lean projection of every row sharing ``thread_id`` for one account, used by
+# the conversation viewer's lazy-sync to reconcile provider message ids.
+# Outlook returns a DIFFERENT REST id for the SAME physical message on the
+# folder-delta endpoint (what sync persisted) vs the mailbox-wide
+# ``$filter=conversationId`` endpoint (what ``fetch_conversation`` returns), and
+# ``Prefer: IdType="ImmutableId"`` does NOT reconcile the two (verified live —
+# see external-apis-used/Outlook/08). The viewer maps each fetched member back
+# onto the stored row of the SAME physical message — keyed by the endpoint-
+# independent ``(received_at, from_email, subject)`` triple — so reopening a
+# thread UPDATEs the existing row instead of INSERTing a duplicate per open.
+# Ordered ``received_at DESC, provider_message_id`` so that, when past opens
+# left duplicate rows, the reused id is deterministically the SAME representative
+# the grouped listing picks (received_at DESC, then min provider_message_id) —
+# the id the frontend requests content under, so reopening is a cache hit.
+# Backed by ``idx_email_metadata_account_thread (account_id, thread_id,
+# received_at DESC)`` (migration 0033). Callers pass a NON-empty ``thread_id``.
+LIST_METADATA_BY_THREAD = """
+    SELECT provider_message_id, received_at, from_email, subject
+    FROM email_metadata
+    WHERE account_id = %(account_id)s
+      AND thread_id  = %(thread_id)s
+    ORDER BY received_at DESC, provider_message_id
 """
 
 # Recompute has_attachments from email_attachments (D-09). The

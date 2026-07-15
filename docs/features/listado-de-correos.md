@@ -133,7 +133,7 @@ Cuando el usuario abre una bandeja, ocurren dos cosas casi a la vez:
 1. **Se pinta de inmediato** lo que hay en la base de datos local (instantáneo, sección 1).
 2. **Se lanza una sincronización en segundo plano** con el proveedor para traer lo que haya llegado nuevo. Mientras corre, la lista ya es visible y usable; cuando termina, la lista se refresca sola con los correos nuevos.
 
-Esta sincronización automática se dispara al entrar al mailbox y al cambiar de cuenta. Corre de forma **silenciosa**: en las bandejas reales no hay un indicador visible de "sincronizando" (el botón de refresco de la cabecera es decorativo y no se anima); el usuario nunca ve una pantalla en blanco esperando, simplemente la lista aparece al instante y se actualiza sola cuando llega lo nuevo. (La vista de Favoritos sí tiene un botón "Sincronizar favoritos" que se anima, pero esa es una acción distinta — ver [favoritos.md](favoritos.md).)
+Esta sincronización automática se dispara al entrar al mailbox y al cambiar de cuenta. Corre de forma **silenciosa**: en las bandejas reales no hay un indicador visible de "sincronizando" (el botón de refresco de la cabecera es decorativo y no se anima); el usuario nunca ve una pantalla en blanco esperando, simplemente la lista aparece al instante y se actualiza sola cuando llega lo nuevo.
 
 ### 6.1 Frescura del caché
 

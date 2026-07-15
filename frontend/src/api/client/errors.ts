@@ -86,6 +86,15 @@ export function toUiError(error: unknown): UiError {
         message: 'Una cuenta ha perdido la conexión. Vuelve a conectarla e inténtalo de nuevo.',
       };
     }
+    if (error.code === 'account_limit_exceeded') {
+      // Second-line defence: the ConnectedAccountsPage already disables "Add
+      // account" at the cap, but any path that still reaches the backend 409 gets
+      // a localized, user-facing message instead of the raw backend text.
+      return {
+        code: error.code,
+        message: 'Has alcanzado el máximo de cuentas conectadas.',
+      };
+    }
     if (error.code === 'mailbox_not_found') {
       // The backend message leaks the internal term "Mailbox" and the raw UUID
       // ("Mailbox '...' not found."). Map the CODE to a localized, user-facing

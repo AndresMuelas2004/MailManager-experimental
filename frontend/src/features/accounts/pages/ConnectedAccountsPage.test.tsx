@@ -121,4 +121,102 @@ describe('ConnectedAccountsPage — account management cards', () => {
     // The card is removed from the listing after a successful delete.
     await waitFor(() => expect(screen.queryByText('one@example.com')).not.toBeInTheDocument());
   });
+
+  it('shows the live backfill counter on a card whose account is still loading', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+      // The account is mid-backfill → its card shows the counter.
+      http.get(`${API_BASE}/mailboxes/mb_1/backfill-status`, () =>
+        HttpResponse.json({
+          accounts: [
+            {
+              account_id: 'a_1',
+              status: 'running',
+              fetched_count: 340,
+              target_total: 100000,
+              done: false,
+            },
+          ],
+          active: true,
+        }),
+      ),
+    );
+
+    renderConnectedAccounts();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    const notice = await screen.findByText(/Cargando/);
+    expect(notice.textContent).toContain('340');
+  });
+
+  it('renders the card normally when the account has no active backfill', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountOne])),
+      // A completed job is terminal → the counter is retired.
+      http.get(`${API_BASE}/mailboxes/mb_1/backfill-status`, () =>
+        HttpResponse.json({
+          accounts: [
+            {
+              account_id: 'a_1',
+              status: 'completed',
+              fetched_count: 100000,
+              target_total: 100000,
+              done: true,
+            },
+          ],
+          active: false,
+        }),
+      ),
+    );
+
+    renderConnectedAccounts();
+
+    await waitFor(() => expect(screen.getByText('one@example.com')).toBeInTheDocument());
+    expect(screen.queryByText(/Cargando/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ConnectedAccountsPage — per-user account quota', () => {
+  it('renders the quota counter and keeps Add enabled below the limit', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([])),
+      // Below the cap → the button stays clickable and no notice shows.
+      http.get(`${API_BASE}/accounts/quota`, () => HttpResponse.json({ connected: 0, limit: 15 })),
+    );
+
+    renderConnectedAccounts();
+    const user = userEvent.setup();
+
+    // The counter mirrors the server quota ("N / max cuentas").
+    expect(await screen.findByText('0 / 15 cuentas')).toBeInTheDocument();
+    expect(screen.queryByText(/Has alcanzado el máximo/)).not.toBeInTheDocument();
+
+    // With a provider selected canAdd becomes true; below the cap the quota does
+    // NOT block the button, so it is enabled.
+    await user.click(screen.getByRole('button', { name: /Selecciona un proveedor/ }));
+    await user.click(screen.getByRole('button', { name: 'Gmail' }));
+    expect(screen.getByRole('button', { name: 'Añadir cuenta' })).toBeEnabled();
+  });
+
+  it('disables Add and shows the limit notice at the cap', async () => {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([])),
+      http.get(`${API_BASE}/accounts/quota`, () => HttpResponse.json({ connected: 15, limit: 15 })),
+    );
+
+    renderConnectedAccounts();
+    const user = userEvent.setup();
+
+    // The at-limit notice explains why adding is blocked, and the counter is full.
+    expect(
+      await screen.findByText('Has alcanzado el máximo de 15 cuentas conectadas.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('15 / 15 cuentas')).toBeInTheDocument();
+
+    // Even with a provider selected (canAdd true) the at-limit quota disables the
+    // button — effectiveCanAdd = canAdd && !atLimit.
+    await user.click(screen.getByRole('button', { name: /Selecciona un proveedor/ }));
+    await user.click(screen.getByRole('button', { name: 'Gmail' }));
+    expect(screen.getByRole('button', { name: 'Añadir cuenta' })).toBeDisabled();
+  });
 });

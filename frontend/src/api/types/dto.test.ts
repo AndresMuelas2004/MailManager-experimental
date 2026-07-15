@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accountOutSchema,
   attachmentMetadataSchema,
+  backfillStatusListSchema,
   draftAttachmentMetadataSchema,
   draftAttachmentResponseSchema,
   draftOutSchema,
@@ -71,6 +72,47 @@ describe('attachmentMetadataSchema', () => {
       is_unavailable: false,
       position: 0,
     });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('backfillStatusListSchema', () => {
+  it('parses a happy-path payload with a running job', () => {
+    const parsed = backfillStatusListSchema.parse({
+      accounts: [
+        {
+          account_id: 'a_1',
+          status: 'running',
+          fetched_count: 12340,
+          target_total: 100000,
+          done: false,
+        },
+      ],
+      active: true,
+    });
+    expect(parsed.active).toBe(true);
+    expect(parsed.accounts[0].status).toBe('running');
+    expect(parsed.accounts[0].fetched_count).toBe(12340);
+  });
+
+  it('parses the empty / no-backfill shape', () => {
+    const parsed = backfillStatusListSchema.parse({ accounts: [], active: false });
+    expect(parsed.accounts).toEqual([]);
+    expect(parsed.active).toBe(false);
+  });
+
+  it('rejects an unknown status enum value', () => {
+    const result = backfillStatusListSchema.safeParse({
+      accounts: [
+        { account_id: 'a_1', status: 'paused', fetched_count: 0, target_total: 1, done: false },
+      ],
+      active: true,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a missing active flag', () => {
+    const result = backfillStatusListSchema.safeParse({ accounts: [] });
     expect(result.success).toBe(false);
   });
 });

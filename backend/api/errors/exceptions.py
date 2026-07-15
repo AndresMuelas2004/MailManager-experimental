@@ -240,6 +240,12 @@ class AccountOperationError(ApiError):
     code = "account_operation_error"
 
 
+class AccountLimitExceeded(ApiError):
+    """The user already owns the maximum number of connected accounts allowed."""
+
+    code = "account_limit_exceeded"
+
+
 class SessionOperationError(ApiError):
     code = "session_operation_error"
 
@@ -434,6 +440,31 @@ class RecipientSuggestionsError(ApiError):
 
 
 # ---------------------------------------------------------------------------
+# Background initial mass backfill.
+# ---------------------------------------------------------------------------
+
+
+class BackfillStatusError(ApiError):
+    """Unexpected (non-DB) failure while loading the backfill status of a
+    mailbox. Mapped to HTTP 500 — same family as ``EmailListError`` (a
+    read-only status failure has no retry story; a ``DatabaseError`` from the
+    same store call still translates to 503)."""
+    code = "backfill_status_error"
+
+
+class BackfillJobError(ApiError):
+    """Persistence fallback for the background backfill machinery.
+
+    Two producers, both OUTSIDE the request/response cycle so it never reaches
+    a client: (1) the worker, which reuses the service persistence helpers
+    (``persist_email_metadata_batch``, ``update_sync_cursor``, …) and swallows
+    this (logs with ``exc_info`` + marks the job failed); (2)
+    ``enqueue_backfill_on_connect``, whose caller (``complete_account_connect``)
+    swallows it best-effort. Registered at 500 for completeness."""
+    code = "backfill_job_error"
+
+
+# ---------------------------------------------------------------------------
 # Health / readiness.
 # ---------------------------------------------------------------------------
 
@@ -458,3 +489,32 @@ class TooManyRequests(ApiError):
     Mapped to HTTP 429.
     """
     code = "rate_limit_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Remote-email-image proxy (GET /image-proxy + admin purge).
+# Consumed from an <img> tag, so the browser only distinguishes 2xx from
+# non-2xx; the granular codes below matter for logs / monitoring / tests.
+# ---------------------------------------------------------------------------
+
+
+class ImageProxyForbidden(ApiError):
+    """The image proxy request carried an invalid or missing HMAC signature.
+
+    Mapped to HTTP 403 — the sentinel URL was not minted by our sanitiser
+    (or was tampered with), so the proxy refuses to fetch it."""
+    code = "image_proxy_forbidden"
+
+
+class ImageProxyBlockedTarget(ApiError):
+    """The remote image target was blocked by the anti-SSRF policy (private /
+    loopback / link-local / metadata / CGNAT address, bad scheme, or an unsafe
+    redirect hop). Mapped to HTTP 403."""
+    code = "image_proxy_blocked_target"
+
+
+class ImageProxyUpstreamError(ApiError):
+    """The image proxy could not serve the remote image: an upstream fetch
+    failure, a non-image / oversized response, or a cache read error. Mapped
+    to HTTP 502 (the failure is on the upstream/proxy side, not the client)."""
+    code = "image_proxy_upstream_error"

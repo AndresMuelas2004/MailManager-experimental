@@ -39,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional local dependency
                 loaded = True
         return loaded
 
+from core.image_proxy import close_client
 from database import (
     close_pool,
     run_startup_migrations_if_enabled,
@@ -46,7 +47,10 @@ from database import (
     warmup_connection,
 )
 from api.errors.handlers import register_error_handlers
-from api.routers.accounts_routers import router as accounts_router
+from api.routers.accounts_routers import (
+    account_quota_router,
+    router as accounts_router,
+)
 from api.routers.attachments_routers import (
     admin_router as attachments_admin_router,
     email_attachments_router,
@@ -59,10 +63,16 @@ from api.routers.emails_routers import (
     router as emails_router,
 )
 from api.routers.health_routers import router as health_router
+from api.routers.image_proxy_routers import (
+    image_proxy_admin_router,
+    image_proxy_router,
+)
 from api.routers.mailboxes_routers import router as mailboxes_router
 from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.routers_helpers import rate_limit_by_ip
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
+from api.services.backfill_worker import start_backfill_worker, stop_backfill_worker
+from api.services.image_proxy_signing import signing_key_is_secure
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
@@ -77,7 +87,35 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.critical("Startup failed (%s): %s", type(exc).__name__, exc)
         raise
+    # Start the background backfill worker best-effort: a failure here (e.g. the
+    # account_backfill_jobs table missing because DB_AUTO_MIGRATE=false) must NOT
+    # abort app startup — the API must serve traffic even without the worker.
+    # Deliberately distinct from the fail-fast validate/migrate/warmup above.
+    try:
+        start_backfill_worker()
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker failed to start (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
     yield
+    try:
+        stop_backfill_worker()
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker failed to stop cleanly (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
+    # Close the shared image-proxy HTTP client (keep-alive pool). Best-effort:
+    # the OS reclaims sockets on process exit, but closing here keeps the dev
+    # --reload cycle and the tests clean. A close failure must not abort shutdown.
+    try:
+        close_client()
+    except Exception as exc:
+        logger.warning(
+            "Image proxy client failed to close cleanly (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
     close_pool()
 
 
@@ -95,6 +133,22 @@ def create_app() -> FastAPI:
         raise RuntimeError(
             "CORS_ALLOWED_ORIGINS must list explicit origins, not '*': a wildcard "
             "origin is incompatible with allow_credentials=True."
+        )
+    # Fail-closed on the image-proxy HMAC key, mirroring the CORS wildcard guard.
+    # ``/image-proxy`` is rate-limit-exempt, so booting with the public dev
+    # fallback key would turn the backend into an open image relay. Gated by an
+    # opt-in flag (default off) so dev / tests keep the fallback: production
+    # deployments set IMAGE_PROXY_REQUIRE_KEY=true (see .env.production.example),
+    # and then a missing / dev-fallback key aborts startup instead of running
+    # insecure.
+    require_image_proxy_key = os.environ.get(
+        "IMAGE_PROXY_REQUIRE_KEY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if require_image_proxy_key and not signing_key_is_secure():
+        raise RuntimeError(
+            "IMAGE_PROXY_SIGNING_KEY must be set to a strong, persistent value "
+            "(not the insecure dev fallback) when IMAGE_PROXY_REQUIRE_KEY is enabled. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
         )
     app.add_middleware(
         CORSMiddleware,
@@ -121,8 +175,16 @@ def create_app() -> FastAPI:
     app.include_router(health_router)  # exempt
     app.include_router(auth_router, dependencies=global_rate_limit)
     app.include_router(oauth_callback_router)  # exempt
+    # Exempt like the callbacks: the browser hits /image-proxy once per image
+    # (a newsletter can carry dozens), so the global bucket would trip on a
+    # single email open. The HMAC signature (only URLs our sanitiser minted) +
+    # the anti-SSRF guard are the real abuse gate. Because it is unthrottled,
+    # a strong IMAGE_PROXY_SIGNING_KEY in production is load-bearing, not just a
+    # footgun — a predictable key would turn this into an open image relay.
+    app.include_router(image_proxy_router)  # exempt
     app.include_router(mailboxes_router, dependencies=global_rate_limit)
     app.include_router(accounts_router, dependencies=global_rate_limit)
+    app.include_router(account_quota_router, dependencies=global_rate_limit)
     app.include_router(emails_router, dependencies=global_rate_limit)
     app.include_router(favorites_router, dependencies=global_rate_limit)
     app.include_router(virtual_mailboxes_router, dependencies=global_rate_limit)
@@ -130,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(drafts_router, dependencies=global_rate_limit)
     app.include_router(email_attachments_router, dependencies=global_rate_limit)
     app.include_router(attachments_admin_router, dependencies=global_rate_limit)
+    app.include_router(image_proxy_admin_router, dependencies=global_rate_limit)
     return app
 
 

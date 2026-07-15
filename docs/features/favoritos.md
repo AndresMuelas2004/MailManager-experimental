@@ -15,7 +15,7 @@ MailManager no inventa este concepto: lo mapea sobre lo que cada proveedor ya of
 - En **Gmail**, un favorito es la etiqueta **`STARRED`** (la estrella de Gmail).
 - En **Outlook**, un favorito es la **bandera de seguimiento** del mensaje (`flag`, con estado "marcado").
 
-El usuario no tiene que saber nada de esto: marca la estrella en MailManager y el cambio se refleja tanto en MailManager como en Gmail/Outlook web, y al revés.
+El usuario no tiene que saber nada de esto: marca la estrella en MailManager y el cambio se refleja tanto en MailManager como en Gmail/Outlook web, y al revés. Y en el otro sentido: los correos que ya venían destacados en el proveedor **llegan a MailManager con su estrella puesta** en cuanto se sincroniza la cuenta — el estado de favorito se baja como una cabecera más del correo (ver [sincronizacion.md](sincronizacion.md) y § 5).
 
 ### 1.1 El favorito es ortogonal a la ubicación del correo
 
@@ -78,14 +78,13 @@ Existe una pestaña dedicada que lista **únicamente** los correos marcados como
 Favoritos aparece en **dos sitios** según desde dónde se mire, y los dos se comportan igual salvo por el alcance del listado:
 
 - **A nivel de mailbox** (la entrada de "Favoritos" del menú lateral): lista los favoritos de **todas** las cuentas del mailbox.
-- **A nivel de una cuenta concreta** (la entrada "Favoritos" de la barra lateral cuando el selector de cuentas está en una cuenta): lista solo los favoritos de **esa** cuenta. Su botón de sincronizar reconcilia solo la cuenta actual (ver § 5).
+- **A nivel de una cuenta concreta** (la entrada "Favoritos" de la barra lateral cuando el selector de cuentas está en una cuenta): lista solo los favoritos de **esa** cuenta.
 
 La vista de favoritos por cuenta es el cierre de la segunda mitad de § 4.1 de este mismo documento: la afirmación *"en una cuenta concreta, solo los de esa cuenta"* ya estaba escrita pero el código nunca la había implementado; ahora sí existe. No hubo cambios de backend ni nuevas llamadas al proveedor — reutiliza el mismo listado de favoritos filtrando por la cuenta.
 
 ### 4.1 Qué muestra
 
 - Una cabecera "Favoritos" con su subtítulo (a nivel de mailbox, "Correos marcados con estrella en Gmail o con bandera en Outlook"; a nivel de cuenta, "Favoritos de" la cuenta).
-- Un botón **"Sincronizar favoritos"** (ver § 5).
 - Una **lupa de búsqueda** que filtra dentro de los favoritos (mismas reglas que la lupa general: literal, sin tildes/mayúsculas, mínimo 2 caracteres, debounce; ver [`lupa.md`](lupa.md)).
 - La tabla de correos favoritos, ordenados por fecha de recepción descendente.
 
@@ -110,16 +109,25 @@ Una matización: las **bandejas ficticias** cuyo filtro no especifica ubicación
 
 ---
 
-## 5. Sincronizar favoritos con el proveedor
+## 5. Captura automática de favoritos (y la reconciliación, ahora vestigial)
 
-El botón **"Sincronizar favoritos"** existe porque MailManager y el proveedor pueden desincronizarse: el usuario pudo marcar una estrella desde Gmail web, desde el móvil, o desde otra app, sin pasar por MailManager. La sincronización **reconcilia** el estado local con lo que el proveedor considera la verdad.
+**Cambio de comportamiento importante.** El estado de favorito se **captura durante la sincronización normal del correo** — tanto en la descarga inicial de una cuenta recién conectada (el backfill masivo) como en **cada** incremental posterior. Los correos destacados **llegan ya con su estrella puesta**, sin que el usuario tenga que hacer nada: el proveedor es la fuente de verdad y la marca viaja como una cabecera más del correo (la etiqueta `STARRED` de Gmail o la bandera de Outlook — ver [sincronizacion.md](sincronizacion.md) § 6). Antes no era así: la estrella solo se poblaba pulsando un botón "Sincronizar favoritos" o marcando a mano.
 
-### 5.1 Qué hace exactamente
+Esta captura cubre **todos** los cambios de estrella, no solo el correo nuevo:
 
-1. Pregunta al proveedor **qué correos tiene marcados como favoritos** ahora mismo. El alcance depende de desde dónde se pulse el botón: desde la pestaña de Favoritos del **mailbox** pregunta a **cada cuenta** del mailbox; desde la pestaña de Favoritos de una **cuenta concreta** pregunta **solo a esa cuenta** (es lo coherente con una vista ya filtrada a una sola cuenta, y no toca el estado de las demás). La etiqueta del botón es la misma en ambos casos: "Sincronizar favoritos".
-2. Para cada cuenta implicada, en una sola operación: marca como favoritos en la base de datos local **todos** los correos que el proveedor reporta como favoritos, y marca como **no favoritos** absolutamente todos los demás correos de esa cuenta.
+- **Correo nuevo que ya llega destacado** del proveedor → entra en el incremental como alta completa, con su estrella puesta.
+- **Des/marcado hecho fuera de MailManager** (Gmail web, el móvil, otra app) **sobre un correo que ya estaba sincronizado** → también se refleja en el siguiente incremental, en **ambos** proveedores. En Gmail ese cambio llega como un evento de etiqueta, y la ruta de cambio-de-etiqueta **ahora también arrastra el estado `STARRED`** (antes lo ignoraba — ese era el único hueco que quedaba, hoy cerrado); en Outlook el incremental re-parsea el mensaje completo, que ya incluye la bandera. La asimetría exacta está en [`../limits/favoritos.md`](../limits/favoritos.md).
 
-Es una **reconciliación completa**, no un "añadir lo nuevo": si el usuario desmarcó una estrella en Gmail web, tras sincronizar ese correo deja de ser favorito también en MailManager.
+**Por eso el botón "Sincronizar favoritos" se retiró de la interfaz.** Como la sincronización general mantiene ya la columna de favoritos al día en todos los casos, el botón dejó de ser necesario y **ya no aparece** en la página de Favoritos (ni a nivel de mailbox ni a nivel de cuenta). El usuario no pulsa nada para ver sus destacados al día.
+
+### 5.1 La reconciliación completa, ahora vestigial
+
+El mecanismo de reconciliación completa **sigue existiendo en el backend** (el endpoint `POST /favorites/sync`), pero **ninguna pantalla lo invoca** ya — se documenta aquí para quien lo encuentre en el código. Lo que hace, si se llama directamente, es:
+
+1. Preguntar al proveedor **qué correos tiene marcados como favoritos** ahora mismo, con un alcance opcional de **una sola cuenta** (o **todas** las del mailbox si no se acota).
+2. Para cada cuenta implicada, en una sola operación: marcar como favoritos en la base local **todos** los correos que el proveedor reporta y marcar como **no favoritos** todos los demás de esa cuenta.
+
+Es una **reconciliación completa** (no un "añadir lo nuevo"): pone al día la columna de favoritos de golpe. Hoy es redundante con la captura automática de arriba, que llega al mismo estado sin intervención.
 
 ### 5.2 La sincronización NO importa correos nuevos (decisión deliberada)
 
@@ -129,9 +137,9 @@ Esta es una asimetría importante y consciente. Si el proveedor reporta como fav
 
 - La llamada que respalda la sincronización solo devuelve **identificadores** de correos favoritos, no su contenido ni su metadata (asunto, remitente, fecha). Importar esos correos obligaría a una segunda ronda de llamadas por cada identificador, convirtiendo una reconciliación barata de etiquetas en una sincronización de metadata encubierta.
 - Importar metadata nueva ya es responsabilidad de **otra** operación (la sincronización general de la bandeja). Hacerlo desde dos sitios distintos arriesga divergencias.
-- El efecto visible para el usuario —"marqué un favorito en Gmail web que MailManager aún no había descargado"— es simplemente "el favorito aparece tras la próxima sincronización de la bandeja", que es aceptable para una reconciliación manual.
+- El efecto visible para el usuario —"marqué un favorito en Gmail web que MailManager aún no había descargado"— es simplemente "el favorito aparece tras la próxima sincronización de la bandeja", que es aceptable: importar la metadata nueva es trabajo de la sincronización general de la bandeja.
 
-**Ejemplo**: el usuario marca en Gmail web un correo muy antiguo que MailManager nunca llegó a descargar. Pulsa "Sincronizar favoritos" en MailManager → ese correo **no** aparece en Favoritos todavía. Tiene que sincronizar primero la bandeja (que baja la metadata) y luego ya aparecerá como favorito.
+**Ejemplo**: el usuario marca en Gmail web un correo muy antiguo que MailManager nunca llegó a descargar. Ese correo **no** aparece en Favoritos todavía: primero hay que sincronizar la bandeja (que baja la metadata) y, una vez esté en local, aparecerá con su estrella.
 
 ### 5.3 Dos números que cuentan cosas distintas
 
@@ -144,11 +152,9 @@ La sincronización informa de dos cantidades que **casi nunca coinciden** y conv
 
 **Caso borde**: que el proveedor no reporte **ningún** favorito es válido y significa "esta cuenta no tiene favoritos" → la sincronización pone a no-favorito todas las filas de la cuenta y aun así informa del recuento completo de filas tocadas.
 
-### 5.4 Qué ve el usuario
+### 5.4 Reintentos ante fallos temporales del proveedor
 
-El botón muestra "Sincronizando…" con un icono girando mientras dura, y al terminar el listado se refresca solo. Si una cuenta falla la autenticación o el proveedor responde con error, la sincronización completa se aborta y se muestra el error. No hay confirmación de éxito con números en pantalla: el usuario percibe el resultado en el propio listado actualizado.
-
-Tanto el listado de favoritos del proveedor (en la sincronización, ambos proveedores) como la propia marca/desmarca en Outlook **reintentan automáticamente ante fallos temporales** del proveedor (throttling "demasiadas peticiones", caídas momentáneas, hipos de red), respetando el tiempo de espera que el proveedor indique. El efecto para el usuario es que **fallan muchas menos veces** por un problema puntual: solo se ve el error cuando el fallo persiste tras los reintentos. (En Gmail la marca ya reintentaba; esta revisión cerró la asimetría llevando los reintentos también al lado Outlook y al listado de ambos proveedores. Los topes exactos de intentos están en [`../limits/favoritos.md`](../limits/favoritos.md).)
+Tanto el listado de favoritos del proveedor (el que usa la reconciliación de arriba, en ambos proveedores) como la propia **marca/desmarca** de una estrella en Outlook **reintentan automáticamente ante fallos temporales** del proveedor (throttling "demasiadas peticiones", caídas momentáneas, hipos de red), respetando el tiempo de espera que el proveedor indique. El efecto para el usuario es que la marca de una estrella **falla muchas menos veces** por un problema puntual: solo se ve el error cuando el fallo persiste tras los reintentos. (En Gmail la marca ya reintentaba; esta revisión cerró la asimetría llevando los reintentos también al lado Outlook y al listado de ambos proveedores. Los topes exactos de intentos están en [`../limits/favoritos.md`](../limits/favoritos.md).)
 
 ---
 
@@ -159,7 +165,7 @@ El estado de favorito se gestiona **por cuenta y por correo**, no por mailbox. E
 - Cada correo lleva la información de **a qué mailbox real pertenece**. Cuando el usuario marca un favorito —sea con la estrella clicable de la fila en Favoritos, sea con el botón por mensaje dentro del visor de la conversación—, la app dirige la llamada al mailbox real que posee la cuenta de ese correo, **no** al mailbox de la URL. Esto es crítico para un hilo abierto desde una bandeja ficticia, cuyos mensajes pueden vivir en mailboxes distintos (ver [conversaciones.md](conversaciones.md)).
 - Si no lo hiciera así, marcar como favorito un correo cuya cuenta vive en otro mailbox fallaría con "cuenta no encontrada", porque el backend valida que la cuenta pertenezca al mailbox indicado.
 
-La sincronización funciona por mailbox o por cuenta: la pestaña de Favoritos del mailbox reconcilia todas las cuentas del mailbox actual; la pestaña de Favoritos de una cuenta reconcilia solo esa cuenta (§ 5.1). En ninguno de los dos casos hay reconciliación de un tirón de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios): eso requeriría disparar una sincronización por cada mailbox implicado.
+La captura de favoritos opera **por cuenta**: la sincronización general de cada cuenta trae el estado de sus estrellas. No hay una reconciliación de un tirón de cuentas repartidas entre varios mailboxes reales (caso de una bandeja ficticia que abarca varios); el endpoint de reconciliación vestigial (§ 5.1), si alguien lo invocara, opera sobre un solo mailbox (o una de sus cuentas), no sobre varios a la vez.
 
 ---
 
@@ -192,18 +198,16 @@ Las implicaciones cuantitativas (ausencia de batch y de acción multi-selección
 4. Si el proveedor confirma → se guarda el favorito en local y el listado se reconcilia.
 5. Si el proveedor falla → la estrella se revierte y se muestra el error; la base de datos local no cambia.
 
-### 9.2 Al sincronizar
+### 9.2 Al sincronizar el correo (captura automática)
 
-1. El usuario pulsa "Sincronizar favoritos".
-2. La app pregunta a cada cuenta del mailbox qué correos están marcados ahora mismo.
-3. Por cada cuenta, en una sola transacción, marca como favoritos los que el proveedor reporta y desmarca todos los demás.
-4. Los correos que el proveedor reporta pero que MailManager no tiene en local se ignoran (§ 5.2).
-5. El listado se refresca con el estado reconciliado.
+1. La sincronización general de la cuenta (backfill inicial o incremental) baja la cabecera de cada correo, **incluida su estrella** (`STARRED` en Gmail, bandera en Outlook).
+2. Al persistir cada correo, su estado de favorito se guarda tal cual lo reporta el proveedor — para el correo nuevo y para el des/marcado fuera de banda sobre correo ya sincronizado (§ 5).
+3. El listado se refresca con los favoritos ya al día. El usuario no pulsa ningún botón.
 
 ---
 
 ## 10. Resumen en una frase
 
-> Un favorito es la estrella de Gmail (`STARRED`) o la bandera de Outlook proyectada como un estado **ortogonal a la ubicación** del correo, que el usuario marca y desmarca con respuesta instantánea (optimista, con reversión si el proveedor falla) desde cualquier listado; la pestaña de Favoritos lista los favoritos ordenados por fecha excluyendo por defecto spam y papelera, y existe en dos sitios —a nivel de mailbox (todas sus cuentas) y a nivel de una cuenta concreta (solo esa, pestaña entre "Enviados" y "Spam")—; el botón de sincronizar reconcilia por completo el estado local con el del proveedor sin importar correos nuevos (Opción A), con el mismo alcance que la vista desde la que se pulsa (todo el mailbox o solo la cuenta); y todo se aplica Provider-First, alternando la estrella correo a correo (sin acción multi-selección ni marca en bloque en el MVP), respetando idénticamente cómo modelan el favorito ambos proveedores.
+> Un favorito es la estrella de Gmail (`STARRED`) o la bandera de Outlook proyectada como un estado **ortogonal a la ubicación** del correo, que el usuario marca y desmarca con respuesta instantánea (optimista, con reversión si el proveedor falla) desde cualquier listado; la pestaña de Favoritos lista los favoritos ordenados por fecha excluyendo por defecto spam y papelera, y existe en dos sitios —a nivel de mailbox (todas sus cuentas) y a nivel de una cuenta concreta (solo esa, pestaña entre "Enviados" y "Spam")—; los favoritos ahora **se cargan solos con el correo** en la sincronización general —correo nuevo o des/marcado fuera de banda sobre correo ya sincronizado, en ambos proveedores (el proveedor es autoritativo)—, de modo que el botón "Sincronizar favoritos" **se retiró de la interfaz**; en el backend pervive un endpoint de reconciliación completa **vestigial** (sin superficie en la UI) que no importa correos nuevos (Opción A); y todo se aplica Provider-First, alternando la estrella correo a correo (sin acción multi-selección ni marca en bloque en el MVP), respetando idénticamente cómo modelan el favorito ambos proveedores.
 
 Eso es todo lo que necesita saber un programador (o cualquier persona del equipo) para entender cómo se va a comportar la gestión de favoritos en el MVP.

@@ -18,6 +18,15 @@ class EmailMetadata:
     promoting this to a list is a non-destructive future migration.
     Empty strings (default) when the provider response carries no ``To``
     (rare; service-side notifications mass-mailed via Bcc).
+
+    ``is_favorite`` is captured during sync from the provider's favourite
+    flag (Gmail ``STARRED`` label / Outlook ``flag.flagStatus``) and the
+    metadata upsert persists it — the provider is the source of truth.
+    **Every sync path that builds EmailMetadata MUST set it**: the upsert
+    overwrites ``is_favorite`` on conflict, so a path that leaves the
+    default ``False`` would silently un-favourite an existing row. A
+    freshly-sent message (envío path) is legitimately ``False`` — a new
+    row, never a conflict.
     """
     provider_message_id: str
     thread_id: str
@@ -27,6 +36,7 @@ class EmailMetadata:
     received_at: datetime
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
+    is_favorite: bool = False
     to_email: str = ""
     to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
@@ -34,10 +44,19 @@ class EmailMetadata:
 
 @dataclass
 class LabelUpdate:
-    """Partial update carrying only label-derived fields for an existing message."""
+    """Partial update carrying only label-derived fields for an existing message.
+
+    ``is_favorite`` closes the Gmail incremental favourite gap: a star/unstar on
+    an existing message arrives via the label-update path (labelsAdded/Removed),
+    not as a full upsert. ``None`` means "do not touch the stored favourite" —
+    the persistence layer COALESCEs it, so an Outlook partial delta object that
+    carries no ``flag`` leaves the value intact. Gmail always populates a
+    concrete bool (``format=minimal`` returns the full labelIds).
+    """
     provider_message_id: str
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
+    is_favorite: bool | None = None
 
 
 @dataclass
@@ -65,6 +84,20 @@ class SpamMoveResult:
     """Result of a spam move/restore for a single message."""
     old_id: str
     new_id: str  # Same as old_id for Gmail; different for Outlook
+
+
+@dataclass
+class BackfillPage:
+    """One wave of the background initial mass backfill.
+
+    Returned by :py:meth:`EmailClient.fetch_backfill_page`. ``upserts`` is
+    the deduplicated metadata for the messages fetched in this wave;
+    ``next_cursor`` is the opaque cursor for the next page (Gmail
+    ``messages.list`` pageToken / Outlook ``@odata.nextLink``) or ``None``
+    when the mailbox is exhausted.
+    """
+    upserts: list[EmailMetadata]
+    next_cursor: str | None
 
 
 @dataclass
@@ -134,14 +167,11 @@ class ConversationMessage:
     when "completing the mailbox" with the messages a thread carries
     that were never synced locally.
 
-    The one field that justifies a dedicated dataclass instead of
-    reusing ``EmailMetadata`` is ``is_favorite``: the favourite mark
-    lives on the ``email_metadata.is_favorite`` column, not on the sync
-    dataclass, so the provider's fresh favourite state for each message
-    would be lost otherwise. The service maps ``ConversationMessage →
-    EmailMetadata`` dropping ``is_favorite`` (applied separately via
-    ``update_favorite``) and uses the value directly for the viewer
-    response.
+    ``is_favorite`` is carried through the ``ConversationMessage →
+    EmailMetadata`` mapping (the metadata upsert persists it now, so the
+    thread's favourite state stays correct after "completing the mailbox")
+    and is also used directly for the viewer response as the provider's
+    fresh favourite state for each message on this open.
 
     No body is carried — each message body is fetched lazily via the
     existing ``fetch_email_content`` cache-aside path when the viewer
@@ -693,3 +723,49 @@ class EmailClient(ABC):
         Implementations must apply ``Prefer: IdType="ImmutableId"`` to
         every Outlook request that touches messages or attachments.
         """
+
+    # ------------------------------------------------------------------
+    # Background initial mass backfill (paginated, resumable, rate-paced).
+    #
+    # These two are concrete with a ``NotImplementedError`` default rather
+    # than ``@abstractmethod`` on purpose: the ABC has non-provider
+    # subclasses (test fakes) that must stay instantiable without stubbing
+    # the whole backfill surface. The real providers (Gmail / Outlook)
+    # override both.
+    # ------------------------------------------------------------------
+
+    def capture_backfill_anchor(self) -> str:
+        """Capture the incremental sync cursor to resume from AFTER the backfill.
+
+        Called ONCE, before the first backfill wave, so any mail arriving
+        during the (possibly hours-long) backfill is replayed by the first
+        incremental sync instead of being lost.
+
+        - **Gmail** — the current ``historyId`` (``users.getProfile``).
+          Captured before listing (invariant: historyId before listing).
+        - **Outlook** — the per-folder delta links primed with
+          ``max_collect=0`` and serialised as the JSON folder-cursor string.
+
+        The returned string is written into ``accounts.sync_cursor`` on
+        backfill completion. Raises a :py:class:`CoreError` subclass on
+        provider failure.
+        """
+        raise NotImplementedError
+
+    def fetch_backfill_page(
+        self, cursor: str | None, page_size: int,
+    ) -> "BackfillPage":
+        """Fetch one wave of message metadata for the background backfill.
+
+        ``cursor`` is ``None`` for the first page, then the opaque cursor
+        returned by the previous page (Gmail ``messages.list`` pageToken /
+        Outlook ``@odata.nextLink``). ``page_size`` is the requested page
+        size, already clamped by the caller to what remains until the
+        target (and further clamped to the provider maximum inside).
+
+        Returns a :py:class:`BackfillPage` with deduplicated ``upserts``
+        and the ``next_cursor`` for the following wave (``None`` when the
+        mailbox is exhausted). Raises a :py:class:`CoreError` subclass on
+        provider failure so the worker's wave-retry loop can back off.
+        """
+        raise NotImplementedError

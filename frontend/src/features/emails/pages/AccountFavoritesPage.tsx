@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { RefreshCw } from 'lucide-react';
 
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
@@ -91,11 +90,6 @@ export default function AccountFavoritesPage() {
   const isFavoritePending = (email: EmailMetadataOut) =>
     favorites.isToggling(email.account_id, email.provider_message_id);
 
-  // Sync scoped to THIS account — the endpoint reconciles only it.
-  const handleSync = () => {
-    favorites.sync({ mailboxId: mailboxId!, accountId: accountId! }).catch(() => {});
-  };
-
   const combinedError = error || bulkError || favorites.error || viewer.error;
 
   const handleSearchChange = (next: string) => {
@@ -124,31 +118,13 @@ export default function AccountFavoritesPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-col gap-2 px-4 pt-6 pb-2 lg:px-8 lg:pt-8">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-          <div className="flex flex-col gap-1.5">
-            <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
-              {title}
-            </h1>
-            <p className="text-[15px] leading-[1.5] text-zinc-500">
-              {t('favorites.accountSubtitle', { title })}
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <button
-              type="button"
-              onClick={handleSync}
-              disabled={favorites.syncing}
-              className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${favorites.syncing ? 'animate-spin' : ''}`} />
-              {favorites.syncing ? t('favorites.syncing') : t('favorites.sync')}
-            </button>
-            {favorites.syncError && (
-              <span className="text-[12px] text-red-600" aria-live="polite">
-                {t('common.syncFailed')}
-              </span>
-            )}
-          </div>
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
+            {title}
+          </h1>
+          <p className="text-[15px] leading-[1.5] text-zinc-500">
+            {t('favorites.accountSubtitle', { title })}
+          </p>
         </div>
       </div>
 

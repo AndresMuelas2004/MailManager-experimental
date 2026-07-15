@@ -7,11 +7,30 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.routers.routers_helpers import require_session
-from api.schemas.account import AccountConnectStartResponse, AccountCreate, AccountOut, AccountUpdate
+from api.schemas.account import (
+    AccountConnectStartResponse,
+    AccountCreate,
+    AccountOut,
+    AccountQuotaOut,
+    AccountUpdate,
+)
 from api.services import accounts_service
 
 
 router = APIRouter(prefix="/mailboxes/{mailbox_id}/accounts", tags=["accounts"])
+
+# User-scoped router (no mailbox prefix): the account quota aggregates across
+# every mailbox the user owns, so it cannot live under the mailbox-scoped
+# ``router`` above. Registered separately in ``app.py``.
+account_quota_router = APIRouter(prefix="/accounts", tags=["accounts"])
+
+
+@account_quota_router.get("/quota", response_model=AccountQuotaOut)
+def get_account_quota(
+    user_id: str = Depends(require_session),
+) -> AccountQuotaOut:
+    """Return the user's connected-account usage vs the configured limit."""
+    return accounts_service.get_account_quota(user_id)
 
 
 @router.get("", response_model=list[AccountOut])

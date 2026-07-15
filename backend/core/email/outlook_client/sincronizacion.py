@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import urllib.parse
 from typing import Any
 
-from ..email_client import EmailMetadata, LabelUpdate, SyncResult
+from ..email_client import BackfillPage, EmailMetadata, LabelUpdate, SyncResult
 from ..errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from ..helpers import dedupe_metadata_by_message_id
 from .contenido import OutlookContenidoMixin
@@ -16,19 +18,29 @@ from .transporte import GRAPH_BASE_URL, _parse_graph_datetime
 logger = logging.getLogger(__name__)
 
 
+# ``sentDateTime`` rides along ONLY as the ``received_at`` fallback of
+# ``_parse_graph_message``: every endpoint (delta, bootstrap, conversation)
+# must derive ``received_at`` from the SAME field chain, or the conversation
+# id reconciliation's identity (received_at, from, subject) diverges between
+# what sync stored and what the viewer fetched for date-less messages.
 _DELTA_SELECT_FIELDS = (
-    "id,conversationId,from,toRecipients,subject,receivedDateTime,isRead"
+    "id,conversationId,from,toRecipients,subject,receivedDateTime,sentDateTime,isRead,flag"
 )
 _DELTA_PAGE_SIZE = 100
 
 
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
-    "receivedDateTime,isRead,parentFolderId"
+    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag,isDraft"
 )
 
 
-_DELTA_FOLDERS = ("inbox", "sentitems", "drafts", "deleteditems", "junkemail", "archive")
+# ``drafts`` is deliberately absent: drafts sync into their own ``drafts`` table
+# and must not leak into ``email_metadata``. Dropping it here means the delta
+# anchor (``capture_backfill_anchor`` / ``_prime_folder_delta_cursors``) never
+# primes nor walks the drafts folder. ``_incremental_email_metadata`` also skips
+# a stale ``drafts`` cursor inherited from a pre-change ``sync_cursor``.
+_DELTA_FOLDERS = ("inbox", "sentitems", "deleteditems", "junkemail", "archive")
 
 
 _FOLDER_TO_BOX: dict[str, str] = {
@@ -37,6 +49,22 @@ _FOLDER_TO_BOX: dict[str, str] = {
     "sentitems": "SENT",
     "archive": "ARCHIVE",
 }
+
+
+# Process-level cache of the special-folder id -> box map, keyed by the stable
+# ``account_label`` ("{mailbox_id}__{account_id}"). ``OutlookClient`` is rebuilt
+# per request (``build_manager_for_accounts`` makes fresh clients each time), so
+# a per-instance cache never survives between conversation opens — only a
+# module-level (process) cache does. Single uvicorn worker (MVP), same profile
+# as ``api/rate_limit.py`` and the backfill worker. Graph returns a STABLE id
+# for each well-known folder of a mailbox, so caching the map is safe; the TTL
+# only bounds the rare case of a recreated mailbox. Values are
+# ``(monotonic_ts, map)``. An INCOMPLETE resolution (any folder lookup failed,
+# empty included) is deliberately NOT cached — see
+# ``_resolve_special_folder_ids``.
+_SPECIAL_FOLDER_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+_SPECIAL_FOLDER_CACHE_LOCK = threading.Lock()
+_SPECIAL_FOLDER_TTL_S = 3600.0  # 1 hour (conservative; the ids are stable anyway)
 
 
 class OutlookSincronizacionMixin:
@@ -85,7 +113,16 @@ class OutlookSincronizacionMixin:
             msg.get("toRecipients"),
         )
 
-        received_at = _parse_graph_datetime(msg.get("receivedDateTime", ""))
+        # Single received_at derivation for EVERY endpoint that parses a
+        # message (delta, bootstrap, conversation): receivedDateTime, falling
+        # back to sentDateTime when absent (Sent/date-less items), then the
+        # deterministic epoch fallback inside ``_parse_graph_datetime``.
+        # Keeping this chain identical across endpoints is load-bearing for
+        # the conversation id reconciliation, whose identity key starts with
+        # ``received_at``.
+        received_at = _parse_graph_datetime(
+            msg.get("receivedDateTime") or msg.get("sentDateTime") or "",
+        )
 
         return EmailMetadata(
             provider_message_id=msg.get("id", ""),
@@ -96,6 +133,7 @@ class OutlookSincronizacionMixin:
             received_at=received_at,
             is_read=msg.get("isRead", False),
             box=box,
+            is_favorite=(msg.get("flag") or {}).get("flagStatus") == "flagged",
             to_email=to_email,
             to_name=to_name,
         )
@@ -137,10 +175,22 @@ class OutlookSincronizacionMixin:
                                 folder_name, msg_id,
                             )
                     elif "from" not in msg and label_updates is not None:
+                        # Partial delta object (only isRead/labels changed).
+                        # Carry ``is_favorite`` ONLY when ``flag`` is present in
+                        # the partial payload; otherwise leave it None so the
+                        # COALESCE in UPDATE_LABELS_BATCH keeps the stored value
+                        # (an out-of-band favourite change on Outlook normally
+                        # arrives as a full upsert, not a partial label update).
+                        is_favorite = (
+                            (msg.get("flag") or {}).get("flagStatus") == "flagged"
+                            if "flag" in msg
+                            else None
+                        )
                         label_updates.append(LabelUpdate(
                             provider_message_id=msg["id"],
                             is_read=msg.get("isRead", False),
                             box=box,
+                            is_favorite=is_favorite,
                         ))
                         logger.debug(
                             "Outlook delta [%s] LABEL id=%s is_read=%s",
@@ -179,7 +229,20 @@ class OutlookSincronizacionMixin:
         parentFolderId can be classified into SENT, TRASH, SPAM or ARCHIVE.
         Any folder not in this mapping defaults to ALL_MAIL. The set of
         folders resolved is driven dynamically by ``_FOLDER_TO_BOX``.
+
+        Backed by a process-level TTL cache keyed on ``account_label`` so the
+        4 Graph calls run at most once per account per TTL — the hot path is
+        ``fetch_conversation``, which resolves these on every conversation open
+        and would otherwise pay 4 round trips each time. A fresh copy is
+        returned on every call so a caller can never mutate the cached map.
         """
+        account_label = self._account_label
+        now = time.monotonic()
+        with _SPECIAL_FOLDER_CACHE_LOCK:
+            entry = _SPECIAL_FOLDER_CACHE.get(account_label)
+            if entry is not None and now - entry[0] < _SPECIAL_FOLDER_TTL_S:
+                return dict(entry[1])
+
         folder_id_to_box: dict[str, str] = {}
         for folder_name, box in _FOLDER_TO_BOX.items():
             try:
@@ -193,6 +256,19 @@ class OutlookSincronizacionMixin:
                     "Outlook bootstrap: failed to resolve folder '%s', skipping.",
                     folder_name,
                 )
+
+        # Cache only a COMPLETE map (every folder in _FOLDER_TO_BOX resolved).
+        # A partial map — one folder's lookup hit a transient throttle/5xx —
+        # would misclassify that folder's messages as ALL_MAIL for a whole
+        # TTL; and since the conversation lazy-sync now UPDATEs the canonical
+        # rows with the box it derives here, a cached partial map would move
+        # e.g. every SENT message of an opened thread into the inbox listing
+        # for an hour. Skipping the write lets the next call retry cheaply
+        # and self-heal (the partial result is still returned for THIS call —
+        # best-effort, same as before).
+        if len(folder_id_to_box) == len(_FOLDER_TO_BOX):
+            with _SPECIAL_FOLDER_CACHE_LOCK:
+                _SPECIAL_FOLDER_CACHE[account_label] = (now, dict(folder_id_to_box))
         return folder_id_to_box
 
     def _fetch_recent_messages(
@@ -220,6 +296,11 @@ class OutlookSincronizacionMixin:
             for msg in response.get("value", []):
                 if len(upserts) >= max_total:
                     break
+                # Drafts belong to the ``drafts`` table, not ``email_metadata``.
+                # Filtering client-side (not via $filter=isDraft eq false, which
+                # collides with $orderby — see plan §0).
+                if msg.get("isDraft") is True:
+                    continue
                 parent_folder_id = msg.get("parentFolderId", "")
                 box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
                 try:
@@ -233,15 +314,14 @@ class OutlookSincronizacionMixin:
 
         return upserts
 
-    def _bootstrap_email_metadata(self, max_total: int) -> SyncResult:
-        """Path 1: Fetch most recent messages across all folders, then init delta cursors."""
-        # Step 1: Discover special folder IDs for box classification.
-        folder_id_to_box = self._resolve_special_folder_ids()
+    def _prime_folder_delta_cursors(self) -> dict[str, str]:
+        """Prime the per-folder delta cursors, returning ``{folder: deltaLink}``.
 
-        # Step 2: Fetch the most recent messages across all folders.
-        upserts = self._fetch_recent_messages(max_total, folder_id_to_box)
-
-        # Step 3: Initialize per-folder delta cursors for future incremental syncs.
+        Paginates each folder's delta query with ``max_collect=0`` (capture
+        the deltaLink without collecting any messages). Shared by the
+        bootstrap (step 3) and the backfill anchor capture. A folder that
+        fails is logged and omitted.
+        """
         folder_cursors: dict[str, str] = {}
         for folder in _DELTA_FOLDERS:
             url = (
@@ -257,14 +337,100 @@ class OutlookSincronizacionMixin:
                     folder_cursors[folder] = delta_link
             except EmailExternalAPIError:
                 logger.warning(
-                    "Outlook bootstrap: delta init for '%s' failed, skipping.",
+                    "Outlook: delta init for '%s' failed, skipping.",
                     folder,
                 )
+        return folder_cursors
+
+    def _folder_id_to_box_cached(self) -> dict[str, str]:
+        """Resolve special-folder IDs once per client instance and cache them.
+
+        The backfill worker keeps the client alive across all waves of an
+        account, so this cache survives between waves (only a process
+        restart re-resolves it). The regular bootstrap / single-message
+        paths keep re-resolving per call — unchanged.
+        """
+        if self._backfill_folder_map is None:
+            self._backfill_folder_map = self._resolve_special_folder_ids()
+        return self._backfill_folder_map
+
+    def _bootstrap_email_metadata(self, max_total: int) -> SyncResult:
+        """Path 1: Fetch most recent messages across all folders, then init delta cursors."""
+        # Step 1: Discover special folder IDs for box classification.
+        folder_id_to_box = self._resolve_special_folder_ids()
+
+        # Step 2: Fetch the most recent messages across all folders.
+        upserts = self._fetch_recent_messages(max_total, folder_id_to_box)
+
+        # Step 3: Initialize per-folder delta cursors for future incremental syncs.
+        folder_cursors = self._prime_folder_delta_cursors()
 
         return SyncResult(
             upserts=dedupe_metadata_by_message_id(upserts),
             new_cursor=self._encode_folder_cursors(folder_cursors),
             is_full_sync=True,
+        )
+
+    def capture_backfill_anchor(self) -> str:
+        """Outlook backfill anchor: the per-folder delta links, primed + encoded.
+
+        Captured at the START of the backfill so mail arriving during the
+        backfill is replayed by the first incremental sync.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook capture_backfill_anchor requires authentication."
+            )
+        return self._encode_folder_cursors(self._prime_folder_delta_cursors())
+
+    def fetch_backfill_page(
+        self, cursor: str | None, page_size: int,
+    ) -> BackfillPage:
+        """Fetch one backfill wave of recent messages across all folders.
+
+        ``cursor`` is ``None`` for the first page (builds the ordered initial
+        query) or an ``@odata.nextLink`` for subsequent pages. The GET is
+        routed through ``_graph_request_json_with_retries`` so it honours
+        ``Retry-After`` and retries transient 429/5xx — ``_graph_request``
+        (used by the plain bootstrap) does neither.
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError(
+                "Outlook fetch_backfill_page requires authentication."
+            )
+        if cursor is None:
+            url = (
+                f"{GRAPH_BASE_URL}/me/messages"
+                f"?$select={_BOOTSTRAP_SELECT_FIELDS}"
+                f"&$orderby=receivedDateTime+desc"
+                f"&$top={min(page_size, 1000)}"
+            )
+        else:
+            url = cursor
+
+        folder_id_to_box = self._folder_id_to_box_cached()
+        response = self._graph_request_json_with_retries(
+            "GET", url, operation="backfill page fetch",
+        )
+
+        upserts: list[EmailMetadata] = []
+        for msg in response.get("value", []):
+            # Drafts sync into their own table — keep them out of the backfill.
+            if msg.get("isDraft") is True:
+                continue
+            parent_folder_id = msg.get("parentFolderId", "")
+            box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
+            try:
+                upserts.append(self._parse_graph_message(msg, box))
+            except Exception as exc:
+                logger.warning(
+                    "Outlook backfill: skipping unparseable message %s: %s",
+                    msg.get("id", "?"), exc,
+                )
+
+        return BackfillPage(
+            upserts=dedupe_metadata_by_message_id(upserts),
+            next_cursor=response.get("@odata.nextLink"),
         )
 
     def _incremental_email_metadata(self, sync_cursor: str) -> SyncResult:
@@ -280,6 +446,14 @@ class OutlookSincronizacionMixin:
         all_failed = True
 
         for folder, delta_link in folder_cursors.items():
+            # Defensive skip: an account synced before drafts were excluded
+            # still carries a ``drafts`` cursor in its stored ``sync_cursor``.
+            # Drop it here (and from ``new_cursors``) so those accounts stop
+            # pulling drafts into ``email_metadata`` without waiting for a
+            # re-bootstrap. ``drafts`` is no longer in ``_DELTA_FOLDERS``, so
+            # freshly primed cursors never carry it in the first place.
+            if folder == "drafts":
+                continue
             try:
                 new_delta = self._fetch_folder_delta(
                     folder, delta_link, upserts, deletes,

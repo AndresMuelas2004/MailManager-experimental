@@ -752,6 +752,26 @@ class TestFetchConversation:
         boxes = {m.provider_message_id: m.box for m in client.fetch_conversation("thread-1")}
         assert boxes == {"m1": "ALL_MAIL", "m-trash": "TRASH", "m-spam": "SPAM"}
 
+    def test_skips_draft_members(self, client: GmailClient):
+        # ``threads.get`` embeds in-progress draft replies in the thread. A
+        # draft must NOT surface as a member: the viewer would render it as a
+        # message and the lazy-sync would persist it into email_metadata
+        # (violating the "drafts never enter email_metadata" invariant), and a
+        # Gmail draft gets a NEW id per save, so it would accumulate one ghost
+        # row per edit+open. Mirrors the fetch_messages_metadata safety net.
+        mock_service = MagicMock()
+        mock_service.users().threads().get().execute.return_value = {
+            "messages": [
+                self._thread_message("m1", internal_date="1700000000000", labels=["INBOX"]),
+                self._thread_message(
+                    "m-draft", internal_date="1700000100000", labels=["DRAFT"],
+                ),
+            ],
+        }
+        client.service = mock_service
+        ids = [m.provider_message_id for m in client.fetch_conversation("thread-1")]
+        assert ids == ["m1"]
+
     def test_orders_ascending_by_internal_date(self, client: GmailClient):
         mock_service = MagicMock()
         # Provider returns out of order; the client must sort oldest-first.

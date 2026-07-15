@@ -14,6 +14,7 @@ from core.email.errors import (
     EmailRecipientsMissingError,
 )
 from core.email.outlook_client import GRAPH_BASE_URL, _DRAFTS_MAX_RETRIES, _DRAFTS_MAX_TOTAL
+from core.email.outlook_client.borradores import _DRAFTS_PAGE_SIZE
 
 
 # ── fetch_drafts ────────────────────────────────────────────────────
@@ -34,6 +35,14 @@ def _outlook_draft_json(draft_id: str, subject: str = "Hello") -> dict:
 
 
 class TestFetchDrafts:
+    def test_cap_and_page_size_are_500(self):
+        # Both the per-account draft cap and the Graph page size were raised
+        # 100 -> 500 (Graph accepts $top<=1000, so a single 500-row page covers
+        # the cap). Pin both constants so a silent revert can't halve the fetch
+        # while every symbolic assertion below still passes.
+        assert _DRAFTS_MAX_TOTAL == 500
+        assert _DRAFTS_PAGE_SIZE == 500
+
     def test_not_authenticated_raises(self, client: OutlookClient):
         client._access_token = None
         with pytest.raises(EmailNotAuthenticatedError):
@@ -56,9 +65,9 @@ class TestFetchDrafts:
         assert mock_graph.call_count == 1
 
     def test_caps_at_max_total_single_page(self, client: OutlookClient):
-        """Defensive cut when a page returns >100 items."""
+        """Defensive cut when a page returns more than the cap (>500) items."""
         client._access_token = "tok"
-        oversize = [_outlook_draft_json(f"d{i}") for i in range(150)]
+        oversize = [_outlook_draft_json(f"d{i}") for i in range(600)]
         with patch.object(client, "_graph_request", return_value={"value": oversize}):
             result = client.fetch_drafts()
         assert len(result) == _DRAFTS_MAX_TOTAL
@@ -69,8 +78,8 @@ class TestFetchDrafts:
         before following nextLink because len(drafts) == max."""
         client._access_token = "tok"
         page_one = {
-            "value": [_outlook_draft_json(f"d{i}") for i in range(100)],
-            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=100",
+            "value": [_outlook_draft_json(f"d{i}") for i in range(500)],
+            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=500",
         }
 
         call_count = {"n": 0}
@@ -83,24 +92,24 @@ class TestFetchDrafts:
             result = client.fetch_drafts()
 
         assert len(result) == _DRAFTS_MAX_TOTAL
-        # Only the first page is fetched — once 100 drafts are collected,
+        # Only the first page is fetched — once 500 drafts are collected,
         # the while loop exits before following nextLink.
         assert call_count["n"] == 1
 
     def test_caps_across_pages(self, client: OutlookClient):
-        """Two pages of 60 items each: the second page is partially consumed
-        (40 items) until the cap is hit, then the loop exits. Total 100
+        """Two pages of 300 items each: the second page is partially consumed
+        (200 items) until the cap is hit, then the loop exits. Total 500
         drafts, exactly 2 _graph_request calls."""
         client._access_token = "tok"
 
         page_one = {
-            "value": [_outlook_draft_json(f"p1-d{i}") for i in range(60)],
-            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=60",
+            "value": [_outlook_draft_json(f"p1-d{i}") for i in range(300)],
+            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=300",
         }
         page_two = {
-            "value": [_outlook_draft_json(f"p2-d{i}") for i in range(60)],
+            "value": [_outlook_draft_json(f"p2-d{i}") for i in range(300)],
             # nextLink present but must never be followed — cap reached mid-page.
-            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=120",
+            "@odata.nextLink": f"{GRAPH_BASE_URL}/me/mailFolders/drafts/messages?$skip=600",
         }
         pages = [page_one, page_two]
         call_count = {"n": 0}
@@ -114,11 +123,11 @@ class TestFetchDrafts:
 
         assert len(result) == _DRAFTS_MAX_TOTAL
         assert call_count["n"] == 2
-        # First 60 come from page 1; next 40 come from page 2 (truncated).
+        # First 300 come from page 1; next 200 come from page 2 (truncated).
         assert result[0].provider_draft_id == "p1-d0"
-        assert result[59].provider_draft_id == "p1-d59"
-        assert result[60].provider_draft_id == "p2-d0"
-        assert result[99].provider_draft_id == "p2-d39"
+        assert result[299].provider_draft_id == "p1-d299"
+        assert result[300].provider_draft_id == "p2-d0"
+        assert result[499].provider_draft_id == "p2-d199"
 
     def test_request_url_contains_orderby_and_top(self, client: OutlookClient):
         client._access_token = "tok"
@@ -133,7 +142,7 @@ class TestFetchDrafts:
 
         assert len(captured_urls) == 1
         url = captured_urls[0]
-        assert "$top=100" in url
+        assert "$top=500" in url
         assert "$orderby=lastModifiedDateTime%20desc" in url
         assert "$select=" in url
         assert "id,subject,body" in url

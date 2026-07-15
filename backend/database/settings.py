@@ -15,7 +15,13 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
 _DEFAULT_DB_POOL_MIN = 1
-_DEFAULT_DB_POOL_MAX = 10
+# Raised from 10 to cover the parallel background backfill: up to
+# BACKFILL_DB_WRITE_CONCURRENCY (default 8) concurrent worker writes + the
+# dispatcher + headroom for user request handling. Keep the invariant
+# DB_POOL_MAX_CONN >= BACKFILL_DB_WRITE_CONCURRENCY + reserve_for_requests.
+# The container's PostgreSQL max_connections (default 100) comfortably admits
+# this, so no compose.yml change is required.
+_DEFAULT_DB_POOL_MAX = 25
 _DEFAULT_DB_CONNECT_TIMEOUT_SECONDS = 10
 _DEFAULT_DB_APPLICATION_NAME = "mailmanager-api"
 

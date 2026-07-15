@@ -11,12 +11,20 @@ from pydantic import SecretStr
 
 from api.errors.exceptions import (
     AccountConnectAuthError,
+    AccountLimitExceeded,
     AccountNotFound,
+    AccountOperationError,
     ApiError,
     DatabaseQueryError,
     ExternalAPIError,
 )
-from api.schemas.account import AccountConnectStartResponse, AccountCreate, AccountOut, AccountUpdate
+from api.schemas.account import (
+    AccountConnectStartResponse,
+    AccountCreate,
+    AccountOut,
+    AccountQuotaOut,
+    AccountUpdate,
+)
 from api.services import accounts_service, oauth_pending
 from core.email import EmailAuthError, EmailManager
 from database import QueryError
@@ -40,15 +48,22 @@ _FAKE_RECORD = {
 class FakeAccountStore:
     """In-memory account store for unit tests."""
 
-    def __init__(self, *, records=None, get_return=None, tokens=None):
+    def __init__(self, *, records=None, get_return=None, tokens=None, account_count=0, count_exc=None):
         self._records = list(records or [])
         self._get_return = get_return
         self._tokens = tokens
+        self._account_count = account_count
+        self._count_exc = count_exc
         self.deleted: list[tuple[str, str]] = []
         self.upserted_tokens: list[tuple] = []
 
     def list_by_mailbox(self, mailbox_id):
         return [r for r in self._records if r["mailbox_id"] == mailbox_id]
+
+    def count_accounts_by_user(self, user_id):
+        if self._count_exc is not None:
+            raise self._count_exc
+        return self._account_count
 
     def get(self, mailbox_id, account_id):
         return dict(self._get_return) if self._get_return else None
@@ -69,6 +84,12 @@ class FakeAccountStoreRaising:
     def __init__(self, exc, *, get_return=None):
         self._exc = exc
         self._get_return = get_return
+
+    def count_accounts_by_user(self, user_id):
+        # Deliberately benign (not raising): the create-flow error tests below
+        # target the UPSERT step, so the pre-insert count guard must pass through
+        # to reach it. The count-error paths have their own dedicated fakes.
+        return 0
 
     def list_by_mailbox(self, mailbox_id):
         raise self._exc
@@ -173,6 +194,129 @@ class TestCreateAccount:
         payload = AccountCreate(provider="gmail", display_label="x", config={})
         with pytest.raises(ApiError, match="Failed to create account"):
             accounts_service.create_account("mb-1", payload, "user-1")
+
+
+# ------------------------------------------------------------------
+# create_account — per-user account limit guard (decision 3A)
+# ------------------------------------------------------------------
+
+
+class TestCreateAccountLimit:
+
+    def _payload(self):
+        return AccountCreate(provider="gmail", display_label="x", config={})
+
+    def test_at_limit_raises_account_limit_exceeded_with_detail(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "2")
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(account_count=2)
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        with pytest.raises(AccountLimitExceeded) as exc_info:
+            accounts_service.create_account("mb-1", self._payload(), "user-1")
+        # The 409 payload carries the numbers the frontend counter needs.
+        assert exc_info.value.detail == {"limit": 2, "connected": 2}
+
+    def test_over_limit_raises(self, monkeypatch):
+        # Guard is ``>=`` so a count already past the limit is also rejected.
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "2")
+        _patch_access(monkeypatch)
+        monkeypatch.setattr(accounts_service, "account_store", FakeAccountStore(account_count=3))
+        with pytest.raises(AccountLimitExceeded):
+            accounts_service.create_account("mb-1", self._payload(), "user-1")
+
+    def test_below_limit_creates(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "2")
+        _patch_access(monkeypatch)
+        monkeypatch.setattr(accounts_service, "account_store", FakeAccountStore(account_count=1))
+        result = accounts_service.create_account("mb-1", self._payload(), "user-1")
+        assert isinstance(result, AccountOut)
+
+    def test_default_limit_is_15(self, monkeypatch):
+        monkeypatch.delenv("MAX_ACCOUNTS_PER_USER", raising=False)
+        _patch_access(monkeypatch)
+        # 15 owned accounts and the default cap of 15 → blocked.
+        monkeypatch.setattr(accounts_service, "account_store", FakeAccountStore(account_count=15))
+        with pytest.raises(AccountLimitExceeded):
+            accounts_service.create_account("mb-1", self._payload(), "user-1")
+
+    def test_count_database_error_translated(self, monkeypatch):
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(count_exc=QueryError("DB fail"))
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        with pytest.raises(DatabaseQueryError):
+            accounts_service.create_account("mb-1", self._payload(), "user-1")
+
+    def test_count_generic_error_raises_operation_error(self, monkeypatch):
+        _patch_access(monkeypatch)
+        store = FakeAccountStore(count_exc=RuntimeError("boom"))
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        with pytest.raises(AccountOperationError, match="count user accounts"):
+            accounts_service.create_account("mb-1", self._payload(), "user-1")
+
+
+# ------------------------------------------------------------------
+# get_account_quota (user-scoped, no mailbox)
+# ------------------------------------------------------------------
+
+
+class TestGetAccountQuota:
+
+    def test_happy_path_returns_connected_and_limit(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "15")
+        monkeypatch.setattr(accounts_service, "account_store", FakeAccountStore(account_count=3))
+        result = accounts_service.get_account_quota("user-1")
+        assert isinstance(result, AccountQuotaOut)
+        assert result.connected == 3
+        assert result.limit == 15
+
+    def test_database_error_translated(self, monkeypatch):
+        store = FakeAccountStore(count_exc=QueryError("DB fail"))
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        with pytest.raises(DatabaseQueryError):
+            accounts_service.get_account_quota("user-1")
+
+    def test_generic_error_raises_operation_error(self, monkeypatch):
+        store = FakeAccountStore(count_exc=RuntimeError("boom"))
+        monkeypatch.setattr(accounts_service, "account_store", store)
+        with pytest.raises(AccountOperationError, match="for quota"):
+            accounts_service.get_account_quota("user-1")
+
+
+# ------------------------------------------------------------------
+# _max_accounts_per_user (env reader, single source of truth)
+# ------------------------------------------------------------------
+
+
+class TestAccountLimitExceededContract:
+
+    def test_code_and_status_mapping(self):
+        # The error class carries the stable code the frontend branches on, and
+        # the handler maps it to 409 Conflict (same family as AccountNotConnected).
+        from fastapi import status
+
+        from api.errors.handlers import _STATUS_MAP
+
+        assert AccountLimitExceeded.code == "account_limit_exceeded"
+        assert _STATUS_MAP[AccountLimitExceeded] == status.HTTP_409_CONFLICT
+
+
+class TestMaxAccountsPerUser:
+
+    def test_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("MAX_ACCOUNTS_PER_USER", raising=False)
+        assert accounts_service._max_accounts_per_user() == 15
+
+    def test_valid_override_is_read(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "30")
+        assert accounts_service._max_accounts_per_user() == 30
+
+    def test_invalid_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "not-a-number")
+        assert accounts_service._max_accounts_per_user() == 15
+
+    def test_blank_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MAX_ACCOUNTS_PER_USER", "   ")
+        assert accounts_service._max_accounts_per_user() == 15
 
 
 # ------------------------------------------------------------------
@@ -406,6 +550,16 @@ class TestConnectAccountFlow:
             return manager
 
         monkeypatch.setattr(accounts_service, "build_manager_for_accounts", _build_manager)
+        # The connect callback now enqueues a first-connection backfill. Stub it
+        # to a no-op by default so the unrelated connect tests stay DB-free (the
+        # real one reaches ``account_store.get_sync_cursor``); the dedicated
+        # backfill-enqueue tests override it.
+        monkeypatch.setattr(accounts_service, "enqueue_backfill_on_connect", lambda *_a, **_kw: None)
+        # The callback now ALSO enqueues a server-side draft sync on every
+        # connect. Stub it to a no-op so the unrelated connect tests stay DB-free
+        # (the real one reaches ``draft_sync_store.enqueue``); the dedicated
+        # draft-sync-enqueue tests override it.
+        monkeypatch.setattr(accounts_service, "enqueue_draft_sync_on_connect", lambda *_a, **_kw: None)
         return store
 
     def _start(self):
@@ -458,6 +612,57 @@ class TestConnectAccountFlow:
         assert payload["email_address"] == "user@example.com"
         # single-use: the pending entry is consumed
         assert oauth_pending._pending == {}
+
+    def test_complete_enqueues_backfill_after_token_persist(self, monkeypatch):
+        self._patch_connect_deps(monkeypatch)
+        enqueue_calls = []
+        monkeypatch.setattr(
+            accounts_service, "enqueue_backfill_on_connect",
+            lambda mid, aid, prov: enqueue_calls.append((mid, aid, prov)),
+        )
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
+        assert enqueue_calls == [(self._MID, self._AID, "gmail")]
+
+    def test_complete_backfill_enqueue_failure_does_not_flip_ok(self, monkeypatch):
+        # Best-effort soft-fail: an enqueue failure must NOT roll the callback
+        # to ok:False (the tokens are already persisted; the user can retry by
+        # reconnecting, which revives a failed job).
+        self._patch_connect_deps(monkeypatch)
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("enqueue exploded")
+
+        monkeypatch.setattr(accounts_service, "enqueue_backfill_on_connect", _boom)
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
+
+    def test_complete_enqueues_draft_sync_after_token_persist(self, monkeypatch):
+        self._patch_connect_deps(monkeypatch)
+        draft_calls = []
+        monkeypatch.setattr(
+            accounts_service, "enqueue_draft_sync_on_connect",
+            lambda mid, aid, prov: draft_calls.append((mid, aid, prov)),
+        )
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
+        assert draft_calls == [(self._MID, self._AID, "gmail")]
+
+    def test_complete_draft_sync_enqueue_failure_does_not_flip_ok(self, monkeypatch):
+        # Same best-effort soft-fail contract as the backfill enqueue: a draft
+        # sync enqueue failure must not roll the OAuth callback to ok:False.
+        self._patch_connect_deps(monkeypatch)
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("draft enqueue exploded")
+
+        monkeypatch.setattr(accounts_service, "enqueue_draft_sync_on_connect", _boom)
+        start = self._start()
+        result = accounts_service.complete_account_connect(start.state, "auth-code", None, None)
+        assert result["ok"] is True
 
     def test_complete_unknown_state_reports_expired(self, monkeypatch):
         self._patch_connect_deps(monkeypatch)

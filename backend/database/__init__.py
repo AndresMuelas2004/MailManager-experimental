@@ -24,12 +24,15 @@ from database.lifecycle import (
     warmup_connection,
 )
 from database.repositories import (
+    account_backfill_store,
     account_store,
     draft_attachment_store,
     draft_store,
+    draft_sync_store,
     email_attachment_store,
     email_content_store,
     email_metadata_store,
+    image_proxy_cache_store,
     mailbox_store,
     session_store,
     user_store,
@@ -39,10 +42,12 @@ from database.security import load_app_credentials
 from database.settings import get_frontend_origin, get_google_oauth_redirect_uri
 
 __all__ = [
+    "account_backfill_store",
     "account_store",
     "close_pool",
     "draft_attachment_store",
     "draft_store",
+    "draft_sync_store",
     "email_attachment_store",
     "email_content_store",
     "ConnectionPoolError",
@@ -51,6 +56,7 @@ __all__ = [
     "email_metadata_store",
     "get_frontend_origin",
     "get_google_oauth_redirect_uri",
+    "image_proxy_cache_store",
     "load_app_credentials",
     "mailbox_store",
     "MigrationError",
