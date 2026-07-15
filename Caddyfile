@@ -14,6 +14,21 @@
 {$DOMAIN} {
 	encode gzip
 
+	# Cabeceras de seguridad (endurecimiento pre-CASA). La CSP está ausente a
+	# propósito: el visor de correo (HTML saneado en iframes, imágenes data:)
+	# necesita una política diseñada y probada aparte — ver el informe pre-CASA
+	# en UtilidadesDelProgramador/despliegue-app/verificacion-oauth/ (local).
+	# "-Server" se difiere hasta la respuesta del upstream y borra el banner de
+	# versión de nginx/uvicorn.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
 	handle_path /api/* {
 		reverse_proxy backend:8000
 	}
