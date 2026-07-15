@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Check, ChevronDown, Inbox, Layers, Mail, Send, Settings, X } from 'lucide-react';
+import { Check, ChevronDown, Inbox, Layers, Mail, Plus, Send, Settings, X } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import MailboxDropdown from './MailboxDropdown';
@@ -46,6 +46,9 @@ type Props = {
   onMailboxRename: (mailboxId: string, displayName: string) => void;
   onMailboxRequestDelete: (mailbox: MailboxItem) => void;
   onScopeSelect: (accountId: string | null) => void;
+  // Fired by the "Añadir cuenta" entry at the bottom of the scope switcher;
+  // the host navigates to the connected-accounts settings section.
+  onAddAccount: () => void;
   onCompose: () => void;
   // Mobile drawer state, owned by MailboxShell. On desktop (lg:) the aside is a
   // static sticky column and these are inert; below lg it slides in/out.
@@ -70,6 +73,7 @@ export default function Sidebar({
   onMailboxRename,
   onMailboxRequestDelete,
   onScopeSelect,
+  onAddAccount,
   onCompose,
   open,
   onClose,
@@ -214,6 +218,20 @@ export default function Sidebar({
                 </button>
               );
             })}
+            <div className="mt-1 border-t border-zinc-100 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAccountsOpen(false);
+                  onAddAccount();
+                  onNavigate();
+                }}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm font-medium text-blue-600 hover:bg-zinc-50"
+              >
+                <Plus className="h-4 w-4 shrink-0" />
+                <span className="flex-1 truncate">{t('sidebar.addAccount')}</span>
+              </button>
+            </div>
           </div>
         )}
       </div>

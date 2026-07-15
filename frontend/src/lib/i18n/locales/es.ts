@@ -34,6 +34,7 @@ export const es = {
     settings: 'Ajustes',
     compose: 'Redactar',
     allAccounts: 'Todas las cuentas',
+    addAccount: 'Añadir cuenta',
   },
 
   nav: {

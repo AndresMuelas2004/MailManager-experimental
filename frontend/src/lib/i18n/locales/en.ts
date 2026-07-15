@@ -32,6 +32,7 @@ export const en: EsDictionary = {
     settings: 'Settings',
     compose: 'Compose',
     allAccounts: 'All accounts',
+    addAccount: 'Add account',
   },
 
   nav: {

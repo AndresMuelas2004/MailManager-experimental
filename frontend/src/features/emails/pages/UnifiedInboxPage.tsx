@@ -1,6 +1,7 @@
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { useEffect } from 'react';
+import { UserPlus } from 'lucide-react';
 
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
@@ -177,14 +178,28 @@ export default function UnifiedInboxPage({ box }: Props) {
             </h1>
             <p className="text-[15px] leading-[1.5] text-zinc-500">{t(config.subtitleKey)}</p>
           </div>
-          <RefreshControl
-            onRefresh={sync}
-            syncing={syncing}
-            lastSyncedAt={lastSyncedAt}
-            hasError={Boolean(syncError)}
-            partialWarning={partialWarning}
-            backfillNotice={backfillNotice}
-          />
+          <div className="flex items-start gap-2">
+            {/* Onboarding entry point: only on the unified main inbox (the
+                landing view), always visible so a user with no accounts —
+                or wanting one more — can find the connect flow at a glance. */}
+            {box === 'ALL_MAIL' && (
+              <Link
+                to={`/m/${mailboxId}/settings/accounts`}
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-blue-700"
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                {t('sidebar.addAccount')}
+              </Link>
+            )}
+            <RefreshControl
+              onRefresh={sync}
+              syncing={syncing}
+              lastSyncedAt={lastSyncedAt}
+              hasError={Boolean(syncError)}
+              partialWarning={partialWarning}
+              backfillNotice={backfillNotice}
+            />
+          </div>
         </div>
         <div className="flex items-center gap-2 pt-2">
           <SearchInput value={rawQ} onChange={handleSearchChange} />

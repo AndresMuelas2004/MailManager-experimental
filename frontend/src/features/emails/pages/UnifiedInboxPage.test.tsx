@@ -661,6 +661,48 @@ describe('UnifiedInboxPage — selection', () => {
   });
 });
 
+// Add-account entry point. The unified MAIN inbox (box=ALL_MAIL) header shows
+// a permanent "Añadir cuenta" link next to the refresh control, pointing at the
+// connected-accounts settings section — the onboarding path for a user with no
+// accounts. Other unified boxes deliberately do NOT mount it.
+describe('UnifiedInboxPage — add account entry point', () => {
+  function stubInbox() {
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/emails`, () =>
+        HttpResponse.json({
+          items: emailFixtures,
+          total: emailFixtures.length,
+          limit: 50,
+          offset: 0,
+        }),
+      ),
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+  }
+
+  it('the unified inbox header links "Añadir cuenta" to the connected-accounts settings', async () => {
+    stubInbox();
+    renderInboxAtMailbox();
+
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+    const link = screen.getByRole('link', { name: 'Añadir cuenta' });
+    expect(link).toHaveAttribute('href', '/m/mb_1/settings/accounts');
+  });
+
+  it('does not render the add-account link on other unified boxes', async () => {
+    stubInbox();
+    renderWithProviders(
+      <Routes>
+        <Route path="/m/:mailboxId/archive" element={<UnifiedInboxPage box="ARCHIVE" />} />
+      </Routes>,
+      { initialEntries: ['/m/mb_1/archive'] },
+    );
+
+    await waitFor(() => expect(screen.getByText('Welcome to the platform')).toBeInTheDocument());
+    expect(screen.queryByRole('link', { name: 'Añadir cuenta' })).not.toBeInTheDocument();
+  });
+});
+
 // Refresh control. The header now mounts a RefreshControl whose button is
 // located by its ACCESSIBLE NAME 'Buscar correo nuevo' (the aria-label), NOT
 // the visible 'Refrescar' text. The page already fires a sync-metadata POST on

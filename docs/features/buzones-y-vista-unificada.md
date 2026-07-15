@@ -96,6 +96,15 @@ La vista de cuenta concreta se distingue de la unificada por un **título con la
 
 La diferencia la marca la **dirección de la página**: la vista unificada no nombra ninguna cuenta, mientras que la vista de cuenta concreta lleva el identificador de la cuenta en la ruta. El usuario no gestiona esto manualmente; elige el ámbito (Todas o una cuenta) en el selector de la barra lateral y las carpetas de esa misma barra lo llevan a la bandeja correspondiente **dentro** del ámbito elegido, y la app sabe en qué modo está.
 
+### 3.4 Acceso rápido a "Añadir cuenta"
+
+Conectar una cuenta nueva vive en Ajustes → Cuentas conectadas, pero la app ofrece **dos accesos directos permanentes** para que un usuario recién llegado (o que quiere una cuenta más) encuentre el camino sin buscar:
+
+- **En el selector de cuentas de la barra lateral**: el desplegable termina siempre con una entrada "Añadir cuenta", separada de la lista, visible tanto en el ámbito unificado como dentro de una cuenta concreta. Elegirla navega a la pantalla de cuentas conectadas del buzón activo.
+- **En la cabecera de la Bandeja unificada**: junto al botón "Refrescar" hay un botón "Añadir cuenta" con el mismo destino. Aparece **solo en la bandeja de entrada unificada** (la vista donde aterriza el usuario), siempre — con o sin cuentas conectadas; las demás bandejas unificadas (Enviados, Archivados, Spam, Papelera) y las vistas de cuenta concreta no lo muestran.
+
+Ninguno de los dos accesos inicia la conexión por sí mismo: ambos llevan a la pantalla de cuentas conectadas, que es donde vive el flujo real de conexión.
+
 ---
 
 ## 4. La lógica de columnas "Para" / "De"

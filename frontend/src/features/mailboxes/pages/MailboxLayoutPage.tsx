@@ -145,6 +145,13 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     composer.openForNewEmail();
   }, [composer, closeDrawer]);
 
+  // "Añadir cuenta" entry of the scope switcher: jump to the connected-accounts
+  // settings section, where the actual OAuth connect flow lives.
+  const handleAddAccount = useCallback(() => {
+    closeDrawer();
+    navigate(`/m/${mailboxId}/settings/accounts`);
+  }, [navigate, mailboxId, closeDrawer]);
+
   // Browser tab title reflects the current mailbox's inbox (ALL_MAIL) unread
   // total: ``(N) MISSELA`` / ``(99+) MISSELA`` / ``MISSELA`` at 0.
   // Mailbox-wide (not scope-narrowed) on purpose — the tab represents the whole
@@ -187,6 +194,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
         onMailboxRename={handleMailboxRename}
         onMailboxRequestDelete={handleMailboxRequestDelete}
         onScopeSelect={handleScopeSelect}
+        onAddAccount={handleAddAccount}
         onCompose={handleCompose}
         open={drawerOpen}
         onClose={closeDrawer}

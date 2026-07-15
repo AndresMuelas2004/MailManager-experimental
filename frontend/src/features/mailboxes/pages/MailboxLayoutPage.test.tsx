@@ -275,6 +275,7 @@ function renderScope(initialEntry: string) {
         <Route path="inbox" element={<div>Unified inbox</div>} />
         <Route path="archive" element={<div>Unified archive</div>} />
         <Route path="virtual-mailboxes" element={<div>Virtual mailboxes</div>} />
+        <Route path="settings/accounts" element={<div>Accounts settings</div>} />
         <Route path="account/:accountId">
           <Route path="inbox" element={<div>Account inbox</div>} />
           <Route path="archive" element={<div>Account archive</div>} />
@@ -351,5 +352,35 @@ describe('MailboxLayoutPage — sidebar scope switcher', () => {
     // In the a_1 scope the inbox badge shows a_1's unread (7), not the total (8).
     await waitFor(() => expect(screen.getByLabelText('7 sin leer')).toBeInTheDocument());
     expect(screen.queryByLabelText('8 sin leer')).not.toBeInTheDocument();
+  });
+
+  it('the switcher offers "Añadir cuenta" and it navigates to the connected-accounts settings', async () => {
+    stubMailboxes();
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderScope('/m/mb_1/inbox');
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: /Todas las cuentas/ }));
+    await user.click(screen.getByRole('button', { name: 'Añadir cuenta' }));
+
+    await waitFor(() => expect(screen.getByText('Accounts settings')).toBeInTheDocument());
+  });
+
+  it('the "Añadir cuenta" entry is also offered inside a single-account scope', async () => {
+    // The entry is permanent (not gated to the unified scope): a user viewing
+    // one account can add the next one from the same dropdown.
+    stubMailboxes();
+    server.use(
+      http.get(`${API_BASE}/mailboxes/mb_1/accounts`, () => HttpResponse.json([accountFixture])),
+    );
+
+    renderScope('/m/mb_1/account/a_1/inbox');
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: /one@example.com/ }));
+    expect(screen.getByRole('button', { name: 'Añadir cuenta' })).toBeInTheDocument();
   });
 });
