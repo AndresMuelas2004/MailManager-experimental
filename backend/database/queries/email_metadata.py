@@ -659,6 +659,23 @@ LIST_METADATA_BY_THREAD = """
     ORDER BY received_at DESC, provider_message_id
 """
 
+# Same identity projection as LIST_METADATA_BY_THREAD, but scoped to the
+# WHOLE account instead of a single thread — used by the /favorites/sync
+# reconciliation (favoritos.py), which suffers the SAME Outlook per-endpoint
+# id drift (the $filter=flag/flagStatus route returns different ids than the
+# delta-sync route persisted here) but has no thread_id to narrow the scan
+# by (a favourite is not confined to one thread). No new index: the account-
+# wide scan mirrors the MVP trade-off already accepted for the thread-scoped
+# query above — this endpoint is not hot-path (a manual, occasional trigger)
+# and accounts are capped by the backfill limit. Ordered identically for the
+# same determinism reason: the first row per physical identity wins.
+LIST_METADATA_IDENTITY_FOR_ACCOUNT = """
+    SELECT provider_message_id, received_at, from_email, subject
+    FROM email_metadata
+    WHERE account_id = %(account_id)s
+    ORDER BY received_at DESC, provider_message_id
+"""
+
 # Recompute has_attachments from email_attachments (D-09). The
 # subquery counts non-inline rows; ``COUNT(*) > 0`` is true if and
 # only if at least one downloadable attachment row exists. Idempotent

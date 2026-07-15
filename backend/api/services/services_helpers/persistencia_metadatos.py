@@ -87,6 +87,30 @@ def load_thread_metadata(
         raise fallback("Failed to load thread metadata for conversation id reconciliation.") from exc
 
 
+def load_account_identity_metadata(
+    account_id: str,
+    *,
+    fallback: type[ApiError] = ApiError,
+) -> list[dict]:
+    """Load the identity columns of every row of an account for id reconciliation.
+
+    Same shape as ``load_thread_metadata`` (each stored row's
+    ``provider_message_id`` + the endpoint-independent ``(received_at,
+    from_email, subject)`` triple) but scoped to the whole account instead
+    of one thread. Used by the favourites sync to remap Outlook's
+    non-deterministic ``$filter=flag/flagStatus`` ids onto the stable ids
+    already stored in ``email_metadata`` — a favourite is not confined to
+    one thread, so the thread-scoped helper cannot be reused here.
+    """
+    try:
+        return email_metadata_store.list_metadata_identity_for_account(account_id)
+    except DatabaseError as exc:
+        raise translate_database_error(exc) from exc
+    except Exception as exc:
+        logger.warning("Unexpected account identity metadata load error (%s): %s", type(exc).__name__, exc)
+        raise fallback("Failed to load account identity metadata for favourites reconciliation.") from exc
+
+
 def load_sync_cursors(
     label_lookup: dict[str, tuple[str, str, str]],
     *,

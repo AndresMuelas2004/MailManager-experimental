@@ -456,3 +456,26 @@ class TestGmailListFavoriteIds:
         client = _make_favorite_client()
         with pytest.raises(EmailNotAuthenticatedError):
             client.list_favorite_ids()
+
+
+class TestGmailListFavoriteCandidates:
+    """Gmail does not override list_favorite_candidates — it inherits the
+    ABC's default (delegates to list_favorite_ids(), no identity fields),
+    correct because Gmail's favourite ids are already stable across
+    endpoints and need no reconciliation."""
+
+    def _list_execute(self, mock_service):
+        return mock_service.users().messages().list().execute
+
+    def test_delegates_to_list_favorite_ids_with_no_identity_fields(self):
+        client = _make_favorite_client()
+        mock_service = MagicMock()
+        self._list_execute(mock_service).side_effect = [
+            {"messages": [{"id": "a"}, {"id": "b"}]},
+        ]
+        client.service = mock_service
+        candidates = client.list_favorite_candidates()
+        assert [c.provider_message_id for c in candidates] == ["a", "b"]
+        assert all(c.received_at is None for c in candidates)
+        assert all(c.from_email is None for c in candidates)
+        assert all(c.subject is None for c in candidates)

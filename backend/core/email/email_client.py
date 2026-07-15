@@ -87,6 +87,25 @@ class SpamMoveResult:
 
 
 @dataclass
+class FavoriteCandidate:
+    """One provider-reported favourite, with identity fields for reconciliation.
+
+    Returned by :py:meth:`EmailClient.list_favorite_candidates`. ``received_at``
+    / ``from_email`` / ``subject`` are ``None`` for providers whose favourite
+    ids are already stable across endpoints (Gmail) — the service layer skips
+    reconciliation entirely when every candidate carries no identity. Outlook
+    populates them so the service can remap the ``$filter=flag/flagStatus``
+    route's non-deterministic ids onto the stable ids already stored in
+    ``email_metadata`` (same per-endpoint id drift already fixed for
+    ``fetch_conversation`` — see repository_guide.md).
+    """
+    provider_message_id: str
+    received_at: datetime | None = None
+    from_email: str | None = None
+    subject: str | None = None
+
+
+@dataclass
 class BackfillPage:
     """One wave of the background initial mass backfill.
 
@@ -532,6 +551,22 @@ class EmailClient(ABC):
         local flag against the provider's source of truth (covers
         out-of-band changes from Gmail web, Outlook desktop, mobile…).
         """
+
+    def list_favorite_candidates(self) -> list[FavoriteCandidate]:
+        """List currently-favourite messages with identity fields for reconciliation.
+
+        Concrete default (NOT abstract, unlike ``list_favorite_ids``): wraps
+        ``list_favorite_ids()`` with no identity fields, correct for any
+        provider whose favourite ids are already stable across endpoints
+        (Gmail). Outlook overrides this to enrich each id with
+        ``received_at`` / ``from_email`` / ``subject`` so the service layer
+        (``favoritos.py::sync_favorites``) can reconcile Outlook's
+        per-endpoint id drift — see :py:class:`FavoriteCandidate`.
+        """
+        return [
+            FavoriteCandidate(provider_message_id=mid)
+            for mid in self.list_favorite_ids()
+        ]
 
     @abstractmethod
     def move_to_spam(self, message_ids: list[str]) -> list[SpamMoveResult]:

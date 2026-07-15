@@ -356,6 +356,64 @@ def test_sync_favorites_full_replace_for_account(
     assert flags == {"m1": True, "m2": False, "m3": True, "m4": False}
 
 
+def test_sync_favorites_outlook_reconciles_drifted_id(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    """Outlook per-endpoint id drift: ``$filter=flag/flagStatus`` returns a
+    different id ('D') than the delta-sync route already stored locally
+    ('A') for the SAME physical message (matching received_at/from_email/
+    subject). Without reconciliation, the naive full-replacement would wipe
+    'A''s favourite (this is the live bug ``test_62_sync_favorites_outlook``
+    in the e2e suite guards against). Proves the fix: the sync resolves 'D'
+    back onto the stored 'A' via the physical identity and keeps it
+    favourite — the drifted id is never persisted as a separate row.
+    """
+    from datetime import datetime, timezone
+    from core.email.email_manager import EmailManager
+    from tests.shared.email_fakes import FakeEmailClient, build_favorite_candidate
+
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "outlook")
+    received_at = datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc)
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO email_metadata
+                (provider_message_id, account_id, thread_id, from_email,
+                 from_name, subject, received_at, is_read, box, is_favorite)
+            VALUES ('A', %s, 't', 'sender@example.com', 'Sender', 'subject',
+                    %s, false, 'ALL_MAIL', false)
+            """,
+            (account_id, received_at),
+        )
+
+    candidate = build_favorite_candidate(provider_message_id="D", received_at=received_at)
+
+    def _build_manager(accounts):
+        manager = EmailManager()
+        for acc in accounts:
+            label = f"{acc.get('mailbox_id')}__{acc.get('account_id')}"
+            manager.add_client(FakeEmailClient(
+                label,
+                list_favorite_candidates_return=[candidate],
+                auth_return={"access_token": "tok", "refresh_token": "ref"},
+            ))
+        return manager
+
+    patch_emails_build_manager(monkeypatch, _build_manager)
+
+    resp = test_client.post(
+        f"{_MAILBOX_URL}/{mailbox_id}/favorites/sync",
+        params={"account_id": account_id},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["accounts"][0]["favorites_synced"] == 1
+
+    # The reconciled stable id 'A' survives the full-replacement — the
+    # drifted id 'D' was never persisted as a separate row/favourite.
+    assert _select_is_favorite(isolated_db, account_id, "A") is True
+    assert _select_is_favorite(isolated_db, account_id, "D") is None
+
+
 def test_set_favorite_race_zero_rows_returns_404(
     test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
 ):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -497,3 +498,92 @@ class TestOutlookListFavoriteIdsRetries:
         client._access_token = None
         with pytest.raises(EmailNotAuthenticatedError):
             client.list_favorite_ids()
+
+
+class TestOutlookListFavoriteCandidatesRetries:
+    """``list_favorite_candidates`` enriches list_favorite_ids with identity
+    fields for the /favorites/sync reconciliation — same retry/pagination
+    machinery, verified separately here."""
+
+    def test_collects_candidates_with_identity_fields(self):
+        client = _make_favorite_client()
+        page = {
+            "value": [
+                {
+                    "id": "a",
+                    "from": {"emailAddress": {"address": "Sender@Example.com", "name": "Sender"}},
+                    "subject": "Hello",
+                    "receivedDateTime": "2024-01-01T12:00:00Z",
+                },
+            ],
+        }
+        with patch.object(client, "_graph_request_raw", return_value=_raw(200, body=page)):
+            candidates = client.list_favorite_candidates()
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c.provider_message_id == "a"
+        assert c.from_email == "Sender@Example.com"
+        assert c.subject == "Hello"
+        assert c.received_at == datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_missing_identity_fields_default_to_empty(self):
+        """Absent from/subject/receivedDateTime parse to the same defaults
+        _parse_graph_message already uses for sync — never None, so the
+        reconciliation's identity tuple stays comparable."""
+        client = _make_favorite_client()
+        page = {"value": [{"id": "a"}]}
+        with patch.object(client, "_graph_request_raw", return_value=_raw(200, body=page)):
+            candidates = client.list_favorite_candidates()
+        c = candidates[0]
+        assert c.from_email == ""
+        assert c.subject == ""
+        assert c.received_at == datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    def test_paginates_via_nextlink(self):
+        client = _make_favorite_client()
+        page1 = {
+            "value": [{"id": "a", "subject": "s1", "receivedDateTime": "2024-01-01T12:00:00Z"}],
+            "@odata.nextLink": "https://graph/next",
+        }
+        page2 = {"value": [{"id": "b", "subject": "s2", "receivedDateTime": "2024-01-02T12:00:00Z"}]}
+        with patch.object(
+            client, "_graph_request_raw",
+            side_effect=[_raw(200, body=page1), _raw(200, body=page2)],
+        ) as raw_mock:
+            candidates = client.list_favorite_candidates()
+        assert [c.provider_message_id for c in candidates] == ["a", "b"]
+        assert raw_mock.call_args_list[1].args[1] == "https://graph/next"
+
+    def test_select_includes_identity_fields(self):
+        """The enriched $select must fetch identity fields in the SAME page
+        request — no extra round trip per candidate."""
+        client = _make_favorite_client()
+        with patch.object(
+            client, "_graph_request_raw", return_value=_raw(200, body={"value": []}),
+        ) as raw_mock:
+            client.list_favorite_candidates()
+        url = raw_mock.call_args_list[0].args[1]
+        assert "$select=id,from,subject,receivedDateTime,sentDateTime" in url
+
+    def test_retries_transient_page_then_succeeds(self):
+        client = _make_favorite_client()
+        page = {"value": [{"id": "a"}]}
+        with patch.object(
+            client, "_graph_request_raw",
+            side_effect=[_raw(503), _raw(200, body=page)],
+        ) as raw_mock:
+            candidates = client.list_favorite_candidates()
+        assert [c.provider_message_id for c in candidates] == ["a"]
+        assert raw_mock.call_count == 2
+
+    def test_permanent_error_aborts_listing(self):
+        client = _make_favorite_client()
+        with patch.object(client, "_graph_request_raw", return_value=_raw(400)):
+            with pytest.raises(EmailExternalAPIError):
+                client.list_favorite_candidates()
+
+    def test_unauthenticated_raises(self):
+        client = _make_favorite_client()
+        client._access_token = None
+        with pytest.raises(EmailNotAuthenticatedError):
+            client.list_favorite_candidates()

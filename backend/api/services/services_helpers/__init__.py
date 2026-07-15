@@ -42,6 +42,7 @@ from .contexto_cuentas import (  # _wrap_secret: privado re-exportado — lo imp
 from .persistencia_metadatos import (
     build_draft_rows,
     delete_email_metadata_batch,
+    load_account_identity_metadata,
     load_suspect_message_ids,
     load_sync_cursors,
     load_thread_metadata,

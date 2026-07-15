@@ -964,6 +964,69 @@ def test_list_metadata_by_thread_propagates_connection_pool_error(monkeypatch):
         em_module.email_metadata_store.list_metadata_by_thread("acc1", "thr-1")
 
 
+# ===== list_metadata_identity_for_account =====
+# Same identity projection as list_metadata_by_thread, scoped to the WHOLE
+# account instead of a single thread. Backs the /favorites/sync reconciliation:
+# a favourite is not confined to one thread, so the account-wide scope is
+# needed. A malformed UUID collapses to [] like the thread-scoped read.
+
+
+def test_list_metadata_identity_for_account_returns_rows_as_dicts(monkeypatch):
+    rows = [
+        {
+            "provider_message_id": "A",
+            "received_at": datetime(2025, 1, 2, 10, 0, tzinfo=timezone.utc),
+            "from_email": "a@b.com",
+            "subject": "Hi",
+        },
+        {
+            "provider_message_id": "B",
+            "received_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+            "from_email": "a@b.com",
+            "subject": "Hi",
+        },
+    ]
+    cursor = FakeCursor(fetchall_results=[rows])
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    result = em_module.email_metadata_store.list_metadata_identity_for_account("acc1")
+    assert result == rows
+    assert all(isinstance(r, dict) for r in result)
+    sql, params = cursor.executed[0]
+    assert sql == em_module.queries.LIST_METADATA_IDENTITY_FOR_ACCOUNT
+    assert params == {"account_id": "acc1"}
+
+
+def test_list_metadata_identity_for_account_invalid_uuid_returns_empty(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.errors.InvalidTextRepresentation())
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    assert em_module.email_metadata_store.list_metadata_identity_for_account("not-a-uuid") == []
+
+
+def test_list_metadata_identity_for_account_psycopg2_error_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=psycopg2.OperationalError("fail"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="Failed to list email metadata identity for account"):
+        em_module.email_metadata_store.list_metadata_identity_for_account("acc1")
+
+
+def test_list_metadata_identity_for_account_generic_raises_query_error(monkeypatch):
+    cursor = FakeCursor(execute_side_effect=RuntimeError("boom"))
+    patch_connection(monkeypatch, em_module, [cursor])
+
+    with pytest.raises(QueryError, match="RuntimeError"):
+        em_module.email_metadata_store.list_metadata_identity_for_account("acc1")
+
+
+def test_list_metadata_identity_for_account_propagates_connection_pool_error(monkeypatch):
+    patch_connection_error(monkeypatch, em_module, ConnectionPoolError("pool down"))
+
+    with pytest.raises(ConnectionPoolError, match="pool down"):
+        em_module.email_metadata_store.list_metadata_identity_for_account("acc1")
+
+
 # ===== update_has_attachments (D-09) =====
 # Recomputes ``email_metadata.has_attachments`` from the live count of
 # non-inline rows in ``email_attachments``. The query is idempotent so

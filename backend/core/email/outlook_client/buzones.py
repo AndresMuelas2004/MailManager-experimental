@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import urllib.parse
 
-from ..email_client import SpamMoveResult
+from ..email_client import FavoriteCandidate, SpamMoveResult
 from ..errors import EmailExternalAPIError, EmailNotAuthenticatedError
 from .transporte import GRAPH_BASE_URL
 
@@ -147,6 +147,48 @@ class OutlookBuzonesMixin:
                     ids.append(msg_id)
             url = response.get("@odata.nextLink")
         return ids
+
+    def list_favorite_candidates(self) -> list[FavoriteCandidate]:
+        """List flagged Outlook messages enriched with identity fields.
+
+        Extends the ``list_favorite_ids`` ``$select`` with the same fields
+        ``_parse_graph_message`` already extracts for sync (``from``,
+        ``subject``, ``receivedDateTime``, ``sentDateTime``) in the SAME
+        paginated call — no extra round trips. Reuses ``_parse_graph_message``
+        (dummy ``box=""``, discarded) so the identity is computed with the
+        exact same field-chain the delta/bootstrap sync used to persist
+        ``email_metadata`` — a bespoke re-parse here would risk a subtly
+        different normalisation that silently breaks the physical-identity
+        match the service layer relies on to reconcile Outlook's
+        per-endpoint id drift (the ``$filter=flag/flagStatus`` route returns
+        different ids than the delta-sync route — see repository_guide.md).
+        """
+        if self._access_token is None:
+            raise EmailNotAuthenticatedError("Outlook list_favorite_candidates requires authentication.")
+        url = (
+            f"{GRAPH_BASE_URL}/me/messages"
+            "?$filter=flag/flagStatus%20eq%20'flagged'"
+            "&$select=id,from,subject,receivedDateTime,sentDateTime"
+            "&$top=100"
+        )
+        candidates: list[FavoriteCandidate] = []
+        while url:
+            response = self._graph_request_json_with_retries(
+                "GET", url, operation="list_favorite_candidates",
+            )
+            for msg in response.get("value", []) or []:
+                msg_id = str(msg.get("id") or "").strip()
+                if not msg_id:
+                    continue
+                parsed = self._parse_graph_message(msg, box="")
+                candidates.append(FavoriteCandidate(
+                    provider_message_id=msg_id,
+                    received_at=parsed.received_at,
+                    from_email=parsed.from_email,
+                    subject=parsed.subject,
+                ))
+            url = response.get("@odata.nextLink")
+        return candidates
 
     def move_to_spam(self, message_ids: list[str]) -> list[SpamMoveResult]:
         """Move messages to spam via Microsoft Graph API. Returns results for successfully moved messages."""

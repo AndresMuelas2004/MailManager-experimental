@@ -129,6 +129,8 @@ El mecanismo de reconciliación completa **sigue existiendo en el backend** (el 
 
 Es una **reconciliación completa** (no un "añadir lo nuevo"): pone al día la columna de favoritos de golpe. Hoy es redundante con la captura automática de arriba, que llega al mismo estado sin intervención.
 
+**Corrección importante (Outlook):** el paso 1 pedía a Outlook, en una versión anterior, los identificadores de favoritos por una ruta cuyos ids no coinciden con los que ya tenía guardados el propio MailManager para ese mismo correo (una peculiaridad conocida de la API de Outlook — el mismo tipo de discrepancia de identificadores que ya afecta a la vista de conversación, ver [conversaciones.md](conversaciones.md)). Sin corregirlo, la reconciliación completa podía **borrar por error** un favorito recién marcado en Outlook, porque no reconocía que el id devuelto por el proveedor y el id ya guardado correspondían al mismo correo. Ahora la reconciliación identifica cada correo por su combinación de fecha de recepción, remitente y asunto — no solo por su identificador — antes de aplicar el paso 2, así que un favorito de Outlook ya no se pierde por esta discrepancia.
+
 ### 5.2 La sincronización NO importa correos nuevos (decisión deliberada)
 
 Esta es una asimetría importante y consciente. Si el proveedor reporta como favorito un correo que **MailManager todavía no tiene** en su base de datos local, la sincronización lo **ignora en silencio**. No crea una fila nueva.

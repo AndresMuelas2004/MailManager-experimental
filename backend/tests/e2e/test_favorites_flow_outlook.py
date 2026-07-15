@@ -64,13 +64,18 @@ def test_62_sync_favorites_outlook(e2e_client):
     """Reconciliation keeps a just-flagged favourite AND returns a coherent envelope.
 
     The survival assertion is the load-bearing one: ``sync_favorites_for_account``
-    is a full replacement (``is_favorite = pmid = ANY(provider_ids)``), so if the
-    ids Outlook returns on the ``$filter=flag/flagStatus`` route do not match the
+    is a full replacement (``is_favorite = pmid = ANY(provider_ids)``), and the
+    ids Outlook returns on the ``$filter=flag/flagStatus`` route do NOT match the
     delta-route ids stored in ``email_metadata`` (the same per-endpoint id drift
-    verified live for ``$filter=conversationId``), the sync silently wipes EVERY
-    favourite of the account. An envelope-only check stays green through that
-    wipe — this test going red IS the live verification that the id spaces
-    diverge and the endpoint must be gated/reconciled for Outlook.
+    verified live for ``$filter=conversationId``). ``favoritos.py::sync_favorites``
+    now reconciles this live, exactly like the conversation viewer's
+    ``_build_id_remap``: ``EmailManager.list_all_favorite_candidates`` enriches
+    each Outlook favourite with its identity (received_at/from_email/subject),
+    and ``_reconcile_favorite_ids`` remaps the drifted id back onto the stable
+    id already stored, BEFORE the full-replacement UPDATE runs. This is now a
+    live regression test for that fix — it going red again would mean the
+    reconciliation broke (e.g. Graph changed the enriched ``$select`` shape, or
+    the identity fields stopped matching what delta-sync stores).
     """
     _assert_ok(e2e_client.post(f"/mailboxes/{OUTLOOK_MAILBOX_ID}/emails/sync-metadata"))
     pmid = _find_non_spam_trash_message(OUTLOOK_ACCOUNT_ID)
@@ -101,9 +106,9 @@ def test_62_sync_favorites_outlook(e2e_client):
         # full-replacement reconciliation (same test, same logical operation —
         # common_mistakes.md §1).
         assert _select_is_favorite(OUTLOOK_ACCOUNT_ID, pmid) is True, (
-            "favorites/sync wiped a provider-flagged favourite: the ids returned "
-            "by the $filter=flag route do not match the stored delta-route ids "
-            "(Outlook per-endpoint id drift) — gate or reconcile the sync for Outlook"
+            "favorites/sync wiped a provider-flagged favourite: the reconciliation "
+            "in _reconcile_favorite_ids failed to remap the drifted $filter=flag "
+            "id back onto the stored delta-route id (Outlook per-endpoint id drift)"
         )
     finally:
         if original is not None:

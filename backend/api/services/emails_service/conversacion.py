@@ -38,7 +38,11 @@ from database import (
     DatabaseError,
 )
 
-from ._comunes import _build_auth_context, _persist_refreshed_tokens
+from ._comunes import (
+    _build_auth_context,
+    _persist_refreshed_tokens,
+    _physical_message_identity,
+)
 
 
 def _conversation_message_to_metadata(
@@ -248,29 +252,6 @@ def get_conversation(
             type(exc).__name__, exc,
         )
         raise ConversationFetchError("Failed to fetch conversation.") from exc
-
-
-def _physical_message_identity(
-    received_at: Any, from_email: str | None, subject: str | None,
-) -> tuple[Any, str, str]:
-    """Endpoint-independent identity of a physical message within a thread.
-
-    Outlook returns a DIFFERENT REST id for the same physical message on the
-    folder-delta endpoint (what sync stored) vs the mailbox-wide
-    ``$filter=conversationId`` endpoint (what ``fetch_conversation`` returns),
-    and ``Prefer: IdType="ImmutableId"`` does NOT reconcile the two (verified
-    live — external-apis-used/Outlook/08). These three fields are parsed
-    identically on both endpoints (both go through ``_parse_graph_message``),
-    so together they identify the same physical message across them.
-    ``received_at`` (a tz-aware datetime; equal instants hash equal even from
-    different tzinfo) is the real discriminator within a thread — two distinct
-    messages differ by send time — and ``from_email`` + ``subject`` harden it.
-    """
-    return (
-        received_at,
-        (from_email or "").strip().lower(),
-        (subject or "").strip(),
-    )
 
 
 def _build_id_remap(

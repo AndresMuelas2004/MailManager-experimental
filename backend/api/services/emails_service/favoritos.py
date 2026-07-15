@@ -13,7 +13,7 @@ from api.errors.exceptions import (
     FavoriteSyncError,
     FavoriteUpdateError,
 )
-from core.email import CoreError
+from core.email import CoreError, FavoriteCandidate
 from api.schemas.email import (
     FavoriteSyncAccountDetail,
     FavoriteSyncResponse,
@@ -22,6 +22,7 @@ from api.schemas.email import (
 from api.services.services_helpers import (
     build_manager_for_accounts,
     ensure_mailbox_access,
+    load_account_identity_metadata,
     raise_on_silent_auth_errors,
     translate_core_error,
     translate_database_error,
@@ -32,7 +33,11 @@ from database import (
     DatabaseError,
 )
 
-from ._comunes import _build_auth_context, _persist_refreshed_tokens
+from ._comunes import (
+    _build_auth_context,
+    _persist_refreshed_tokens,
+    _physical_message_identity,
+)
 
 
 def set_favorite(
@@ -215,12 +220,12 @@ def sync_favorites(
         raise_on_silent_auth_errors(manager.get_last_errors(), fallback=FavoriteSyncError)
 
         try:
-            provider_results = manager.list_all_favorite_ids()
+            provider_results = manager.list_all_favorite_candidates()
         except CoreError as exc:
             raise translate_core_error(exc, fallback=FavoriteSyncError) from exc
         except Exception as exc:
             logger.warning(
-                "Unexpected list_all_favorite_ids error (%s): %s",
+                "Unexpected list_all_favorite_candidates error (%s): %s",
                 type(exc).__name__, exc,
             )
             raise FavoriteSyncError(
@@ -231,11 +236,12 @@ def sync_favorites(
 
         account_details: list[FavoriteSyncAccountDetail] = []
         total_synced = 0
-        for label, favorite_ids in provider_results.items():
+        for label, candidates in provider_results.items():
             ids = label_lookup.get(label)
             if not ids:
                 continue
             _mailbox_id, aid, provider = ids
+            favorite_ids = _reconcile_favorite_ids(aid, candidates)
             try:
                 affected = email_metadata_store.sync_favorites_for_account(
                     aid, favorite_ids,
@@ -255,7 +261,7 @@ def sync_favorites(
             account_details.append(FavoriteSyncAccountDetail(
                 account_id=aid,
                 provider=provider,
-                favorites_synced=len(favorite_ids),
+                favorites_synced=len(candidates),
             ))
 
         return FavoriteSyncResponse(
@@ -272,3 +278,63 @@ def sync_favorites(
         raise FavoriteSyncError(
             "Failed to synchronise favourites."
         ) from exc
+
+
+def _reconcile_favorite_ids(
+    account_id: str, candidates: list[FavoriteCandidate],
+) -> list[str]:
+    """Resolve each candidate to the id ``sync_favorites_for_account`` must use.
+
+    Reconciles Outlook's per-endpoint id drift: the ``$filter=flag/flagStatus``
+    route returns different ids than the delta-sync route persisted in
+    ``email_metadata``, so a naive full-replacement using the raw candidate
+    ids would silently wipe every Outlook favourite (the SAME mechanism
+    already fixed for the conversation viewer — see ``conversacion.py``'s
+    ``_build_id_remap``).
+
+    Short-circuits without touching the DB when no candidate carries identity
+    fields (Gmail, or any provider whose ids are already stable) — a pure
+    passthrough. Otherwise loads the account's stored identity rows and
+    resolves EVERY candidate through its physical-identity match (never a
+    "my own id is already stored, skip the lookup" shortcut — verified live
+    against a real Outlook account that a candidate's raw id can coincide
+    with an UNRELATED stored row's id, e.g. two sibling messages of the same
+    thread a second apart; trusting that coincidence would silently apply
+    the favourite to the wrong row). A candidate with no identity match
+    keeps its own (verbatim) id — a genuinely new favourite not yet synced
+    locally, silently dropped by the full-replacement UPDATE (already-
+    documented "Option A" skip behaviour). A reconciliation read failure
+    degrades to verbatim ids for every candidate (logged), never aborting
+    the sync.
+    """
+    if not any(c.received_at is not None for c in candidates):
+        return [c.provider_message_id for c in candidates]
+
+    try:
+        existing_rows = load_account_identity_metadata(
+            account_id, fallback=FavoriteSyncError,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Favourites sync id reconciliation failed for account '%s' (%s): %s",
+            account_id, type(exc).__name__, exc,
+            exc_info=exc,
+        )
+        return [c.provider_message_id for c in candidates]
+
+    identity_to_id: dict[tuple, str] = {}
+    for row in existing_rows:
+        identity_to_id.setdefault(
+            _physical_message_identity(
+                row["received_at"], row.get("from_email"), row.get("subject"),
+            ),
+            row["provider_message_id"],
+        )
+
+    resolved: list[str] = []
+    for c in candidates:
+        stable = identity_to_id.get(
+            _physical_message_identity(c.received_at, c.from_email, c.subject),
+        )
+        resolved.append(stable if stable else c.provider_message_id)
+    return resolved

@@ -15,6 +15,7 @@ from core.email import (
     EmailClient,
     EmailContent,
     EmailMetadata,
+    FavoriteCandidate,
     LabelUpdate,
     SpamMoveResult,
     SyncResult,
@@ -92,6 +93,28 @@ def build_conversation_message(
     )
 
 
+def build_favorite_candidate(
+    provider_message_id: str = "m1",
+    received_at: datetime | None = None,
+    from_email: str = "sender@example.com",
+    subject: str = "subject",
+) -> FavoriteCandidate:
+    """Build an Outlook-shaped ``FavoriteCandidate`` (identity fields
+    populated) with sensible defaults. For a Gmail-shaped candidate (no
+    identity — the reconciliation short-circuits), construct
+    ``FavoriteCandidate(provider_message_id=...)`` directly: its identity
+    fields already default to ``None``.
+    """
+    if received_at is None:
+        received_at = DEFAULT_RECEIVED_AT
+    return FavoriteCandidate(
+        provider_message_id=provider_message_id,
+        received_at=received_at,
+        from_email=from_email,
+        subject=subject,
+    )
+
+
 class FakeEmailClient(EmailClient):
     """In-memory fake that can simulate provider successes and failures."""
 
@@ -125,6 +148,7 @@ class FakeEmailClient(EmailClient):
         set_favorite_exc: Exception | None = None,
         list_favorite_ids_exc: Exception | None = None,
         list_favorite_ids_return: list[str] | None = None,
+        list_favorite_candidates_return: list[FavoriteCandidate] | None = None,
         fetch_reply_context_exc: Exception | None = None,
         fetch_reply_context_return: ReplyContext | None = None,
         fetch_conversation_exc: Exception | None = None,
@@ -196,6 +220,7 @@ class FakeEmailClient(EmailClient):
         self._set_favorite_exc = set_favorite_exc
         self._list_favorite_ids_exc = list_favorite_ids_exc
         self._list_favorite_ids_return = list(list_favorite_ids_return or [])
+        self._list_favorite_candidates_return = list_favorite_candidates_return
         self._fetch_reply_context_exc = fetch_reply_context_exc
         self._fetch_reply_context_return = fetch_reply_context_return
         self._fetch_conversation_exc = fetch_conversation_exc
@@ -244,6 +269,7 @@ class FakeEmailClient(EmailClient):
         ] = []
         self.set_favorite_calls: list[tuple[str, bool]] = []
         self.list_favorite_ids_calls = 0
+        self.list_favorite_candidates_calls = 0
         # Reply / Forward bookkeeping. ``create_draft_reply_kwargs`` and
         # ``send_draft_with_attachments_reply_kwargs`` are populated on
         # every call so a test can assert that the reply / forward
@@ -601,6 +627,20 @@ class FakeEmailClient(EmailClient):
         if self._list_favorite_ids_exc:
             raise self._list_favorite_ids_exc
         return list(self._list_favorite_ids_return)
+
+    def list_favorite_candidates(self) -> list[FavoriteCandidate]:
+        """Return the injected enriched candidates, or defer to the ABC
+        default (which wraps ``list_favorite_ids()`` — reusing its exc/return
+        injection unchanged).
+
+        Tests exercising the Outlook per-endpoint id drift reconciliation
+        inject ``list_favorite_candidates_return`` directly; tests that only
+        care about the raw-id path keep using ``list_favorite_ids_return``.
+        """
+        self.list_favorite_candidates_calls += 1
+        if self._list_favorite_candidates_return is not None:
+            return list(self._list_favorite_candidates_return)
+        return super().list_favorite_candidates()
 
     def fetch_reply_context(self, provider_message_id: str) -> ReplyContext:
         """Return the injected ``ReplyContext`` (or a benign default).

@@ -12,6 +12,7 @@ from .email_client import (
     EmailClient,
     EmailContent,
     EmailMetadata,
+    FavoriteCandidate,
     ReplyContext,
     SpamMoveResult,
     SyncResult,
@@ -486,20 +487,24 @@ class EmailManager:
                 f"Unexpected list_favorite_ids error ({type(exc).__name__}): {exc}"
             ) from exc
 
-    def list_all_favorite_ids(self) -> dict[str, list[str]]:
-        """Per-account favourite-id listing — used by the multi-account sync.
+    def list_all_favorite_candidates(self) -> dict[str, list[FavoriteCandidate]]:
+        """Per-account favourite listing (with identity fields) — used by the multi-account sync.
 
         Mirrors :py:meth:`fetch_all_drafts` shape: returns
-        ``{account_label: list[str]}`` and accumulates per-client errors
-        in ``self._last_errors`` so the service layer can decide how to
-        surface partial failures.
+        ``{account_label: list[FavoriteCandidate]}`` and accumulates
+        per-client errors in ``self._last_errors`` so the service layer
+        can decide how to surface partial failures. The service layer
+        (``favoritos.py::sync_favorites``) reconciles Outlook's
+        per-endpoint id drift using the identity fields each candidate
+        carries; Gmail candidates carry none (its ids are already stable),
+        so reconciliation is a no-op for them.
         """
         self._last_errors = {}
-        results: dict[str, list[str]] = {}
+        results: dict[str, list[FavoriteCandidate]] = {}
         for client in self._clients:
             label = client.get_account_label()
             try:
-                results[label] = client.list_favorite_ids()
+                results[label] = client.list_favorite_candidates()
             except Exception as exc:
                 self._last_errors[label] = exc
         return results

@@ -47,6 +47,34 @@ def _persist_refreshed_tokens(
             raise fallback("Failed to persist refreshed tokens.") from exc
 
 
+def _physical_message_identity(
+    received_at: Any, from_email: str | None, subject: str | None,
+) -> tuple[Any, str, str]:
+    """Endpoint-independent identity of a physical message.
+
+    Outlook returns a DIFFERENT REST id for the same physical message
+    depending on which endpoint is asked (folder-delta sync vs. the
+    mailbox-wide ``$filter=conversationId`` / ``$filter=flag/flagStatus``
+    routes), and ``Prefer: IdType="ImmutableId"`` does NOT reconcile them
+    (verified live — external-apis-used/Outlook/08). These three fields are
+    parsed identically on every endpoint (all go through
+    ``_parse_graph_message``), so together they identify the same physical
+    message across them. ``received_at`` (a tz-aware datetime; equal
+    instants hash equal even from different tzinfo) is the real
+    discriminator — two distinct messages differ by send time — and
+    ``from_email`` + ``subject`` harden it.
+
+    Shared by the conversation lazy-sync (``conversacion.py``, thread-scoped)
+    and the favourites sync reconciliation (``favoritos.py``, account-scoped)
+    so both use the exact same normalisation and never silently diverge.
+    """
+    return (
+        received_at,
+        (from_email or "").strip().lower(),
+        (subject or "").strip(),
+    )
+
+
 def _build_auth_context(
     accounts: list[dict[str, Any]],
     mailbox_id: str,

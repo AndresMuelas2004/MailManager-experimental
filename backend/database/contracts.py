@@ -547,6 +547,25 @@ class EmailMetadataStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_metadata_identity_for_account(
+        self, account_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return the identity columns of every row of ``account_id``.
+
+        Same projection as ``list_metadata_by_thread`` but scoped to the
+        whole account instead of one thread. Backs the ``/favorites/sync``
+        reconciliation: Outlook's ``$filter=flag/flagStatus`` route returns
+        different ids than the delta-sync route persisted here (the same
+        per-endpoint id drift), and a favourite is not confined to one
+        thread, so the reconciliation needs an account-wide identity map.
+        Ordered ``received_at DESC, provider_message_id`` for the same
+        determinism reason as ``list_metadata_by_thread``. Malformed UUIDs
+        collapse to ``[]`` (treated as "no results"), consistent with
+        ``exists``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def list_unread_recent_uncached(
         self, account_id: str, limit: int,
     ) -> list[str]:
