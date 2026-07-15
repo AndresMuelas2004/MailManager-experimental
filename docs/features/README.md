@@ -38,3 +38,4 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 
 ### Experiencia e interfaz
 - [diseno-responsive-movil.md](diseno-responsive-movil.md) — Disposición móvil por debajo de 1024 px: barra superior con cajón de navegación, botón flotante de redactar, compositor y visores a pantalla completa, listado como tarjetas, paginador compacto y demás ajustes de aspecto (sin cambios de backend).
+- [paginas-publicas.md](paginas-publicas.md) — La landing de marketing en la raíz del sitio (anónimos la ven; los autenticados entran a su correo como siempre) y las páginas legales públicas de privacidad y términos, bilingües con detección inglés-por-defecto para navegadores no españoles y selector EN/ES que comparte la preferencia de idioma de la app.

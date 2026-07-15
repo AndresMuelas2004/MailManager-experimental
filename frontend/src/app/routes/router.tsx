@@ -4,10 +4,13 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import RequireAuth from './RequireAuth';
 import RootLayout from '../layout/RootLayout';
 import LoginPage from '../../features/auth/pages/LoginPage';
+import LandingPage from '../../features/landing/pages/LandingPage';
 import MailboxGatewayPage from '../../features/mailboxes/pages/MailboxGatewayPage';
 import MailboxLayoutPage from '../../features/mailboxes/pages/MailboxLayoutPage';
 import DraftComposerMount from '../../features/drafts/pages/DraftComposerMount';
 
+const PrivacyPage = lazy(() => import('../../features/landing/pages/PrivacyPage'));
+const TermsPage = lazy(() => import('../../features/landing/pages/TermsPage'));
 const CreateMailboxPage = lazy(() => import('../../features/mailboxes/pages/CreateMailboxPage'));
 const ConnectedAccountsPage = lazy(
   () => import('../../features/accounts/pages/ConnectedAccountsPage'),
@@ -39,64 +42,74 @@ const router = createBrowserRouter([
     element: <RootLayout />,
     children: [
       { path: '/login', element: <LoginPage /> },
+      { path: '/privacy', element: <PrivacyPage /> },
+      { path: '/terms', element: <TermsPage /> },
       {
         path: '/',
-        element: <RequireAuth />,
         children: [
-          { index: true, element: <MailboxGatewayPage /> },
-          { path: 'create-mailbox', element: <CreateMailboxPage /> },
+          // Public index: anonymous visitors get the marketing landing, and
+          // the page itself forwards authenticated ones to /home — so every
+          // pre-existing navigate('/') / to="/" keeps working unchanged.
+          { index: true, element: <LandingPage /> },
           {
-            path: 'm/:mailboxId',
-            element: <MailboxLayoutPage />,
+            element: <RequireAuth />,
             children: [
-              // Pathless layout that keeps the singleton draft composer mounted
-              // across every mailbox content route. Lives in features/drafts so
-              // the cross-feature import of DraftComposerHost is avoided.
+              { path: 'home', element: <MailboxGatewayPage /> },
+              { path: 'create-mailbox', element: <CreateMailboxPage /> },
               {
-                element: <DraftComposerMount />,
+                path: 'm/:mailboxId',
+                element: <MailboxLayoutPage />,
                 children: [
-                  { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
-                  { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
-                  { path: 'archive', element: <UnifiedInboxPage box="ARCHIVE" /> },
-                  { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
-                  { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
-                  { path: 'drafts', element: <DraftsPage /> },
-                  { path: 'favorites', element: <FavoritesPage /> },
-                  { path: 'virtual-mailboxes', element: <VirtualMailboxesPage /> },
+                  // Pathless layout that keeps the singleton draft composer mounted
+                  // across every mailbox content route. Lives in features/drafts so
+                  // the cross-feature import of DraftComposerHost is avoided.
                   {
-                    path: 'virtual-mailboxes/:virtualMailboxId',
-                    element: <VirtualMailboxViewPage />,
-                  },
-                  {
-                    path: 'account/:accountId',
+                    element: <DraftComposerMount />,
                     children: [
-                      { index: true, element: <Navigate to="inbox" replace /> },
-                      { path: 'inbox', element: <AccountInboxPage box="ALL_MAIL" /> },
-                      { path: 'sent', element: <AccountInboxPage box="SENT" /> },
-                      { path: 'favorites', element: <AccountFavoritesPage /> },
-                      { path: 'archive', element: <AccountInboxPage box="ARCHIVE" /> },
-                      { path: 'spam', element: <AccountInboxPage box="SPAM" /> },
-                      { path: 'trash', element: <AccountInboxPage box="TRASH" /> },
-                      { path: 'drafts', element: <AccountDraftsPage /> },
+                      { path: 'inbox', element: <UnifiedInboxPage box="ALL_MAIL" /> },
+                      { path: 'sent', element: <UnifiedInboxPage box="SENT" /> },
+                      { path: 'archive', element: <UnifiedInboxPage box="ARCHIVE" /> },
+                      { path: 'spam', element: <UnifiedInboxPage box="SPAM" /> },
+                      { path: 'trash', element: <UnifiedInboxPage box="TRASH" /> },
+                      { path: 'drafts', element: <DraftsPage /> },
+                      { path: 'favorites', element: <FavoritesPage /> },
+                      { path: 'virtual-mailboxes', element: <VirtualMailboxesPage /> },
+                      {
+                        path: 'virtual-mailboxes/:virtualMailboxId',
+                        element: <VirtualMailboxViewPage />,
+                      },
+                      {
+                        path: 'account/:accountId',
+                        children: [
+                          { index: true, element: <Navigate to="inbox" replace /> },
+                          { path: 'inbox', element: <AccountInboxPage box="ALL_MAIL" /> },
+                          { path: 'sent', element: <AccountInboxPage box="SENT" /> },
+                          { path: 'favorites', element: <AccountFavoritesPage /> },
+                          { path: 'archive', element: <AccountInboxPage box="ARCHIVE" /> },
+                          { path: 'spam', element: <AccountInboxPage box="SPAM" /> },
+                          { path: 'trash', element: <AccountInboxPage box="TRASH" /> },
+                          { path: 'drafts', element: <AccountDraftsPage /> },
+                        ],
+                      },
                     ],
                   },
-                ],
-              },
-              // Settings area — sibling of DraftComposerMount (not a mail view,
-              // so it does not need the composer singleton mounted). The
-              // ConnectedAccountsPage reused here is the same lazy component the
-              // old standalone /accounts route used.
-              {
-                path: 'settings',
-                element: <SettingsLayoutPage />,
-                children: [
-                  { index: true, element: <SettingsAccountPage /> },
-                  { path: 'accounts', element: <ConnectedAccountsPage /> },
-                  { path: 'signature', element: <SignatureSettingsPage /> },
-                  { path: 'mailboxes', element: <MailboxesSettingsPage /> },
-                  { path: 'preferences', element: <PreferencesPage /> },
-                  { path: 'data', element: <DataSyncPage /> },
-                  { path: 'about', element: <AboutPage /> },
+                  // Settings area — sibling of DraftComposerMount (not a mail view,
+                  // so it does not need the composer singleton mounted). The
+                  // ConnectedAccountsPage reused here is the same lazy component the
+                  // old standalone /accounts route used.
+                  {
+                    path: 'settings',
+                    element: <SettingsLayoutPage />,
+                    children: [
+                      { index: true, element: <SettingsAccountPage /> },
+                      { path: 'accounts', element: <ConnectedAccountsPage /> },
+                      { path: 'signature', element: <SignatureSettingsPage /> },
+                      { path: 'mailboxes', element: <MailboxesSettingsPage /> },
+                      { path: 'preferences', element: <PreferencesPage /> },
+                      { path: 'data', element: <DataSyncPage /> },
+                      { path: 'about', element: <AboutPage /> },
+                    ],
+                  },
                 ],
               },
             ],
