@@ -100,3 +100,6 @@ compose.override.yaml
 
 # Informes locales de errores pendientes de corregir (no se versionan)
 errores-pendientes-de-corregir/
+
+# Mapa local de cuentas propietarias de consolas externas (Azure/Google) — no se versiona
+cuentas-de-la-aplicacion.md

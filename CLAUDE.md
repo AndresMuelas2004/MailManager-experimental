@@ -135,3 +135,7 @@
   ### 14 Documentación de APIs Externas (Gmail / Microsoft Graph)
 
   Antes de responder a una pregunta o hacer un cambio que involucre la API de Gmail o la API de Outlook / Microsoft Graph, consulta PRIMERO la carpeta de investigación local `external-apis-used/` (ignorada por git). Abre el índice de clasificación del proveedor correspondiente — `external-apis-used/Gmail/CLAUDE.md` o `external-apis-used/Outlook/CLAUDE.md` — que enruta al fichero `.md` exacto por tema, y lee ese fichero para encontrar lo que necesitas. Solo si la información necesaria no está ahí, o parece incompleta, **avisa primero al usuario y espera** antes de ir a internet a buscar la documentación oficial de la API (developers.google.com / learn.microsoft.com).
+
+  ### 15 Cuentas Propietarias de las Consolas Externas
+
+  Cuando necesites saber con qué cuenta se administra cada consola o registro externo de la aplicación (el App Registration de Azure para Outlook/login Microsoft, el proyecto de Google Cloud para OAuth de Gmail/login Google, la bóveda de Bitwarden, los perfiles dedicados de Chrome o las credenciales en disco), consulta el fichero local `cuentas-de-la-aplicacion.md` en la raíz del repo (ignorado por git). Ese fichero es la fuente de verdad de qué cuenta posee cada cosa; no adivines la cuenta ni la busques por prueba y error.
