@@ -11,7 +11,8 @@ import hashlib
 import logging
 import os
 import threading
-from typing import Iterator
+import time
+from typing import Callable, Iterator, TypeVar
 
 from cachetools import TTLCache
 
@@ -23,9 +24,10 @@ from core.image_proxy import (
     ImageProxyUnfetchable,
     fetch_remote_image,
 )
-from database import DatabaseError, image_proxy_cache_store
+from database import ConnectionPoolError, DatabaseError, image_proxy_cache_store
 
 from api.errors.exceptions import (
+    DatabaseConnectionError,
     DatabaseQueryError,
     ImageProxyBlockedTarget,
     ImageProxyForbidden,
@@ -39,6 +41,70 @@ from api.services.services_helpers import translate_database_error
 
 
 _STREAM_CHUNK_SIZE = 64 * 1024  # 64 KB chunks for StreamingResponse
+
+T = TypeVar("T")
+
+# ---------------------------------------------------------------------------
+# Serve gate + pool-exhaustion retry.
+#
+# A cold open of an image-heavy newsletter fires DOZENS of concurrent
+# GET /image-proxy requests (48 on a live AliExpress digest), and the endpoint
+# is deliberately rate-limit-exempt. Every handler starts with a cache read
+# that takes a pool connection, and ``getconn()`` RAISES instantly when the
+# shared pool (``DB_POOL_MAX_CONN``, default 25) is exhausted — reproduced
+# live: a 43-request burst turned a random ~20% into instant 503s (grey
+# ``td background`` cells / broken ``<img>`` icons in the viewer) even on full
+# cache hits. Two complementary bounds close this:
+#
+# - ``_SERVE_GATE`` caps concurrent serves so the images themselves can never
+#   drain the pool (mirrors ``core.image_proxy.fetcher._DOWNLOAD_GATE`` in
+#   shape and size): surplus requests WAIT for a slot instead of failing.
+#   Acquired AFTER the signature check (a 403 must not spend a slot) and
+#   released before streaming (the chunks are in-memory bytes — no DB, no
+#   upstream held).
+# - ``_retry_on_pool_exhaustion`` absorbs pressure from OTHER work sharing the
+#   pool at open time (sync fan-out, body prefetch, backfill worker): the same
+#   wait-don't-fail policy as the backfill's ``_gated_db_write``, kept local
+#   because importing a worker's private helper would couple unrelated
+#   services.
+# ---------------------------------------------------------------------------
+
+_MAX_CONCURRENT_SERVES = 8
+_SERVE_GATE = threading.BoundedSemaphore(_MAX_CONCURRENT_SERVES)
+
+_POOL_RETRY_ATTEMPTS = 3
+_POOL_RETRY_DELAYS_S = (0.05, 0.15)
+
+
+def _is_pool_exhaustion(exc: BaseException) -> bool:
+    """True when *exc* (or a cause in its chain) is DB connection-pool
+    exhaustion — either the raw ``ConnectionPoolError`` raised by a store call
+    or an already-translated ``DatabaseConnectionError``. Mirrors
+    ``backfill_worker._is_pool_exhaustion``."""
+    seen = 0
+    current: BaseException | None = exc
+    while current is not None and seen < 10:
+        if isinstance(current, (ConnectionPoolError, DatabaseConnectionError)):
+            return True
+        current = current.__cause__
+        seen += 1
+    return False
+
+
+def _retry_on_pool_exhaustion(fn: Callable[[], T]) -> T:
+    """Run a cache-store call, briefly retrying on pool exhaustion.
+
+    Any other error — and the final exhaustion after the retry budget — is
+    re-raised untouched so the caller's existing translation still applies.
+    """
+    for attempt in range(_POOL_RETRY_ATTEMPTS):
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_pool_exhaustion(exc) or attempt == _POOL_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_POOL_RETRY_DELAYS_S[min(attempt, len(_POOL_RETRY_DELAYS_S) - 1)])
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def _stream_bytes(data: bytes) -> Iterator[bytes]:
@@ -66,54 +132,59 @@ def get_proxied_image(u: str, s: str) -> tuple[str, Iterator[bytes], str]:
         raise ImageProxyForbidden("Invalid or missing signature on image proxy request.")
     url_hash = hashlib.sha256(original_url.encode("utf-8")).hexdigest()
 
-    # 1) DB cache (Services -> Database).
-    try:
-        cached = image_proxy_cache_store.get(url_hash)
-    except DatabaseError as exc:
-        raise translate_database_error(exc) from exc
-    except Exception as exc:
-        logger.warning(
-            "Unexpected image proxy cache read error (%s): %s", type(exc).__name__, exc,
-        )
-        raise ImageProxyUpstreamError(
-            "Failed to read the image proxy cache before fetching."
-        ) from exc
-    if cached is not None:
-        return cached["content_type"], _stream_bytes(cached["image_bytes"]), url_hash
+    with _SERVE_GATE:
+        # 1) DB cache (Services -> Database).
+        try:
+            cached = _retry_on_pool_exhaustion(
+                lambda: image_proxy_cache_store.get(url_hash)
+            )
+        except DatabaseError as exc:
+            raise translate_database_error(exc) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected image proxy cache read error (%s): %s", type(exc).__name__, exc,
+            )
+            raise ImageProxyUpstreamError(
+                "Failed to read the image proxy cache before fetching."
+            ) from exc
+        if cached is not None:
+            return cached["content_type"], _stream_bytes(cached["image_bytes"]), url_hash
 
-    # 2) Cache miss -> anti-SSRF fetcher in core.
-    try:
-        fetched = fetch_remote_image(original_url)
-    except ImageProxyBlocked as exc:
-        raise ImageProxyBlockedTarget(
-            "Image proxy blocked the remote target by anti-SSRF policy."
-        ) from exc
-    except ImageProxyNotAnImage as exc:
-        raise ImageProxyUpstreamError(
-            "Image proxy upstream returned non-image or oversized content."
-        ) from exc
-    except ImageProxyUnfetchable as exc:
-        raise ImageProxyUpstreamError(
-            "Image proxy failed to fetch the remote image from upstream."
-        ) from exc
-    except Exception as exc:
-        logger.warning(
-            "Unexpected image proxy fetch error (%s): %s", type(exc).__name__, exc,
-        )
-        raise ImageProxyUpstreamError(
-            "Unexpected failure fetching the remote image in the image proxy."
-        ) from exc
+        # 2) Cache miss -> anti-SSRF fetcher in core.
+        try:
+            fetched = fetch_remote_image(original_url)
+        except ImageProxyBlocked as exc:
+            raise ImageProxyBlockedTarget(
+                "Image proxy blocked the remote target by anti-SSRF policy."
+            ) from exc
+        except ImageProxyNotAnImage as exc:
+            raise ImageProxyUpstreamError(
+                "Image proxy upstream returned non-image or oversized content."
+            ) from exc
+        except ImageProxyUnfetchable as exc:
+            raise ImageProxyUpstreamError(
+                "Image proxy failed to fetch the remote image from upstream."
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Unexpected image proxy fetch error (%s): %s", type(exc).__name__, exc,
+            )
+            raise ImageProxyUpstreamError(
+                "Unexpected failure fetching the remote image in the image proxy."
+            ) from exc
 
-    # 3) Persist best-effort: serve the image even if the cache write fails.
-    try:
-        image_proxy_cache_store.upsert(
-            url_hash, original_url, fetched.content_type, fetched.data,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Image fetched but proxy-cache persist failed (%s): %s",
-            type(exc).__name__, exc, exc_info=exc,
-        )
+        # 3) Persist best-effort: serve the image even if the cache write fails.
+        try:
+            _retry_on_pool_exhaustion(
+                lambda: image_proxy_cache_store.upsert(
+                    url_hash, original_url, fetched.content_type, fetched.data,
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Image fetched but proxy-cache persist failed (%s): %s",
+                type(exc).__name__, exc, exc_info=exc,
+            )
 
     return fetched.content_type, _stream_bytes(fetched.data), url_hash
 

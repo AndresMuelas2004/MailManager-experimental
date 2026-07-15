@@ -114,6 +114,10 @@ Para el usuario el correo se ve **igual que antes** —las imágenes aparecen en
 
 **Si el proxy no puede servir una imagen, se ve como imagen rota.** Igual que cualquier imagen que falla: si el servidor del remitente está caído, la imagen fue borrada, o el destino se **bloquea por seguridad**, en su hueco aparece el icono de imagen rota y el resto del correo se renderiza con normalidad. El bloqueo por seguridad corresponde a la protección **anti-SSRF**: si una imagen remota apunta a un destino peligroso (una dirección interna/privada camuflada por un remitente malicioso), el proxy la rechaza. Los límites exactos del proxy (tamaños, tiempos, esquemas y destinos bloqueados, plazo de la caché de servidor) están en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
 
+**Las imágenes mal etiquetadas por el remitente también se ven.** Algunos remitentes alojan sus imágenes en almacenes (S3 y similares) que las sirven declarando un tipo de contenido genérico («esto son bytes») en lugar de «esto es una imagen». En ese caso el proxy **no se fía de la etiqueta**: inspecciona los primeros bytes del fichero y, si son de verdad una imagen (JPEG, PNG, GIF, WebP…), la sirve con su tipo real. Si los bytes no corresponden a ninguna imagen conocida —una página de error, un SVG, contenido arbitrario— la rechaza, como siempre. Sin esta tolerancia, correos reales llegaban con **todas** sus imágenes rotas de forma permanente.
+
+**Abrir un correo con muchas imágenes no rompe ninguna al azar.** La primera apertura de un correo con decenas de imágenes dispara todas sus descargas casi a la vez; el backend **encola** las peticiones excedentes en lugar de dejarlas fallar, de modo que todas las imágenes acaban pintándose (las últimas tardan un instante más). Antes, ese estallido podía agotar recursos internos y un subconjunto aleatorio de imágenes aparecía roto o como un hueco gris hasta reabrir el correo varias veces. Las cotas exactas de concurrencia están en [../limits/visualizacion-de-correos.md](../limits/visualizacion-de-correos.md).
+
 ---
 
 ## 5. Asimetrías entre Gmail y Outlook

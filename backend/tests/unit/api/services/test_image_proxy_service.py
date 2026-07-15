@@ -9,12 +9,14 @@ service (not through ``translate_core_error``), so each mapping is pinned here.
 from __future__ import annotations
 
 import hashlib
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from api.errors.exceptions import (
     ApiError,
+    DatabaseConnectionError,
     DatabaseQueryError,
     ImageProxyBlockedTarget,
     ImageProxyForbidden,
@@ -30,7 +32,7 @@ from core.image_proxy import (
     ImageProxyNotAnImage,
     ImageProxyUnfetchable,
 )
-from database.errors import QueryError as DbQueryError
+from database.errors import ConnectionPoolError, QueryError as DbQueryError
 
 
 _URL = "https://cdn.example.com/logo.png"
@@ -181,6 +183,159 @@ class TestCacheReadError:
         u, s = _valid_us()
         with pytest.raises(ImageProxyUpstreamError):
             image_proxy_service.get_proxied_image(u, s)
+
+
+# ── serve gate (pool protection for image bursts) ───────────────────
+
+
+class TestServeGate:
+
+    def test_serve_gate_is_a_bounded_semaphore_sized_to_the_constant(self):
+        # The gate MUST be a BoundedSemaphore sized to _MAX_CONCURRENT_SERVES so
+        # a cold-open burst of dozens of images WAITS for a slot instead of each
+        # handler grabbing a pool connection at once — the reproduced failure
+        # mode was getconn() raising instantly at pool exhaustion, turning a
+        # random subset of a 43-image newsletter into 503s. A regression to a
+        # plain int / wrong size silently reopens it.
+        assert isinstance(image_proxy_service._SERVE_GATE, threading.BoundedSemaphore)
+        assert image_proxy_service._SERVE_GATE._value == image_proxy_service._MAX_CONCURRENT_SERVES
+
+    def test_serve_releases_the_gate_on_success(self, monkeypatch):
+        monkeypatch.setattr(
+            image_proxy_service.image_proxy_cache_store, "get",
+            lambda _h: {"content_type": "image/png", "image_bytes": b"CACHED"},
+        )
+        _forbid_fetch(monkeypatch)
+        before = image_proxy_service._SERVE_GATE._value
+        u, s = _valid_us()
+        image_proxy_service.get_proxied_image(u, s)
+        assert image_proxy_service._SERVE_GATE._value == before
+
+    def test_serve_releases_the_gate_on_error(self, monkeypatch):
+        # The permit must be released when the serve fails, or repeated errors
+        # would drain the gate and stall every future image serve.
+        monkeypatch.setattr(image_proxy_service.image_proxy_cache_store, "get", lambda _h: None)
+        monkeypatch.setattr(
+            image_proxy_service, "fetch_remote_image",
+            lambda _url: (_ for _ in ()).throw(ImageProxyUnfetchable("down")),
+        )
+        before = image_proxy_service._SERVE_GATE._value
+        u, s = _valid_us()
+        with pytest.raises(ImageProxyUpstreamError):
+            image_proxy_service.get_proxied_image(u, s)
+        assert image_proxy_service._SERVE_GATE._value == before
+
+    def test_invalid_signature_never_takes_a_gate_slot(self, monkeypatch):
+        # The gate is acquired AFTER the signature check: a 403 must not spend a
+        # serve slot (an attacker with garbage signatures could otherwise queue
+        # behind legitimate serves).
+        acquired: list[bool] = []
+
+        class _SpyGate:
+            def __enter__(self):
+                acquired.append(True)
+
+            def __exit__(self, *_a):
+                return False
+
+        monkeypatch.setattr(image_proxy_service, "_SERVE_GATE", _SpyGate())
+        with pytest.raises(ImageProxyForbidden):
+            image_proxy_service.get_proxied_image("not*base64", "deadbeef")
+        assert acquired == []
+
+
+# ── pool-exhaustion retry (wait, don't 503) ─────────────────────────
+
+
+@pytest.fixture()
+def _instant_retries(monkeypatch):
+    """Zero out the retry sleeps so exhaustion tests stay fast and deterministic."""
+    monkeypatch.setattr(image_proxy_service, "_POOL_RETRY_DELAYS_S", (0, 0))
+
+
+class TestPoolExhaustionRetry:
+
+    def test_cache_read_pool_exhaustion_is_retried_until_it_succeeds(
+        self, monkeypatch, _instant_retries
+    ):
+        # A transient pool-exhaustion (sync fan-out / prefetch / backfill holding
+        # the pool at open time) must be absorbed by the brief retry instead of
+        # surfacing as an instant 503 (a grey image in the viewer).
+        calls: list[int] = []
+
+        def _flaky_get(_h):
+            calls.append(1)
+            if len(calls) < 3:
+                raise ConnectionPoolError("connection pool exhausted")
+            return {"content_type": "image/png", "image_bytes": b"CACHED"}
+
+        monkeypatch.setattr(image_proxy_service.image_proxy_cache_store, "get", _flaky_get)
+        _forbid_fetch(monkeypatch)
+        u, s = _valid_us()
+        content_type, chunks, _hash = image_proxy_service.get_proxied_image(u, s)
+        assert content_type == "image/png"
+        assert b"".join(chunks) == b"CACHED"
+        assert len(calls) == 3
+
+    def test_cache_read_exhaustion_beyond_the_budget_translates_to_503(
+        self, monkeypatch, _instant_retries
+    ):
+        # Sustained exhaustion still fails — the retry is a brief absorber, not
+        # an unbounded wait — and keeps the existing DatabaseConnectionError
+        # (503) translation.
+        calls: list[int] = []
+
+        def _always_exhausted(_h):
+            calls.append(1)
+            raise ConnectionPoolError("connection pool exhausted")
+
+        monkeypatch.setattr(
+            image_proxy_service.image_proxy_cache_store, "get", _always_exhausted,
+        )
+        u, s = _valid_us()
+        with pytest.raises(DatabaseConnectionError):
+            image_proxy_service.get_proxied_image(u, s)
+        assert len(calls) == image_proxy_service._POOL_RETRY_ATTEMPTS
+
+    def test_non_pool_database_error_is_not_retried(self, monkeypatch, _instant_retries):
+        # Only pool exhaustion is transient-by-nature; a QueryError must
+        # propagate immediately (single call) through the existing translation.
+        calls: list[int] = []
+
+        def _query_error(_h):
+            calls.append(1)
+            raise DbQueryError("db down")
+
+        monkeypatch.setattr(image_proxy_service.image_proxy_cache_store, "get", _query_error)
+        u, s = _valid_us()
+        with pytest.raises(DatabaseQueryError):
+            image_proxy_service.get_proxied_image(u, s)
+        assert len(calls) == 1
+
+    def test_persist_pool_exhaustion_is_retried_then_swallowed(
+        self, monkeypatch, _instant_retries
+    ):
+        # The upsert keeps its best-effort contract: sustained exhaustion there
+        # burns the retry budget and is then swallowed — the image still serves.
+        upsert_calls: list[int] = []
+
+        def _always_exhausted(*_a):
+            upsert_calls.append(1)
+            raise ConnectionPoolError("connection pool exhausted")
+
+        monkeypatch.setattr(image_proxy_service.image_proxy_cache_store, "get", lambda _h: None)
+        monkeypatch.setattr(
+            image_proxy_service.image_proxy_cache_store, "upsert", _always_exhausted,
+        )
+        monkeypatch.setattr(
+            image_proxy_service, "fetch_remote_image",
+            lambda _url: FetchedImage(content_type="image/png", data=b"PNG"),
+        )
+        u, s = _valid_us()
+        content_type, chunks, _hash = image_proxy_service.get_proxied_image(u, s)
+        assert content_type == "image/png"
+        assert b"".join(chunks) == b"PNG"
+        assert len(upsert_calls) == image_proxy_service._POOL_RETRY_ATTEMPTS
 
 
 # ── touch_cache_last_accessed (BackgroundTask, best-effort) ─────────

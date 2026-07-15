@@ -252,6 +252,78 @@ def test_fetch_rejects_non_image_content_type(monkeypatch):
         fetch_remote_image("https://cdn.example.com/not-an-image")
 
 
+def test_fetch_rejects_non_generic_non_image_type_without_reading_the_body(monkeypatch):
+    # A NON-generic non-image declaration (application/json) must keep failing
+    # fast — the sniffing path is reserved for generic/absent types only, so
+    # the body is never downloaded for a truthfully-declared non-image.
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    _patch_client(monkeypatch, [
+        _FakeStreamResponse(headers={"content-type": "application/json"}, chunks=(b"{}",)),
+    ])
+    with pytest.raises(ImageProxyNotAnImage):
+        fetch_remote_image("https://cdn.example.com/data.json")
+
+
+# ── generic Content-Type + magic-byte sniffing ─────────────────────
+# S3/GCS serve objects uploaded without an explicit type as
+# application/octet-stream (verified live on a real newsletter whose every
+# image 502'd under the previous strict ``image/*`` check). The sniff admits
+# the body only when its magic bytes are a real raster image.
+
+
+@pytest.mark.parametrize(
+    "data, expected",
+    [
+        (b"\xff\xd8\xff\xe0" + b"\0" * 8, "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\n" + b"\0" * 8, "image/png"),
+        (b"GIF87a" + b"\0" * 8, "image/gif"),
+        (b"GIF89a" + b"\0" * 8, "image/gif"),
+        (b"RIFF\x24\x00\x00\x00WEBPVP8 ", "image/webp"),
+        (b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00", "image/avif"),
+        (b"\x00\x00\x00\x20ftypavis\x00\x00\x00\x00", "image/avif"),
+        (b"BM" + b"\0" * 12, "image/bmp"),
+        (b"\x00\x00\x01\x00\x01\x00", "image/x-icon"),
+        (b"<html><body>nope</body></html>", None),
+        (b"<svg xmlns='http://www.w3.org/2000/svg'/>", None),  # SVG NEVER sniffed
+        (b"", None),
+    ],
+)
+def test_sniff_image_content_type(data, expected):
+    assert fetcher._sniff_image_content_type(data) == expected
+
+
+@pytest.mark.parametrize(
+    "declared", ["application/octet-stream", "binary/octet-stream", None],
+)
+def test_fetch_sniffs_an_image_body_behind_a_generic_content_type(monkeypatch, declared):
+    # The S3-misconfiguration case: octet-stream (or no header at all) over
+    # real JPEG bytes must serve as image/jpeg — the sniffed type replaces the
+    # generic one so the nosniff response and the cache row carry the truth.
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    headers = {} if declared is None else {"content-type": declared}
+    _patch_client(monkeypatch, [
+        _FakeStreamResponse(headers=headers, chunks=(b"\xff\xd8\xff\xe0JPEGDATA",)),
+    ])
+    result = fetch_remote_image("https://bucket.s3.amazonaws.com/flyer.jpg")
+    assert result.content_type == "image/jpeg"
+    assert result.data == b"\xff\xd8\xff\xe0JPEGDATA"
+
+
+def test_fetch_rejects_a_generic_content_type_with_a_non_image_body(monkeypatch):
+    # Generic declaration + body that is NOT a recognisable image (an HTML
+    # error page, an SVG, arbitrary bytes) must still be rejected — the sniff
+    # admits real raster images only, never turns the proxy into a blind relay.
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    _patch_client(monkeypatch, [
+        _FakeStreamResponse(
+            headers={"content-type": "application/octet-stream"},
+            chunks=(b"<svg xmlns='http://www.w3.org/2000/svg'/>",),
+        ),
+    ])
+    with pytest.raises(ImageProxyNotAnImage):
+        fetch_remote_image("https://cdn.example.com/mystery.bin")
+
+
 def test_fetch_rejects_oversized_declared_content_length(monkeypatch):
     _patch_resolution(monkeypatch, "93.184.216.34")
     _patch_client(monkeypatch, [

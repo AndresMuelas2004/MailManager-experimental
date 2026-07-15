@@ -41,6 +41,15 @@ _MAX_BYTES = 10 * 1024 * 1024        # 10 MB hard cap on the decoded image
 _TIMEOUT_S = 10.0                    # per-phase timeout (connect / read / write / pool)
 _MAX_REDIRECTS = 3
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+# Declared upstream types that carry no real information ("the uploader never
+# set one"). S3/GCS default to application/octet-stream for objects uploaded
+# without an explicit type — common among newsletter senders (verified live:
+# avivaimages.s3.amazonaws.com serves the FABRIK JPEGs as octet-stream, which
+# the previous strict ``image/*`` check turned into a permanent 502 for every
+# image of the email). For these, the magic-byte sniff below decides; a
+# NON-generic non-image declaration (text/html, application/json…) is still
+# rejected without reading the body.
+_GENERIC_CONTENT_TYPES = frozenset({"", "application/octet-stream", "binary/octet-stream"})
 # A browser-like UA is load-bearing, not cosmetic: CDN bot-protection layers
 # (Vercel on ideabrowser.com, verified live) answer 429/403 to unknown or
 # missing UAs, silently breaking those images in the viewer. The string is
@@ -188,6 +197,33 @@ def _assert_public_url(url: str) -> None:
             )
 
 
+def _sniff_image_content_type(data: bytes) -> str | None:
+    """Best-effort magic-byte detection of raster image formats.
+
+    Used ONLY when the upstream declared a generic content type (see
+    ``_GENERIC_CONTENT_TYPES``); a recognised signature both admits the body
+    and supplies the real type for the response / cache row (the endpoint
+    serves ``nosniff``, so the persisted type must be correct). Deliberately
+    NEVER sniffs SVG — it is XML that can carry active content, so SVG is only
+    ever served when the upstream explicitly declares ``image/svg+xml``.
+    """
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis"):
+        return "image/avif"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    if data.startswith(b"\x00\x00\x01\x00"):
+        return "image/x-icon"
+    return None
+
+
 def _read_capped_body(response: httpx.Response) -> bytes:
     """Stream the response body, aborting if it exceeds ``_MAX_BYTES``.
 
@@ -239,7 +275,8 @@ def fetch_remote_image(url: str) -> FetchedImage:
                     content_type = (
                         response.headers.get("content-type", "").split(";")[0].strip().lower()
                     )
-                    if not content_type.startswith("image/"):
+                    declares_image = content_type.startswith("image/")
+                    if not declares_image and content_type not in _GENERIC_CONTENT_TYPES:
                         raise ImageProxyNotAnImage(
                             f"Image proxy upstream returned non-image Content-Type: {content_type!r}."
                         )
@@ -254,6 +291,14 @@ def fetch_remote_image(url: str) -> FetchedImage:
                                 "Image proxy upstream declared an oversized Content-Length."
                             )
                     data = _read_capped_body(response)
+                    if not declares_image:
+                        sniffed = _sniff_image_content_type(data)
+                        if sniffed is None:
+                            raise ImageProxyNotAnImage(
+                                f"Image proxy upstream sent a generic Content-Type ({content_type!r}) "
+                                "and the body carries no recognisable image signature."
+                            )
+                        content_type = sniffed
                     return FetchedImage(content_type=content_type, data=data)
             except ImageProxyError:
                 # Re-raise typed domain errors (SSRF block, non-image, upstream
