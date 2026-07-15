@@ -24,7 +24,7 @@ router = APIRouter(prefix="/auth", tags=["oauth-callbacks"])
 
 _CALLBACK_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>MailManager</title></head>
+<head><meta charset="utf-8"><title>MISSELA</title></head>
 <body style="font-family: system-ui, sans-serif; display: flex; min-height: 90vh; align-items: center; justify-content: center;">
 <div style="max-width: 28rem; text-align: center;">
 <h3>{heading}</h3>

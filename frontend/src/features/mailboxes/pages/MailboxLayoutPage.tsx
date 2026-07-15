@@ -146,15 +146,15 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   }, [composer, closeDrawer]);
 
   // Browser tab title reflects the current mailbox's inbox (ALL_MAIL) unread
-  // total: ``(N) MailManager`` / ``(99+) MailManager`` / ``MailManager`` at 0.
+  // total: ``(N) MISSELA`` / ``(99+) MISSELA`` / ``MISSELA`` at 0.
   // Mailbox-wide (not scope-narrowed) on purpose — the tab represents the whole
   // mailbox. This is the only runtime writer of document.title (index.html ships
   // the static fallback); the cleanup restores it when leaving the mailbox shell.
   useEffect(() => {
     document.title =
-      inboxTotal > 0 ? `(${inboxTotal > 99 ? '99+' : inboxTotal}) MailManager` : 'MailManager';
+      inboxTotal > 0 ? `(${inboxTotal > 99 ? '99+' : inboxTotal}) MISSELA` : 'MISSELA';
     return () => {
-      document.title = 'MailManager';
+      document.title = 'MISSELA';
     };
   }, [inboxTotal]);
 
@@ -218,7 +218,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
             <Menu className="h-6 w-6" />
           </button>
           <span className="truncate text-sm font-semibold text-zinc-900">
-            {currentMailboxName || 'MailManager'}
+            {currentMailboxName || 'MISSELA'}
           </span>
         </header>
         <div className="relative min-w-0 flex-1 overflow-auto">

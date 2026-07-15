@@ -41,7 +41,7 @@ _MAX_BYTES = 10 * 1024 * 1024        # 10 MB hard cap on the decoded image
 _TIMEOUT_S = 10.0                    # per-phase timeout (connect / read / write / pool)
 _MAX_REDIRECTS = 3
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
-_USER_AGENT = "MailManager-ImageProxy/1.0"
+_USER_AGENT = "MISSELA-ImageProxy/1.0"
 
 # Cap on concurrent remote downloads across the whole process. The proxy
 # endpoint is synchronous, so every in-flight fetch occupies one anyio

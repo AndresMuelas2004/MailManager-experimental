@@ -8,9 +8,9 @@ export default function CreateMailboxBranding() {
     <div className="hidden flex-1 flex-col items-center justify-center gap-8 bg-gradient-to-b from-blue-500 to-blue-900 px-15 text-white lg:flex">
       <div className="flex items-center gap-3">
         <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[14px]">
-          <img src="/logo.png" alt="MailManager logo" className="h-full w-full object-cover" />
+          <img src="/logo.png" alt="MISSELA logo" className="h-full w-full object-cover" />
         </div>
-        <h1 className="text-[38px] font-extrabold tracking-tight">MailManager</h1>
+        <h1 className="text-[38px] font-extrabold tracking-tight">MISSELA</h1>
       </div>
 
       <div className="flex max-w-[400px] flex-col items-center gap-5">

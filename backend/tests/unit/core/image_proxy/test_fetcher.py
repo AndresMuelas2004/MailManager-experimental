@@ -365,7 +365,7 @@ def test_fetch_releases_the_download_gate_on_error(monkeypatch):
 def test_request_headers_carry_no_cookies_or_referer():
     """The whole point of the proxy is that the sender only ever sees the
     backend — a fixed UA, and nothing that could leak the end user's identity."""
-    assert fetcher._REQUEST_HEADERS == {"User-Agent": "MailManager-ImageProxy/1.0"}
+    assert fetcher._REQUEST_HEADERS == {"User-Agent": "MISSELA-ImageProxy/1.0"}
     assert "Cookie" not in fetcher._REQUEST_HEADERS
     assert "Referer" not in fetcher._REQUEST_HEADERS
 

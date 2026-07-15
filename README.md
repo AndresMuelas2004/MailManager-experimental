@@ -1,6 +1,6 @@
-﻿# MailManager
+﻿# MISSELA
 
-MailManager is a multi-account email management platform with a FastAPI backend and a React frontend.
+MISSELA (formerly MailManager — internal identifiers such as the Docker/compose project names, the Postgres database and the repo name keep the `mailmanager` codename) is a multi-account email management platform with a FastAPI backend and a React frontend.
 It lets you group Gmail and Outlook accounts under mailbox entities, connect them with OAuth 2.0, fetch inbox messages across providers, and send emails from any connected account.
 
 ## Highlights

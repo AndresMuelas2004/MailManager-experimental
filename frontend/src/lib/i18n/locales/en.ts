@@ -433,7 +433,7 @@ export const en: EsDictionary = {
 
     account: {
       title: 'Your account',
-      subtitle: 'Your identity in MailManager and your account actions.',
+      subtitle: 'Your identity in MISSELA and your account actions.',
       logout: 'Log out',
       deleteAccount: 'Delete account',
       deleteDialogAria: 'Delete account',

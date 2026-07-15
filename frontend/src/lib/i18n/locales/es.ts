@@ -436,7 +436,7 @@ export const es = {
 
     account: {
       title: 'Tu cuenta',
-      subtitle: 'Tu identidad en MailManager y las acciones de tu cuenta.',
+      subtitle: 'Tu identidad en MISSELA y las acciones de tu cuenta.',
       logout: 'Cerrar sesión',
       deleteAccount: 'Eliminar cuenta',
       deleteDialogAria: 'Eliminar cuenta',

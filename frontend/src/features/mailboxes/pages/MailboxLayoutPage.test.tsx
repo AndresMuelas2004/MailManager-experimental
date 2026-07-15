@@ -5,7 +5,7 @@
  *  - The responsive mobile shell: the hamburger / drawer / backdrop / floating
  *    compose button and the composer opening from the FAB.
  *  - The unread-count surfaces: the Sidebar badges next to "Bandeja unificada"
- *    (ALL_MAIL) and "Spam" (SPAM), and the browser tab title (``(N) MailManager``).
+ *    (ALL_MAIL) and "Spam" (SPAM), and the browser tab title (``(N) MISSELA``).
  *
  * HTTP is intercepted at MSW; the real hooks (useMailboxList,
  * useMailboxUnreadCounts), endpoints, schema validation and React Query cache
@@ -41,7 +41,7 @@ pinTestLang('es');
 // ``document.title`` is global jsdom state written by the tab-title effect, so
 // reset it after every test to stop one spec leaking into the next.
 afterEach(() => {
-  document.title = 'MailManager';
+  document.title = 'MISSELA';
 });
 
 // Translated aria-labels / copy the shell exposes (see locales/es.ts).
@@ -241,7 +241,7 @@ describe('MailboxLayoutPage — unread badges and tab title', () => {
     useUnreadCounts('mb_1', 5, 2);
     renderLayout();
 
-    await waitFor(() => expect(document.title).toBe('(5) MailManager'));
+    await waitFor(() => expect(document.title).toBe('(5) MISSELA'));
   });
 
   it('renders no badge and a plain title when both totals are zero', async () => {
@@ -252,7 +252,7 @@ describe('MailboxLayoutPage — unread badges and tab title', () => {
     await waitFor(() => expect(screen.getByText('Inbox content')).toBeInTheDocument());
     // Badge hides itself at 0 → no "… sin leer" labelled element anywhere.
     expect(screen.queryByLabelText(/sin leer/)).not.toBeInTheDocument();
-    expect(document.title).toBe('MailManager');
+    expect(document.title).toBe('MISSELA');
   });
 });
 

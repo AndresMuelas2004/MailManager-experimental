@@ -20,10 +20,10 @@ export default function AboutPage() {
 
       <div className="flex items-center gap-3">
         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl">
-          <img src="/logo.png" alt="MailManager" className="h-full w-full object-cover" />
+          <img src="/logo.png" alt="MISSELA" className="h-full w-full object-cover" />
         </div>
         <div className="flex flex-col">
-          <span className="text-base font-semibold text-zinc-900">MailManager</span>
+          <span className="text-base font-semibold text-zinc-900">MISSELA</span>
           <span className="text-sm text-zinc-500">
             {t('settings.about.version', { version: APP_VERSION })}
           </span>

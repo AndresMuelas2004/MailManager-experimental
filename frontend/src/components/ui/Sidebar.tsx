@@ -98,9 +98,9 @@ export default function Sidebar({
     >
       <div className="flex items-center gap-2.5 px-2 pb-5">
         <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg">
-          <img src="/logo.png" alt="MailManager" className="h-full w-full object-cover" />
+          <img src="/logo.png" alt="MISSELA" className="h-full w-full object-cover" />
         </div>
-        <span className="text-lg font-bold tracking-tight text-zinc-900">MailManager</span>
+        <span className="text-lg font-bold tracking-tight text-zinc-900">MISSELA</span>
         <button
           type="button"
           onClick={onClose}

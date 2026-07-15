@@ -9,9 +9,9 @@ export default function LoginBranding() {
       <div className="flex flex-col items-center gap-6">
         <div className="flex items-center gap-3">
           <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[14px]">
-            <img src="/logo.png" alt="MailManager logo" className="h-full w-full object-cover" />
+            <img src="/logo.png" alt="MISSELA logo" className="h-full w-full object-cover" />
           </div>
-          <h1 className="text-[38px] font-extrabold tracking-tight">MailManager</h1>
+          <h1 className="text-[38px] font-extrabold tracking-tight">MISSELA</h1>
         </div>
 
         <p className="max-w-[380px] text-center text-[17px] leading-[1.6] text-white/[0.87]">
