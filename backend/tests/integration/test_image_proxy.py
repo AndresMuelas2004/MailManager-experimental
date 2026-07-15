@@ -27,6 +27,16 @@ from core.image_proxy import FetchedImage, ImageProxyBlocked, ImageProxyNotAnIma
 _REMOTE_URL = "https://cdn.example.com/newsletter/logo.png"
 
 
+@pytest.fixture(autouse=True)
+def _reset_touch_throttle():
+    """The touch throttle is module-level state keyed by url_hash. Every test
+    here shares ``_REMOTE_URL`` (same hash), so without a reset a bump in one
+    test would suppress the bump the cache-hit test asserts. Clear it per test."""
+    image_proxy_service.reset_touch_throttle()
+    yield
+    image_proxy_service.reset_touch_throttle()
+
+
 def _valid_us(url: str = _REMOTE_URL) -> dict[str, str]:
     """Mint the ``{u, s}`` query pair from the production signer."""
     query = parse_qs(urlsplit(build_proxy_sentinel_url(url)).query)

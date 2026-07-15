@@ -72,6 +72,7 @@ from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.routers_helpers import rate_limit_by_ip
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
 from api.services.backfill_worker import start_backfill_worker, stop_backfill_worker
+from api.services.image_proxy_signing import signing_key_is_secure
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
@@ -132,6 +133,22 @@ def create_app() -> FastAPI:
         raise RuntimeError(
             "CORS_ALLOWED_ORIGINS must list explicit origins, not '*': a wildcard "
             "origin is incompatible with allow_credentials=True."
+        )
+    # Fail-closed on the image-proxy HMAC key, mirroring the CORS wildcard guard.
+    # ``/image-proxy`` is rate-limit-exempt, so booting with the public dev
+    # fallback key would turn the backend into an open image relay. Gated by an
+    # opt-in flag (default off) so dev / tests keep the fallback: production
+    # deployments set IMAGE_PROXY_REQUIRE_KEY=true (see .env.production.example),
+    # and then a missing / dev-fallback key aborts startup instead of running
+    # insecure.
+    require_image_proxy_key = os.environ.get(
+        "IMAGE_PROXY_REQUIRE_KEY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if require_image_proxy_key and not signing_key_is_secure():
+        raise RuntimeError(
+            "IMAGE_PROXY_SIGNING_KEY must be set to a strong, persistent value "
+            "(not the insecure dev fallback) when IMAGE_PROXY_REQUIRE_KEY is enabled. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
         )
     app.add_middleware(
         CORSMiddleware,

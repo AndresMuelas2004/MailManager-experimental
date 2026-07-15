@@ -43,6 +43,20 @@ _MAX_REDIRECTS = 3
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _USER_AGENT = "MailManager-ImageProxy/1.0"
 
+# Cap on concurrent remote downloads across the whole process. The proxy
+# endpoint is synchronous, so every in-flight fetch occupies one anyio
+# threadpool worker (default 40, SHARED by every sync route in the app). A
+# newsletter can reference dozens of remote images; opening it fires that many
+# concurrent GET /image-proxy requests, and — since the endpoint is
+# rate-limit-exempt — nothing else bounds them. Without this gate a single
+# image-heavy open could saturate the threadpool and stall unrelated sync
+# endpoints (listing, content, sending). The gate makes surplus fetches WAIT
+# for a slot instead of each holding a worker for up to _TIMEOUT_S × hops. It
+# is deliberately a plain module constant (core stays env-free — only
+# database.settings reads os.environ); tune here if a deployment needs to.
+_MAX_CONCURRENT_DOWNLOADS = 8
+_DOWNLOAD_GATE = threading.BoundedSemaphore(_MAX_CONCURRENT_DOWNLOADS)
+
 # Neutral request headers: a fixed UA, and deliberately NO cookies, NO
 # credentials, NO Referer, and nothing that could leak the end user's IP —
 # the whole point of the proxy is that the sender only ever sees the backend.
@@ -186,58 +200,63 @@ def fetch_remote_image(url: str) -> FetchedImage:
     is revalidated. Returns the image bytes + its ``Content-Type`` on success;
     raises :py:class:`ImageProxyBlocked` / :py:class:`ImageProxyUnfetchable` /
     :py:class:`ImageProxyNotAnImage` otherwise.
+
+    All network work runs while holding ``_DOWNLOAD_GATE`` so concurrent
+    downloads never exceed ``_MAX_CONCURRENT_DOWNLOADS`` and cannot starve the
+    shared anyio threadpool (see the gate's definition above).
     """
     current = url
     client = _get_client()
-    for _ in range(_MAX_REDIRECTS + 1):
-        try:
-            _assert_public_url(current)
-            with client.stream("GET", current) as response:
-                if response.is_redirect:
-                    location = response.headers.get("location")
-                    if not location:
+    with _DOWNLOAD_GATE:
+        for _ in range(_MAX_REDIRECTS + 1):
+            try:
+                _assert_public_url(current)
+                with client.stream("GET", current) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ImageProxyUnfetchable(
+                                "Image proxy upstream sent a redirect without a Location header."
+                            )
+                        current = str(httpx.URL(current).join(location))
+                        continue
+                    if response.status_code >= 400:
                         raise ImageProxyUnfetchable(
-                            "Image proxy upstream sent a redirect without a Location header."
+                            f"Image proxy upstream returned status {response.status_code}."
                         )
-                    current = str(httpx.URL(current).join(location))
-                    continue
-                if response.status_code >= 400:
-                    raise ImageProxyUnfetchable(
-                        f"Image proxy upstream returned status {response.status_code}."
+                    content_type = (
+                        response.headers.get("content-type", "").split(";")[0].strip().lower()
                     )
-                content_type = (
-                    response.headers.get("content-type", "").split(";")[0].strip().lower()
-                )
-                if not content_type.startswith("image/"):
-                    raise ImageProxyNotAnImage(
-                        f"Image proxy upstream returned non-image Content-Type: {content_type!r}."
-                    )
-                declared = response.headers.get("content-length")
-                if declared is not None:
-                    try:
-                        declared_length: int | None = int(declared)
-                    except ValueError:
-                        declared_length = None  # unparseable header — the streaming cap still applies
-                    if declared_length is not None and declared_length > _MAX_BYTES:
+                    if not content_type.startswith("image/"):
                         raise ImageProxyNotAnImage(
-                            "Image proxy upstream declared an oversized Content-Length."
+                            f"Image proxy upstream returned non-image Content-Type: {content_type!r}."
                         )
-                data = _read_capped_body(response)
-                return FetchedImage(content_type=content_type, data=data)
-        except ImageProxyError:
-            # Re-raise typed domain errors (SSRF block, non-image, upstream
-            # failure) intact so the service maps each to its own HTTP status.
-            raise
-        except (httpx.HTTPError, httpx.InvalidURL) as exc:
-            raise ImageProxyUnfetchable(
-                "Image proxy could not fetch the remote image from upstream."
-            ) from exc
-        except Exception as exc:
-            # Anything untyped escaping the SSRF frontier (a malformed port
-            # raising ValueError, a host failing IDNA raising UnicodeError,
-            # a body-streaming error) must not leak out of core untyped.
-            raise ImageProxyUnfetchable(
-                f"Image proxy unexpected fetch error ({type(exc).__name__}): {exc}"
-            ) from exc
+                    declared = response.headers.get("content-length")
+                    if declared is not None:
+                        try:
+                            declared_length: int | None = int(declared)
+                        except ValueError:
+                            declared_length = None  # unparseable header — the streaming cap still applies
+                        if declared_length is not None and declared_length > _MAX_BYTES:
+                            raise ImageProxyNotAnImage(
+                                "Image proxy upstream declared an oversized Content-Length."
+                            )
+                    data = _read_capped_body(response)
+                    return FetchedImage(content_type=content_type, data=data)
+            except ImageProxyError:
+                # Re-raise typed domain errors (SSRF block, non-image, upstream
+                # failure) intact so the service maps each to its own HTTP status.
+                raise
+            except (httpx.HTTPError, httpx.InvalidURL) as exc:
+                raise ImageProxyUnfetchable(
+                    "Image proxy could not fetch the remote image from upstream."
+                ) from exc
+            except Exception as exc:
+                # Anything untyped escaping the SSRF frontier (a malformed port
+                # raising ValueError, a host failing IDNA raising UnicodeError,
+                # a body-streaming error) must not leak out of core untyped.
+                raise ImageProxyUnfetchable(
+                    f"Image proxy unexpected fetch error ({type(exc).__name__}): {exc}"
+                ) from exc
 
     raise ImageProxyUnfetchable("Image proxy exceeded the maximum number of redirects.")

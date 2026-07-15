@@ -18,17 +18,22 @@ function messageKey(message: EmailMetadataOut): string {
 }
 
 // True when ``m`` is the same physical message the user opened (``openedEmail``,
-// the listing row). Gmail and threads without an id-mismatch match by
-// ``provider_message_id``; Outlook returns a DIFFERENT REST id for the same
-// message on the ``fetch_conversation`` endpoint than on the sync/listing one,
-// so the same physical message is matched by identical (received_at, from_email)
-// there. This is what dedups the opened email against its conversation twin so
-// it is not shown twice.
+// the listing row). Primary match: exact ``provider_message_id`` — the backend
+// reconciles Outlook's conversation-endpoint ids onto the stored (listing) ids
+// before responding, so the twin normally arrives with the SAME id on both
+// providers. The physical-identity fallback mirrors the backend's
+// reconciliation key (instant + lowercased from_email + trimmed subject) and
+// only matters when that reconciliation degraded (best-effort read failure →
+// verbatim conversation ids). Instants are compared as timestamps, not raw
+// strings, so a serialization difference ("Z" vs "+00:00") can never leave the
+// opened email duplicated in the viewer.
 function isSameAsOpened(m: EmailMetadataOut, openedEmail: EmailMetadataOut): boolean {
   if (m.account_id !== openedEmail.account_id) return false;
+  if (m.provider_message_id === openedEmail.provider_message_id) return true;
   return (
-    m.provider_message_id === openedEmail.provider_message_id ||
-    (m.received_at === openedEmail.received_at && m.from_email === openedEmail.from_email)
+    new Date(m.received_at).getTime() === new Date(openedEmail.received_at).getTime() &&
+    m.from_email.trim().toLowerCase() === openedEmail.from_email.trim().toLowerCase() &&
+    (m.subject ?? '').trim() === (openedEmail.subject ?? '').trim()
   );
 }
 
@@ -80,8 +85,17 @@ export default function ConversationViewerMount({
 
   // Mark the thread's unread messages read exactly once per open. The ref
   // guard mirrors ``readTriggered`` in ``EmailViewer``: once the chain has
-  // loaded we fire a single grouped read-status call for the unread subset.
-  // ``markRead`` no-ops on an empty array, so an all-read thread costs nothing.
+  // SETTLED — with members, with an empty chain, or with an error — we fire a
+  // single grouped read-status call for the unread subset. ``markRead``
+  // no-ops on an empty array, so an all-read thread costs nothing.
+  //
+  // The error/empty paths must NOT be skipped: the warmed-cache instant open
+  // paints the opened email's body without waiting for ``/conversation``, so
+  // the user has read the email even when the chain fetch fails — bailing out
+  // there left the thread bold (and the unread badge stale) forever after a
+  // transient provider failure. In those paths ``unread`` collapses to just
+  // ``openedEmail``, whose listing id + ``propagate_thread`` still flips the
+  // whole thread server-side.
   //
   // ``openedEmail`` (the listing row) is included explicitly and FIRST, then
   // the conversation members. Outlook assigns different REST ids to the same
@@ -91,13 +105,14 @@ export default function ConversationViewerMount({
   // the conversation members alone updates the wrong row and the listing never
   // flips to read on Outlook. Marking ``openedEmail`` by its listing id fixes
   // that; the members still cover the rest of the thread on Gmail, where ids
-  // are consistent. Dedup by (account_id, provider_message_id) so Gmail does
-  // not mark the representative twice.
+  // are consistent. Dedup by (account_id, provider_message_id) so the
+  // representative is never marked twice (the backend now returns the
+  // reconciled listing id for the twin, so the exact-key dedup catches it on
+  // both providers).
   const readTriggered = useRef(false);
   useEffect(() => {
     if (readTriggered.current) return;
     if (loading) return;
-    if (messages.length === 0) return;
     readTriggered.current = true;
     const seen = new Set<string>();
     const unread = [openedEmail, ...messages].filter((m) => {

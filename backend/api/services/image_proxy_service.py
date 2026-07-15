@@ -10,7 +10,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 from typing import Iterator
+
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +118,53 @@ def get_proxied_image(u: str, s: str) -> tuple[str, Iterator[bytes], str]:
     return fetched.content_type, _stream_bytes(fetched.data), url_hash
 
 
+# ---------------------------------------------------------------------------
+# Sliding-TTL touch throttle.
+#
+# Serving an image counts as an access that should bump ``last_accessed_at``,
+# but two facts make a DB write per served image wasteful: a browser only
+# re-requests an image after its own 30-day immutable cache expires, and a
+# single newsletter open fires DOZENS of GET /image-proxy at once. Opening a
+# pool connection per served image for a trivial TTL bump would hammer the
+# shared pool (max 25, also used by the backfill worker) precisely under the
+# load this feature invites. Since the purge TTL is 30 DAYS of inactivity,
+# sub-daily precision on ``last_accessed_at`` is irrelevant — so we bump at
+# most once per URL hash per ``_TOUCH_THROTTLE_TTL_S``. In-process only (single
+# uvicorn worker MVP, same trade-off as ``api/rate_limit.py``); the DB stays the
+# source of truth for the actual 30-day TTL. Reset between tests via
+# ``reset_touch_throttle``.
+# ---------------------------------------------------------------------------
+
+_TOUCH_THROTTLE_TTL_S = 24 * 60 * 60
+_touch_throttle: TTLCache = TTLCache(maxsize=100_000, ttl=_TOUCH_THROTTLE_TTL_S)
+_touch_throttle_lock = threading.Lock()
+
+
+def _should_touch(url_hash: str) -> bool:
+    """True at most once per ``url_hash`` per ``_TOUCH_THROTTLE_TTL_S`` (thread-safe)."""
+    with _touch_throttle_lock:
+        if url_hash in _touch_throttle:
+            return False
+        _touch_throttle[url_hash] = True
+        return True
+
+
+def reset_touch_throttle() -> None:
+    """Clear the in-memory touch throttle. Test-isolation hook only."""
+    with _touch_throttle_lock:
+        _touch_throttle.clear()
+
+
 def touch_cache_last_accessed(url_hash: str) -> None:
     """BackgroundTask body: refresh the cache TTL after a successful serve.
 
-    Best-effort — a TTL hint, not a correctness guarantee. Swallows and logs
-    every error (with ``exc_info`` since this is the only observability point).
+    Best-effort — a TTL hint, not a correctness guarantee. Throttled in memory
+    (``_should_touch``) so a burst of served images does not open one pool
+    connection each for a trivial bump. Swallows and logs every error (with
+    ``exc_info`` since this is the only observability point).
     """
+    if not _should_touch(url_hash):
+        return
     try:
         image_proxy_cache_store.touch_last_accessed(url_hash)
     except Exception as exc:

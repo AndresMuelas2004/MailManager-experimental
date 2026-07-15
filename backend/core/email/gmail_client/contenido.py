@@ -322,6 +322,17 @@ class GmailContenidoMixin:
         messages: list[ConversationMessage] = []
         for msg in (thread or {}).get("messages", []):
             try:
+                # ``threads.get`` embeds in-progress draft replies in the
+                # thread. Drafts belong to the ``drafts`` table, never to the
+                # viewer nor to ``email_metadata`` (the lazy-sync persists
+                # whatever is returned here) — mirrors the ``"DRAFT" in
+                # labelIds`` safety net of ``fetch_messages_metadata``. Extra
+                # trap this closes: a Gmail draft gets a NEW message id on
+                # every save, so letting it through would accumulate one
+                # ghost row per edit+open. Inside the try so a malformed
+                # ``labelIds`` still falls into the per-message skip below.
+                if "DRAFT" in set(msg.get("labelIds") or []):
+                    continue
                 meta = self._parse_metadata_response(msg)
                 is_favorite = "STARRED" in set(msg.get("labelIds") or [])
                 messages.append(

@@ -75,6 +75,8 @@ def _conversation_message_to_metadata(
 
 def _conversation_message_to_out(
     message: ConversationMessage, account_id: str, mailbox_id: str,
+    *,
+    provider_message_id: str | None = None,
 ) -> EmailMetadataOut:
     """Map a provider ``ConversationMessage`` into the viewer response model.
 
@@ -82,9 +84,16 @@ def _conversation_message_to_out(
     the account's ``account_id`` / ``mailbox_id`` (a thread never crosses
     accounts), and ``has_attachments=False`` (B.lazy — the per-message clip
     appears once the body is opened and attachments are discovered).
-    """
+
+    ``provider_message_id`` overrides the message's own id with the reconciled
+    (persisted) one — the response MUST carry the same ids the lazy-sync wrote,
+    because the frontend drives every per-message action (content, favourite,
+    reply-context, box moves, read status) through them: an Outlook
+    conversation-endpoint id that was remapped away no longer has a row, so
+    returning it verbatim turns those actions into 404s / silent zero-row
+    updates."""
     return EmailMetadataOut(
-        provider_message_id=message.provider_message_id,
+        provider_message_id=provider_message_id or message.provider_message_id,
         account_id=account_id,
         mailbox_id=mailbox_id,
         thread_id=message.thread_id,
@@ -120,10 +129,12 @@ def get_conversation(
        clicked a listed row).
     4. ``thread_id`` empty → single-message conversation, mapped from the
        row already read, NO provider call.
-    5. Otherwise: silent auth → ``manager.fetch_conversation`` → best-effort
-       lazy sync (persist the thread's messages, applying favourites) →
-       build the response from the provider's fresh state ordered oldest
-       first.
+    5. Otherwise: silent auth → ``manager.fetch_conversation`` → reconcile
+       member ids against the thread's stored rows → best-effort lazy sync
+       (persist the thread's messages under the reconciled ids) → build the
+       response from the provider's fresh state, ordered oldest first and
+       carrying the SAME reconciled ids the persist used (the frontend drives
+       every per-message action through them).
     """
     # Re-canonicalise mailbox_id from the authoritative DB record instead of
     # trusting the path param verbatim. ensure_mailbox_access already proved the
@@ -200,22 +211,33 @@ def get_conversation(
                 "Unexpected provider failure while fetching the conversation thread."
             ) from exc
 
+        # Reconcile the fetched members' ids against the rows already stored
+        # for this thread (Outlook hands the same physical message different
+        # ids per endpoint), THEN share the exact same final-id view between
+        # the lazy-sync persist and the response mapping: response and DB must
+        # never diverge, or the frontend's per-message actions (content,
+        # favourite, reply-context, box moves) hit ids that have no row.
+        # A reconciliation read failure degrades to {} → BOTH sides verbatim.
+        id_remap = _reconcile_thread_ids(account_id, thread_id, members) if members else {}
+        members_by_final_id = _dedupe_members_by_final_id(members, id_remap)
+
         # Lazy sync ("complete the mailbox"): persist every thread message so
         # reopening serves from DB and the bodies pre-check passes. Best-effort
-        # — the viewer must open even if the cache-fill fails. ``thread_id`` is
-        # the authoritative thread of the clicked (base) row; the lazy-sync
-        # reconciles each fetched member against the rows already stored under
-        # it so Outlook's per-endpoint id drift does not duplicate rows.
-        _lazy_sync_conversation(account_id, thread_id, members)
+        # — the viewer must open even if the cache-fill fails.
+        _lazy_sync_conversation(account_id, members_by_final_id)
 
         # Map the response from the provider's fresh state (NOT a DB re-read):
         # a message that moved box / was read out-of-band is reflected even if
-        # the best-effort upsert above failed. Oldest first.
+        # the best-effort upsert above failed. Oldest first, keyed/sorted by
+        # the FINAL (persisted) id.
         ordered = sorted(
-            members, key=lambda m: (m.received_at, m.provider_message_id),
+            members_by_final_id.items(), key=lambda kv: (kv[1].received_at, kv[0]),
         )
         messages = [
-            _conversation_message_to_out(m, account_id, mailbox_id) for m in ordered
+            _conversation_message_to_out(
+                m, account_id, mailbox_id, provider_message_id=final_id,
+            )
+            for final_id, m in ordered
         ]
         return ConversationOut(thread_id=thread_id, messages=messages)
     except ApiError:
@@ -315,8 +337,27 @@ def _reconcile_thread_ids(
         return {}
 
 
+def _dedupe_members_by_final_id(
+    members: list[ConversationMessage], id_remap: dict[str, str],
+) -> dict[str, ConversationMessage]:
+    """Apply the id remap and dedupe by the FINAL id, keeping the newest member
+    for a key (members arrive oldest-first from both provider clients).
+
+    This single mapping feeds BOTH the lazy-sync persist and the viewer
+    response, so the ids the frontend receives are exactly the ids the rows
+    were persisted under. Two members can only collapse to one id in the rare
+    physical-key collision; collapsing here also keeps the response free of
+    duplicate ``(account_id, provider_message_id)`` keys (the frontend uses
+    them as React keys and action targets) while the batch upsert side rejects
+    the same conflict key twice ("cannot affect row a second time")."""
+    by_id: dict[str, ConversationMessage] = {}
+    for m in members:
+        by_id[id_remap.get(m.provider_message_id, m.provider_message_id)] = m
+    return by_id
+
+
 def _lazy_sync_conversation(
-    account_id: str, thread_id: str, members: list[ConversationMessage],
+    account_id: str, members_by_final_id: dict[str, ConversationMessage],
 ) -> None:
     """Best-effort persistence of a fetched conversation's messages.
 
@@ -328,35 +369,26 @@ def _lazy_sync_conversation(
     Swallowed on failure (logged) so a cache-fill hiccup never aborts the
     viewer.
 
-    Each member's provider id is first reconciled against the ids already
-    stored for ``thread_id`` (``_reconcile_thread_ids``): Outlook returns a
-    non-deterministic id for the same physical message on the conversation
-    endpoint, so persisting members verbatim INSERTs a duplicate row per open
-    (inflating ``thread_message_count`` and leaving the grouped-listing
-    representative — hence the cached body — under an unstable id). Remapping
-    onto the stored stable id turns those inserts into UPDATEs. Gmail ids are
-    stable, so the remap is empty and behaviour is unchanged.
-
-    NOTE: this only affects the LISTING's thread row on the next list; it
-    does NOT change the ``ConversationOut`` of this call (the viewer reads
-    per-message state from the provider members, not from the DB).
+    ``members_by_final_id`` is the reconciled final-id view built by the
+    caller (``_reconcile_thread_ids`` + ``_dedupe_members_by_final_id``):
+    Outlook returns a non-deterministic id for the same physical message on
+    the conversation endpoint, so persisting members verbatim INSERTs a
+    duplicate row per open (inflating ``thread_message_count`` and leaving the
+    grouped-listing representative — hence the cached body — under an unstable
+    id). Remapping onto the stored stable id turns those inserts into UPDATEs.
+    Gmail ids are stable, so the remap is empty and behaviour is unchanged.
+    The SAME mapping also feeds the ``ConversationOut`` of this call, so the
+    viewer always acts on ids that exist locally.
     """
-    if not members:
+    if not members_by_final_id:
         return
-    id_remap = _reconcile_thread_ids(account_id, thread_id, members)
-    # Dedupe by the FINAL id, keeping the newest member for a key (members
-    # arrive oldest-first): two members can only collapse to one id in the rare
-    # physical-key collision, and the batch upsert rejects the same conflict key
-    # twice ("cannot affect row a second time").
-    by_id: dict[str, EmailMetadata] = {}
-    for m in members:
-        pmid = id_remap.get(m.provider_message_id, m.provider_message_id)
-        by_id[pmid] = _conversation_message_to_metadata(
-            m, account_id, provider_message_id=pmid,
-        )
+    metadata = [
+        _conversation_message_to_metadata(m, account_id, provider_message_id=pmid)
+        for pmid, m in members_by_final_id.items()
+    ]
     try:
         persist_email_metadata_batch(
-            account_id, list(by_id.values()), fallback=ConversationFetchError,
+            account_id, metadata, fallback=ConversationFetchError,
         )
     except Exception as exc:
         logger.warning(

@@ -35,18 +35,31 @@ _OUTLOOK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
 _OUTLOOK_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 
+# Deterministic fallback for empty/malformed Graph timestamps. It MUST be a
+# constant — never ``now()``: the conversation lazy-sync reconciles Outlook's
+# per-endpoint id drift through the endpoint-independent identity
+# ``(received_at, from_email, subject)``, so a non-reproducible fallback gives
+# the same physical message a DIFFERENT identity on every read, the remap
+# never matches, and the duplicate-row factory resurrects for any message
+# without a parseable date.
+_GRAPH_DATETIME_FALLBACK = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 def _parse_graph_datetime(raw: Any) -> datetime:
     """Parse a Graph ISO-8601 timestamp (``…Z``) into an aware ``datetime``.
 
-    Falls back to ``now(UTC)`` when the value is empty or malformed so a
-    single bad timestamp never aborts a thread/sync parse.
+    Falls back to the deterministic ``_GRAPH_DATETIME_FALLBACK`` (epoch, UTC)
+    when the value is empty or malformed, so a single bad timestamp never
+    aborts a thread/sync parse AND the same payload always parses to the same
+    instant (load-bearing for the conversation id reconciliation — see the
+    constant's comment).
     """
     if not raw:
-        return datetime.now(timezone.utc)
+        return _GRAPH_DATETIME_FALLBACK
     try:
         return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+        return _GRAPH_DATETIME_FALLBACK
 
 
 def _retry_after_seconds(headers: dict[str, str] | None) -> float | None:

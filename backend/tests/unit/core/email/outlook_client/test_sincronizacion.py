@@ -124,10 +124,12 @@ class TestParseGraphMessage:
         assert result.from_email == ""
         assert result.from_name == ""
 
-    def test_invalid_date_falls_back_to_now(self):
+    def test_invalid_date_falls_back_to_deterministic_epoch(self):
+        # Deterministic (never now()): received_at heads the id-reconciliation
+        # identity, so the same payload must always parse to the same instant.
         msg = _make_graph_message(received="not-a-date")
         result = OutlookClient._parse_graph_message(msg, "ALL_MAIL")
-        assert (datetime.now(timezone.utc) - result.received_at).total_seconds() < 5
+        assert result.received_at == datetime(1970, 1, 1, tzinfo=timezone.utc)
 
     def test_missing_conversation_id(self):
         msg = _make_graph_message()
@@ -381,6 +383,40 @@ class TestResolveSpecialFolderIds:
 
         # Both calls retried all 4 folders — the degraded map was never pinned.
         assert call_count["n"] == 8
+
+    def test_partial_failure_does_not_cache_and_retries_next_call(self):
+        # A PARTIAL map (one folder lookup hit a transient error) must not be
+        # cached either: pinning it for a TTL would classify that folder's
+        # messages as ALL_MAIL for an hour, and the conversation lazy-sync
+        # would rewrite the canonical rows' box with that wrong value (e.g.
+        # SENT thread members surfacing in the inbox listing).
+        client = _make_authenticated_client()
+        calls: list[str] = []
+
+        def _sent_fails(method, url, body=None):
+            calls.append(url)
+            if "/mailFolders/sentitems?" in url:
+                raise EmailExternalAPIError("throttled")
+            if "/mailFolders/deleteditems?" in url:
+                return {"id": "id-trash"}
+            if "/mailFolders/junkemail?" in url:
+                return {"id": "id-spam"}
+            if "/mailFolders/archive?" in url:
+                return {"id": "id-archive"}
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.object(client, "_graph_request", side_effect=_sent_fails):
+            first = client._resolve_special_folder_ids()
+            # The partial result still serves THIS call (best-effort)…
+            assert first == {"id-trash": "TRASH", "id-spam": "SPAM", "id-archive": "ARCHIVE"}
+            # …but is never pinned; the next call re-resolves and self-heals.
+            assert client._account_label not in sincronizacion._SPECIAL_FOLDER_CACHE
+
+        healed_calls: list[str] = []
+        with patch.object(client, "_graph_request", side_effect=self._resolving_mock(healed_calls)):
+            second = client._resolve_special_folder_ids()
+        assert second == self._RESOLVED
+        assert len(healed_calls) == 4
 
 
 class TestFetchRecentMessages:
@@ -1368,13 +1404,23 @@ class TestFetchMessagesMetadata:
 
 
 class TestParseGraphMessageSentDateFallback:
-    """_parse_graph_message was refactored to reuse _parse_graph_datetime."""
+    """received_at derivation lives INSIDE _parse_graph_message for EVERY
+    endpoint (delta / bootstrap / conversation): receivedDateTime →
+    sentDateTime → deterministic epoch. One shared chain is load-bearing for
+    the conversation id reconciliation, whose identity starts with
+    received_at."""
 
-    def test_missing_received_date_falls_back_to_now(self):
-        # A message with no receivedDateTime still parses (helper → now). The
-        # sentDateTime fallback itself is exercised at the fetch_conversation
-        # level, where the raw message is still available.
+    def test_missing_received_date_falls_back_to_sent_date(self):
+        msg = _make_graph_message()
+        del msg["receivedDateTime"]
+        msg["sentDateTime"] = "2025-06-02T08:00:00Z"
+        result = OutlookClient._parse_graph_message(msg, "SENT")
+        assert result.received_at == datetime(2025, 6, 2, 8, 0, tzinfo=timezone.utc)
+
+    def test_missing_both_dates_falls_back_to_deterministic_epoch(self):
+        # No receivedDateTime and no sentDateTime → the deterministic epoch,
+        # identical on every parse (never now()).
         msg = _make_graph_message()
         del msg["receivedDateTime"]
         result = OutlookClient._parse_graph_message(msg, "SENT")
-        assert (datetime.now(timezone.utc) - result.received_at).total_seconds() < 5
+        assert result.received_at == datetime(1970, 1, 1, tzinfo=timezone.utc)

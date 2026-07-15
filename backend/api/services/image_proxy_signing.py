@@ -32,6 +32,19 @@ def _signing_key() -> bytes:
     return (os.getenv("IMAGE_PROXY_SIGNING_KEY") or _DEV_FALLBACK_KEY).encode("utf-8")
 
 
+def signing_key_is_secure() -> bool:
+    """True when a strong, persistent HMAC key is configured for production.
+
+    A deployment is secure when ``IMAGE_PROXY_SIGNING_KEY`` is set to a value
+    other than the public dev fallback. ``create_app()`` calls this at startup
+    (gated by ``IMAGE_PROXY_REQUIRE_KEY``) to fail-closed rather than boot the
+    rate-limit-exempt ``/image-proxy`` endpoint with a predictable key that
+    would turn the backend into an open image relay.
+    """
+    key = os.getenv("IMAGE_PROXY_SIGNING_KEY")
+    return bool(key) and key != _DEV_FALLBACK_KEY
+
+
 def _sign(url: str) -> str:
     return hmac.new(_signing_key(), url.encode("utf-8"), hashlib.sha256).hexdigest()
 

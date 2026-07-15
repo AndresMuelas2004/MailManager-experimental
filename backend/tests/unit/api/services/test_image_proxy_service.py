@@ -39,6 +39,16 @@ _URL_HASH = hashlib.sha256(_URL.encode("utf-8")).hexdigest()
 _PURGE_ENV = "IMAGE_PROXY_PURGE_TOKEN"
 
 
+@pytest.fixture(autouse=True)
+def _reset_touch_throttle():
+    """Isolate the in-memory touch throttle between tests: it is module-level
+    state keyed by url_hash, so a touch in one test would otherwise suppress a
+    touch of the same hash in the next (making order-dependent failures)."""
+    image_proxy_service.reset_touch_throttle()
+    yield
+    image_proxy_service.reset_touch_throttle()
+
+
 def _valid_us(url: str = _URL) -> tuple[str, str]:
     """Mint a genuine ``(u, s)`` pair via the production signer."""
     query = parse_qs(urlsplit(build_proxy_sentinel_url(url)).query)
@@ -194,6 +204,32 @@ class TestTouchCacheLastAccessed:
         )
         # Runs after the stream is already on the wire — must never raise.
         assert image_proxy_service.touch_cache_last_accessed(_URL_HASH) is None
+
+    def test_second_touch_of_same_hash_is_throttled(self, monkeypatch):
+        """Only the FIRST touch per url_hash opens a DB connection; a burst of
+        served images (same CDN image across a newsletter) must not hammer the
+        shared pool. The throttle suppresses the repeat within its TTL window."""
+        touched: list[str] = []
+        monkeypatch.setattr(
+            image_proxy_service.image_proxy_cache_store, "touch_last_accessed",
+            lambda h: touched.append(h),
+        )
+        image_proxy_service.touch_cache_last_accessed(_URL_HASH)
+        image_proxy_service.touch_cache_last_accessed(_URL_HASH)
+        image_proxy_service.touch_cache_last_accessed(_URL_HASH)
+        # Three serves, one DB touch.
+        assert touched == [_URL_HASH]
+
+    def test_distinct_hashes_each_touch_once(self, monkeypatch):
+        """The throttle is per url_hash — a different image still touches."""
+        touched: list[str] = []
+        monkeypatch.setattr(
+            image_proxy_service.image_proxy_cache_store, "touch_last_accessed",
+            lambda h: touched.append(h),
+        )
+        image_proxy_service.touch_cache_last_accessed("hash_a")
+        image_proxy_service.touch_cache_last_accessed("hash_b")
+        assert touched == ["hash_a", "hash_b"]
 
 
 # ── purge_expired_images (three-state admin auth) ──────────────────

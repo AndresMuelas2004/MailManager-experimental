@@ -41,6 +41,49 @@ def test_create_app_accepts_explicit_origins(monkeypatch):
     assert app is not None
 
 
+def test_create_app_requires_image_proxy_key_when_flag_enabled(monkeypatch):
+    """With IMAGE_PROXY_REQUIRE_KEY on, a missing signing key fails to boot.
+
+    ``/image-proxy`` is rate-limit-exempt, so booting with the public dev
+    fallback key would be an open image relay. Production sets the flag; a
+    missing key must abort startup, mirroring the CORS wildcard guard."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.delenv("IMAGE_PROXY_SIGNING_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="IMAGE_PROXY_SIGNING_KEY"):
+        create_app()
+
+
+def test_create_app_rejects_dev_fallback_key_when_flag_enabled(monkeypatch):
+    """The public dev fallback key is treated as 'no secure key' under the flag."""
+    from api.services.image_proxy_signing import _DEV_FALLBACK_KEY
+
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.setenv("IMAGE_PROXY_SIGNING_KEY", _DEV_FALLBACK_KEY)
+    with pytest.raises(RuntimeError, match="IMAGE_PROXY_SIGNING_KEY"):
+        create_app()
+
+
+def test_create_app_accepts_strong_image_proxy_key_when_flag_enabled(monkeypatch):
+    """A strong, distinct key satisfies the guard and boots normally."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.setenv("IMAGE_PROXY_REQUIRE_KEY", "true")
+    monkeypatch.setenv("IMAGE_PROXY_SIGNING_KEY", "a-strong-persistent-production-secret")
+    app = create_app()
+    assert app is not None
+
+
+def test_create_app_does_not_require_image_proxy_key_by_default(monkeypatch):
+    """With the flag off (the default), a missing key is fine — dev / tests keep
+    the fallback so nothing breaks without opting in."""
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    monkeypatch.delenv("IMAGE_PROXY_REQUIRE_KEY", raising=False)
+    monkeypatch.delenv("IMAGE_PROXY_SIGNING_KEY", raising=False)
+    app = create_app()
+    assert app is not None
+
+
 def test_create_app_builds_with_rate_limiting_enabled(monkeypatch):
     """Adding the per-router rate-limit ``dependencies`` does not break boot.
 

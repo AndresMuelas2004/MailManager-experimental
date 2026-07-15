@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import threading
 
 import httpx
 import pytest
@@ -319,6 +320,43 @@ def test_fetch_out_of_range_port_is_unfetchable(monkeypatch):
     _patch_client(monkeypatch, [])
     with pytest.raises(ImageProxyUnfetchable):
         fetch_remote_image("https://cdn.example.com:99999/logo.png")
+
+
+# ── concurrency gate (threadpool protection) ───────────────────────
+
+
+def test_download_gate_is_a_bounded_semaphore_sized_to_the_constant():
+    # The gate MUST be a BoundedSemaphore sized to _MAX_CONCURRENT_DOWNLOADS so
+    # surplus concurrent downloads WAIT for a slot instead of each holding an
+    # anyio threadpool worker (the endpoint is synchronous + rate-limit-exempt).
+    # A regression to a plain int / wrong size silently reopens the
+    # threadpool-exhaustion risk a heavy newsletter would trigger.
+    assert isinstance(fetcher._DOWNLOAD_GATE, threading.BoundedSemaphore)
+    assert fetcher._DOWNLOAD_GATE._value == fetcher._MAX_CONCURRENT_DOWNLOADS
+
+
+def test_fetch_acquires_and_releases_the_download_gate(monkeypatch):
+    # A successful fetch must leave the gate's permit count unchanged (acquired
+    # for the download, released on the way out) — no leaked permit that would
+    # shrink capacity over time.
+    _patch_resolution(monkeypatch, "93.184.216.34")
+    _patch_client(monkeypatch, [
+        _FakeStreamResponse(headers={"content-type": "image/png"}, chunks=(b"OK",)),
+    ])
+    before = fetcher._DOWNLOAD_GATE._value
+    fetch_remote_image("https://cdn.example.com/logo.png")
+    assert fetcher._DOWNLOAD_GATE._value == before
+
+
+def test_fetch_releases_the_download_gate_on_error(monkeypatch):
+    # The permit must be released even when the fetch fails, or repeated errors
+    # would drain the gate and deadlock all future downloads.
+    _patch_resolution(monkeypatch, "10.0.0.5")  # private → ImageProxyBlocked
+    _patch_client(monkeypatch, [])
+    before = fetcher._DOWNLOAD_GATE._value
+    with pytest.raises(ImageProxyBlocked):
+        fetch_remote_image("https://internal.example.com/x.png")
+    assert fetcher._DOWNLOAD_GATE._value == before
 
 
 # ── privacy: neutral request headers ───────────────────────────────

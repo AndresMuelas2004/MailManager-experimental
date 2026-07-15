@@ -14,8 +14,11 @@ const RECENT_MS = 48 * 60 * 60 * 1000;
 // concurrency test can assert the ceiling by name.
 export const PREFETCH_CONCURRENCY = 3;
 
-// Same scope as the backend's DB prefetch (unread, INBOX, ≤48h) so almost every
-// warmed body is a local DB hit (~10 ms), not a provider round trip.
+// Same scope as the backend's sync-time DB prefetch (unread, INBOX, ≤48h) so
+// most warmed bodies are a local DB hit (~10 ms). Rows the backend already
+// pre-cached (its 50 most-recent per account) are pure DB hits; a target beyond
+// that set is a cache miss that triggers one provider fetch on the backend —
+// acceptable and bounded by PREFETCH_CONCURRENCY, not a guaranteed local hit.
 function isPrefetchTarget(e: EmailMetadataOut): boolean {
   return (
     !e.is_read &&

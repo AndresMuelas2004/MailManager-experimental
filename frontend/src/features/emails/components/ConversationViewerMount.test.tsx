@@ -8,9 +8,12 @@
  * Pins Q2=A: the opened email's body paints IMMEDIATELY from the (fast)
  * ``/content`` read without waiting for the live ``/conversation`` call, the
  * chain fills in below when it arrives, the opened email's conversation twin is
- * deduped (Gmail by id, Outlook by received_at+from_email — its body is read
- * under the LISTING id, a cache hit), a chain-fetch error is non-blocking, and
- * Reply targets the opened email before the chain loads and the newest after.
+ * deduped (primary: exact id — the backend reconciles Outlook conversation ids
+ * onto the listing ids; fallback: the physical identity instant+from+subject
+ * mirroring the backend's reconciliation key — its body is read under the
+ * LISTING id, a cache hit), a chain-fetch error is non-blocking AND still
+ * marks the opened (already read on screen) email as read, and Reply targets
+ * the opened email before the chain loads and the newest after.
  */
 
 import { screen, waitFor } from '@testing-library/react';
@@ -157,7 +160,13 @@ describe('ConversationViewerMount — dedup of the opened email against the chai
     expect(screen.getAllByText('m_opened <m_opened@example.com>')).toHaveLength(1);
   });
 
-  it('dedups the Outlook twin (different id, same received_at+from) and reads the body with the listing id', async () => {
+  it('dedups the Outlook twin (different id, same physical identity) and reads the body with the listing id', async () => {
+    // Covers the DEGRADED backend path: normally the backend reconciles the
+    // conversation id onto the listing id (same-id dedup), but when that
+    // best-effort reconciliation fails the twin arrives verbatim and the
+    // physical-identity fallback (same instant + from_email + subject —
+    // mirroring the backend's reconciliation key, so same physical message ⇒
+    // same subject) must still dedupe it.
     const contentRequests: string[] = [];
     server.use(
       contentHandler('<p>BODY</p>', (pmid) => contentRequests.push(pmid)),
@@ -166,11 +175,12 @@ describe('ConversationViewerMount — dedup of the opened email against the chai
           thread_id: 't_1',
           messages: [
             // Same physical message under a DIFFERENT REST id (Outlook), same
-            // received_at + from_email as the listing row.
+            // received_at + from_email + subject as the listing row.
             makeEmail('conv_id_X', {
               received_at: '2024-05-01T10:00:00Z',
               from_email: 'boss@corp.com',
               from_name: 'Boss',
+              subject: 'Quarterly numbers',
             }),
           ],
         }),
@@ -182,6 +192,7 @@ describe('ConversationViewerMount — dedup of the opened email against the chai
         received_at: '2024-05-01T10:00:00Z',
         from_email: 'boss@corp.com',
         from_name: 'Boss',
+        subject: 'Quarterly numbers',
       }),
     );
 
@@ -215,6 +226,43 @@ describe('ConversationViewerMount — chain error resilience + reply target', ()
     expect(iframe.getAttribute('srcdoc')).toContain('RESILIENT-BODY');
     // A non-blocking notice is shown instead of replacing the whole viewer.
     expect(await screen.findByText(THREAD_ERROR)).toBeInTheDocument();
+  });
+
+  it('marks the opened email read even when /conversation fails (the warmed body was read)', async () => {
+    // The instant open paints the body from the warmed cache without waiting
+    // for /conversation, so the user HAS read the email even when the chain
+    // fetch fails. The read-status call must still fire — with the listing id
+    // and propagate_thread — or the thread stays bold forever after a
+    // transient provider failure.
+    const readBodies: Array<{
+      items: Array<{ provider_message_id: string }>;
+      propagate_thread?: boolean;
+    }> = [];
+    server.use(
+      contentHandler('<p>BODY</p>'),
+      http.get(CONVERSATION_PATH, () =>
+        HttpResponse.json(
+          { error: { code: 'external_api_error', message: 'boom' } },
+          { status: 502 },
+        ),
+      ),
+      http.patch(`${API_BASE}/mailboxes/:mailboxId/emails/read-status`, async ({ request }) => {
+        readBodies.push(
+          (await request.json()) as {
+            items: Array<{ provider_message_id: string }>;
+            propagate_thread?: boolean;
+          },
+        );
+        return HttpResponse.json({ updated_count: 1, accounts: [] });
+      }),
+    );
+
+    mountViewer(makeEmail('m_opened', { is_read: false }));
+
+    await screen.findByText(THREAD_ERROR);
+    await waitFor(() => expect(readBodies).toHaveLength(1));
+    expect(readBodies[0].items.map((i) => i.provider_message_id)).toEqual(['m_opened']);
+    expect(readBodies[0].propagate_thread).toBe(true);
   });
 
   it('reply targets the opened email before the chain loads and the newest after', async () => {

@@ -76,14 +76,20 @@ class TestParseGraphDatetime:
         assert result.month == 6
         assert result.tzinfo is not None
 
-    def test_empty_falls_back_to_now(self):
-        result = _parse_graph_datetime("")
-        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+    # The fallback must be a deterministic CONSTANT, never now(): the
+    # conversation id reconciliation keys identity by received_at, so a
+    # non-reproducible fallback would give the same physical message a
+    # different identity per read and re-create duplicate rows per open.
+    _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-    def test_none_falls_back_to_now(self):
-        result = _parse_graph_datetime(None)
-        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+    def test_empty_falls_back_to_deterministic_epoch(self):
+        assert _parse_graph_datetime("") == self._EPOCH
 
-    def test_malformed_falls_back_to_now(self):
-        result = _parse_graph_datetime("not-a-date")
-        assert (datetime.now(timezone.utc) - result).total_seconds() < 5
+    def test_none_falls_back_to_deterministic_epoch(self):
+        assert _parse_graph_datetime(None) == self._EPOCH
+
+    def test_malformed_falls_back_to_deterministic_epoch(self):
+        assert _parse_graph_datetime("not-a-date") == self._EPOCH
+        # Reproducibility is the contract: two parses of the same bad payload
+        # must yield the SAME instant.
+        assert _parse_graph_datetime("not-a-date") == _parse_graph_datetime("not-a-date")

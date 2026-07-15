@@ -18,15 +18,20 @@ from .transporte import GRAPH_BASE_URL, _parse_graph_datetime
 logger = logging.getLogger(__name__)
 
 
+# ``sentDateTime`` rides along ONLY as the ``received_at`` fallback of
+# ``_parse_graph_message``: every endpoint (delta, bootstrap, conversation)
+# must derive ``received_at`` from the SAME field chain, or the conversation
+# id reconciliation's identity (received_at, from, subject) diverges between
+# what sync stored and what the viewer fetched for date-less messages.
 _DELTA_SELECT_FIELDS = (
-    "id,conversationId,from,toRecipients,subject,receivedDateTime,isRead,flag"
+    "id,conversationId,from,toRecipients,subject,receivedDateTime,sentDateTime,isRead,flag"
 )
 _DELTA_PAGE_SIZE = 100
 
 
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
-    "receivedDateTime,isRead,parentFolderId,flag,isDraft"
+    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag,isDraft"
 )
 
 
@@ -54,7 +59,8 @@ _FOLDER_TO_BOX: dict[str, str] = {
 # as ``api/rate_limit.py`` and the backfill worker. Graph returns a STABLE id
 # for each well-known folder of a mailbox, so caching the map is safe; the TTL
 # only bounds the rare case of a recreated mailbox. Values are
-# ``(monotonic_ts, map)``. An EMPTY resolution is deliberately NOT cached — see
+# ``(monotonic_ts, map)``. An INCOMPLETE resolution (any folder lookup failed,
+# empty included) is deliberately NOT cached — see
 # ``_resolve_special_folder_ids``.
 _SPECIAL_FOLDER_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 _SPECIAL_FOLDER_CACHE_LOCK = threading.Lock()
@@ -107,7 +113,16 @@ class OutlookSincronizacionMixin:
             msg.get("toRecipients"),
         )
 
-        received_at = _parse_graph_datetime(msg.get("receivedDateTime", ""))
+        # Single received_at derivation for EVERY endpoint that parses a
+        # message (delta, bootstrap, conversation): receivedDateTime, falling
+        # back to sentDateTime when absent (Sent/date-less items), then the
+        # deterministic epoch fallback inside ``_parse_graph_datetime``.
+        # Keeping this chain identical across endpoints is load-bearing for
+        # the conversation id reconciliation, whose identity key starts with
+        # ``received_at``.
+        received_at = _parse_graph_datetime(
+            msg.get("receivedDateTime") or msg.get("sentDateTime") or "",
+        )
 
         return EmailMetadata(
             provider_message_id=msg.get("id", ""),
@@ -242,11 +257,16 @@ class OutlookSincronizacionMixin:
                     folder_name,
                 )
 
-        # Cache only a non-empty result. An empty map means every folder call
-        # failed (a transient auth/throttle blip) — caching it would misclassify
-        # every message as ALL_MAIL for a whole TTL. Skipping the write lets the
-        # next call retry cheaply and self-heal.
-        if folder_id_to_box:
+        # Cache only a COMPLETE map (every folder in _FOLDER_TO_BOX resolved).
+        # A partial map — one folder's lookup hit a transient throttle/5xx —
+        # would misclassify that folder's messages as ALL_MAIL for a whole
+        # TTL; and since the conversation lazy-sync now UPDATEs the canonical
+        # rows with the box it derives here, a cached partial map would move
+        # e.g. every SENT message of an opened thread into the inbox listing
+        # for an hour. Skipping the write lets the next call retry cheaply
+        # and self-heal (the partial result is still returned for THIS call —
+        # best-effort, same as before).
+        if len(folder_id_to_box) == len(_FOLDER_TO_BOX):
             with _SPECIAL_FOLDER_CACHE_LOCK:
                 _SPECIAL_FOLDER_CACHE[account_label] = (now, dict(folder_id_to_box))
         return folder_id_to_box

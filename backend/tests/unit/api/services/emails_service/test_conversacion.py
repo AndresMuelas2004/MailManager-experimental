@@ -344,10 +344,40 @@ class TestGetConversation:
                 "subject": "Hello",
             }],
         )
-        conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
+        result = conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
         persisted = {m.provider_message_id: m for call in persist_calls for m in call[1]}
         assert "A" in persisted
         assert "D" not in persisted
+        # The RESPONSE must carry the same reconciled id the persist used: the
+        # frontend drives content / favourite / reply-context / box moves
+        # through these ids, and 'D' has no row (404s / zero-row updates).
+        assert [m.provider_message_id for m in result.messages] == ["A"]
+
+    def test_response_reconciled_id_keeps_fresh_provider_state(self, monkeypatch):
+        # The remap swaps ONLY the id: box / is_read / is_favorite must still
+        # reflect the provider's fresh state from THIS open, not the stored row.
+        members = [build_conversation_message(
+            provider_message_id="D", thread_id="thr-1",
+            received_at=datetime(2025, 1, 1, 10, 0),
+            from_email="sender@test.com", subject="Hello",
+            box="SPAM", is_read=True, is_favorite=True,
+        )]
+        _patch_get_conversation_common(
+            monkeypatch,
+            fake_client_kwargs={"fetch_conversation_return": members},
+            thread_rows=[{
+                "provider_message_id": "A",
+                "received_at": datetime(2025, 1, 1, 10, 0),
+                "from_email": "sender@test.com",
+                "subject": "Hello",
+            }],
+        )
+        result = conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
+        msg = result.messages[0]
+        assert msg.provider_message_id == "A"
+        assert msg.box == "SPAM"
+        assert msg.is_read is True
+        assert msg.is_favorite is True
 
     def test_lazy_sync_persists_under_own_ids_when_already_stored(self, monkeypatch):
         # Gmail: the member's own id is already stored (stable across endpoints),
@@ -425,7 +455,7 @@ class TestGetConversation:
                 "subject": "Hello",
             }],
         )
-        conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
+        result = conversacion.get_conversation(_MAILBOX_ID, _ACCOUNT_ID, "m_base", _USER_ID)
         persisted = [m for call in persist_calls for m in call[1]]
         under_a = [m for m in persisted if m.provider_message_id == "A"]
         # Collapsed to exactly one row under the stable id; neither raw id survives.
@@ -433,6 +463,11 @@ class TestGetConversation:
         assert not any(m.provider_message_id in {"D1", "D2"} for m in persisted)
         # The LAST (newest) member won the collapse.
         assert under_a[0].is_favorite is True
+        # Response↔persistence parity: the viewer shows the same single entry
+        # (duplicate (account, id) keys would collide as React keys / action
+        # targets), carrying the winning member's fresh state.
+        assert [m.provider_message_id for m in result.messages] == ["A"]
+        assert result.messages[0].is_favorite is True
 
     def test_email_not_found_when_base_row_missing(self, monkeypatch):
         _patch_get_conversation_common(monkeypatch, base_row=None)

@@ -12,7 +12,7 @@ full router→service→DB→core wiring are real.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.email.email_manager import EmailManager
 from core.email.errors import EmailExternalAPIError
@@ -148,6 +148,44 @@ def test_conversation_reopen_serves_persisted_chain(
     assert [m["provider_message_id"] for m in second.json()["messages"]] == [
         "base", "extra",
     ]
+
+
+def test_conversation_response_carries_reconciled_id_for_drifted_member(
+    test_client, setup_mailbox_and_account, isolated_db, monkeypatch,
+):
+    # Outlook id drift: the conversation endpoint returns the SAME physical
+    # message (identical received_at / from_email / subject) under a different
+    # id than the one sync stored. The lazy-sync must UPDATE the stored row
+    # (no duplicate), and the response must carry the STORED id — the frontend
+    # drives content / favourite / reply-context / box moves through the
+    # response ids, so a verbatim drifted id would 404 against the local copy.
+    mailbox_id, account_id = setup_mailbox_and_account(test_client, "outlook")
+    _seed_base_row(isolated_db, account_id, provider_message_id="stable",
+                   thread_id="thr-3", received_at="2026-05-01T10:00:00+00:00")
+    members = [
+        build_conversation_message(
+            provider_message_id="drifted", thread_id="thr-3",
+            received_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+            from_email="sender@x.com", subject="Base subject",
+        ),
+    ]
+    _patch_conversation_manager(monkeypatch, members)
+
+    resp = test_client.get(_conversation_url(mailbox_id, account_id, "stable"))
+    assert resp.status_code == 200, resp.text
+    assert [m["provider_message_id"] for m in resp.json()["messages"]] == ["stable"]
+
+    # Same test, side effect (common_mistakes §1): no duplicate row landed —
+    # the thread still holds exactly the stored row, under the stable id.
+    with isolated_db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT provider_message_id FROM email_metadata
+            WHERE account_id = %(aid)s AND thread_id = 'thr-3'
+            """,
+            {"aid": account_id},
+        )
+        assert [r[0] for r in cur.fetchall()] == ["stable"]
 
 
 def test_conversation_missing_base_message_returns_404(

@@ -70,25 +70,49 @@ def test_58_set_favorite_toggle_gmail(e2e_client):
 
 
 def test_59_sync_favorites_gmail(e2e_client):
-    """A single-account favourites reconciliation returns a coherent envelope."""
-    _assert_ok(e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata"))
+    """Reconciliation keeps a just-starred favourite AND returns a coherent envelope.
 
-    resp = e2e_client.post(
-        f"/mailboxes/{GMAIL_MAILBOX_ID}/favorites/sync",
-        params={"account_id": GMAIL_ACCOUNT_ID},
-    )
-    _assert_ok(resp)
-    body = resp.json()
-    # total_synced is the rowcount across the account (>= the provider's
-    # favourite count, since every row is rewritten in one statement).
-    assert isinstance(body["total_synced"], int)
-    assert body["total_synced"] >= 0
-    assert len(body["accounts"]) == 1
-    detail = body["accounts"][0]
-    assert detail["account_id"] == GMAIL_ACCOUNT_ID
-    assert detail["favorites_synced"] >= 0
-    # The provider favourite count never exceeds the rows touched.
-    assert detail["favorites_synced"] <= body["total_synced"]
+    Mirror of ``test_62_sync_favorites_outlook``: the sync is a full replacement
+    (``is_favorite = pmid = ANY(provider_ids)``), so the survival assertion pins
+    that the ids ``list_favorite_ids`` returns match the stored ones. Gmail ids
+    are stable across endpoints, so this documents the contract the Outlook twin
+    exists to interrogate.
+    """
+    _assert_ok(e2e_client.post(f"/mailboxes/{GMAIL_MAILBOX_ID}/emails/sync-metadata"))
+    pmid = _find_non_spam_trash_message(GMAIL_ACCOUNT_ID)
+    if pmid is None:
+        pytest.skip("No synced Gmail emails available for favourites sync")
+
+    original = _select_is_favorite(GMAIL_ACCOUNT_ID, pmid)
+    base = f"/mailboxes/{GMAIL_MAILBOX_ID}/accounts/{GMAIL_ACCOUNT_ID}/emails/{pmid}/favorite"
+    try:
+        _assert_ok(e2e_client.patch(base, json={"favorite": True}))
+        assert _select_is_favorite(GMAIL_ACCOUNT_ID, pmid) is True
+
+        resp = e2e_client.post(
+            f"/mailboxes/{GMAIL_MAILBOX_ID}/favorites/sync",
+            params={"account_id": GMAIL_ACCOUNT_ID},
+        )
+        _assert_ok(resp)
+        body = resp.json()
+        # total_synced is the rowcount across the account (>= the provider's
+        # favourite count, since every row is rewritten in one statement).
+        assert isinstance(body["total_synced"], int)
+        assert body["total_synced"] >= 0
+        assert len(body["accounts"]) == 1
+        detail = body["accounts"][0]
+        assert detail["account_id"] == GMAIL_ACCOUNT_ID
+        assert detail["favorites_synced"] >= 0
+        # The provider favourite count never exceeds the rows touched.
+        assert detail["favorites_synced"] <= body["total_synced"]
+
+        # The favourite starred at the provider moments ago survives the
+        # full-replacement reconciliation (same test, same logical operation —
+        # common_mistakes.md §1).
+        assert _select_is_favorite(GMAIL_ACCOUNT_ID, pmid) is True
+    finally:
+        if original is not None:
+            _assert_ok(e2e_client.patch(base, json={"favorite": original}))
 
 
 def test_60_listing_favorite_excludes_spam_and_trash_gmail(e2e_client):

@@ -590,6 +590,22 @@ _CRITICAL_ELEMENT_RE = re.compile(
 )
 
 
+def _count_critical_elements(html_before: str, tree: Any) -> tuple[int, int]:
+    """Return ``(count in the raw HTML, count in the lxml-reparsed tree)`` of the
+    critical layout elements (``img``/``td``/``th``/``table``).
+
+    Shared by the two lxml reparse passes (geometry mirroring and remote-image
+    rewriting). A post-reparse count far below the input count is the signal
+    that libxml2 mis-interpreted the fragment and its tree must not be trusted.
+    Compares element COUNTS, not byte lengths: lxml normalises entities
+    (``&`` → ``&amp;``) and requotes attributes, so byte deltas false-positive
+    on perfectly valid input.
+    """
+    before = len(_CRITICAL_ELEMENT_RE.findall(html_before))
+    after = sum(1 for _ in tree.iter("img", "td", "th", "table"))
+    return before, after
+
+
 def _mirror_geometry_to_attributes(html: str) -> str:
     """Mirror ``width``/``height`` from inline styles to HTML attributes.
 
@@ -618,8 +634,7 @@ def _mirror_geometry_to_attributes(html: str) -> str:
         logger.warning("geometry restoration parse failed (%s): %s",
                        type(exc).__name__, exc)
         return html
-    critical_before = len(_CRITICAL_ELEMENT_RE.findall(html))
-    critical_after = sum(1 for _ in tree.iter("img", "td", "th", "table"))
+    critical_before, critical_after = _count_critical_elements(html, tree)
     if critical_before > 0 and critical_after < critical_before / 2:
         logger.warning(
             "geometry restoration lost critical elements (%d → %d); "
@@ -848,6 +863,18 @@ def _rewrite_images_structured(html: str, url_rewriter: Callable[[str], str]) ->
     from lxml import html as lxml_html  # lazy — transitive dep of premailer
 
     tree = lxml_html.fragment_fromstring(html, create_parent="div")
+    # Defensive guard (same shape as _mirror_geometry_to_attributes): if libxml2
+    # mis-parsed the bleach-clean fragment and dropped most of its layout
+    # elements, do NOT serialise the mangled tree — raise so rewrite_remote_images
+    # falls back to the regex path, which rewrites the ORIGINAL string without
+    # restructuring (no content lost). Without this, a mis-parse silently
+    # persists a mutilated body into the immutable email_content cache.
+    critical_before, critical_after = _count_critical_elements(html, tree)
+    if critical_before > 0 and critical_after < critical_before / 2:
+        raise ValueError(
+            f"lxml reparse dropped critical elements during image rewrite "
+            f"({critical_before} → {critical_after})"
+        )
     for element in tree.iter():
         tag = element.tag
         if not isinstance(tag, str):
@@ -864,6 +891,16 @@ def _rewrite_images_structured(html: str, url_rewriter: Callable[[str], str]) ->
         else:
             inline = element.get("style")
             if inline and ("http://" in inline or "https://" in inline):
+                # Inline styles rewrite EVERY remote ``url(...)`` (no per-property
+                # filter, unlike ``<style>`` blocks which skip ``@font-face src``).
+                # This is safe because this pass runs AFTER bleach: the CSSSanitizer
+                # already dropped every property outside ``_ALLOWED_CSS_PROPERTIES``,
+                # and the only ``url()``-bearing survivors that matter inline are
+                # image properties. ``src`` is allowlisted only for ``@font-face``
+                # (which cannot exist inline), so a stray inline ``src:url()`` is a
+                # visual no-op — over-rewriting it breaks nothing and never leaks.
+                # INVARIANT: keep ``_ALLOWED_CSS_PROPERTIES`` free of any non-image
+                # ``url()`` property that is meaningful inline, or this must filter.
                 element.set("style", _rewrite_css_url_values(inline, url_rewriter))
 
     inner = "".join(
@@ -883,13 +920,26 @@ def _rewrite_url_attr(
 
 
 def _rewrite_image_attrs_regex(html: str, url_rewriter: Callable[[str], str]) -> str:
-    """Regex fallback for ``src=`` / ``background=`` (used only if lxml raises)."""
-    def _replace(match: re.Match[str]) -> str:
+    """Regex fallback used only when the structured lxml pass raises or mis-parses.
+
+    Rewrites ``src=`` / ``background=`` attributes AND every remote ``url(...)``
+    in the raw string. Covering ``url(...)`` too is what keeps the fallback
+    privacy-safe: the structured pass filters ``url(...)`` by image property, but
+    here — a rare emergency path — leaking a raw remote URL is the worst outcome,
+    so we deliberately over-rewrite (a stray ``@font-face`` url gets proxied and
+    that font breaks) rather than let any remote URL survive uncached. The
+    signer is idempotent, so an already-rewritten sentinel is not double-wrapped.
+    """
+    def _replace_attr(match: re.Match[str]) -> str:
         raw = html_unescape(match.group("url"))
         sentinel = html_escape(url_rewriter(raw), quote=True)
         return f'{match.group("pre")}{match.group("q")}{sentinel}{match.group("q")}'
 
-    return _IMG_URL_ATTR_RE.sub(_replace, html)
+    html = _IMG_URL_ATTR_RE.sub(_replace_attr, html)
+    # Second pass: any remaining remote ``url(...)`` (inline styles / <style>
+    # blocks the attribute regex does not reach). Fidelity of ``&`` escaping is
+    # best-effort here — a mis-signed URL breaks the image but never leaks it.
+    return _rewrite_css_url_values(html, url_rewriter)
 
 
 def rewrite_remote_images(html: str, url_rewriter: Callable[[str], str]) -> str:

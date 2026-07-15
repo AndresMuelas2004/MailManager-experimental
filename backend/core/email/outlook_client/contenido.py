@@ -42,10 +42,15 @@ logger = logging.getLogger(__name__)
 # Conversation view ($filter=conversationId): bodies are fetched lazily
 # per message via fetch_email_content, so the select stays lightweight.
 # Adds ``sentDateTime`` (ordering fallback for Sent items) and ``flag``
-# (favourite state) on top of the bootstrap fields.
+# (favourite state) on top of the bootstrap fields. ``isDraft`` is selected
+# ONLY to filter drafts out — the mailbox-wide ``$filter=conversationId``
+# scope includes the Drafts folder (unlike the sync's folder deltas), and a
+# draft reply leaking through here would be shown as a thread message AND
+# persisted into ``email_metadata`` by the viewer's lazy-sync, violating the
+# "drafts never enter email_metadata" invariant (drafts live in ``drafts``).
 _CONVERSATION_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
-    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag"
+    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag,isDraft"
 )
 
 
@@ -87,13 +92,19 @@ class OutlookContenidoMixin:
                 "GET", url, extra_headers=_PREFER_IMMUTABLE_HEADERS,
             )
             for msg in response.get("value", []) or []:
+                # Drafts belong to the ``drafts`` table, never to the viewer
+                # nor to ``email_metadata`` (the lazy-sync persists whatever
+                # is returned here). Mirrors the bootstrap's isDraft filter.
+                if msg.get("isDraft"):
+                    continue
                 parent_folder_id = msg.get("parentFolderId", "")
                 box = folder_id_to_box.get(parent_folder_id, "ALL_MAIL")
                 try:
+                    # ``received_at`` (incl. the sentDateTime fallback for
+                    # Sent items) is derived INSIDE _parse_graph_message so
+                    # every endpoint shares one chain — load-bearing for the
+                    # id-reconciliation identity.
                     meta = self._parse_graph_message(msg, box)
-                    received_at = meta.received_at
-                    if not msg.get("receivedDateTime") and msg.get("sentDateTime"):
-                        received_at = _parse_graph_datetime(msg.get("sentDateTime"))
                     is_favorite = (msg.get("flag") or {}).get("flagStatus") == "flagged"
                     messages.append(
                         ConversationMessage(
@@ -102,7 +113,7 @@ class OutlookContenidoMixin:
                             from_email=meta.from_email,
                             from_name=meta.from_name,
                             subject=meta.subject,
-                            received_at=received_at,
+                            received_at=meta.received_at,
                             is_read=meta.is_read,
                             is_favorite=is_favorite,
                             box=meta.box,

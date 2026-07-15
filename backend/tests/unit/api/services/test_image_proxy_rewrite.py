@@ -11,12 +11,36 @@ four rewrite surfaces are: ``img@src``, ``td|th|table@background``, inline
 
 from __future__ import annotations
 
+import re
+
 import cssutils
 import lxml.html
 import pytest
 
+import api.services.email_html_pipeline as pipeline
 from api.services.email_html_pipeline import rewrite_remote_images
-from api.services.image_proxy_signing import SENTINEL_PREFIX, build_proxy_sentinel_url
+from api.services.image_proxy_signing import (
+    SENTINEL_PREFIX,
+    build_proxy_sentinel_url,
+    verify_and_extract,
+)
+
+
+# Matches every minted sentinel in the output, tolerating both the raw ``&``
+# (``<style>`` rawtext / CSS) and the ``&amp;`` (HTML attribute) separator.
+_SENTINEL_RE = re.compile(
+    re.escape(SENTINEL_PREFIX) + r"\?u=(?P<u>[^&\"'\s)]+)&(?:amp;)?s=(?P<s>[0-9a-f]+)"
+)
+
+
+def _recovered_urls(html: str) -> list[str | None]:
+    """Recover the original URL behind every sentinel in ``html`` by verifying
+    its HMAC round-trips. A ``None`` entry means a signature failed to validate
+    (the escaping corrupted ``u`` or ``s``)."""
+    return [
+        verify_and_extract(m.group("u"), m.group("s"))
+        for m in _SENTINEL_RE.finditer(html)
+    ]
 
 
 def _recording_rewriter():
@@ -147,7 +171,7 @@ def test_broken_style_block_is_left_unchanged(monkeypatch):
 
 def test_regex_fallback_rewrites_attributes_when_lxml_raises(monkeypatch):
     """If the structured lxml pass raises, the regex safety-net still rewrites
-    ``src=`` / ``background=`` (a rare ``<style>`` url is the accepted residual)."""
+    ``src=`` / ``background=``."""
     def _boom(*_a, **_k):
         raise RuntimeError("lxml exploded")
 
@@ -161,3 +185,84 @@ def test_regex_fallback_rewrites_attributes_when_lxml_raises(monkeypatch):
     assert 'src="PROXY::https://cdn.example.com/logo.png"' in result
     assert 'background="PROXY::https://cdn.example.com/bg.png"' in result
     assert "https://cdn.example.com/logo.png" in calls
+
+
+def test_regex_fallback_also_rewrites_css_url_so_it_never_leaks(monkeypatch):
+    """The regex fallback must ALSO rewrite ``url(...)`` in inline styles /
+    ``<style>``, not just ``src=``/``background=``. Privacy is the invariant:
+    when the structured pass bails, a raw remote ``url()`` surviving into the
+    cached body would be a leak. Better to over-rewrite than to leak."""
+    def _boom(*_a, **_k):
+        raise RuntimeError("lxml exploded")
+
+    monkeypatch.setattr(lxml.html, "fragment_fromstring", _boom)
+    rw, _calls = _recording_rewriter()
+    html = (
+        '<img src="https://cdn.example.com/logo.png">'
+        '<div style="background:url(https://cdn.example.com/bg.png)">x</div>'
+    )
+    result = rewrite_remote_images(html, rw)
+    assert 'src="PROXY::https://cdn.example.com/logo.png"' in result
+    assert "PROXY::https://cdn.example.com/bg.png" in result
+    # No raw remote URL survived the fallback.
+    assert "url(https://cdn.example.com/bg.png)" not in result
+
+
+def test_guard_bails_to_fallback_when_lxml_drops_critical_elements(monkeypatch):
+    """If libxml2 mis-parses the bleach-clean fragment and drops most layout
+    elements, the structured pass must NOT serialise the mangled tree — it bails
+    to the regex fallback, which rewrites the original string without
+    restructuring (no content lost, nothing leaked)."""
+    # Force the critical-element count to collapse, simulating a mis-parse.
+    monkeypatch.setattr(pipeline, "_count_critical_elements", lambda _html, _tree: (10, 0))
+    rw, _calls = _recording_rewriter()
+    html = (
+        '<img src="https://cdn.example.com/logo.png">'
+        '<div style="background:url(https://cdn.example.com/bg.png)">x</div>'
+    )
+    result = rewrite_remote_images(html, rw)
+    # Fell back to regex: attribute AND url() rewritten, original content intact.
+    assert 'src="PROXY::https://cdn.example.com/logo.png"' in result
+    assert "PROXY::https://cdn.example.com/bg.png" in result
+    assert "url(https://cdn.example.com/bg.png)" not in result
+    assert ">x</div>" in result
+
+
+# ── signature round-trips through every surface (query-string URLs) ────
+# These pin the load-bearing property the "PROXY::" tests above cannot: after
+# the real signer runs, the minted sentinel's HMAC must VALIDATE. The ``&`` of a
+# query string is exactly where escaping is most fragile (``<style>`` rawtext vs
+# HTML attribute), and query strings are the common case in newsletter images.
+
+
+def test_signature_round_trips_for_query_string_url_in_img_src():
+    url = "https://cdn.example.com/logo.png?w=600&h=400&v=2"
+    result = rewrite_remote_images(f'<img src="{url}">', build_proxy_sentinel_url)
+    assert _recovered_urls(result) == [url]
+
+
+def test_signature_round_trips_for_query_string_url_in_inline_style():
+    url = "https://cdn.example.com/hero.png?w=600&h=400"
+    html = f'<div style="background-image:url({url})">x</div>'
+    result = rewrite_remote_images(html, build_proxy_sentinel_url)
+    assert _recovered_urls(result) == [url]
+
+
+def test_signature_round_trips_for_query_string_url_in_style_block():
+    url = "https://cdn.example.com/hero.png?w=600&h=400"
+    html = (
+        "<style>@media (min-width:600px){.h{background-image:url(" + url + ")}}</style>"
+        "<div class='h'>x</div>"
+    )
+    result = rewrite_remote_images(html, build_proxy_sentinel_url)
+    assert _recovered_urls(result) == [url]
+
+
+def test_signature_round_trips_for_entity_encoded_query_string_in_attribute():
+    """Post-bleach, the ``&`` in an attribute URL arrives as ``&amp;``. lxml
+    decodes it on read, so the signer sees the raw ``&`` and the recovered URL
+    must be the decoded one."""
+    decoded = "https://cdn.example.com/i.png?a=1&b=2"
+    html = '<img src="https://cdn.example.com/i.png?a=1&amp;b=2">'
+    result = rewrite_remote_images(html, build_proxy_sentinel_url)
+    assert _recovered_urls(result) == [decoded]

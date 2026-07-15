@@ -261,9 +261,9 @@ Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `backgro
 | Aspecto | Valor / regla |
 |---------|---------------|
 | Prefijo centinela en el HTML cacheado | `https://mm-image-proxy.invalid/img?u=<base64url(url)>&s=<firma>`. El host `.invalid` (RFC 6761) **nunca resuelve**: si el frontend no lo reescribe, la imagen simplemente se rompe (fail-closed, sin fuga de IP). |
-| Firma | **HMAC-SHA256** de la URL original, clave `IMAGE_PROXY_SIGNING_KEY` (env). El endpoint la verifica en tiempo constante; firma inválida o ausente → **403**. |
+| Firma | **HMAC-SHA256** de la URL original, clave `IMAGE_PROXY_SIGNING_KEY` (env). El endpoint la verifica en tiempo constante; firma **presente pero inválida** → **403** `image_proxy_forbidden`. Params `u`/`s` **ausentes** → **422** (validación de FastAPI), no 403. |
 | Resolución en el cliente | El frontend cambia el prefijo centinela por la URL absoluta real del proxy (`{apiBase}/image-proxy`), conservando `?u=…&s=…`. |
-| La clave de firma es *load-bearing* | Como `/image-proxy` está **exento del rate limit**, una clave débil/predecible convertiría el endpoint en un relay abierto de imágenes. Un cambio de clave invalida todas las URLs ya firmadas (imágenes rotas hasta que el cuerpo se re-sanee en un fallo de caché). |
+| La clave de firma es *load-bearing* | Como `/image-proxy` está **exento del rate limit**, una clave débil/predecible convertiría el endpoint en un relay abierto de imágenes. **Guarda de arranque:** con `IMAGE_PROXY_REQUIRE_KEY=true` (producción), el backend **rechaza arrancar** si la clave falta o es la de dev. Rotar la clave invalida todas las URLs ya firmadas; los correos abiertos con frecuencia **no** se auto-recuperan (nunca se purgan por inactividad), así que rotar exige `TRUNCATE email_content`. |
 
 ### 10.3 Descarga (fetcher anti-SSRF)
 
@@ -287,7 +287,7 @@ Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `backgro
 |---------|---------------|
 | Tabla / clave | `image_proxy_cache`, keyeada por el **SHA-256 hex de la URL original**. Clave **global** (compartida entre cuentas y usuarios): la misma imagen de CDN referenciada desde muchos correos se descarga del remitente **una sola vez**. |
 | Almacenamiento | Binario inline en `image_bytes` (BYTEA); imágenes acotadas (10 MB) y servidas enteras. |
-| TTL | **30 días deslizantes** desde el último acceso (`last_accessed_at`; cada servida lo refresca, best-effort). **Distinto** del TTL del cuerpo (`email_content`, 7 días — § 9.1); coincide con el de los binarios de adjuntos ([adjuntos.md](adjuntos.md)). |
+| TTL | **30 días deslizantes** desde el último acceso (`last_accessed_at`). El refresco en cada servida está **limitado a un bump por URL cada 24 h** (throttle en memoria) para no abrir una conexión de BD por imagen servida; como el TTL es de 30 días, esa precisión sub-diaria es irrelevante. **Distinto** del TTL del cuerpo (`email_content`, 7 días — § 9.1); coincide con el de los binarios de adjuntos ([adjuntos.md](adjuntos.md)). |
 | Purga | **Manual**: `POST /admin/image-proxy/purge` (cabecera `X-Admin-Token` = env `IMAGE_PROXY_PURGE_TOKEN`). Sin cron/scheduler. Tres estados: env sin definir → **503** `purge_disabled`; token ausente/incorrecto → **401** `invalid_admin_token`; correcto → ejecuta y devuelve `{purged_count, freed_bytes}`. (Mismo modelo que la purga de adjuntos.) |
 
 ### 10.5 Endpoint y caché del navegador
@@ -297,7 +297,7 @@ Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `backgro
 | Endpoint | `GET /image-proxy?u=…&s=…` — **sin cookie de sesión** (el iframe del visor es de origen "null" y la petición es un subrecurso cross-site, así que la cookie nunca viaja; la firma HMAC es la puerta de acceso). |
 | Rate limit | **Exento** del límite global por-IP: un newsletter puede llevar docenas de imágenes, y un bucket por imagen dispararía el límite al abrir un solo correo. La firma + el anti-SSRF acotan el abuso. |
 | Caché del navegador | `Cache-Control: private, max-age=2592000, immutable` (**30 días**; la URL firmada es estable) + `X-Content-Type-Options: nosniff`. |
-| Códigos de estado | **403** firma inválida/ausente (`image_proxy_forbidden`) o destino bloqueado por anti-SSRF (`image_proxy_blocked_target`); **502** fallo de descarga upstream, contenido no-imagen/sobredimensionado o error de lectura de caché (`image_proxy_upstream_error`). Desde un `<img>` el navegador solo distingue 2xx de no-2xx (imagen rota); los códigos importan para logs/tests. |
+| Códigos de estado | **403** firma inválida (`image_proxy_forbidden`) o destino bloqueado por anti-SSRF (`image_proxy_blocked_target`); **422** si faltan los params `u`/`s`; **502** fallo de descarga upstream, contenido no-imagen/sobredimensionado o error de lectura de caché (`image_proxy_upstream_error`). Desde un `<img>` el navegador solo distingue 2xx de no-2xx (imagen rota); los códigos importan para logs/tests. |
 
 ---
 
@@ -310,9 +310,9 @@ Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `backgro
 | **Incrustar partes marcadas inline pero NO referenciadas** por el cuerpo | Por la regla estricta (D-13), si el cuerpo no usa la parte vía `cid:`, se promociona a adjunto descargable en vez de incrustarse en el HTML. |
 | **Proxy de fuentes web remotas** (`@font-face { src: url(https://…) }`) | El proxy solo sirve `image/*`; una fuente proxeada se rompería. Las fuentes remotas se cargan directas, como antes. |
 | **Cierre total de la ventana TOCTOU de DNS** | El anti-SSRF valida el host y luego httpx lo re-resuelve; un DNS con TTL de sub-segundo que pase de IP pública a privada podría colarse. Fijar la conexión a la IP validada queda como endurecimiento futuro (§ 10.3). |
-| **Reescritura garantizada de todas las imágenes remotas en un correo patológico** | Si la pasada estructurada falla y actúa el fallback por regex, un `url(...)` raro podría quedar sin reescribir y cargarse directo del remitente. Siempre cubre `src=` / `background=` (§ 10.1). |
+| **Fidelidad perfecta del cuerpo cuando lxml malinterpreta un fragmento** | Si la pasada estructurada de lxml pierde la mayoría de los elementos de layout (o lanza), se usa un fallback por regex que reescribe `src=` / `background=` **y** todos los `url(...)` remotos sobre la cadena original, sin reestructurar (no se pierde contenido). La **privacidad se preserva** (ninguna URL cruda sobrevive); el coste es que en ese caso raro un `@font-face src` remoto también se proxea y la fuente se rompe. |
 | **Purga del proxy de imágenes por cron o automática** | Solo hay purga manual vía `POST /admin/image-proxy/purge` (igual que los adjuntos). Sin programador en el MVP. |
-| **Descarga asíncrona o paralela del proxy en el servidor** | El endpoint `GET /image-proxy` es **síncrono** por decisión (MVP, bajo riesgo): la aceleración viene de reutilizar conexiones (keep-alive, § 10.3), no de paralelizar la descarga en el servidor. |
+| **Descarga asíncrona o paralela del proxy en el servidor** | El endpoint `GET /image-proxy` es **síncrono** por decisión (MVP): la aceleración viene de reutilizar conexiones (keep-alive, § 10.3), no de paralelizar. Las descargas concurrentes están **acotadas por un semáforo (máx. 8)** para que abrir un correo con muchas imágenes nuevas no agote el threadpool compartido de la app. |
 | **Aislamiento por usuario de las imágenes proxeadas** | La caché del proxy es global (keyeada por hash de URL) para deduplicar y minimizar contactos con el remitente; no se particiona por usuario ni por correo (§ 10.4). |
 | **Persistencia de la caché en memoria del navegador entre sesiones** | La caché en memoria (§ 9.3) es efímera: se pierde al cerrar la pestaña y se descarta tras 30 min sin uso. La persistencia entre sesiones la aporta la caché de la base de datos, no esta capa. |
 | **Render del layout específico de Outlook de escritorio** | Los bloques solo-Outlook se descartan a propósito (duplicarían contenido en un visor no-Outlook). |

@@ -671,6 +671,38 @@ class TestFetchConversation:
             members = client.fetch_conversation("conv1")
         assert {m.provider_message_id for m in members} == {"m1", "m2"}
 
+    def test_skips_draft_members(self):
+        # The mailbox-wide $filter scope includes the Drafts folder (unlike
+        # the sync's folder deltas). A draft reply must NOT surface as a
+        # thread member: the viewer would render it as a received message and
+        # the lazy-sync would persist it into email_metadata, violating the
+        # "drafts never enter email_metadata" invariant.
+        client = _make_authenticated_client()
+        draft = self._conv_message("m-draft", received="2025-06-02T08:00:00Z")
+        draft["isDraft"] = True
+        real = self._conv_message("m-real", received="2025-06-01T08:00:00Z")
+        real["isDraft"] = False
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", return_value={"value": [draft, real]}):
+            members = client.fetch_conversation("conv1")
+        assert [m.provider_message_id for m in members] == ["m-real"]
+
+    def test_selects_is_draft_field(self):
+        # The draft filter reads ``isDraft`` from the payload, so the $select
+        # must request it — dropping it from the select silently disables the
+        # filter (Graph omits unselected fields).
+        client = _make_authenticated_client()
+        captured: dict = {}
+
+        def _capture(method, url, extra_headers=None):
+            captured["url"] = url
+            return {"value": []}
+
+        with patch.object(client, "_resolve_special_folder_ids", return_value={}), \
+             patch.object(client, "_graph_request", side_effect=_capture):
+            client.fetch_conversation("conv1")
+        assert "isDraft" in captured["url"]
+
     def test_empty_value_returns_empty_list(self):
         # A purged/deleted Outlook conversation returns value: [] (not 404) →
         # an empty member list (ConversationOut(messages=[]) at the service).
