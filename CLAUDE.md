@@ -138,4 +138,12 @@
 
   ### 15 Cuentas Propietarias de las Consolas Externas
 
+  @cuentas-de-la-aplicacion.md
+  
   Cuando necesites saber con qué cuenta se administra cada consola o registro externo de la aplicación (el App Registration de Azure para Outlook/login Microsoft, el proyecto de Google Cloud para OAuth de Gmail/login Google, la bóveda de Bitwarden, los perfiles dedicados de Chrome o las credenciales en disco), consulta el fichero local `cuentas-de-la-aplicacion.md` en la raíz del repo (ignorado por git). Ese fichero es la fuente de verdad de qué cuenta posee cada cosa; no adivines la cuenta ni la busques por prueba y error.
+
+  ### 16 Estado Actual del Proyecto y Restricciones Operativas Vigentes
+
+  @estado-actual.md
+
+  El fichero importado arriba recoge el estado operativo vigente del proyecto y las restricciones temporales que **no se derivan del código** — hoy, la **congelación de despliegue a producción mientras dura la verificación OAuth de Google** (no cambiar nombre de app, logo, scopes, dominio autorizado, ni las URLs o el contenido de la home / `/privacy` / `/terms`; única excepción, un hotfix de seguridad o de bug crítico que no toque nada de eso; el desarrollo en local y en ramas no tiene restricción). Claude debe tratar cada restricción de ese fichero como una regla estricta con la misma autoridad que este `CLAUDE.md`, y releerlo antes de cualquier trabajo relacionado con despliegue, dominio, marca o scopes. La restricción se retira cuando el propio fichero lo indique (al recibir la Letter of Validation de Google).
