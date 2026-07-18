@@ -83,5 +83,17 @@ from .busqueda import (
 # Adjuntos: recálculo del flag has_attachments
 from .adjuntos import recompute_has_attachments
 
+# Carpetas (carpetas-y-reglas): materialización, asignación Provider-First,
+# reconciliación de pertenencia y chips
+from .carpetas import (
+    assign_folder_provider_first,
+    authenticate_single_account,
+    enrich_items_with_folders,
+    ensure_folder_materialized,
+    fetch_folder_chips,
+    reconcile_folder_memberships,
+    unassign_folder_provider_first,
+)
+
 # Mapeo de fila a modelo de respuesta
 from .mapeo import row_to_email_metadata_out

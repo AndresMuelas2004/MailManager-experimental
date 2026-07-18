@@ -440,6 +440,59 @@ class RecipientSuggestionsError(ApiError):
 
 
 # ---------------------------------------------------------------------------
+# Folders + internal rules (carpetas-y-reglas).
+# ---------------------------------------------------------------------------
+
+
+class FolderNotFound(ApiError):
+    """Folder does not exist or does not belong to the user (404, D-22: a
+    foreign folder is indistinguishable from a missing one)."""
+    code = "folder_not_found"
+
+
+class FolderNameConflict(ApiError):
+    """A folder with the same name (case-insensitive) already exists for the
+    user (409 — the unique index is the defence, this is the surface)."""
+    code = "folder_name_conflict"
+
+
+class FolderOperationError(ApiError):
+    """Unexpected internal (non-provider) failure during a folder operation.
+
+    Provider label/category failures do NOT reach this — they translate via
+    ``translate_core_error`` to ``ExternalAPIError`` (502). This is the 500
+    fallback for a DB/logic stumble on our side."""
+    code = "folder_operation_error"
+
+
+class RuleNotFound(ApiError):
+    """Rule does not exist or does not belong to the user (404)."""
+    code = "rule_not_found"
+
+
+class RuleValidationError(ApiError):
+    """The rule would end up with no condition after applying a PATCH (422).
+
+    Distinct from the schema-level 422 (``{"detail": [...]}`` from FastAPI):
+    this is a SERVICE re-validation of the MERGED rule, emitted with the
+    project ``{"error": {...}}`` envelope."""
+    code = "rule_validation_error"
+
+
+class RuleOperationError(ApiError):
+    """Unexpected internal (non-provider) failure during a rule operation
+    (CRUD or apply enqueue). Mapped to HTTP 500."""
+    code = "rule_operation_error"
+
+
+class RuleApplyStatusError(ApiError):
+    """Unexpected (non-DB) failure while reading a rule's apply status. Mapped
+    to HTTP 500 — same family as ``BackfillStatusError`` (a read-only status
+    failure has no retry story; a ``DatabaseError`` still translates to 503)."""
+    code = "rule_apply_status_error"
+
+
+# ---------------------------------------------------------------------------
 # Background initial mass backfill.
 # ---------------------------------------------------------------------------
 

@@ -22,6 +22,7 @@ lifespan; failures there are best-effort and never abort app startup.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import threading
 import time
@@ -46,6 +47,7 @@ from api.services.backfill_config import (
     is_backfill_worker_enabled,
 )
 from api.services.services_helpers import (
+    assign_folder_provider_first,
     build_draft_rows,
     build_manager_for_accounts,
     load_wrapped_account_tokens,
@@ -63,6 +65,10 @@ from database import (
     account_store,
     draft_store,
     draft_sync_store,
+    email_metadata_store,
+    folder_store,
+    rule_apply_store,
+    rule_store,
 )
 
 T = TypeVar("T")
@@ -77,6 +83,12 @@ _WAVE_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0, 10.0, 20.0)
 # Provider page-size caps (Gmail messages.list max 500; Graph $top max 1000).
 _GMAIL_PAGE_SIZE = 500
 _OUTLOOK_PAGE_SIZE = 1000
+
+# Rule-apply ("apply to existing") pacing: keyset page of matching messages +
+# a small delay between pages (conservative rhythm, same philosophy as the
+# backfill; the per-message provider clients keep their own retries).
+_RULE_APPLY_PAGE_SIZE = 200
+_RULE_APPLY_PAGE_DELAY_S = 0.3
 
 # Cool-off (seconds) before the reaper revives a failed job — avoids a tight
 # retry loop. Passed as the ``backoff_seconds`` of the reaper query.
@@ -194,6 +206,7 @@ def _dispatcher_loop(stop_event: threading.Event) -> None:
     for reset, label in (
         (account_backfill_store.reset_running_to_pending, "backfill"),
         (draft_sync_store.reset_running_to_pending, "draft-sync"),
+        (rule_apply_store.reset_running_to_pending, "rule-apply"),
     ):
         try:
             reset()
@@ -208,6 +221,7 @@ def _dispatcher_loop(stop_event: threading.Event) -> None:
     pool = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="backfill-job")
     backfill_in_flight: dict[str, Future] = {}
     draft_in_flight: dict[str, Future] = {}
+    rule_apply_in_flight: dict[str, Future] = {}
     try:
         while not stop_event.is_set():
             try:
@@ -217,8 +231,15 @@ def _dispatcher_loop(stop_event: threading.Event) -> None:
                     backfill_in_flight.pop(aid, None)
                 for aid in [a for a, fut in draft_in_flight.items() if fut.done()]:
                     draft_in_flight.pop(aid, None)
+                for rid in [r for r, fut in rule_apply_in_flight.items() if fut.done()]:
+                    rule_apply_in_flight.pop(rid, None)
 
-                free = max_concurrent - len(backfill_in_flight) - len(draft_in_flight)
+                free = (
+                    max_concurrent
+                    - len(backfill_in_flight)
+                    - len(draft_in_flight)
+                    - len(rule_apply_in_flight)
+                )
                 # Draft-sync jobs first: they are quick (seconds), so claiming
                 # them ahead of the hours-long backfill keeps drafts responsive.
                 if free > 0:
@@ -227,6 +248,17 @@ def _dispatcher_loop(stop_event: threading.Event) -> None:
                         if not account_id or account_id in draft_in_flight:
                             continue
                         draft_in_flight[account_id] = pool.submit(_run_draft_sync_job, job, stop_event)
+                        free -= 1
+                        if free <= 0:
+                            break
+                # Rule-apply jobs next: user-initiated "apply to existing", ahead
+                # of the long backfill so it stays responsive.
+                if free > 0:
+                    for job in _claim_rule_apply_jobs(free):
+                        rule_id = str(job.get("rule_id") or "")
+                        if not rule_id or rule_id in rule_apply_in_flight:
+                            continue
+                        rule_apply_in_flight[rule_id] = pool.submit(_run_rule_apply_job, job, stop_event)
                         free -= 1
                         if free <= 0:
                             break
@@ -258,6 +290,7 @@ def _reap_retriable_failed() -> None:
     for store, label in (
         (account_backfill_store, "backfill"),
         (draft_sync_store, "draft-sync"),
+        (rule_apply_store, "rule-apply"),
     ):
         try:
             revived = store.reset_retriable_failed_to_pending(max_attempts, _FAILED_RETRY_BACKOFF_S)
@@ -292,6 +325,17 @@ def _claim_draft_jobs(limit: int) -> list[dict]:
         return []
 
 
+def _claim_rule_apply_jobs(limit: int) -> list[dict]:
+    try:
+        return rule_apply_store.claim_next_batch(limit)
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker: rule-apply claim_next_batch failed (%s): %s",
+            type(exc).__name__, exc, exc_info=exc,
+        )
+        return []
+
+
 def _mark_failed(account_id: str, error: str) -> None:
     try:
         with _gate():
@@ -300,6 +344,17 @@ def _mark_failed(account_id: str, error: str) -> None:
         logger.warning(
             "Backfill worker: mark_failed for %s failed (%s): %s",
             account_id, type(exc).__name__, exc, exc_info=exc,
+        )
+
+
+def _mark_rule_apply_failed(rule_id: str, error: str) -> None:
+    try:
+        with _gate():
+            rule_apply_store.mark_failed(rule_id, error)
+    except Exception as exc:
+        logger.warning(
+            "Backfill worker: rule-apply mark_failed for %s failed (%s): %s",
+            rule_id, type(exc).__name__, exc, exc_info=exc,
         )
 
 
@@ -550,6 +605,195 @@ def _run_draft_sync_job(job: dict, stop_event: threading.Event) -> None:
             account_id, type(exc).__name__, exc, exc_info=exc,
         )
         _mark_draft_failed(account_id, "unexpected")
+
+
+# ---------------------------------------------------------------------------
+# Rule-apply job ("apply to existing") — MULTI-account / MULTI-mailbox / per-rule.
+# Unlike backfill / draft-sync (single account, single provider), an apply spans
+# every Gmail AND Outlook account of the user, so it builds a multi-account
+# manager and routes each matched message to ITS OWN account_label. It must NOT
+# reuse ``_authenticate_job_manager`` / ``_build_auth_context`` (single-mailbox).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_user_account_records(owner_user_id: str) -> list[dict[str, Any]]:
+    """Resolve the FULL account records the user owns.
+
+    ``list_account_ids_by_user`` returns only ids, but the manager + token load
+    need the ``mailbox_id`` / ``provider`` of each — resolved via
+    ``get_by_id_for_user`` (N+1, acceptable off the request hot path)."""
+    try:
+        ids = account_store.list_account_ids_by_user(owner_user_id)
+    except Exception as exc:
+        logger.warning(
+            "Rule apply: failed to list account ids for user %s (%s): %s",
+            owner_user_id, type(exc).__name__, exc, exc_info=exc,
+        )
+        return []
+    records: list[dict[str, Any]] = []
+    for account_id in ids:
+        try:
+            record = account_store.get_by_id_for_user(account_id, owner_user_id)
+        except Exception as exc:
+            logger.warning(
+                "Rule apply: failed to resolve account %s (%s): %s",
+                account_id, type(exc).__name__, exc, exc_info=exc,
+            )
+            continue
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _authenticate_multi_account(
+    records: list[dict[str, Any]],
+) -> tuple[Any, dict[str, str]]:
+    """Build + silently authenticate a MULTI-account manager, each account cebado
+    with its OWN mailbox_id. Returns ``(manager, {account_id: account_label})``.
+
+    Auth failures are per-account and NOT raised: a message on an
+    unauthenticated account fails its own assign (logged + skipped) — the job
+    still processes the healthy accounts. Refreshed tokens are persisted."""
+    auth_payloads: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    label_lookup: dict[str, tuple[str, str, str]] = {}
+    label_by_account: dict[str, str] = {}
+    credentials_cache: dict[str, dict[str, Any]] = {}
+    for record in records:
+        account_id = str(record.get("account_id") or "")
+        mailbox_id = str(record.get("mailbox_id") or "")
+        provider = str(record.get("provider") or "").lower()
+        if not account_id or not mailbox_id or not provider:
+            continue
+        if provider not in credentials_cache:
+            credentials_cache[provider] = load_wrapped_app_credentials(provider)
+        account_label = f"{mailbox_id}__{account_id}"
+        auth_payloads[account_label] = (
+            credentials_cache[provider],
+            load_wrapped_account_tokens(mailbox_id, account_id, provider),
+        )
+        label_lookup[account_label] = (mailbox_id, account_id, provider)
+        label_by_account[account_id] = account_label
+
+    manager = build_manager_for_accounts(records)
+    refreshed = manager.authenticate_all_silent(auth_payloads)
+    if refreshed:
+        _persist_refreshed_tokens(refreshed, label_lookup, fallback=BackfillJobError)
+    return manager, label_by_account
+
+
+def _encode_apply_cursor(received_at: Any, account_id: str, provider_message_id: str) -> str:
+    ts = received_at.isoformat() if hasattr(received_at, "isoformat") else str(received_at)
+    return json.dumps({
+        "received_at": ts,
+        "account_id": account_id,
+        "provider_message_id": provider_message_id,
+    })
+
+
+def _decode_apply_cursor(page_cursor: str | None) -> tuple[Any, str, str] | None:
+    if not page_cursor:
+        return None
+    try:
+        data = json.loads(page_cursor)
+        return (data["received_at"], data["account_id"], data["provider_message_id"])
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
+        # Corrupt checkpoint → restart the scan (assignment is idempotent). This
+        # is the only observability point for a malformed checkpoint, so log the
+        # offending cursor value before discarding it (§9.6, matching every other
+        # swallow in this file).
+        logger.warning(
+            "Rule apply: discarding corrupt page cursor %r; restarting scan (%s).",
+            page_cursor, type(exc).__name__, exc_info=exc,
+        )
+        return None
+
+
+def _run_rule_apply_job(job: dict, stop_event: threading.Event) -> None:
+    """Process one rule's "apply to existing": scan every synced message of the
+    user that matches the rule's condition and assign the target folder
+    Provider-First, resuming from the keyset checkpoint. Never lets an exception
+    escape to tumble the worker."""
+    rule_id = str(job.get("rule_id") or "")
+    owner_user_id = str(job.get("owner_user_id") or "")
+    processed_count = int(job.get("processed_count") or 0)
+    page_cursor = job.get("page_cursor")
+
+    try:
+        rule = rule_store.get(rule_id)
+        if rule is None:
+            _gated_db_write(lambda: rule_apply_store.mark_completed(rule_id), stop_event)
+            return
+        folder = folder_store.get(str(rule["target_folder_id"]))
+        if folder is None:
+            # Folder deleted (its FK cascade would also drop the job, but be safe).
+            _gated_db_write(lambda: rule_apply_store.mark_completed(rule_id), stop_event)
+            return
+        folder_id = str(rule["target_folder_id"])
+        folder_name = str(folder["name"])
+        match_from = rule.get("match_from_email")
+        match_subject = rule.get("match_subject_contains")
+
+        records = _resolve_user_account_records(owner_user_id)
+        if not records:
+            _gated_db_write(lambda: rule_apply_store.mark_completed(rule_id), stop_event)
+            return
+        manager, label_by_account = _authenticate_multi_account(records)
+
+        after_cursor = _decode_apply_cursor(page_cursor)
+        while not stop_event.is_set():
+            rows = email_metadata_store.list_messages_matching_rule(
+                owner_user_id, match_from, match_subject, after_cursor, _RULE_APPLY_PAGE_SIZE,
+            )
+            if not rows:
+                break
+            for row in rows:
+                account_id = str(row["account_id"])
+                mailbox_id = str(row["mailbox_id"])
+                provider_message_id = str(row["provider_message_id"])
+                account_label = label_by_account.get(account_id) or f"{mailbox_id}__{account_id}"
+                try:
+                    assign_folder_provider_first(
+                        manager, account_label, account_id, provider_message_id,
+                        folder_id, folder_name, fallback=BackfillJobError,
+                    )
+                except Exception as exc:
+                    # Per-message best-effort (e.g. a dead-token account) — log and
+                    # keep going so one bad message never fails the whole apply.
+                    # This swallow is the only observability point for the failure
+                    # (nothing is re-raised), so it carries ``exc_info`` (§9.6).
+                    logger.warning(
+                        "Rule apply %s: assign failed for message %s (%s): %s",
+                        rule_id, provider_message_id, type(exc).__name__, exc,
+                        exc_info=exc,
+                    )
+                processed_count += 1
+
+            last = rows[-1]
+            after_cursor = (
+                last["received_at"], str(last["account_id"]), str(last["provider_message_id"]),
+            )
+            cursor_str = _encode_apply_cursor(*after_cursor)
+            _gated_db_write(
+                lambda: rule_apply_store.update_progress(rule_id, processed_count, cursor_str),
+                stop_event,
+            )
+            if len(rows) < _RULE_APPLY_PAGE_SIZE:
+                break
+            stop_event.wait(_RULE_APPLY_PAGE_DELAY_S)
+        else:
+            # Shutdown mid-apply: leave the job 'running'; reset_running_to_pending
+            # recovers it on the next start and it resumes from its checkpoint.
+            logger.info("Rule apply %s paused on shutdown at %d; will resume.", rule_id, processed_count)
+            return
+
+        _gated_db_write(lambda: rule_apply_store.mark_completed(rule_id), stop_event)
+        logger.info("Rule apply %s completed: %d messages processed.", rule_id, processed_count)
+    except Exception as exc:
+        logger.warning(
+            "Rule apply %s failed unexpectedly (%s): %s",
+            rule_id, type(exc).__name__, exc, exc_info=exc,
+        )
+        _mark_rule_apply_failed(rule_id, "unexpected")
 
 
 def _wave_retry_after(exc: Exception) -> float | None:
