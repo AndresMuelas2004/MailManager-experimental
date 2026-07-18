@@ -29,8 +29,11 @@ from database.repositories import draft_sync_repository as draft_sync_repo_modul
 from database.repositories import email_attachment_repository as email_attachment_repo_module
 from database.repositories import email_content_repository as email_content_repo_module
 from database.repositories import email_metadata_repository as email_metadata_repo_module
+from database.repositories import folder_repository as folder_repo_module
 from database.repositories import image_proxy_cache_repository as image_proxy_cache_repo_module
 from database.repositories import mailbox_repository as mailbox_repo_module
+from database.repositories import rule_apply_job_repository as rule_apply_repo_module
+from database.repositories import rule_repository as rule_repo_module
 from database.repositories import session_repository as session_repo_module
 from database.repositories import user_repository as user_repo_module
 from database.repositories import virtual_mailbox_repository as virtual_mailbox_repo_module
@@ -67,6 +70,10 @@ from api.services.drafts_service import (
     gestion as _drafts_gestion,
     sincronizacion as _drafts_sincronizacion,
 )
+# ``services_helpers.carpetas`` binds ``build_manager_for_accounts`` /
+# ``load_wrapped_*`` by name (carpetas-y-reglas), so the per-email folder
+# assign/unassign path executes them there — patch that submodule too (Trap 2).
+from api.services.services_helpers import carpetas as _services_helpers_carpetas
 
 _EMAILS_BUILD_MANAGER_MODULES = (
     _emails_lectura,
@@ -240,6 +247,14 @@ def isolated_db(monkeypatch):
     # the vmbox integration tests leak rows across tests because the
     # repository uses the real pool instead of the per-test transaction.
     monkeypatch.setattr(virtual_mailbox_repo_module.connection, "get_connection", _get_conn)
+    # Folder + rule + rule-apply repositories (carpetas-y-reglas, Trap 1). The
+    # sync path now reconciles folder memberships and evaluates rules on EVERY
+    # sync (folder_store.get_ref_map / rule_store.list_active_by_owner), so these
+    # must use the per-test transaction even for the pre-existing sync tests —
+    # not only the dedicated folders/rules endpoints.
+    monkeypatch.setattr(folder_repo_module.connection, "get_connection", _get_conn)
+    monkeypatch.setattr(rule_repo_module.connection, "get_connection", _get_conn)
+    monkeypatch.setattr(rule_apply_repo_module.connection, "get_connection", _get_conn)
 
     yield conn
 
@@ -296,6 +311,9 @@ def _apply_test_monkeypatches(monkeypatch, build_manager_fn):
     patch_emails_build_manager(monkeypatch, build_manager_fn)
     patch_drafts_build_manager(monkeypatch, build_manager_fn)
     monkeypatch.setattr(attachments_service, "build_manager_for_accounts", build_manager_fn)
+    # Per-email folder assign/unassign authenticates a single account inside
+    # ``services_helpers.carpetas`` (which binds the name itself — Trap 2).
+    monkeypatch.setattr(_services_helpers_carpetas, "build_manager_for_accounts", build_manager_fn)
 
     monkeypatch.setattr(
         services_helpers, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
@@ -320,6 +338,13 @@ def _apply_test_monkeypatches(monkeypatch, build_manager_fn):
     )
     monkeypatch.setattr(
         attachments_service, "load_wrapped_account_tokens",
+        lambda _mb, _acc, _prov: _fake_account_tokens,
+    )
+    monkeypatch.setattr(
+        _services_helpers_carpetas, "load_wrapped_app_credentials", lambda _provider: _fake_app_creds,
+    )
+    monkeypatch.setattr(
+        _services_helpers_carpetas, "load_wrapped_account_tokens",
         lambda _mb, _acc, _prov: _fake_account_tokens,
     )
 
