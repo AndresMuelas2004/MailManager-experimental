@@ -85,7 +85,39 @@ Escribe o actualiza los tests siguiendo exactamente las convenciones documentada
 - Replica el estilo: orden de imports, naming, patrones de parametrize, scopes de fixtures — refleja los tests de alrededor.
 - El código de producción permanece intocado. Si encuentras un bug real, documéntalo en el informe final en lugar de arreglarlo.
 
-## Paso 5 — Informe final
+## Paso 5 — Compuerta de verificación (obligatoria)
+
+Ejecuta las suites que cubren lo que escribiste y, si el diff toca el frontend, **además el chequeo de tipos**.
+
+### 5a — Tests
+
+Backend (desde la raíz del repositorio, con el intérprete del proyecto):
+
+```bash
+.venv/Scripts/python.exe -m pytest backend/tests/unit backend/tests/integration -q
+```
+
+No ejecutes la suite E2E: hace llamadas reales a Gmail/Outlook y solo se lanza cuando el usuario lo pide.
+
+Frontend (desde `frontend/`):
+
+```bash
+npm run test:run
+```
+
+### 5b — Chequeo de tipos del frontend (si el diff toca `frontend/`)
+
+```bash
+npx tsc --project tsconfig.app.json    # desde frontend/, debe salir con código 0
+```
+
+**Por qué este paso existe y no es redundante con 5a:** Vitest transpila con esbuild, que **borra los tipos sin validarlos**. Una suite de frontend entera puede salir verde con el árbol de TypeScript roto — ya ocurrió: la feature de carpetas añadió el campo requerido `folders` a `EmailMetadataOut`, los builders locales de 9 ficheros de test se quedaron sin él, y los tests siguieron pasando mientras `tsc` fallaba. `npm run test:run` **nunca** detecta esto. Este es el único gate del pipeline que lo cubre; no lo elimines.
+
+El fallo típico es exactamente ese: un campo nuevo, requerido en un DTO de producción, ausente en los builders/fixtures locales de los tests. Arréglalo en los ficheros de test — añadiendo el campo **antes** de cualquier `...overrides`, para que un test pueda seguir sobrescribiéndolo.
+
+**No sales de este paso hasta que `tsc` salga con código 0**, con una única excepción: si el error de tipos está en **código de producción**, la restricción dura del agente sigue vigente — no lo toques, recógelo en «Hallazgos en código de producción» y déjalo constar en el informe.
+
+## Paso 6 — Informe final
 
 Emite un resumen estructurado conciso con esta forma exacta:
 
@@ -98,6 +130,7 @@ Emite un resumen estructurado conciso con esta forma exacta:
 - Pasados: <N>
 - Fallidos: <N>  (lista los fallos y motivos, si los hay)
 - Saltados: <N> (lista motivos)
+- Chequeo de tipos del frontend: <código 0 | no aplica, el diff no toca frontend/ | FALLA — pega los errores de tsc y explica por qué no se pudieron arreglar>
 
 ## Hallazgos en código de producción (NO arreglados por este agente)
 - <descripción de cualquier bug o inconsistencia observada al escribir los tests>
