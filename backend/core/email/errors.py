@@ -103,6 +103,27 @@ class EmailExternalAPIError(EmailError):
     default_message = "External API call failed."
 
 
+class LabelOperationError(EmailExternalAPIError):
+    """Gmail user-label CRUD / apply failure (folders, carpetas-y-reglas).
+
+    Subclass of :py:class:`EmailExternalAPIError` so it inherits the existing
+    ``EmailExternalAPIError -> ExternalAPIError`` (HTTP 502) translation without
+    touching ``_CORE_TO_API_MAP``; the dedicated name only sharpens diagnostics.
+    """
+    code = "email_label_operation_error"
+    default_message = "Gmail label operation failed."
+
+
+class CategoryOperationError(EmailExternalAPIError):
+    """Outlook category read-modify-write failure (folders, carpetas-y-reglas).
+
+    Subclass of :py:class:`EmailExternalAPIError` (HTTP 502) for the same reason
+    as :py:class:`LabelOperationError`.
+    """
+    code = "email_category_operation_error"
+    default_message = "Outlook category operation failed."
+
+
 class EmailAttachmentNotFound(EmailError):
     """Provider returned 404/410 for an attachment fetch — D-17."""
     code = "email_attachment_not_found"

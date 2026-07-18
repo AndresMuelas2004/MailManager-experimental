@@ -13,6 +13,7 @@ from .borradores import GmailBorradoresMixin
 from .buzones import GmailBuzonesMixin
 from .contenido import GmailContenidoMixin
 from .envio import GmailEnvioMixin
+from .etiquetas import GmailEtiquetasMixin
 from .sincronizacion import GmailSincronizacionMixin
 
 
@@ -22,6 +23,7 @@ class GmailClient(
     GmailEnvioMixin,
     GmailBorradoresMixin,
     GmailBuzonesMixin,
+    GmailEtiquetasMixin,
     GmailContenidoMixin,
     EmailClient,
 ):

@@ -27,6 +27,7 @@ from core.email.errors import (
     CoreError,
     EmailAccountNotFoundError,
     EmailAccountRecordError,
+    CategoryOperationError,
     EmailAttachmentBlockedByProvider,
     EmailAttachmentDownloadFailed,
     EmailAttachmentNotFound,
@@ -48,6 +49,7 @@ from core.email.errors import (
     EmailRecipientsMissingError,
     EmailRefreshFailedError,
     EmailReplyContextFetchError,
+    LabelOperationError,
 )
 from core.email.helpers import (
     GmailSendStrategy,
@@ -79,6 +81,7 @@ __all__ = [
     "AttachmentUploadResult",
     "BackfillPage",
     "BLOCKED_EXTENSIONS",
+    "CategoryOperationError",
     "ConversationMessage",
     "CoreError",
     "DraftAttachmentInput",
@@ -103,6 +106,7 @@ __all__ = [
     "EmailManager",
     "EmailMetadata",
     "FavoriteCandidate",
+    "LabelOperationError",
     "LabelUpdate",
     "SpamMoveResult",
     "EmailMissingAppCredentialsError",

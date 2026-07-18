@@ -509,6 +509,104 @@ class EmailManager:
                 self._last_errors[label] = exc
         return results
 
+    # ------------------------------------------------------------------
+    # Folders (Gmail user labels / Outlook categories) — carpetas-y-reglas.
+    # Provider-routed by client type: Gmail uses opaque label ids, Outlook
+    # uses the category NAME as its provider_ref (== the folder name).
+    # ------------------------------------------------------------------
+
+    def ensure_folder_ref(self, account_label: str, name: str) -> str:
+        """Materialise a folder in an account and return its provider_ref.
+
+        Gmail creates/adopts a user label and returns its opaque id; Outlook has
+        no master list to create — the category NAME is the ref, returned as-is
+        (adoption is automatic: the same name is the same category).
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            if isinstance(client, GmailClient):
+                return client.ensure_user_label(name)
+            return name
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected ensure_folder_ref error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def assign_folder_to_message(
+        self, account_label: str, message_id: str, provider_ref: str, name: str,
+    ) -> str:
+        """Apply a folder's label/category to a message. Returns the (possibly
+        rewritten, Outlook) message id; Gmail keeps the same id."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            if isinstance(client, GmailClient):
+                client.add_label_to_messages(provider_ref, [message_id])
+                return message_id
+            return client.add_category_to_message(message_id, name)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected assign_folder_to_message error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def unassign_folder_from_message(
+        self, account_label: str, message_id: str, provider_ref: str, name: str,
+    ) -> str:
+        """Remove a folder's label/category from a message."""
+        client = self._get_client_or_raise(account_label)
+        try:
+            if isinstance(client, GmailClient):
+                client.remove_label_from_messages(provider_ref, [message_id])
+                return message_id
+            return client.remove_category_from_message(message_id, name)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected unassign_folder_from_message error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def rename_folder_label(
+        self, account_label: str, provider_ref: str, new_name: str,
+    ) -> None:
+        """Reflect a folder rename at the provider LABEL level.
+
+        Gmail patches the user label in place (one call). Outlook is a NO-OP here
+        — its category displayName is immutable, so a rename is a per-member
+        re-tag driven by the service (unassign old name + assign new name).
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            if isinstance(client, GmailClient):
+                client.rename_user_label(provider_ref, new_name)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected rename_folder_label error ({type(exc).__name__}): {exc}"
+            ) from exc
+
+    def delete_folder_label(self, account_label: str, provider_ref: str) -> None:
+        """Reflect a folder delete at the provider LABEL level.
+
+        Gmail deletes the user label (which removes it from every message).
+        Outlook is a NO-OP here — the service removes the category from each
+        member (there is no deletable label object).
+        """
+        client = self._get_client_or_raise(account_label)
+        try:
+            if isinstance(client, GmailClient):
+                client.delete_user_label(provider_ref)
+        except CoreError:
+            raise
+        except Exception as exc:
+            raise EmailExternalAPIError(
+                f"Unexpected delete_folder_label error ({type(exc).__name__}): {exc}"
+            ) from exc
+
     def move_to_spam(
         self,
         account_label: str,

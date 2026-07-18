@@ -40,6 +40,14 @@ class EmailMetadata:
     to_email: str = ""
     to_name: str = ""
     account_id: str = ""  # Stamped by the service layer before persistence
+    # Raw provider membership labels PRESENT on the message: Gmail's raw
+    # ``labelIds`` (opaque user-label ids + system ids) / Outlook's ``categories``
+    # (display-name strings). TRANSIENT — it feeds the folder-membership
+    # reconciliation (email_folder_members), NOT a column of email_metadata; it
+    # is NOT part of the persist_email_metadata_batch upsert tuple. The service
+    # crosses it against ``folder_account_links`` so only MISSELA-managed
+    # folders are reconciled (system/foreign labels simply do not match).
+    provider_labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -57,6 +65,12 @@ class LabelUpdate:
     is_read: bool
     box: str  # "ALL_MAIL" | "SENT" | "SPAM" | "TRASH" | "DELETED" | "ARCHIVE"
     is_favorite: bool | None = None
+    # Raw provider membership labels on an out-of-band label change (folder
+    # reconciliation, same role as ``is_favorite`` above). ``None`` means "do
+    # not touch memberships" (Outlook partial delta with no ``categories``);
+    # Gmail's ``format=minimal`` always returns the full ``labelIds`` so it ships
+    # a concrete list (``[]`` = "no folders now, drop managed memberships").
+    provider_labels: list[str] | None = None
 
 
 @dataclass
