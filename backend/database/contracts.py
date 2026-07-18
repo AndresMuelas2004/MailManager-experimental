@@ -346,6 +346,7 @@ class EmailMetadataStore(ABC):
         operator_clauses: list[tuple[str, Any]] | None = None,
         sort: str | None = None,
         sort_dir: str | None = None,
+        folder_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List email metadata for the given accounts, optionally filtered.
 
@@ -410,6 +411,12 @@ class EmailMetadataStore(ABC):
         (``account_id, provider_message_id``) is always appended so OFFSET
         paging stays stable. Only the SELECT carries an ``ORDER BY``, so
         ``count_filtered`` takes NO equivalent parameters.
+
+        ``folder_id``: when set, restrict the listing to messages that belong
+        to that folder (an ``EXISTS`` against ``email_folder_members``). Only
+        the folder email listing uses it (always with
+        ``distinct_provider_message_id`` + ``group_by_thread``); ``None`` for
+        every other caller leaves the SQL unchanged.
         """
         raise NotImplementedError
 
@@ -426,6 +433,7 @@ class EmailMetadataStore(ABC):
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
         operator_clauses: list[tuple[str, Any]] | None = None,
+        folder_id: str | None = None,
     ) -> int:
         """Count the email metadata rows that match ``list_filtered``.
 
@@ -621,6 +629,31 @@ class EmailMetadataStore(ABC):
         (most-recent non-empty name wins for ``name``), capped at
         ``limit``. Returns ``[]`` without touching the database when
         ``account_ids`` is empty.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_messages_matching_rule(
+        self,
+        owner_user_id: str,
+        from_email: str | None,
+        subject_contains: str | None,
+        after_cursor: tuple[Any, str, str] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Page through the messages that satisfy a rule's condition.
+
+        Backs the "apply to existing" worker (carpetas-y-reglas). Scoped to the
+        user via the ``email_metadata -> accounts -> mailboxes`` JOIN and
+        excludes ``box = 'DELETED'``. ``from_email`` (exact, case-insensitive)
+        and ``subject_contains`` (accent-/case-insensitive substring) are
+        AND-combined; each may be ``None`` (at least one is guaranteed by the
+        rule CHECK). Returns rows carrying ``provider_message_id`` / ``account_id``
+        / ``mailbox_id`` / ``provider`` / ``received_at`` so the worker can route
+        the provider call. Keyset paginated by ``(received_at, account_id,
+        provider_message_id)`` ASC — pass the last row's triple as
+        ``after_cursor`` for the next page (``None`` for the first). Malformed
+        UUIDs collapse to ``[]``, consistent with the rest of this store.
         """
         raise NotImplementedError
 
@@ -1026,4 +1059,219 @@ class SessionStore(ABC):
 
     @abstractmethod
     def delete_expired(self) -> None:
+        raise NotImplementedError
+
+
+class FolderStore(ABC):
+    """Contract for user folders + their membership (carpetas-y-reglas).
+
+    Owns the three folder tables: ``folders`` (the user-owned label),
+    ``folder_account_links`` (per-account provider materialisation), and
+    ``email_folder_members`` (the multi-membership). The email listing of a
+    folder is NOT here — it reuses ``EmailMetadataStore.list_filtered`` with
+    ``folder_id`` (the DB layer must not grow a second email-listing path).
+    """
+
+    # -- folders CRUD -------------------------------------------------------
+
+    @abstractmethod
+    def create(self, folder: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, folder_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_by_owner(self, owner_user_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, folder: dict[str, Any]) -> dict[str, Any] | None:
+        """Rename / recolour (full-field replace). ``None`` when no row matched
+        (deleted between the service pre-check and the UPDATE → 404)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, folder_id: str) -> bool:
+        """Delete a folder. ``True`` iff a row was removed (``False`` → 404)."""
+        raise NotImplementedError
+
+    # -- folder_account_links (lazy provider materialisation) ---------------
+
+    @abstractmethod
+    def get_link(self, folder_id: str, account_id: str) -> dict[str, Any] | None:
+        """Return the ``{folder_id, account_id, provider_ref}`` link, or ``None``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert_link(self, folder_id: str, account_id: str, provider_ref: str) -> None:
+        """Materialise a folder in an account (idempotent; keeps an existing ref)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_link_ref(self, folder_id: str, account_id: str, provider_ref: str) -> None:
+        """Re-point a link's provider_ref (Outlook category rename)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_links_by_folder(self, folder_id: str) -> list[dict[str, Any]]:
+        """Every account materialisation of a folder (drives rename/delete reflection)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_ref_map(self, account_id: str) -> dict[str, str]:
+        """Return the ``{provider_ref: folder_id}`` map of an account.
+
+        Empty when the account has no materialised folder — the sync
+        reconciliation short-circuits on it (the common case, and always so
+        during a new account's backfill).
+        """
+        raise NotImplementedError
+
+    # -- email_folder_members (the membership) ------------------------------
+
+    @abstractmethod
+    def add_member(self, provider_message_id: str, account_id: str, folder_id: str) -> None:
+        """Add a membership (idempotent — ``ON CONFLICT DO NOTHING``)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def remove_member(self, provider_message_id: str, account_id: str, folder_id: str) -> bool:
+        """Remove a membership. ``True`` iff a row was removed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reconcile_memberships(
+        self,
+        account_id: str,
+        present: list[tuple[str, str]],
+        seen_message_ids: list[str],
+        managed_folder_ids: list[str],
+    ) -> None:
+        """Make ``email_folder_members`` match the provider's labels/categories.
+
+        ``present`` is the ``(provider_message_id, folder_id)`` pairs the
+        provider reports for the SEEN messages (already crossed against
+        ``get_ref_map``), ``seen_message_ids`` scopes the delete to the messages
+        this sync observed, and ``managed_folder_ids`` restricts it to folders
+        MISSELA manages for this account. Upserts the present pairs and deletes
+        any managed membership of a seen message that is no longer present —
+        never touching unmanaged labels/categories nor unseen messages
+        (decision 12/14).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_member_message_ids(self, folder_id: str, account_id: str) -> list[str]:
+        """Member ``provider_message_id``s of a folder in one account.
+
+        Drives the Outlook rename / delete reflection (its category displayName
+        is immutable, so a rename/delete re-tags each member). Malformed UUIDs
+        collapse to ``[]``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_folders_for_messages(
+        self, pairs: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        """Folder chips for a page of messages, in one round trip.
+
+        ``pairs`` is ``(provider_message_id, account_id)``; returns one row per
+        ``(message, folder)`` with ``folder_id`` / ``name`` / ``color``. Returns
+        ``[]`` without touching the DB when ``pairs`` is empty.
+        """
+        raise NotImplementedError
+
+
+class RuleStore(ABC):
+    """Contract for the internal rule engine (carpetas-y-reglas)."""
+
+    @abstractmethod
+    def create(self, rule: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, rule_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_by_owner(self, owner_user_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_active_by_owner(self, owner_user_id: str) -> list[dict[str, Any]]:
+        """Only ``is_enabled`` rules — the sync-time evaluation loads these."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, rule: dict[str, Any]) -> dict[str, Any] | None:
+        """Full-field replace. ``None`` when no row matched (race → 404)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, rule_id: str) -> bool:
+        """Delete a rule. ``True`` iff a row was removed (``False`` → 404)."""
+        raise NotImplementedError
+
+
+class RuleApplyJobStore(ABC):
+    """Contract for the "apply to existing" durable queue (carpetas-y-reglas).
+
+    One row per RULE in ``rule_apply_jobs`` — a resumable checkpoint (``page_cursor``
+    + ``processed_count``) driven by the SAME in-process worker as the backfill /
+    draft-sync queues, but keyed by rule (an apply spans every account of the
+    user). Clone of ``AccountBackfillStore`` minus the account-shape columns.
+    """
+
+    @abstractmethod
+    def enqueue(self, rule_id: str, owner_user_id: str) -> None:
+        """Enqueue (or restart) an apply.
+
+        UNCONDITIONAL like the draft-sync enqueue: every apply click resets the
+        row to ``pending`` and clears the checkpoint so a full re-scan runs.
+        Idempotent (assignment is idempotent) and INDEPENDENT of the worker flag
+        (no fallback path — the job waits until the worker runs).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, rule_id: str) -> dict[str, Any] | None:
+        """Return the job row for the apply-status endpoint, or ``None``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def claim_next_batch(self, limit: int) -> list[dict[str, Any]]:
+        """Atomically claim up to ``limit`` pending jobs, marking them running."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_progress(
+        self, rule_id: str, processed_count: int, page_cursor: str | None,
+    ) -> None:
+        """Checkpoint the scan: processed count + next keyset cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_completed(self, rule_id: str) -> None:
+        """Mark the job ``completed`` and clear ``page_cursor``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_failed(self, rule_id: str, error: str) -> None:
+        """Mark the job ``failed``, store ``error`` and increment ``attempts``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_running_to_pending(self) -> None:
+        """Put every ``running`` job back to ``pending`` (startup recovery)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_retriable_failed_to_pending(
+        self, max_attempts: int, backoff_seconds: int,
+    ) -> int:
+        """Revive ``failed`` jobs with ``attempts < max_attempts`` (after the
+        cool-off) back to ``pending``. Returns the number revived."""
         raise NotImplementedError
