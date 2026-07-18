@@ -144,4 +144,32 @@ describe('toUiError', () => {
       message: 'Demasiadas peticiones. Espera un momento e inténtalo de nuevo.',
     });
   });
+
+  it('localizes the folder_not_found code (never leaks the raw backend text)', () => {
+    const ui = toUiError(new ApiError("Folder 'abc' not found.", 'folder_not_found', 404));
+    expect(ui).toEqual({
+      code: 'folder_not_found',
+      message: 'Esta carpeta no existe o ya no está disponible.',
+    });
+  });
+
+  it('localizes the folder_name_conflict code', () => {
+    const ui = toUiError(
+      new ApiError("A folder named 'x' already exists.", 'folder_name_conflict', 409, {
+        name: 'x',
+      }),
+    );
+    expect(ui).toEqual({
+      code: 'folder_name_conflict',
+      message: 'Ya tienes una carpeta con ese nombre.',
+    });
+  });
+
+  it('localizes the rule_not_found code', () => {
+    const ui = toUiError(new ApiError("Rule 'r' not found.", 'rule_not_found', 404));
+    expect(ui).toEqual({
+      code: 'rule_not_found',
+      message: 'Esta regla no existe o ya no está disponible.',
+    });
+  });
 });

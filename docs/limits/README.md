@@ -25,6 +25,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 ### Organizar
 - [acciones-sobre-correos.md](acciones-sobre-correos.md) — Tope de selección, lotes, política de reintentos (incluido archivar/desarchivar), códigos de error y el alcance exacto del borrado (no-op).
 - [bandejas-ficticias.md](bandejas-ficticias.md) — Criterios de filtro admitidos, validaciones y límites de la vista virtual.
+- [carpetas-y-reglas.md](carpetas-y-reglas.md) — Longitudes de carpeta y de regla, condiciones admitidas, topes del listado y del "aplicar a los existentes", endpoints, códigos de error, permisos reutilizados y qué NO soporta.
 
 ### Escribir y enviar
 - [composicion-y-envio.md](composicion-y-envio.md) — Validaciones mínimas del envío directo, tope de tamaño del cuerpo, allowlist del saneador de texto enriquecido, reintentos y códigos de error.

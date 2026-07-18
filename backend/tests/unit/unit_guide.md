@@ -145,6 +145,12 @@ El parseo de cada env `BACKFILL_*` NUNCA lanza: un valor inválido o en blanco d
 
 El único lookup tiene su par `DatabaseError → ApiError traducido (503)` / `RuntimeError → EmailFetchError`.
 
+### `emails_service/test_sincronizacion.py` — stub de `reconcile_folder_memberships` + dos background tasks
+
+`sync_email_metadata` llama a `reconcile_folder_memberships` (§5.1) DENTRO del bucle por-cuenta, incondicionalmente y tras persistir. `_patch_common` DEBE stubearlo, con una trampa **asimétrica a la guarda de backfill de arriba**: el helper de reconciliación **traga toda excepción**, así que un test sin stub NO falla ruidosamente — intenta en silencio una conexión real a BD (rompe el aislamiento no-BD sin ninguna aserción roja que lo delate), a diferencia de la guarda de backfill que SÍ lanza. Los recorder tests sobreescriben el stub para asertar una llamada por cuenta sincronizada (saltada en las fallidas, que hacen `continue` antes de persistir).
+
+Con `background_tasks` inyectado el servicio agenda **dos** tareas post-respuesta, aseveradas por posición: `added[0]` = `_run_content_prefetch_and_purge`, `added[1]` = `run_rule_evaluation` (§5.2, sobre los upserts de este sync). Ambas gateadas por el MISMO `background_tasks`, así que los llamadores directos / tests que lo omiten se saltan ambas; añadir una tercera o reordenarlas rompe las aserciones posicionales.
+
 ### `test_accounts_service.py` — el enqueue de backfill es best-effort/soft-fail
 
 `_patch_connect_deps` stubea `enqueue_backfill_on_connect` como no-op (el real alcanzaría `account_store.get_sync_cursor`, sacando de la BD a los tests de connect no relacionados). El contrato portante: el encolado ocurre TRAS persistir los tokens y es best-effort — un fallo del enqueue NO voltea el `ok:True` de `complete_account_connect` (los tokens ya están; el usuario reconecta y revive el job). Este es el swallow del que habla `test_backfill_service.py`: la capa de servicio de backfill lanza tipado, y este llamador lo traga.

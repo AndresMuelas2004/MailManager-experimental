@@ -18,6 +18,7 @@ from api.schemas.email import (
     UnreadCountOut,
 )
 from api.services.services_helpers import (
+    enrich_items_with_folders,
     ensure_mailbox_access,
     parse_search_query,
     row_to_email_metadata_out,
@@ -201,8 +202,10 @@ def list_emails(
             "Failed to count emails while paginating the mailbox listing."
         ) from exc
 
+    items = [row_to_email_metadata_out(row) for row in rows]
+    enrich_items_with_folders(items)  # folder chips (best-effort, single batch)
     return EmailPageOut(
-        items=[row_to_email_metadata_out(row) for row in rows],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,

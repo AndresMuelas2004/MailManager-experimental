@@ -28,6 +28,12 @@ const VirtualMailboxesPage = lazy(() => import('../../features/emails/pages/Virt
 const VirtualMailboxViewPage = lazy(
   () => import('../../features/emails/pages/VirtualMailboxViewPage'),
 );
+const FoldersPage = lazy(() => import('../../features/folders/pages/FoldersPage'));
+// The folder VIEW lives in features/emails (it reuses EmailTable — a feature
+// cannot import another feature's components); the folder CRUD + rules stay in
+// features/folders.
+const FolderViewPage = lazy(() => import('../../features/emails/pages/FolderViewPage'));
+const RulesSettingsPage = lazy(() => import('../../features/folders/pages/RulesSettingsPage'));
 const SettingsLayoutPage = lazy(() => import('../../features/settings/pages/SettingsLayoutPage'));
 const SettingsAccountPage = lazy(() => import('../../features/settings/pages/SettingsAccountPage'));
 const PreferencesPage = lazy(() => import('../../features/settings/pages/PreferencesPage'));
@@ -78,6 +84,8 @@ const router = createBrowserRouter([
                         path: 'virtual-mailboxes/:virtualMailboxId',
                         element: <VirtualMailboxViewPage />,
                       },
+                      { path: 'folders', element: <FoldersPage /> },
+                      { path: 'folders/:folderId', element: <FolderViewPage /> },
                       {
                         path: 'account/:accountId',
                         children: [
@@ -105,6 +113,7 @@ const router = createBrowserRouter([
                       { path: 'accounts', element: <ConnectedAccountsPage /> },
                       { path: 'signature', element: <SignatureSettingsPage /> },
                       { path: 'mailboxes', element: <MailboxesSettingsPage /> },
+                      { path: 'rules', element: <RulesSettingsPage /> },
                       { path: 'preferences', element: <PreferencesPage /> },
                       { path: 'data', element: <DataSyncPage /> },
                       { path: 'about', element: <AboutPage /> },

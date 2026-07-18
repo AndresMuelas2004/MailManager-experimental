@@ -969,6 +969,7 @@ function emailMetadataFixture(providerMessageId = 'pmid_1', accountId = 'acc_1')
     is_favorite: false,
     has_attachments: false,
     thread_message_count: 1,
+    folders: [],
   };
 }
 

@@ -13,8 +13,10 @@ import Spinner from '../../../components/common/Spinner';
 import Checkbox from '../../../components/common/Checkbox';
 import FavoriteButton from './FavoriteButton';
 import EmailPagination from './EmailPagination';
+import FolderChips from '../../../components/ui/FolderChips';
+import FolderAssignMenu from '../../../components/ui/FolderAssignMenu';
 import type { HeaderCheckboxState } from '../../../lib/hooks/useSelection';
-import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
+import type { EmailMetadataOut, AccountOut, FolderRef } from '../../../api/types/dto';
 
 type EmailTableView = 'individual' | 'unified' | 'mixed';
 
@@ -45,6 +47,15 @@ type Props = {
   // button are disabled simply by the page not passing their props. Favoritos
   // leaves this false/absent and keeps the classic behaviour.
   conversationMode?: boolean;
+  // Folder chips + assign menu (optional — omitting them leaves existing mounts
+  // untouched; chips still render from ``email.folders`` regardless). ``folders``
+  // is the full catalogue for the menu; the callbacks route by the row's own
+  // ``email`` (its ``mailbox_id`` + ``account_id``). The menu renders only when
+  // ``folders`` AND both callbacks are supplied.
+  folders?: FolderRef[];
+  onAssignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  onUnassignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  isFolderBusy?: (email: EmailMetadataOut) => boolean;
   // Pagination is optional: when the four props below are provided the
   // header bar shows the "from–to de total" range on the left and the
   // page controls on the right. Omitting them keeps the legacy
@@ -104,6 +115,10 @@ export default function EmailTable({
   bulkBar,
   emptyMessage,
   conversationMode = false,
+  folders,
+  onAssignFolder,
+  onUnassignFolder,
+  isFolderBusy,
   page,
   pageSize,
   total,
@@ -113,6 +128,9 @@ export default function EmailTable({
   const { t } = useTranslation();
   const accountsById = useMemo(() => buildAccountMap(accounts), [accounts]);
   const { showTo, showFrom } = resolveColumnLayout(view, isSent);
+  // The per-row assign menu needs the catalogue AND both callbacks; without all
+  // three we render chips only (read-only membership).
+  const folderMenuEnabled = Boolean(folders && onAssignFolder && onUnassignFolder);
 
   if (loading) {
     return (
@@ -192,6 +210,9 @@ export default function EmailTable({
           {showFrom && <div className="w-[170px]">{t('emailTable.colFrom')}</div>}
           <div className="flex-1">{t('emailTable.colSubject')}</div>
           <div className="w-16 text-right">{t('emailTable.colDate')}</div>
+          {/* Trailing spacer keeps the header columns aligned with the body
+              rows when the folder-assign menu adds a trailing action cell. */}
+          {folderMenuEnabled && <div className="w-8" aria-hidden />}
         </div>
       </div>
 
@@ -329,10 +350,33 @@ export default function EmailTable({
                     ? normaliseSubject(email.subject)
                     : (email.subject ?? t('common.noSubject'))}
                 </span>
+                {/* Folder membership tags next to the subject (desktop only —
+                    the mobile row is cramped; the assign menu still works
+                    there). The wrapper owns the visibility toggle so it never
+                    fights FolderChips' own ``flex`` base class. ``?? []`` guards
+                    against email objects that bypass the Zod ``.default([])``
+                    (hand-built test fixtures). */}
+                {(email.folders ?? []).length > 0 && (
+                  <span className="hidden shrink-0 lg:flex">
+                    <FolderChips folders={email.folders ?? []} />
+                  </span>
+                )}
               </div>
               <div className={`w-16 shrink-0 text-right text-xs ${weight} text-zinc-900`}>
                 {formatDate(email.received_at)}
               </div>
+              {folderMenuEnabled && (
+                <div className="shrink-0">
+                  <FolderAssignMenu
+                    compact
+                    folders={folders!}
+                    assignedIds={new Set((email.folders ?? []).map((f) => f.folder_id))}
+                    onAssign={(folderId) => onAssignFolder!(email, folderId)}
+                    onUnassign={(folderId) => onUnassignFolder!(email, folderId)}
+                    busy={isFolderBusy?.(email) ?? false}
+                  />
+                </div>
+              )}
             </div>
           );
         })

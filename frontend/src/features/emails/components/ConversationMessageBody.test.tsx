@@ -52,6 +52,7 @@ function makeMessage(overrides: Partial<EmailMetadataOut> = {}): EmailMetadataOu
     has_attachments: false,
     is_favorite: false,
     thread_message_count: 1,
+    folders: [],
     ...overrides,
   };
 }

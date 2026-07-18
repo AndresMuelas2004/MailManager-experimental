@@ -87,6 +87,13 @@ def _patch_common(monkeypatch, *, fake_client_kwargs=None):
     monkeypatch.setattr(sincronizacion, "update_email_metadata_labels_batch", lambda _aid, _lu, **_kw: len(_lu))
     monkeypatch.setattr(sincronizacion, "load_sync_cursors", lambda _lookup, **_kw: {})
     monkeypatch.setattr(sincronizacion, "update_sync_cursor", lambda _mb, _acc, _cur, **_kw: None)
+    # ``sync_email_metadata`` calls ``reconcile_folder_memberships`` (§5.1) inside
+    # the per-account loop; its real body opens a DB connection via
+    # ``folder_store.get_ref_map``. Stub it so the unit tests stay DB-free. Trap:
+    # UNLIKE the backfill guard (which RAISES on a missing stub), this helper
+    # SWALLOWS its own errors — an un-stubbed test would NOT fail loudly, it would
+    # silently attempt a real connection. The recorder tests override this stub.
+    monkeypatch.setattr(sincronizacion, "reconcile_folder_memberships", lambda *_a, **_kw: None)
 
 
 class TestSyncEmailMetadata:
@@ -119,7 +126,9 @@ class TestSyncEmailMetadata:
     def test_background_tasks_schedules_prefetch_for_synced_accounts(self, monkeypatch):
         """When the router injects ``BackgroundTasks``, the service registers the
         prefetch/purge job with the account_label + account_id of every synced
-        account (``label`` is already the account_label — never reconstructed)."""
+        account (``label`` is already the account_label — never reconstructed),
+        AND the sync-time rule evaluation (carpetas-y-reglas §5.2) — both gated
+        by the same injected ``background_tasks``."""
         _patch_common(monkeypatch)
         added = []
 
@@ -131,13 +140,65 @@ class TestSyncEmailMetadata:
         sincronizacion.sync_email_metadata(
             _MAILBOX_ID, _USER_ID, background_tasks=bt,
         )
-        assert len(added) == 1
+        # Two post-response tasks now: the content prefetch/purge, then the rule
+        # evaluation over this sync's new upserts.
+        assert len(added) == 2
         fn, args = added[0]
         assert fn is sincronizacion._run_content_prefetch_and_purge
         # args = (manager, prefetch_targets, synced_account_ids)
         _manager, targets, account_ids = args
         assert targets == [(_LABEL, _ACCOUNT_ID)]
         assert account_ids == [_ACCOUNT_ID]
+
+        rule_fn, rule_args = added[1]
+        assert rule_fn is sincronizacion.run_rule_evaluation
+        # args = (manager, user_id, rule_eval_targets) where each target is
+        # (account_label, account_id, [new upserts]).
+        _rmanager, rule_user_id, rule_targets = rule_args
+        assert rule_user_id == _USER_ID
+        assert rule_targets[0][0] == _LABEL
+        assert rule_targets[0][1] == _ACCOUNT_ID
+        assert isinstance(rule_targets[0][2], list)
+
+    def test_reconcile_folder_memberships_called_per_synced_account(self, monkeypatch):
+        """``sync_email_metadata`` reconciles folder memberships once per synced
+        account (§5.1), inside the per-account loop after persistence. Overrides
+        the ``_patch_common`` stub to assert the wiring: one call with the
+        account_id plus this sync's upserts / label_updates."""
+        _patch_common(monkeypatch)
+        calls = []
+        monkeypatch.setattr(
+            sincronizacion, "reconcile_folder_memberships",
+            lambda aid, upserts, label_updates: calls.append((aid, upserts, label_updates)),
+        )
+        result = sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+        assert result.total_synced == 1
+        assert len(calls) == 1
+        aid, upserts, label_updates = calls[0]
+        assert aid == _ACCOUNT_ID
+        assert isinstance(upserts, list)
+        assert isinstance(label_updates, list)
+
+    def test_reconcile_folder_memberships_skips_failed_account(self, monkeypatch):
+        """A per-account failure short-circuits before the reconciliation call
+        (§5.1 runs after persistence, which the failed account never reaches), so
+        reconcile fires only for the healthy account of a partial success."""
+        _patch_common(monkeypatch)
+        monkeypatch.setattr(
+            sincronizacion.account_store, "list_by_mailbox",
+            lambda _mb: [_fake_account(_ACCOUNT_ID), _fake_account(_ACCOUNT_ID_2)],
+        )
+        monkeypatch.setattr(
+            sincronizacion, "build_manager_for_accounts",
+            self._partial_builder(_ACCOUNT_ID_2, auth_silent_exc=EmailAuthError("token revoked")),
+        )
+        calls = []
+        monkeypatch.setattr(
+            sincronizacion, "reconcile_folder_memberships",
+            lambda aid, *_a: calls.append(aid),
+        )
+        sincronizacion.sync_email_metadata(_MAILBOX_ID, _USER_ID)
+        assert calls == [_ACCOUNT_ID]
 
     def test_empty_accounts_returns_zero(self, monkeypatch):
         _patch_common(monkeypatch)

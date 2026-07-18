@@ -25,6 +25,7 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../limits/`](../limi
 ### Organizar
 - [acciones-sobre-correos.md](acciones-sobre-correos.md) — Marcar leído / no leído, mover a papelera, spam, archivar / desarchivar, borrado definitivo y acciones masivas.
 - [bandejas-ficticias.md](bandejas-ficticias.md) — Bandejas virtuales con filtros guardados que agregan varias cuentas.
+- [carpetas-y-reglas.md](carpetas-y-reglas.md) — Carpetas propias con pertenencia múltiple (reflejadas como etiqueta de Gmail / categoría de Outlook) para organizar el correo a mano, y reglas que lo clasifican solo al sincronizar según remitente exacto y/o asunto.
 
 ### Escribir y enviar
 - [composicion-y-envio.md](composicion-y-envio.md) — El composer en modo "Nuevo mensaje" y el envío directo.

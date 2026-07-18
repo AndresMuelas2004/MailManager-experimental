@@ -62,6 +62,7 @@ from api.routers.emails_routers import (
     favorites_router,
     router as emails_router,
 )
+from api.routers.folders_routers import router as folders_router
 from api.routers.health_routers import router as health_router
 from api.routers.image_proxy_routers import (
     image_proxy_admin_router,
@@ -70,6 +71,7 @@ from api.routers.image_proxy_routers import (
 from api.routers.mailboxes_routers import router as mailboxes_router
 from api.routers.oauth_callback_routers import router as oauth_callback_router
 from api.routers.routers_helpers import rate_limit_by_ip
+from api.routers.rules_routers import router as rules_router
 from api.routers.virtual_mailboxes_routers import router as virtual_mailboxes_router
 from api.services.backfill_worker import start_backfill_worker, stop_backfill_worker
 from api.services.image_proxy_signing import signing_key_is_secure
@@ -188,6 +190,8 @@ def create_app() -> FastAPI:
     app.include_router(emails_router, dependencies=global_rate_limit)
     app.include_router(favorites_router, dependencies=global_rate_limit)
     app.include_router(virtual_mailboxes_router, dependencies=global_rate_limit)
+    app.include_router(folders_router, dependencies=global_rate_limit)
+    app.include_router(rules_router, dependencies=global_rate_limit)
     app.include_router(contacts_router, dependencies=global_rate_limit)
     app.include_router(drafts_router, dependencies=global_rate_limit)
     app.include_router(email_attachments_router, dependencies=global_rate_limit)

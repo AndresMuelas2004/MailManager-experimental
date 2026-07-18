@@ -8,9 +8,14 @@ import {
   draftAttachmentResponseSchema,
   draftOutSchema,
   emailContentOutSchema,
+  emailFoldersOutSchema,
   emailMetadataOutSchema,
   emailPageSchema,
   failedAttachmentSchema,
+  folderOutSchema,
+  folderRefSchema,
+  ruleApplyStatusOutSchema,
+  ruleOutSchema,
 } from './dto';
 
 const VALID_UUID = '11111111-1111-4000-a000-111111111111';
@@ -396,6 +401,150 @@ describe('emailPageSchema', () => {
     // The old contract returned ``EmailMetadataOut[]`` directly. A drift
     // back to it must fail loudly instead of being silently accepted.
     const result = emailPageSchema.safeParse([validEmail]);
+    expect(result.success).toBe(false);
+  });
+});
+
+// Folders + rules (carpetas-y-reglas)
+
+describe('folderRefSchema / folderOutSchema', () => {
+  it('parses a folder with a null color', () => {
+    const parsed = folderOutSchema.parse({
+      folder_id: 'f1',
+      owner_user_id: 'u1',
+      name: 'Universidad',
+      color: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(parsed.name).toBe('Universidad');
+    expect(parsed.color).toBeNull();
+  });
+
+  it('rejects a missing color (it is .nullable(), not .optional())', () => {
+    const result = folderOutSchema.safeParse({
+      folder_id: 'f1',
+      owner_user_id: 'u1',
+      name: 'Universidad',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('parses a compact folder ref (chip)', () => {
+    const parsed = folderRefSchema.parse({ folder_id: 'f1', name: 'A', color: '#fff' });
+    expect(parsed.color).toBe('#fff');
+  });
+});
+
+describe('emailFoldersOutSchema', () => {
+  it('parses the assign/unassign response (folder list)', () => {
+    const parsed = emailFoldersOutSchema.parse({
+      folders: [{ folder_id: 'f1', name: 'A', color: null }],
+    });
+    expect(parsed.folders).toHaveLength(1);
+  });
+
+  it('parses an empty folder list', () => {
+    expect(emailFoldersOutSchema.parse({ folders: [] }).folders).toEqual([]);
+  });
+});
+
+describe('emailMetadataOutSchema — folders', () => {
+  it('defaults folders to [] when the field is missing', () => {
+    // A surface that does not project folders (e.g. conversation messages) omits
+    // the key; the ``.default([])`` keeps deserialisation working.
+    const parsed = emailMetadataOutSchema.parse({
+      provider_message_id: 'm1',
+      account_id: 'acc',
+      mailbox_id: 'mb',
+      thread_id: null,
+      from_email: 'a@b.c',
+      from_name: null,
+      subject: null,
+      received_at: '2024-01-01T00:00:00Z',
+      is_read: false,
+      box: 'ALL_MAIL',
+    });
+    expect(parsed.folders).toEqual([]);
+  });
+
+  it('parses a populated folders list', () => {
+    const parsed = emailMetadataOutSchema.parse({
+      provider_message_id: 'm1',
+      account_id: 'acc',
+      mailbox_id: 'mb',
+      thread_id: null,
+      from_email: 'a@b.c',
+      from_name: null,
+      subject: null,
+      received_at: '2024-01-01T00:00:00Z',
+      is_read: false,
+      box: 'ALL_MAIL',
+      folders: [{ folder_id: 'f1', name: 'A', color: null }],
+    });
+    expect(parsed.folders[0].folder_id).toBe('f1');
+  });
+});
+
+describe('ruleOutSchema', () => {
+  it('parses a rule with both conditions null except one', () => {
+    const parsed = ruleOutSchema.parse({
+      rule_id: 'r1',
+      owner_user_id: 'u1',
+      name: null,
+      is_enabled: true,
+      match_from_email: 'boss@example.com',
+      match_subject_contains: null,
+      target_folder_id: 'f1',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(parsed.match_from_email).toBe('boss@example.com');
+    expect(parsed.match_subject_contains).toBeNull();
+  });
+
+  it('rejects a missing target_folder_id', () => {
+    const result = ruleOutSchema.safeParse({
+      rule_id: 'r1',
+      owner_user_id: 'u1',
+      name: null,
+      is_enabled: true,
+      match_from_email: 'a@b.c',
+      match_subject_contains: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('ruleApplyStatusOutSchema', () => {
+  it('parses the "none" sentinel (never applied)', () => {
+    const parsed = ruleApplyStatusOutSchema.parse({
+      status: 'none',
+      processed_count: 0,
+      active: false,
+    });
+    expect(parsed.status).toBe('none');
+  });
+
+  it('parses a running job', () => {
+    const parsed = ruleApplyStatusOutSchema.parse({
+      status: 'running',
+      processed_count: 42,
+      active: true,
+    });
+    expect(parsed.active).toBe(true);
+  });
+
+  it('rejects an unknown status enum value', () => {
+    const result = ruleApplyStatusOutSchema.safeParse({
+      status: 'paused',
+      processed_count: 0,
+      active: false,
+    });
     expect(result.success).toBe(false);
   });
 });

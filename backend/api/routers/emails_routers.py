@@ -31,7 +31,8 @@ from api.schemas.email import (
     TrashActionResult,
     UnreadCountOut,
 )
-from api.services import emails_service
+from api.schemas.folder import EmailFoldersOut, FolderAssignRequest
+from api.services import emails_service, folders_service
 
 
 router = APIRouter(prefix="/mailboxes/{mailbox_id}/emails", tags=["emails"])
@@ -385,4 +386,43 @@ def get_conversation(
     """
     return emails_service.get_conversation(
         mailbox_id, account_id, provider_message_id, user_id,
+    )
+
+
+@favorites_router.post(
+    "/accounts/{account_id}/emails/{provider_message_id}/folders",
+    response_model=EmailFoldersOut,
+)
+def assign_folder_to_email(
+    mailbox_id: str,
+    account_id: str,
+    provider_message_id: str,
+    payload: FolderAssignRequest,
+    user_id: str = Depends(require_session),
+) -> EmailFoldersOut:
+    """Assign a folder to a single email (Provider-First). Mounted on the
+    ``favorites_router`` because it needs the message's account in the path
+    (the account routes the provider label/category call). Returns the email's
+    folders after the assignment (for the chips). Folder membership is orthogonal
+    to box — it does NOT move/archive the email."""
+    return folders_service.assign_folder_to_email(
+        mailbox_id, account_id, provider_message_id, payload.folder_id, user_id,
+    )
+
+
+@favorites_router.delete(
+    "/accounts/{account_id}/emails/{provider_message_id}/folders/{folder_id}",
+    response_model=EmailFoldersOut,
+)
+def unassign_folder_from_email(
+    mailbox_id: str,
+    account_id: str,
+    provider_message_id: str,
+    folder_id: str,
+    user_id: str = Depends(require_session),
+) -> EmailFoldersOut:
+    """Remove a folder from a single email (Provider-First). Returns the email's
+    remaining folders."""
+    return folders_service.unassign_folder_from_email(
+        mailbox_id, account_id, provider_message_id, folder_id, user_id,
     )

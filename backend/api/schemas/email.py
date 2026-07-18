@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from api.schemas.attachment import AttachmentMetadataOut
+from api.schemas.folder import FolderRef
 
 
 class EmailSendRequest(BaseModel):
@@ -239,6 +240,11 @@ class EmailMetadataOut(BaseModel):
     has_attachments: bool = False
     is_favorite: bool = False
     thread_message_count: int = 1
+    # Folders this email belongs to (chips). Filled by the listing service in a
+    # second batch pass AFTER ``row_to_email_metadata_out`` maps the row — the
+    # mapper never projects it, so it defaults to ``[]`` when the service does
+    # not enrich the page (e.g. conversation viewer messages).
+    folders: list[FolderRef] = Field(default_factory=list)
 
 
 class EmailPageOut(BaseModel):

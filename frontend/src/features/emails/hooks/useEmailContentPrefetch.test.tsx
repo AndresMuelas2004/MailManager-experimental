@@ -43,6 +43,7 @@ function makeTarget(id: string): EmailMetadataOut {
     has_attachments: false,
     is_favorite: false,
     thread_message_count: 1,
+    folders: [],
   };
 }
 

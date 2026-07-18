@@ -270,6 +270,13 @@ class FakeEmailClient(EmailClient):
         self.set_favorite_calls: list[tuple[str, bool]] = []
         self.list_favorite_ids_calls = 0
         self.list_favorite_candidates_calls = 0
+        # Folder category calls (carpetas-y-reglas). A FakeEmailClient is neither
+        # a GmailClient nor an OutlookClient, so EmailManager's folder fan-out
+        # takes the else (Outlook) branch: ``ensure_folder_ref`` returns the name
+        # with no client call, and assign/unassign route here. Recorded so a test
+        # can assert the Provider-First order (provider call then local member).
+        self.add_category_calls: list[tuple[str, str]] = []
+        self.remove_category_calls: list[tuple[str, str]] = []
         # Reply / Forward bookkeeping. ``create_draft_reply_kwargs`` and
         # ``send_draft_with_attachments_reply_kwargs`` are populated on
         # every call so a test can assert that the reply / forward
@@ -616,6 +623,16 @@ class FakeEmailClient(EmailClient):
             is_read=True,
         )
         return sent_meta, []
+
+    def add_category_to_message(self, message_id: str, category_name: str) -> str:
+        # Outlook-shaped folder apply (EmailManager routes non-Gmail clients
+        # here). Returns the id unchanged (a real Outlook move may rewrite it).
+        self.add_category_calls.append((message_id, category_name))
+        return message_id
+
+    def remove_category_from_message(self, message_id: str, category_name: str) -> str:
+        self.remove_category_calls.append((message_id, category_name))
+        return message_id
 
     def set_favorite(self, provider_message_id: str, is_favorite: bool) -> None:
         self.set_favorite_calls.append((provider_message_id, is_favorite))

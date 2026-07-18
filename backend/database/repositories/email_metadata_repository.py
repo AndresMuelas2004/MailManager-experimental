@@ -579,6 +579,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         box_in: list[str] | None,
         box_not_in: list[str] | None,
         operator_clauses: list[tuple[str, Any]] | None = None,
+        folder_id: str | None = None,
     ) -> tuple[str, str, str, str, dict[str, Any]]:
         """Build the ``{box_predicate}``/``{search_predicate}``/``{extra_predicate}``/
         ``{match_predicate}`` slots and the named params shared by every
@@ -673,6 +674,21 @@ class PgEmailMetadataStore(EmailMetadataStore):
                 clause, op_params = op_builder(value, i)
                 extra_clauses.append(clause)
                 params.update(op_params)
+        # Folder-membership restriction (folder email listing). A typed
+        # ``EXISTS`` against ``email_folder_members`` correlated on the message's
+        # ``(provider_message_id, account_id)`` — NOT free-form text, so it is
+        # injection-safe like every other clause here. Only the folder listing
+        # sets ``folder_id`` (always with ``distinct_provider_message_id=True`` +
+        # ``group_by_thread=True``); every other caller passes ``None``, so the
+        # emitted SQL is unchanged for them.
+        if folder_id is not None:
+            params["folder_id"] = folder_id
+            extra_clauses.append(
+                "EXISTS (SELECT 1 FROM email_folder_members efm "
+                "WHERE efm.provider_message_id = em.provider_message_id "
+                "AND efm.account_id = em.account_id "
+                "AND efm.folder_id = %(folder_id)s)"
+            )
         extra_predicate = (
             "AND " + " AND ".join(extra_clauses) if extra_clauses else ""
         )
@@ -714,6 +730,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         operator_clauses: list[tuple[str, Any]] | None = None,
         sort: str | None = None,
         sort_dir: str | None = None,
+        folder_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not account_ids:
             return []
@@ -725,6 +742,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                     box_in=box_in,
                     box_not_in=box_not_in,
                     operator_clauses=operator_clauses,
+                    folder_id=folder_id,
                 )
             )
             params["limit"] = limit
@@ -774,6 +792,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
         distinct_provider_message_id: bool = False,
         group_by_thread: bool = False,
         operator_clauses: list[tuple[str, Any]] | None = None,
+        folder_id: str | None = None,
     ) -> int:
         # Mirror ``list_filtered``'s empty-accounts short-circuit: never
         # touch the DB when there is nothing to count.
@@ -787,6 +806,7 @@ class PgEmailMetadataStore(EmailMetadataStore):
                     box_in=box_in,
                     box_not_in=box_not_in,
                     operator_clauses=operator_clauses,
+                    folder_id=folder_id,
                 )
             )
             template = _select_count_template(
@@ -973,6 +993,78 @@ class PgEmailMetadataStore(EmailMetadataStore):
         except Exception as exc:
             raise QueryError(
                 f"Unexpected recipient suggestions error ({type(exc).__name__}): {exc}"
+            ) from exc
+        return [dict(row) for row in rows]
+
+    def list_messages_matching_rule(
+        self,
+        owner_user_id: str,
+        from_email: str | None,
+        subject_contains: str | None,
+        after_cursor: tuple[Any, str, str] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        # Backs the "apply to existing" worker. The from/subject expressions
+        # replicate ``_build_from_email_clause`` / ``_build_subject_contains_clause``
+        # (exact lower-cased email; accent-/case-insensitive escaped substring)
+        # so the retroactive scan matches the same messages a live sync would.
+        # Keyset paginated by the ``(received_at, account_id, provider_message_id)``
+        # tuple; a folder assignment never mutates those columns, so the scan is
+        # stable across pages. At least one condition is guaranteed by the caller
+        # (the rule CHECK constraint).
+        # Predicate construction lives INSIDE the try (sibling parity with
+        # ``list_filtered`` / ``count_filtered`` / ``list_recipient_suggestions``):
+        # an ill-formed ``after_cursor`` unpack would otherwise raise an untyped
+        # ValueError that escapes the layer unwrapped (§7 rule 4). Unreachable with
+        # the current callers, but the symmetry closes the theoretical hole.
+        try:
+            params: dict[str, Any] = {"owner_user_id": owner_user_id, "limit": limit}
+
+            from_predicate = ""
+            if from_email:
+                params["from_exact"] = str(from_email)
+                from_predicate = (
+                    "AND lower(coalesce(em.from_email, '')) = lower(%(from_exact)s)"
+                )
+
+            subject_predicate = ""
+            if subject_contains:
+                params["subject_like"] = f"%{_escape_like(str(subject_contains))}%"
+                subject_predicate = (
+                    "AND unaccent(lower(coalesce(em.subject, ''))) "
+                    "ILIKE unaccent(lower(%(subject_like)s))"
+                )
+
+            cursor_predicate = ""
+            if after_cursor is not None:
+                received_at, account_id, provider_message_id = after_cursor
+                params["after_received_at"] = received_at
+                params["after_account_id"] = account_id
+                params["after_pmid"] = provider_message_id
+                cursor_predicate = (
+                    "AND (em.received_at, em.account_id, em.provider_message_id) > "
+                    "(%(after_received_at)s::timestamptz, %(after_account_id)s::uuid, "
+                    "%(after_pmid)s::varchar)"
+                )
+
+            sql = queries.LIST_MESSAGES_MATCHING_RULE.format(
+                from_predicate=from_predicate,
+                subject_predicate=subject_predicate,
+                cursor_predicate=cursor_predicate,
+            )
+            with connection.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(sql, params)
+                    rows = cur.fetchall()
+        except psycopg2.errors.InvalidTextRepresentation:
+            return []
+        except DatabaseError:
+            raise
+        except psycopg2.Error as exc:
+            raise QueryError("Failed to list messages matching rule.") from exc
+        except Exception as exc:
+            raise QueryError(
+                f"Unexpected list messages matching rule error ({type(exc).__name__}): {exc}"
             ) from exc
         return [dict(row) for row in rows]
 

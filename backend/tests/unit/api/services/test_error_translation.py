@@ -44,6 +44,7 @@ from auth import (
     AuthTokenProviderError,
 )
 from core.email.errors import (
+    CategoryOperationError,
     CoreError,
     EmailAccountNotFoundError,
     EmailAccountRecordError,
@@ -51,6 +52,7 @@ from core.email.errors import (
     EmailConfigError,
     EmailDuplicateAccountLabelError,
     EmailExternalAPIError,
+    LabelOperationError,
     EmailInvalidCredentialsDataError,
     EmailInvalidExpiryError,
     EmailInvalidTokenDataError,
@@ -98,6 +100,11 @@ _CORE_CASES = [
     (EmailConfigError, AccountMisconfigured),
     (EmailRecipientsMissingError, RecipientsMissing),
     (EmailExternalAPIError, ExternalAPIError),
+    # Folder label / category failures (carpetas-y-reglas) are subclasses of
+    # EmailExternalAPIError, so they inherit the 502 mapping WITHOUT a new entry
+    # in _CORE_TO_API_MAP — the dedicated names only sharpen diagnostics.
+    (LabelOperationError, ExternalAPIError),
+    (CategoryOperationError, ExternalAPIError),
     (CoreError, ApiError),
 ]
 

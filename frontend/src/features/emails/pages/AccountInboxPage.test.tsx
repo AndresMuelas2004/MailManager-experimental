@@ -103,6 +103,7 @@ function makeMessage(id: string, overrides: Partial<EmailMetadataOut> = {}): Ema
     has_attachments: false,
     is_favorite: false,
     thread_message_count: 1,
+    folders: [],
     ...overrides,
   };
 }

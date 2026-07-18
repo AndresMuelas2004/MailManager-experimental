@@ -9,6 +9,7 @@ from ..email_client import EmailClient
 from .autenticacion import OutlookAutenticacionMixin
 from .borradores import OutlookBorradoresMixin
 from .buzones import OutlookBuzonesMixin
+from .categorias import OutlookCategoriasMixin
 from .contenido import OutlookContenidoMixin
 from .envio import OutlookEnvioMixin
 from .sincronizacion import OutlookSincronizacionMixin
@@ -21,6 +22,7 @@ class OutlookClient(
     OutlookEnvioMixin,
     OutlookBorradoresMixin,
     OutlookBuzonesMixin,
+    OutlookCategoriasMixin,
     OutlookContenidoMixin,
     OutlookTransporteMixin,
     EmailClient,

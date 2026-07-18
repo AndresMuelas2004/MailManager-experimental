@@ -718,3 +718,31 @@ LIST_UNREAD_RECENT_UNCACHED = """
     ORDER BY em.received_at DESC
     LIMIT %(limit)s
 """
+
+# Messages of a user that satisfy a rule's condition — backs the "apply to
+# existing" worker (carpetas-y-reglas §5.3). The user scoping is via the
+# ``email_metadata -> accounts -> mailboxes`` JOIN filtering
+# ``mailboxes.owner_user_id`` (``accounts`` has NO ``owner_user_id`` column —
+# the same pattern as ``LIST_ACCOUNT_IDS_BY_USER``). ``mailbox_id`` + ``provider``
+# are projected so the worker can rebuild each message's ``account_label`` and
+# route the provider call. ``box <> 'DELETED'`` never classifies hard-deleted
+# mail (same discipline as LIST_RECIPIENT_SUGGESTIONS / the fake-mailbox DELETED
+# exclusion). The {from_predicate}/{subject_predicate}/{cursor_predicate} slots
+# are filled by the repository from hardcoded fragments + named params (NEVER
+# free-form text — same SQL-injection invariant as LIST_FILTERED). Keyset
+# pagination on ``(received_at, account_id, provider_message_id)`` ASC is stable
+# because a folder assignment never mutates those columns.
+LIST_MESSAGES_MATCHING_RULE = """
+    SELECT em.provider_message_id, em.account_id, a.mailbox_id, a.provider,
+           em.received_at
+    FROM email_metadata em
+    JOIN accounts a  ON a.account_id  = em.account_id
+    JOIN mailboxes mb ON mb.mailbox_id = a.mailbox_id
+    WHERE mb.owner_user_id = %(owner_user_id)s
+      AND em.box <> 'DELETED'
+      {from_predicate}
+      {subject_predicate}
+      {cursor_predicate}
+    ORDER BY em.received_at ASC, em.account_id ASC, em.provider_message_id ASC
+    LIMIT %(limit)s
+"""

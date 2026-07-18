@@ -34,11 +34,13 @@ from api.services.services_helpers import (
     persist_email_metadata_batch,
     purge_expired_email_content,
     raise_on_silent_auth_errors,
+    reconcile_folder_memberships,
     translate_core_error,
     translate_database_error,
     update_email_metadata_labels_batch,
     update_sync_cursor,
 )
+from api.services.folders_rules_eval import run_rule_evaluation
 from database import (
     account_backfill_store,
     account_store,
@@ -253,6 +255,10 @@ def sync_email_metadata(
         # — do NOT reconstruct ``f"{mailbox_id}__{aid}"``.
         prefetch_targets: list[tuple[str, str]] = []
         synced_account_ids: list[str] = []
+        # Rule-evaluation targets (§5.2): the NEW upserts of each synced account,
+        # fed to the post-response background task so it only evaluates rules over
+        # this sync's new mail (not the whole local copy).
+        rule_eval_targets: list[tuple[str, str, list]] = []
 
         # ``skip_reconciliation_ids`` (computed once from the mailbox's backfill
         # jobs above) gates ghost reconciliation: it holds EVERY account with a
@@ -280,6 +286,17 @@ def sync_email_metadata(
             deleted = delete_email_metadata_batch(aid, sync_result.deletes, fallback=EmailFetchError)
             label_updated = update_email_metadata_labels_batch(aid, sync_result.label_updates, fallback=EmailFetchError)
             update_sync_cursor(mid, aid, sync_result.new_cursor, fallback=EmailFetchError)
+
+            # Folder-membership reconciliation (§5.1) — SYNCHRONOUS and best-effort
+            # (the helper swallows its own errors). It runs AFTER the metadata is
+            # persisted (so the FK targets exist) and BEFORE the response, so it
+            # always precedes the post-response rule evaluation: the labels rule
+            # evaluation adds surface in the NEXT sync's snapshot, where this
+            # reconciliation preserves them (§5.2 ordering trap). It reads the
+            # provider labels off BOTH the full upserts AND the incremental
+            # label updates, and no-ops when the account has no managed folders.
+            reconcile_folder_memberships(aid, sync_result.upserts, sync_result.label_updates)
+            rule_eval_targets.append((label, aid, sync_result.upserts))
 
             reconciled, ghost_ids = 0, []
             if sync_result.is_full_sync and aid not in skip_reconciliation_ids:
@@ -345,6 +362,16 @@ def sync_email_metadata(
                 manager,
                 prefetch_targets,
                 synced_account_ids,
+            )
+            # Rule evaluation (§5.2) runs POST-response too, reusing the
+            # already-authenticated manager. Keyword-only ``background_tasks``
+            # gates it exactly like the prefetch, so direct callers / tests that
+            # omit it skip rule evaluation (no effect on the SyncResultOut).
+            background_tasks.add_task(
+                run_rule_evaluation,
+                manager,
+                user_id,
+                rule_eval_targets,
             )
 
         return SyncResultOut(

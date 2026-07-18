@@ -23,15 +23,19 @@ logger = logging.getLogger(__name__)
 # must derive ``received_at`` from the SAME field chain, or the conversation
 # id reconciliation's identity (received_at, from, subject) diverges between
 # what sync stored and what the viewer fetched for date-less messages.
+# ``categories`` (folder membership, carpetas-y-reglas) MUST appear in BOTH
+# select sets in lockstep — exactly like ``flag``; missing it in one loses the
+# membership on that path. The two sets differ (delta omits ``parentFolderId`` /
+# ``isDraft``), so both are extended explicitly.
 _DELTA_SELECT_FIELDS = (
-    "id,conversationId,from,toRecipients,subject,receivedDateTime,sentDateTime,isRead,flag"
+    "id,conversationId,from,toRecipients,subject,receivedDateTime,sentDateTime,isRead,flag,categories"
 )
 _DELTA_PAGE_SIZE = 100
 
 
 _BOOTSTRAP_SELECT_FIELDS = (
     "id,conversationId,from,toRecipients,subject,"
-    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag,isDraft"
+    "receivedDateTime,sentDateTime,isRead,parentFolderId,flag,isDraft,categories"
 )
 
 
@@ -136,6 +140,11 @@ class OutlookSincronizacionMixin:
             is_favorite=(msg.get("flag") or {}).get("flagStatus") == "flagged",
             to_email=to_email,
             to_name=to_name,
+            # Category display-names for folder-membership reconciliation. For
+            # Outlook a folder's provider_ref IS the category name (== the
+            # folder name), so the service crosses these directly against
+            # folder_account_links.
+            provider_labels=list(msg.get("categories") or []),
         )
 
     def _fetch_folder_delta(
@@ -186,11 +195,23 @@ class OutlookSincronizacionMixin:
                             if "flag" in msg
                             else None
                         )
+                        # Carry ``categories`` (folder membership) ONLY when the
+                        # field is present in the partial payload; otherwise
+                        # None so the reconciliation leaves memberships intact
+                        # (same conditional treatment as ``flag`` above — an
+                        # out-of-band category change normally arrives as a full
+                        # upsert, not a partial label update).
+                        provider_labels = (
+                            list(msg.get("categories") or [])
+                            if "categories" in msg
+                            else None
+                        )
                         label_updates.append(LabelUpdate(
                             provider_message_id=msg["id"],
                             is_read=msg.get("isRead", False),
                             box=box,
                             is_favorite=is_favorite,
+                            provider_labels=provider_labels,
                         ))
                         logger.debug(
                             "Outlook delta [%s] LABEL id=%s is_read=%s",

@@ -48,6 +48,7 @@ function makeEmail(id: string, overrides: Partial<EmailMetadataOut> = {}): Email
     has_attachments: false,
     is_favorite: false,
     thread_message_count: 1,
+    folders: [],
     ...overrides,
   };
 }

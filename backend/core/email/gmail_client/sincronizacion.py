@@ -524,6 +524,12 @@ class GmailSincronizacionMixin:
             is_favorite=is_favorite,
             to_email=to_email,
             to_name=to_name,
+            # Raw labelIds for folder-membership reconciliation. We do NOT filter
+            # user/system here (that would need a labels.list per message we do
+            # not make) — the service crosses these against folder_account_links,
+            # where opaque user-label ids (Label_NN) match and system ids
+            # (INBOX/STARRED/CATEGORY_*) simply do not.
+            provider_labels=list(label_ids),
         )
 
     def _fetch_sender_email(self) -> str:
@@ -683,6 +689,11 @@ class GmailSincronizacionMixin:
                 # the current STARRED state. ``format=minimal`` returns the full
                 # labelIds, so Gmail ALWAYS populates a concrete bool (never None).
                 is_favorite="STARRED" in label_ids,
+                # Same for folder membership: an out-of-band (un)label on an
+                # existing message arrives here. ``format=minimal`` returns the
+                # FULL labelIds, so this is always concrete (``[]`` = "no folders
+                # now") — never None (which would mean "do not touch").
+                provider_labels=list(label_ids),
             ))
         _log_skipped_messages("label sync", skipped_ids, message_ids)
         return results
