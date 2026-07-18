@@ -161,6 +161,110 @@ export const failedAttachmentSchema = z.object({
 });
 export type FailedAttachmentDetail = z.infer<typeof failedAttachmentSchema>;
 
+// Folders — user-owned organization labels mirrored to the provider (Gmail
+// label / Outlook category). A folder is unique per user and spans every
+// connected account. ``color`` is a MISSELA-side hint and can be ``null``.
+export const folderRefSchema = z.object({
+  folder_id: z.string(),
+  name: z.string(),
+  color: z.string().nullable(),
+});
+export type FolderRef = z.infer<typeof folderRefSchema>;
+
+export const folderOutSchema = z.object({
+  folder_id: z.string(),
+  owner_user_id: z.string(),
+  name: z.string(),
+  color: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type FolderOut = z.infer<typeof folderOutSchema>;
+
+export const folderListSchema = z.array(folderOutSchema);
+
+// Per-email folder membership — response of the assign/unassign endpoints. The
+// list of folders the email belongs to AFTER the operation, so the chips can be
+// repainted directly from the response.
+export const emailFoldersOutSchema = z.object({
+  folders: z.array(folderRefSchema),
+});
+export type EmailFoldersOut = z.infer<typeof emailFoldersOutSchema>;
+
+// Folder create/update request bodies. Like the other request schemas these
+// document the contract and refine the inferred type only — ``request<T>()``
+// validates responses, never request bodies. The client-side name guard lives
+// in ``FolderForm``; the backend's Pydantic bounds are authoritative.
+export const folderCreateSchema = z.object({
+  name: z.string().min(1).max(120),
+  color: z.string().optional(),
+});
+export type FolderCreate = z.infer<typeof folderCreateSchema>;
+
+export const folderUpdateSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  color: z.string().optional(),
+});
+export type FolderUpdate = z.infer<typeof folderUpdateSchema>;
+
+// Automatic organization rules — "if the sender is X and/or the subject
+// contains Y, add the email to folder Z". Conditions are nullable (either can
+// be absent); ``target_folder_id`` is the single action of this version.
+export const ruleOutSchema = z.object({
+  rule_id: z.string(),
+  owner_user_id: z.string(),
+  name: z.string().nullable(),
+  is_enabled: z.boolean(),
+  match_from_email: z.string().nullable(),
+  match_subject_contains: z.string().nullable(),
+  target_folder_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type RuleOut = z.infer<typeof ruleOutSchema>;
+
+export const ruleListSchema = z.array(ruleOutSchema);
+
+// Rule create/update request bodies. At least one condition
+// (``match_from_email`` / ``match_subject_contains``) is required — enforced
+// client-side in ``RuleForm`` because the backend "≥1 condition" 422 on
+// create/patch is a Pydantic ``{"detail":[...]}`` envelope, NOT the
+// ``{"error":{code}}`` service envelope. ``apply_to_existing: true`` also
+// enqueues the "apply to existing" background job. On PATCH the two condition
+// fields accept ``null`` to clear a condition (the service re-validates the
+// merged rule and returns the ``rule_validation_error`` service envelope if it
+// would be left with no condition).
+export const ruleCreateSchema = z.object({
+  name: z.string().optional(),
+  match_from_email: z.string().optional(),
+  match_subject_contains: z.string().optional(),
+  target_folder_id: z.string(),
+  is_enabled: z.boolean().optional(),
+  apply_to_existing: z.boolean().optional(),
+});
+export type RuleCreate = z.infer<typeof ruleCreateSchema>;
+
+export const ruleUpdateSchema = z.object({
+  name: z.string().nullable().optional(),
+  match_from_email: z.string().nullable().optional(),
+  match_subject_contains: z.string().nullable().optional(),
+  target_folder_id: z.string().optional(),
+  is_enabled: z.boolean().optional(),
+  apply_to_existing: z.boolean().optional(),
+});
+export type RuleUpdate = z.infer<typeof ruleUpdateSchema>;
+
+// "Apply to existing" job status — response of ``POST /rules/{id}/apply`` and
+// ``GET /rules/{id}/apply-status``. ``status: "none"`` is the value when the
+// rule was never applied (no job); ``active`` is true only while the job is
+// ``pending``/``running`` (the poll stops when it flips to false).
+export const ruleApplyStatusOutSchema = z.object({
+  status: z.enum(['none', 'pending', 'running', 'completed', 'failed']),
+  processed_count: z.number(),
+  active: z.boolean(),
+});
+export type RuleApplyStatusOut = z.infer<typeof ruleApplyStatusOutSchema>;
+
 // Emails
 export const emailMetadataOutSchema = z.object({
   provider_message_id: z.string(),
@@ -177,6 +281,13 @@ export const emailMetadataOutSchema = z.object({
   box: z.string(),
   has_attachments: z.boolean().default(false),
   is_favorite: z.boolean().default(false),
+  // Folders the email belongs to (chips). ``.default([])`` is load-bearing:
+  // the backend populates this in a second batch step and may scope it to the
+  // main listings in the MVP, so a surface that does not project it (or
+  // ``ConversationOut.messages``, which reuses this schema) omits the key —
+  // without the default that would fail Zod parsing. ``folderRefSchema`` is
+  // declared above so this forward reference resolves at module load.
+  folders: z.array(folderRefSchema).default([]),
   // Number of messages of the thread present in the listed box (conversation
   // view). The backend aggregates is_read / has_attachments / is_favorite
   // across the thread when grouping; this field is the thread's message count

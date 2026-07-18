@@ -5,10 +5,17 @@ import Spinner from '../../../components/common/Spinner';
 import type { UseAttachmentDownloaderReturn } from '../hooks/useAttachmentDownloader';
 import type { UiError } from '../../../api/client/errors';
 import AttachmentsList from './AttachmentsList';
+import FolderChips from '../../../components/ui/FolderChips';
+import FolderAssignMenu from '../../../components/ui/FolderAssignMenu';
 import { hasRenderableBody, wrapHtmlEmail, wrapPlainText } from './emailHtmlFrame';
 import { buildAccountMap, formatDate, resolveAccount } from '../../../lib/formatters';
 import { useTranslation } from '../../../lib/i18n';
-import type { EmailMetadataOut, AccountOut, EmailContentOut } from '../../../api/types/dto';
+import type {
+  EmailMetadataOut,
+  AccountOut,
+  EmailContentOut,
+  FolderRef,
+} from '../../../api/types/dto';
 
 type Props = {
   email: EmailMetadataOut;
@@ -22,6 +29,13 @@ type Props = {
   onReply: (email: EmailMetadataOut) => void | Promise<void>;
   onReplyAll: (email: EmailMetadataOut) => void | Promise<void>;
   onForward: (email: EmailMetadataOut) => void | Promise<void>;
+  // Folder chips + assign menu of the opened email (optional). The menu renders
+  // only when ``folders`` AND both callbacks are supplied; chips render from
+  // ``email.folders`` regardless.
+  folders?: FolderRef[];
+  onAssignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  onUnassignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  isFolderBusy?: (email: EmailMetadataOut) => boolean;
 };
 
 export default function EmailViewer({
@@ -36,6 +50,10 @@ export default function EmailViewer({
   onReply,
   onReplyAll,
   onForward,
+  folders,
+  onAssignFolder,
+  onUnassignFolder,
+  isFolderBusy,
 }: Props) {
   const { t } = useTranslation();
   const readTriggered = useRef(false);
@@ -58,6 +76,7 @@ export default function EmailViewer({
     : null;
 
   const subject = email.subject ?? t('common.noSubject');
+  const folderMenuEnabled = Boolean(folders && onAssignFolder && onUnassignFolder);
 
   let body: React.ReactNode;
   if (loading) {
@@ -126,7 +145,17 @@ export default function EmailViewer({
             <span className="truncate">{accountEmail}</span>
           </div>
         )}
+        <FolderChips folders={email.folders ?? []} className="mt-1" />
         <div className="mt-2 flex flex-wrap items-center gap-2">
+          {folderMenuEnabled && (
+            <FolderAssignMenu
+              folders={folders!}
+              assignedIds={new Set((email.folders ?? []).map((f) => f.folder_id))}
+              onAssign={(folderId) => onAssignFolder!(email, folderId)}
+              onUnassign={(folderId) => onUnassignFolder!(email, folderId)}
+              busy={isFolderBusy?.(email) ?? false}
+            />
+          )}
           <button
             type="button"
             onClick={() => {

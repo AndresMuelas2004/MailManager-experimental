@@ -2,7 +2,7 @@ import EmailViewer from './EmailViewer';
 import ConversationViewerMount from './ConversationViewerMount';
 import useAttachmentDownloader from '../hooks/useAttachmentDownloader';
 import useEmailContent from '../hooks/useEmailContent';
-import type { EmailMetadataOut, AccountOut } from '../../../api/types/dto';
+import type { EmailMetadataOut, AccountOut, FolderRef } from '../../../api/types/dto';
 
 type Props = {
   openedEmail: EmailMetadataOut | null;
@@ -16,6 +16,13 @@ type Props = {
   // thread, so mount the conversation viewer (full chain) instead of the
   // mono-message viewer. Favoritos leaves it false/absent.
   conversationMode?: boolean;
+  // Folder chips + assign menu of the opened email — forwarded to the
+  // mono-message viewer only. The conversation viewer (thread-level) does not
+  // take them; single-message assignment there happens from the listing row.
+  folders?: FolderRef[];
+  onAssignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  onUnassignFolder?: (email: EmailMetadataOut, folderId: string) => void;
+  isFolderBusy?: (email: EmailMetadataOut) => boolean;
 };
 
 export default function ViewerMount({
@@ -27,6 +34,10 @@ export default function ViewerMount({
   onReplyAll,
   onForward,
   conversationMode = false,
+  folders,
+  onAssignFolder,
+  onUnassignFolder,
+  isFolderBusy,
 }: Props) {
   if (!openedEmail) return null;
   // Conversation path: the data-fetching hooks live per-message inside
@@ -54,6 +65,10 @@ export default function ViewerMount({
       onReply={onReply}
       onReplyAll={onReplyAll}
       onForward={onForward}
+      folders={folders}
+      onAssignFolder={onAssignFolder}
+      onUnassignFolder={onUnassignFolder}
+      isFolderBusy={isFolderBusy}
     />
   );
 }
@@ -78,6 +93,10 @@ function ViewerWithDownloader({
   onReply,
   onReplyAll,
   onForward,
+  folders,
+  onAssignFolder,
+  onUnassignFolder,
+  isFolderBusy,
 }: Omit<Props, 'openedEmail'> & { openedEmail: EmailMetadataOut }) {
   const downloader = useAttachmentDownloader({
     mailboxId: openedEmail.mailbox_id,
@@ -101,6 +120,10 @@ function ViewerWithDownloader({
       onReply={onReply}
       onReplyAll={onReplyAll}
       onForward={onForward}
+      folders={folders}
+      onAssignFolder={onAssignFolder}
+      onUnassignFolder={onUnassignFolder}
+      isFolderBusy={isFolderBusy}
     />
   );
 }

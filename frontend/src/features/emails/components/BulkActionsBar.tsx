@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   X,
   Trash2,
@@ -8,11 +9,13 @@ import {
   Archive,
   Inbox,
   Flame,
+  FolderPlus,
 } from 'lucide-react';
 
 import { useTranslation } from '../../../lib/i18n';
 import type { Translate } from '../../../lib/i18n';
 import type { EmailBox } from '../../../lib/types';
+import type { FolderRef } from '../../../api/types/dto';
 import type { BulkAction, ReadToggleTarget } from '../types';
 import { EMAIL_BOX_CONFIG } from '../boxes';
 
@@ -25,6 +28,12 @@ type Props = {
   disabled: boolean;
   onClear: () => void;
   onAction: (action: BulkAction) => void;
+  // Bulk "add to folder" (optional). Orthogonal to ``box`` — folders never
+  // move/archive the email — so it is NOT gated by ``EMAIL_BOX_CONFIG`` and
+  // shows in every box when a catalogue + handler are supplied. Add-only:
+  // ``onAddToFolder`` fans out one assign call per selected email in the hook.
+  folders?: FolderRef[];
+  onAddToFolder?: (folderId: string) => void;
 };
 
 function readLabel(t: Translate, target: ReadToggleTarget, count: number): string {
@@ -66,8 +75,12 @@ export default function BulkActionsBar({
   disabled,
   onClear,
   onAction,
+  folders,
+  onAddToFolder,
 }: Props) {
   const { t } = useTranslation();
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const folderPickerEnabled = Boolean(folders && folders.length > 0 && onAddToFolder);
   const confirmDelete = () => {
     const msg =
       selectedCount > 1
@@ -97,6 +110,54 @@ export default function BulkActionsBar({
           : t('bulk.selectedMany', { count: selectedCount })}
       </span>
       <div className="mx-2 h-5 w-px bg-zinc-200" />
+
+      {folderPickerEnabled && (
+        <div className="relative">
+          <ActionButton
+            icon={FolderPlus}
+            label={t('bulk.addToFolder')}
+            onClick={() => setFolderPickerOpen((v) => !v)}
+            disabled={disabled}
+          />
+          {folderPickerOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                aria-hidden
+                onClick={() => setFolderPickerOpen(false)}
+              />
+              <div
+                role="menu"
+                className="absolute left-0 z-50 mt-1 max-h-64 w-56 overflow-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+              >
+                <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                  {t('bulk.addToFolder')}
+                </p>
+                {folders!.map((folder) => (
+                  <button
+                    key={folder.folder_id}
+                    type="button"
+                    role="menuitem"
+                    disabled={disabled}
+                    onClick={() => {
+                      onAddToFolder!(folder.folder_id);
+                      setFolderPickerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50 disabled:opacity-50"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: folder.color ?? '#a1a1aa' }}
+                      aria-hidden
+                    />
+                    <span className="flex-1 truncate text-zinc-800">{folder.name}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {allows('toggle_read') && (
         <ActionButton

@@ -28,8 +28,12 @@ type NavItem = {
   badge?: number; // nº of unread; the Badge hides itself when 0
   // When true the link always targets the unified base (/m/:mailboxId/...),
   // ignoring the active account scope — for entries that have no per-account
-  // route (Bandejas ficticias / virtual mailboxes).
+  // route (Bandejas ficticias / virtual mailboxes, Carpetas).
   global?: boolean;
+  // Per-folder colour dot (user data → rendered via inline style, since
+  // Tailwind cannot express a dynamic colour). Absent/null for every non-folder
+  // entry and for folders with no colour, which fall back to their icon.
+  color?: string | null;
 };
 
 type Props = {
@@ -237,7 +241,7 @@ export default function Sidebar({
       </div>
 
       <nav className="mt-2 flex flex-col gap-0.5">
-        {navItems.map(({ icon: Icon, label, path, badge, global }) => (
+        {navItems.map(({ icon: Icon, label, path, badge, global, color }) => (
           <NavLink
             key={path}
             to={{ pathname: `${global ? unifiedBase : scopeBase}/${path}`, search: navSearch }}
@@ -248,8 +252,18 @@ export default function Sidebar({
               }`
             }
           >
-            <Icon className="h-5 w-5" />
-            <span className="flex-1">{label}</span>
+            <span className="flex h-5 w-5 items-center justify-center">
+              {color ? (
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: color }}
+                  aria-hidden
+                />
+              ) : (
+                <Icon className="h-5 w-5" />
+              )}
+            </span>
+            <span className="flex-1 truncate">{label}</span>
             {typeof badge === 'number' && (
               <Badge count={badge} aria-label={t('nav.unreadBadge', { count: badge })} />
             )}

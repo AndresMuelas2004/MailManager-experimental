@@ -391,4 +391,112 @@ export const handlers = [
   http.get(`${API_BASE}/virtual-mailboxes/:virtualMailboxId/emails`, () =>
     HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
   ),
+
+  // Folders (user-level). Happy-path: empty list; create/update echo the body.
+  http.get(`${API_BASE}/folders`, () => HttpResponse.json([])),
+  http.post(`${API_BASE}/folders`, async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      folder_id: 'folder_test',
+      owner_user_id: 'u_test',
+      name: typeof body.name === 'string' ? body.name : 'Test folder',
+      color: typeof body.color === 'string' ? body.color : null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.get(`${API_BASE}/folders/:folderId`, ({ params }) =>
+    HttpResponse.json({
+      folder_id: String(params.folderId),
+      owner_user_id: 'u_test',
+      name: 'Test folder',
+      color: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  ),
+  http.patch(`${API_BASE}/folders/:folderId`, async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      folder_id: String(params.folderId),
+      owner_user_id: 'u_test',
+      name: typeof body.name === 'string' ? body.name : 'Test folder',
+      color: typeof body.color === 'string' ? body.color : null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.delete(`${API_BASE}/folders/:folderId`, () => HttpResponse.json({ status: 'deleted' })),
+  http.get(`${API_BASE}/folders/:folderId/emails`, () =>
+    HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 }),
+  ),
+
+  // Per-email folder assignment (under the email's mailbox). Happy-path returns
+  // the email's folder list after the operation; specs override with a
+  // populated list to assert chip repaints.
+  http.post(`${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/emails/:pmid/folders`, () =>
+    HttpResponse.json({ folders: [] }),
+  ),
+  http.delete(
+    `${API_BASE}/mailboxes/:mailboxId/accounts/:accountId/emails/:pmid/folders/:folderId`,
+    () => HttpResponse.json({ folders: [] }),
+  ),
+
+  // Rules (user-level). Happy-path: empty list; create/update echo the body.
+  http.get(`${API_BASE}/rules`, () => HttpResponse.json([])),
+  http.post(`${API_BASE}/rules`, async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      rule_id: 'rule_test',
+      owner_user_id: 'u_test',
+      name: typeof body.name === 'string' ? body.name : null,
+      is_enabled: typeof body.is_enabled === 'boolean' ? body.is_enabled : true,
+      match_from_email: typeof body.match_from_email === 'string' ? body.match_from_email : null,
+      match_subject_contains:
+        typeof body.match_subject_contains === 'string' ? body.match_subject_contains : null,
+      target_folder_id:
+        typeof body.target_folder_id === 'string' ? body.target_folder_id : 'folder_test',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.get(`${API_BASE}/rules/:ruleId`, ({ params }) =>
+    HttpResponse.json({
+      rule_id: String(params.ruleId),
+      owner_user_id: 'u_test',
+      name: null,
+      is_enabled: true,
+      match_from_email: 'someone@example.com',
+      match_subject_contains: null,
+      target_folder_id: 'folder_test',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  ),
+  http.patch(`${API_BASE}/rules/:ruleId`, async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    return HttpResponse.json({
+      rule_id: String(params.ruleId),
+      owner_user_id: 'u_test',
+      name: typeof body.name === 'string' ? body.name : null,
+      is_enabled: typeof body.is_enabled === 'boolean' ? body.is_enabled : true,
+      match_from_email: typeof body.match_from_email === 'string' ? body.match_from_email : null,
+      match_subject_contains:
+        typeof body.match_subject_contains === 'string' ? body.match_subject_contains : null,
+      target_folder_id:
+        typeof body.target_folder_id === 'string' ? body.target_folder_id : 'folder_test',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }),
+  http.delete(`${API_BASE}/rules/:ruleId`, () => HttpResponse.json({ status: 'deleted' })),
+  // Enqueue "apply to existing": returns the initial running status.
+  http.post(`${API_BASE}/rules/:ruleId/apply`, () =>
+    HttpResponse.json({ status: 'pending', processed_count: 0, active: true }),
+  ),
+  // Apply-status poll. Happy-path: no job (never applied) so ``active:false``
+  // stops the poll; specs override with a running/growing status.
+  http.get(`${API_BASE}/rules/:ruleId/apply-status`, () =>
+    HttpResponse.json({ status: 'none', processed_count: 0, active: false }),
+  ),
 ];

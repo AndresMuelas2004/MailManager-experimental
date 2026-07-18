@@ -4,6 +4,8 @@ import {
   Archive,
   Filter,
   FileEdit,
+  Folder,
+  Folders,
   Inbox,
   Menu,
   Send,
@@ -22,6 +24,7 @@ import useMailboxAccounts from '../hooks/useMailboxAccounts';
 import useMailboxUnreadCounts from '../hooks/useMailboxUnreadCounts';
 import useRenameMailbox from '../hooks/useRenameMailbox';
 import useDeleteMailbox from '../hooks/useDeleteMailbox';
+import useFolderList from '../hooks/useFolderList';
 
 // Inline because the array is mailbox-feature-only and the features layer's
 // "exactly three subdirs" rule (pages / hooks / components) does not allow a
@@ -59,6 +62,11 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     useMailboxUnreadCounts(mailboxId);
   const { rename: renameMailbox } = useRenameMailbox();
   const { remove: removeMailbox } = useDeleteMailbox();
+  // Read-only folder catalogue for the sidebar's per-folder nav entries. A twin
+  // of the ``['folders']`` readers in features/emails and features/folders —
+  // shared key → one deduped fetch. MUST live in features/mailboxes because
+  // this page cannot import a hook from another feature.
+  const { folders } = useFolderList();
   const composer = useDraftComposerContext();
 
   // Active scope derived from the URL: an /account/:accountId/* route means a
@@ -170,7 +178,7 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
   const inboxBadge = activeAccountId ? (inboxByAccount.get(activeAccountId) ?? 0) : inboxTotal;
   const spamBadge = activeAccountId ? (spamByAccount.get(activeAccountId) ?? 0) : spamTotal;
 
-  const navItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path, global }) => ({
+  const baseNavItems = MAILBOX_NAV_ITEMS.map(({ icon, labelKey, path, global }) => ({
     icon,
     // The inbox entry reads "Bandeja unificada" in the unified scope but
     // "Bandeja de entrada" inside a single account (where nothing is unified).
@@ -179,6 +187,23 @@ function MailboxShell({ mailboxId }: { mailboxId: string }) {
     global,
     badge: path === 'inbox' ? inboxBadge : path === 'spam' ? spamBadge : undefined,
   }));
+
+  // The user's folders surface INDIVIDUALLY in the sidebar (unlike virtual
+  // mailboxes, which are one entry to an index): a "Carpetas" management entry
+  // (→ FoldersPage) followed by one entry per folder (→ its view), each with its
+  // colour dot. All ``global`` — folders have no per-account route.
+  const folderNavItems = [
+    { icon: Folders, label: t('nav.folders'), path: 'folders', global: true },
+    ...folders.map((folder) => ({
+      icon: Folder,
+      label: folder.name,
+      path: `folders/${folder.folder_id}`,
+      global: true,
+      color: folder.color,
+    })),
+  ];
+
+  const navItems = [...baseNavItems, ...folderNavItems];
 
   return (
     <div className="flex h-screen bg-[#F9FAFB]">

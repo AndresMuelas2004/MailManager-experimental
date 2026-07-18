@@ -105,6 +105,26 @@ export function toUiError(error: unknown): UiError {
         message: 'Esta bandeja no existe o ya no está disponible.',
       };
     }
+    if (error.code === 'folder_not_found') {
+      // Wrapped folder errors — localize the CODE so the folder view / assign
+      // menu never show the raw backend text (same pattern as above).
+      return {
+        code: error.code,
+        message: 'Esta carpeta no existe o ya no está disponible.',
+      };
+    }
+    if (error.code === 'folder_name_conflict') {
+      return {
+        code: error.code,
+        message: 'Ya tienes una carpeta con ese nombre.',
+      };
+    }
+    if (error.code === 'rule_not_found') {
+      return {
+        code: error.code,
+        message: 'Esta regla no existe o ya no está disponible.',
+      };
+    }
     return { message: error.message, code: error.code };
   }
   if (error instanceof Error) {

@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useEmailFolderControls from '../hooks/useEmailFolderControls';
 import useBackfillStatus from '../hooks/useBackfillStatus';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
@@ -74,11 +75,14 @@ export default function AccountInboxPage({ box }: Props) {
       ? t('inbox.backfillNotice', { count: accountBackfill.fetched_count.toLocaleString() })
       : null;
 
+  const folderControls = useEmailFolderControls();
+
   const { selection, bulkError, bulkBar } = useBulkBar({
     box,
     refresh,
     searchKey: debouncedQ,
     scopeKey: `${mailboxId}:${accountId}:${box}`,
+    folders: folderControls.folders,
   });
 
   const handlePageChange = (next: number) => {
@@ -195,6 +199,10 @@ export default function AccountInboxPage({ box }: Props) {
         headerCheckboxState={selection.headerState(emails)}
         bulkBar={bulkBar}
         onOpen={viewer.open}
+        folders={folderControls.folders}
+        onAssignFolder={folderControls.onAssignFolder}
+        onUnassignFolder={folderControls.onUnassignFolder}
+        isFolderBusy={folderControls.isFolderBusy}
         emptyMessage={emptyMessage}
         page={page}
         pageSize={pageSize}

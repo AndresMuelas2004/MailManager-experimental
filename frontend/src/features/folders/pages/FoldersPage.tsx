@@ -1,0 +1,140 @@
+import { useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { Folder, Pencil, Plus, Trash2 } from 'lucide-react';
+
+import useFolders from '../hooks/useFolders';
+import FolderForm from '../components/FolderForm';
+import Modal from '../../../components/common/Modal';
+import Spinner from '../../../components/common/Spinner';
+import { useTranslation } from '../../../lib/i18n';
+import type { FolderCreate, FolderOut, FolderUpdate } from '../../../api/types/dto';
+
+type EditorState = { kind: 'closed' } | { kind: 'create' } | { kind: 'edit'; record: FolderOut };
+
+export default function FoldersPage() {
+  const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { t } = useTranslation();
+  const list = useFolders();
+  const [editor, setEditor] = useState<EditorState>({ kind: 'closed' });
+
+  const handleSubmit = async (payload: FolderCreate) => {
+    if (editor.kind === 'create') {
+      await list.create(payload);
+    } else if (editor.kind === 'edit') {
+      const updatePayload: FolderUpdate = payload;
+      await list.update(editor.record.folder_id, updatePayload);
+    }
+    setEditor({ kind: 'closed' });
+  };
+
+  const handleDelete = async (record: FolderOut) => {
+    if (!window.confirm(t('folders.confirmDelete', { name: record.name }))) return;
+    try {
+      await list.remove(record.folder_id);
+    } catch {
+      /* surfaced through list.error */
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex flex-col gap-4 px-4 pt-6 pb-6 sm:flex-row sm:items-start sm:justify-between lg:px-8 lg:pt-8">
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 lg:text-[28px]">
+            {t('folders.title')}
+          </h1>
+          <p className="text-[15px] leading-[1.5] text-zinc-500">{t('folders.subtitle')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setEditor({ kind: 'create' })}
+          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" />
+          {t('folders.newButton')}
+        </button>
+      </div>
+
+      {list.error && (
+        <div className="mx-4 mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 lg:mx-8">
+          {list.error.message}
+        </div>
+      )}
+
+      {list.loading ? (
+        <div className="flex h-64 items-center justify-center">
+          <Spinner />
+        </div>
+      ) : list.folders.length === 0 ? (
+        <div className="px-4 py-10 text-center text-sm text-zinc-400 lg:px-8">
+          {t('folders.empty')}
+        </div>
+      ) : (
+        <ul className="flex flex-col">
+          {list.folders.map((record) => (
+            <li
+              key={record.folder_id}
+              className="flex items-center gap-4 border-b border-zinc-100 px-4 py-4 hover:bg-zinc-50 lg:px-8"
+            >
+              {record.color ? (
+                <span
+                  className="h-4 w-4 shrink-0 rounded-full"
+                  style={{ backgroundColor: record.color }}
+                  aria-hidden
+                />
+              ) : (
+                <Folder className="h-5 w-5 shrink-0 text-zinc-400" />
+              )}
+              <div className="flex flex-1 flex-col gap-0.5">
+                <Link
+                  to={`/m/${mailboxId}/folders/${record.folder_id}`}
+                  className="text-sm font-semibold text-zinc-900 hover:text-blue-700"
+                >
+                  {record.name}
+                </Link>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditor({ kind: 'edit', record })}
+                className="grid h-8 w-8 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700"
+                aria-label={t('folders.editAria')}
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete(record)}
+                disabled={list.mutating}
+                className="grid h-8 w-8 place-items-center rounded-md text-red-500 hover:bg-red-50 disabled:opacity-50"
+                aria-label={t('folders.deleteAria')}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Modal
+        open={editor.kind !== 'closed'}
+        onClose={() => setEditor({ kind: 'closed' })}
+        widthClass="max-w-lg"
+        mobileFullScreen
+        ariaLabel={editor.kind === 'edit' ? t('folders.editTitle') : t('folders.newTitle')}
+      >
+        <div className="flex max-h-full flex-col overflow-auto px-4 pt-6 pb-6 lg:max-h-[80vh] lg:px-6">
+          <h2 className="mb-4 text-lg font-semibold text-zinc-900">
+            {editor.kind === 'edit' ? t('folders.editTitle') : t('folders.newTitle')}
+          </h2>
+          <FolderForm
+            initial={editor.kind === 'edit' ? editor.record : undefined}
+            saving={list.mutating}
+            submitLabel={editor.kind === 'edit' ? t('folders.saveChanges') : t('folders.create')}
+            onSubmit={handleSubmit}
+            onCancel={() => setEditor({ kind: 'closed' })}
+          />
+        </div>
+      </Modal>
+    </div>
+  );
+}

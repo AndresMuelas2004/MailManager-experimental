@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import useEmailList from '../hooks/useEmailList';
 import useEmailViewer from '../hooks/useEmailViewer';
 import useBulkBar from '../hooks/useBulkBar';
+import useEmailFolderControls from '../hooks/useEmailFolderControls';
 import useFavorite from '../hooks/useFavorite';
 import EmailTable from '../components/EmailTable';
 import ViewerMount from '../components/ViewerMount';
@@ -34,11 +35,14 @@ export default function FavoritesPage() {
   const { emails, accounts, total, pageSize, totalPages, loading, isPlaceholder, error, refresh } =
     useEmailList(mailboxId!, 'ALL_MAIL', undefined, debouncedQ, true, page);
 
+  const folderControls = useEmailFolderControls();
+
   const { selection, bulkError, bulkBar } = useBulkBar({
     box: 'ALL_MAIL',
     refresh,
     searchKey: debouncedQ,
     scopeKey: `${mailboxId}:favorites`,
+    folders: folderControls.folders,
   });
 
   const handlePageChange = (next: number) => {
@@ -133,6 +137,10 @@ export default function FavoritesPage() {
             isFavoritePending={isFavoritePending}
             headerCheckboxState={selection.headerState(emails)}
             bulkBar={bulkBar}
+            folders={folderControls.folders}
+            onAssignFolder={folderControls.onAssignFolder}
+            onUnassignFolder={folderControls.onUnassignFolder}
+            isFolderBusy={folderControls.isFolderBusy}
             emptyMessage={emptyMessage}
             page={page}
             pageSize={pageSize}
@@ -150,6 +158,10 @@ export default function FavoritesPage() {
         onReply={handleReply}
         onReplyAll={handleReplyAll}
         onForward={handleForward}
+        folders={folderControls.folders}
+        onAssignFolder={folderControls.onAssignFolder}
+        onUnassignFolder={folderControls.onUnassignFolder}
+        isFolderBusy={folderControls.isFolderBusy}
       />
     </div>
   );

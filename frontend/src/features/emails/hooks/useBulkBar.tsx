@@ -4,10 +4,11 @@ import type { ReactNode } from 'react';
 import useSelection from '../../../lib/hooks/useSelection';
 import { EMAILS_PAGE_SIZE } from '../../../lib/constants';
 import useEmailBulkActions from './useEmailBulkActions';
+import useEmailFolders from './useEmailFolders';
 import BulkActionsBar from '../components/BulkActionsBar';
 import type { BulkAction, ReadToggleTarget } from '../types';
 import type { EmailBox } from '../../../lib/types';
-import type { EmailMetadataOut } from '../../../api/types/dto';
+import type { EmailMetadataOut, FolderRef } from '../../../api/types/dto';
 import type { UiError } from '../../../api/client/errors';
 
 function emailKey(e: EmailMetadataOut): string {
@@ -28,6 +29,11 @@ type UseBulkBarArgs = {
   // survive into the new box and stay actionable on the now-hidden emails
   // of the previous one. Cleared whenever it changes.
   scopeKey?: string;
+  // Folder catalogue for the bulk "add to folder" picker (optional). When
+  // present the bar shows the picker and a pick fans out one assign call per
+  // selected email — there is NO bulk endpoint (backend MVP), so we route each
+  // email by its own mailbox_id + account_id, exactly like the per-row menu.
+  folders?: FolderRef[];
 };
 
 type UseBulkBarReturn = {
@@ -41,8 +47,10 @@ export default function useBulkBar({
   refresh,
   searchKey,
   scopeKey,
+  folders,
 }: UseBulkBarArgs): UseBulkBarReturn {
   const selection = useSelection<EmailMetadataOut>(emailKey);
+  const emailFolders = useEmailFolders();
 
   // The Set inside ``useSelection`` only stores keys, so it forgets the
   // email objects of rows that leave the visible page. With pagination a
@@ -169,16 +177,42 @@ export default function useBulkBar({
     [bulk, selected, readToggleTarget],
   );
 
+  // Bulk "add to folder": one assign call per selected email (no bulk endpoint —
+  // backend MVP), each routed by its own mailbox_id + account_id. The selection
+  // is kept so the user can add the same selection to several folders in a row.
+  const onAddToFolder = useCallback(
+    (folderId: string) => {
+      void Promise.all(
+        selected.map((e) =>
+          emailFolders.assign({
+            mailboxId: e.mailbox_id,
+            accountId: e.account_id,
+            providerMessageId: e.provider_message_id,
+            folderId,
+          }),
+        ),
+      ).catch(() => undefined);
+    },
+    [selected, emailFolders],
+  );
+
   const bulkBar = (
     <BulkActionsBar
       selectedCount={selected.length}
       box={box}
       readToggleTarget={readToggleTarget}
-      disabled={bulk.loading}
+      disabled={bulk.loading || emailFolders.busy}
       onClear={wrappedClear}
       onAction={onAction}
+      folders={folders}
+      onAddToFolder={onAddToFolder}
     />
   );
 
+  // The folder-add is best-effort: its failures are NOT folded into ``bulkError``
+  // (which replaces the whole listing on the page) — the chips reconcile with
+  // server truth via ``useEmailFolders``' ``onSettled`` invalidation instead. A
+  // blanked listing on a transient assign failure would be worse UX than a chip
+  // that simply does not stick.
   return { selection: wrappedSelection, bulkError: bulk.error, bulkBar };
 }
