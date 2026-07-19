@@ -690,7 +690,15 @@ _DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_rule_apply_jobs_active "
     "ON rule_apply_jobs (status) "
     "WHERE status IN ('pending', 'running');",
-    "UPDATE alembic_version SET version_num = '0045_create_folders_and_rules';",
+    # Migration 0046: one-shot email_content invalidation after the <style>
+    # rendering fixes (bleach entity-unescape inside <style>, dark-scheme
+    # @media dropped, var() declarations dropped). Same collapsed-invalidation
+    # note as 0044: the TRUNCATEs above already cleared the table for a fresh
+    # bootstrap, so this repeat is a no-op there; for incremental upgrades the
+    # per-migration TRUNCATE in 0046 runs via Alembic.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = "
+    "'0046_invalidate_email_content_cache_style_fixes';",
 ]
 
 

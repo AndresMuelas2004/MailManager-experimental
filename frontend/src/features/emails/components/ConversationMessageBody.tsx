@@ -96,6 +96,9 @@ export default function ConversationMessageBody({ message }: Props) {
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
         className="h-[70vh] w-full border-0"
+        // Pin the embedded document to light so sender dark-mode media
+        // queries never fire (see emailHtmlFrame.ts).
+        style={{ colorScheme: 'light' }}
       />
     );
   } else if (content && hasRenderableBody(content.text_body)) {
@@ -106,6 +109,7 @@ export default function ConversationMessageBody({ message }: Props) {
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="strict-origin-when-cross-origin"
         className="h-[70vh] w-full border-0"
+        style={{ colorScheme: 'light' }}
       />
     );
   } else {

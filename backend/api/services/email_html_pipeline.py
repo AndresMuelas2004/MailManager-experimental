@@ -35,6 +35,14 @@ Pipeline
    ``rel="noopener noreferrer"``, and ``href`` dropped when its scheme is
    ``cid:``/``data:`` — those are image-only protocols) via the shared
    :mod:`api.services.html_link_hardening` filter.
+8. ``_unescape_style_blocks`` — undo bleach's HTML-escaping inside ``<style>``
+   blocks (``&gt;`` → ``>``, ``&amp;`` → ``&``, never ``&lt;``). ``<style>``
+   is a rawtext element: browsers do NOT decode entities in it, so a child
+   combinator serialized as ``&gt;`` reaches the CSS parser verbatim and its
+   trailing ``;`` SPLITS the selector — the parser discards everything before
+   the ``;`` and recovers with the remainder (``.card &gt; table {…}``
+   becomes the rule ``table {…}``), turning scoped rules (Outlook dark-mode
+   ``[data-ogsc]`` hacks in the wild) into global ones.
 """
 
 from __future__ import annotations
@@ -148,6 +156,13 @@ _ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset({
 # ``@media`` and ``@supports`` carry responsive layouts and must survive.
 # ``@font-face`` is kept so corporate signatures with web fonts still render.
 _ALLOWED_CSS_AT_RULES: frozenset[str] = frozenset({"media", "supports", "font-face"})
+
+# ``@media`` blocks whose condition mentions this marker are dropped whole:
+# the viewer renders every email light-only (Gmail-web parity — Gmail strips
+# ``prefers-color-scheme`` media queries), and both scheme variants are
+# covered by the substring ("light" rules are redundant with the base design,
+# "dark" rules must never fire). Matched case-insensitively on the media text.
+_DARK_SCHEME_MEDIA_MARKER = "prefers-color-scheme"
 
 
 # ---------------------------------------------------------------------------
@@ -280,9 +295,17 @@ _GEOMETRY_STYLE_RE: dict[str, re.Pattern[str]] = {
 
 # Property values matching this expression are dropped from CSS (both inline
 # styles and ``<style>`` blocks). Covers ``expression(…)`` (legacy IE code
-# execution) and any scheme-based URL carrying JavaScript.
+# execution), any scheme-based URL carrying JavaScript, and ``var(…)`` custom
+# property USES: their definitions (``--x: …``) never survive sanitisation
+# (cssutils/tinycss2 drop the non-allowlisted ``--*`` names), so a surviving
+# ``background-color: var(--body-bg)`` computes to *invalid at computed-value
+# time* → ``unset`` — and, being an author declaration, it still BEATS the
+# legacy ``bgcolor`` presentational fallback the template ships for exactly
+# this case, wiping the intended background (Amazon.es dark-mode templates).
+# Gmail drops ``var()`` declarations too, so removal is rendering parity: the
+# legacy fallbacks wake up.
 _UNSAFE_CSS_VALUE_RE = re.compile(
-    r"(expression\s*\(|javascript\s*:|vbscript\s*:)",
+    r"(expression\s*\(|javascript\s*:|vbscript\s*:|var\s*\()",
     re.IGNORECASE,
 )
 
@@ -398,6 +421,14 @@ def _sanitize_css_rules(rules: Any) -> None:
     The at-rule decision uses ``_ALLOWED_CSS_AT_RULES`` as the single source
     of truth: if you want to drop ``@media`` in the future, remove it from
     the constant — no code change needed here.
+
+    ``@media`` blocks conditioned on ``prefers-color-scheme`` are dropped
+    entirely (see ``_DARK_SCHEME_MEDIA_MARKER``): the viewer is light-only,
+    but the iframe inherits the OS/browser scheme, so a user browsing in dark
+    mode would get the sender's dark-mode palette on top of our light chrome —
+    half-applied (images and fixed inline colors stay light-designed) and
+    unreadable. Gmail web strips these media queries too, so dropping them is
+    rendering parity, not a capability loss.
     """
     from cssutils.css import CSSRule  # lazy — transitive dep of premailer
 
@@ -422,6 +453,10 @@ def _sanitize_css_rules(rules: Any) -> None:
                     to_remove.append(rule)
                     continue
                 if rule_type == CSSRule.MEDIA_RULE:
+                    media_text = getattr(rule.media, "mediaText", "") or ""
+                    if _DARK_SCHEME_MEDIA_MARKER in media_text.lower():
+                        to_remove.append(rule)
+                        continue
                     _sanitize_css_rules(rule.cssRules)
                 else:
                     _sanitize_css_declarations(rule.style)
@@ -702,21 +737,64 @@ _INBOUND_LINK_REL = "noopener noreferrer"
 _ALLOWED_A_HREF_SCHEMES: frozenset[str] = frozenset({"http", "https", "mailto", "tel"})
 
 
+def _build_css_sanitizer() -> Any:
+    """Build the inline-``style`` sanitizer: allowlist + ``var()`` stripping.
+
+    ``CSSSanitizer`` filters by property NAME only, so a ``background-color:
+    var(--body-bg)`` on an allowlisted property survives it. The definitions
+    (``--body-bg: …``) never survive (non-allowlisted names), so the surviving
+    use computes to ``unset`` AND — as an author declaration — still overrides
+    the ``bgcolor`` presentational fallback (see ``_UNSAFE_CSS_VALUE_RE``).
+    The subclass drops every declaration whose value carries ``var(`` after
+    the base class has done its allowlist pass, mirroring what the ``<style>``
+    path does via ``_sanitize_css_declarations``.
+    """
+    from bleach.css_sanitizer import CSSSanitizer  # lazy — optional dep
+
+    class _VarStrippingCSSSanitizer(CSSSanitizer):
+        def sanitize_css(self, style: str) -> str:  # type: ignore[override]
+            cleaned = super().sanitize_css(style)
+            if "var(" not in cleaned.lower():
+                return cleaned
+            try:
+                import tinycss2  # dependency of bleach's css_sanitizer
+
+                kept: list[str] = []
+                for decl in tinycss2.parse_declaration_list(cleaned):
+                    if getattr(decl, "type", None) != "declaration":
+                        continue
+                    value = tinycss2.serialize(decl.value)
+                    if "var(" in value.lower():
+                        continue
+                    important = " !important" if decl.important else ""
+                    kept.append(f"{decl.name}: {value.strip()}{important}")
+                return "; ".join(kept)
+            except Exception as exc:
+                # Fail-closed for the offending declarations, not the whole
+                # attribute: an unparseable style falls back to the base
+                # class output (allowlisted, just with the broken var() uses).
+                logger.debug(
+                    "var() stripping failed (%s): %s", type(exc).__name__, exc,
+                )
+                return cleaned
+
+    return _VarStrippingCSSSanitizer(
+        allowed_css_properties=_ALLOWED_CSS_PROPERTIES,
+        allowed_svg_properties=frozenset(),
+    )
+
+
 def _clean_with_bleach(html: str) -> str:
     """Final allowlist pass: tags, attributes, protocols, inline CSS, links.
 
     Uses a ``Cleaner`` with the shared link-hardening filter appended so the
     ``<a>`` rewrite happens in the same parse pass as the sanitisation.
     """
-    from bleach.css_sanitizer import CSSSanitizer  # lazy — optional dep
     from bleach.sanitizer import Cleaner
 
     from api.services.html_link_hardening import build_link_hardening_filter
 
-    css_sanitizer = CSSSanitizer(
-        allowed_css_properties=_ALLOWED_CSS_PROPERTIES,
-        allowed_svg_properties=frozenset(),
-    )
+    css_sanitizer = _build_css_sanitizer()
     cleaner = Cleaner(
         tags=_ALLOWED_TAGS,
         attributes=_ALLOWED_ATTRIBUTES,
@@ -735,6 +813,75 @@ def _clean_with_bleach(html: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Step 8 — undo bleach's entity-escaping inside <style> blocks
+# ---------------------------------------------------------------------------
+
+# Entities bleach's serializer emits inside ``<style>`` rawtext, mapped back
+# to their characters. ``&lt;`` is DELIBERATELY absent: un-escaping it could
+# materialise ``</style>`` (premature block close → markup injection) from a
+# hostile string value cssutils happened to preserve. CSS never needs a
+# literal ``<`` (no selector or allowlisted value uses one), so leaving it
+# escaped breaks at most that one hostile rule. ``&amp;`` is replaced LAST so
+# a double-escaped ``&amp;gt;`` collapses to the literal ``&gt;`` (a broken
+# CSS token, harmless) instead of a live ``>``.
+_STYLE_UNESCAPE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("&gt;", ">"),
+    ("&quot;", '"'),
+    ("&#x27;", "'"),
+    ("&#39;", "'"),
+    ("&amp;", "&"),
+)
+
+_STYLE_CLOSE_RE = re.compile(r"</\s*style", re.IGNORECASE)
+
+
+def _unescape_style_blocks(html: str) -> str:
+    """Undo bleach's HTML-escaping inside every ``<style>`` block.
+
+    ``<style>`` is a rawtext element: the browser's HTML parser hands its
+    content to the CSS parser VERBATIM, entities included. Bleach's serializer
+    escapes ``&``/``<``/``>`` in that content, so a child combinator becomes
+    ``&gt;`` — and its trailing ``;`` splits the selector at CSS-parse time
+    (everything before the ``;`` is discarded as an invalid declaration, the
+    remainder parses as a fresh rule). Real-world impact: Outlook dark-mode
+    hack rules like ``[data-ogsc] .card > table { background:#181a1a }``
+    degenerate into a global ``table { background:#181a1a }`` — dark
+    backgrounds bleeding into the light viewer (Amazon.es, ~20% of the cached
+    corpus carried at least one escaped combinator).
+
+    Runs AFTER bleach (the escaping's source) so the final document carries
+    browser-parseable CSS. Safety: the content at this point is
+    cssutils-sanitised CSS (step 3), and ``&lt;`` is never un-escaped, so no
+    replacement can materialise a tag or close the block early; the
+    ``_STYLE_CLOSE_RE`` guard is belt-and-braces against that invariant ever
+    breaking.
+    """
+    if "<style" not in html.lower():
+        return html
+
+    def _replace(match: re.Match[str]) -> str:
+        body = match.group("body")
+        if not body:
+            return match.group(0)
+        unescaped = body
+        for entity, char in _STYLE_UNESCAPE_REPLACEMENTS:
+            unescaped = unescaped.replace(entity, char)
+        if _STYLE_CLOSE_RE.search(unescaped):
+            # Impossible by construction (``&lt;`` stays escaped); if it ever
+            # happens, keep the escaped-but-safe original body.
+            logger.warning(
+                "style unescape would materialise a </style>; keeping the "
+                "escaped block"
+            )
+            return match.group(0)
+        open_tag = match.group("open")
+        close_tag = match.group("close") or "</style>"
+        return f"{open_tag}{unescaped}{close_tag}"
+
+    return _STYLE_BLOCK_RE.sub(_replace, html)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -743,10 +890,10 @@ def prepare_email_html(html: str) -> str:
     """Transform provider HTML into browser-safe HTML for the iframe viewer.
 
     Runs the full pipeline (charset → MSO unwrap → <style> sanitize → CSS
-    inline → geometry mirror → <script> strip → bleach). Each step is
-    fail-soft: on any unexpected error the step logs a warning and returns the
-    input unchanged, so bleach always sees well-formed content and no step can
-    take down the endpoint.
+    inline → geometry mirror → <script> strip → bleach → <style> unescape).
+    Each step is fail-soft: on any unexpected error the step logs a warning
+    and returns the input unchanged, so bleach always sees well-formed content
+    and no step can take down the endpoint.
     """
     if not html or html.isspace():
         return html
@@ -757,7 +904,8 @@ def prepare_email_html(html: str) -> str:
     html = _flatten_document_wrappers(html)
     html = _mirror_geometry_to_attributes(html)
     html = _strip_script_blocks(html)
-    return _clean_with_bleach(html)
+    html = _clean_with_bleach(html)
+    return _unescape_style_blocks(html)
 
 
 # ---------------------------------------------------------------------------
@@ -840,12 +988,13 @@ def _rewrite_style_block(css: str, url_rewriter: Callable[[str], str]) -> str:
     """Rewrite remote image ``url(...)`` inside a ``<style>`` block via cssutils.
 
     Unlike attributes (which lxml decodes on read), ``<style>`` is a rawtext
-    element: bleach HTML-escapes its content (``&`` -> ``&amp;``) and lxml hands
-    it back verbatim. So the URL sitting in a declaration here is HTML-escaped;
-    it is unescaped before signing (or the proxy would fetch a ``?a=1&amp;b=2``
-    URL) and the sentinel is emitted with a raw ``&`` — valid in a CSS ``url()``
-    and correct whether the viewer iframe reads the block as rawtext or decodes
-    it via ``srcdoc``.
+    element that lxml hands back verbatim. Since pipeline step 8
+    (``_unescape_style_blocks``) the content arrives with raw characters —
+    bleach's ``&amp;`` escaping is already undone — so the ``html_unescape``
+    below is normally a no-op kept as belt-and-braces for any residual entity
+    (e.g. a double-escaped ``&amp;gt;`` collapsed to ``&gt;`` by step 8). The
+    sentinel is emitted with a raw ``&`` — valid in a CSS ``url()`` and
+    correct because the browser never entity-decodes rawtext.
     """
     def _unescaping_rewriter(url: str) -> str:
         return url_rewriter(html_unescape(url))

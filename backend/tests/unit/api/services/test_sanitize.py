@@ -1072,3 +1072,173 @@ def test_link_stylesheet_content_is_never_injected(monkeypatch):
     assert "Oferta de empleo" in result
     assert "Quicksand" not in result
     assert "sans serif" not in result
+
+
+# ---------------------------------------------------------------------------
+# <style> rawtext unescape (step 8) — combinators must reach the CSS parser raw
+# ---------------------------------------------------------------------------
+
+
+def test_style_block_child_combinator_survives_unescaped():
+    """``>`` combinators in <style> must stay raw characters, never ``&gt;``.
+
+    ``<style>`` is rawtext: the browser hands its content to the CSS parser
+    without entity-decoding, so an ``&gt;`` reaches it verbatim and the
+    entity's ``;`` SPLITS the selector (everything before it is discarded as
+    an invalid declaration; the remainder parses as a fresh rule).
+    """
+    html = (
+        "<html><head><style>"
+        ".wrapper > table { border-collapse: collapse }"
+        "</style></head><body><table><tr><td>x</td></tr></table></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "&gt;" not in result
+    assert re.search(r"\.wrapper\s*>\s*table", result)
+
+
+def test_scoped_dark_rule_does_not_degenerate_into_global_rule():
+    """The Amazon.es regression: an Outlook dark-hack rule with a child
+    combinator must keep its ``[data-ogsc]`` scope intact.
+
+    Before the fix the escaped ``&gt;`` split the selector at CSS-parse time
+    and the remainder became a global ``table { background:#181a1a }``,
+    painting every table dark in the light viewer.
+    """
+    html = (
+        "<html><head><style>"
+        "[data-ogsc] .rio-card > table { background-color: #181a1a }"
+        "</style></head><body>"
+        '<table bgcolor="white"><tr><td>contenido</td></tr></table>'
+        "</body></html>"
+    )
+    result = sanitize_email_html(html)
+    match = re.search(r"<style[^>]*>(.*?)</style>", result, re.S)
+    assert match is not None
+    css = match.group(1)
+    # The scope prefix and the combinator survive together on one selector —
+    # no entity, no split.
+    assert "&gt;" not in css
+    assert re.search(r"\[data-ogsc\]\s*\.rio-card\s*>\s*table", css)
+
+
+def test_style_unescape_leaves_lt_escaped():
+    """``&lt;`` must NEVER be unescaped inside <style> (it could materialise a
+    premature ``</style>`` and break out of the block). ``&gt;``/``&amp;`` are
+    restored; ``&lt;`` stays an entity (a broken CSS token, harmless)."""
+    from api.services.email_html_pipeline import _unescape_style_blocks
+
+    html = "<style>a &lt;/style&gt; b { color: red }</style>"
+    result = _unescape_style_blocks(html)
+    assert "&lt;" in result
+    # The closing sequence never materialises early: exactly one real
+    # ``</style>`` (the block's own closer) exists in the output.
+    assert result.count("</style>") == 1
+    assert "&gt;" not in result
+
+
+def test_style_unescape_double_escaped_gt_stays_entity():
+    """A literal ``&gt;`` in the ORIGINAL CSS arrives double-escaped
+    (``&amp;gt;``) and must collapse to the entity ``&gt;`` — a broken CSS
+    token — not to a live ``>`` (that would change the author's data)."""
+    from api.services.email_html_pipeline import _unescape_style_blocks
+
+    html = "<style>i &amp;gt; j { color: red }</style>"
+    result = _unescape_style_blocks(html)
+    assert "&gt;" in result
+    assert "&amp;gt;" not in result
+
+
+# ---------------------------------------------------------------------------
+# prefers-color-scheme media queries — dropped whole (light-only viewer)
+# ---------------------------------------------------------------------------
+
+
+def test_drops_dark_scheme_media_query_keeps_responsive_ones():
+    """``@media (prefers-color-scheme: dark)`` blocks are dropped whole (the
+    viewer is light-only and Gmail strips them too); responsive ``@media``
+    blocks survive untouched."""
+    html = (
+        "<html><head><style>"
+        ".card { background: #fff }"
+        "@media (prefers-color-scheme: dark) { .card { background: #181a1a } }"
+        "@media only screen and (max-width: 480px) { .card { width: 100% } }"
+        "</style></head><body><div class=\"card\">x</div></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "prefers-color-scheme" not in result
+    assert "#181a1a" not in result
+    assert "max-width" in result
+
+
+def test_drops_light_scheme_media_query_too():
+    """``prefers-color-scheme: light`` blocks are redundant with the base
+    design once the viewer is pinned to light — dropped for symmetry (matches
+    Gmail, which strips every prefers-color-scheme query)."""
+    html = (
+        "<html><head><style>"
+        "@media (prefers-color-scheme: light) { .card { background: #fafafa } }"
+        "</style></head><body><div class=\"card\">x</div></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "prefers-color-scheme" not in result
+
+
+def test_drops_combined_condition_dark_media_query():
+    """A media query mixing screen/width conditions WITH prefers-color-scheme
+    is still dropped — the dark condition must never fire, and Gmail drops the
+    whole query as well."""
+    html = (
+        "<html><head><style>"
+        "@media screen and (max-width: 600px) and (prefers-color-scheme: dark)"
+        " { .m { background: #000 } }"
+        "</style></head><body><div class=\"m\">x</div></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "prefers-color-scheme" not in result
+    assert "background: #000" not in result
+
+
+# ---------------------------------------------------------------------------
+# var() custom-property uses — dropped so legacy fallbacks wake up
+# ---------------------------------------------------------------------------
+
+
+def test_var_use_dropped_from_style_block():
+    """Declarations using ``var(…)`` are dropped from <style> rules: their
+    ``--x`` definitions never survive sanitisation, so the use would compute
+    to *invalid at computed-value time* and wipe the element's background."""
+    html = (
+        "<html><head><style>"
+        "body { background-color: var(--body-bg); color: #111 }"
+        "</style></head><body><p>x</p></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "var(" not in result
+    assert "color: #111" in result or "color:#111" in result.replace(" ", "")
+
+
+def test_var_use_dropped_from_inline_style_wakes_bgcolor_fallback():
+    """The Amazon.es body pattern: ``style="background-color:var(--body-bg)"``
+    plus a legacy ``bgcolor="#FFFFFF"`` fallback. The broken var() use must be
+    dropped so the promoted body wrapper carries the bgcolor fallback."""
+    html = (
+        "<html><head></head>"
+        '<body style="background-color:var(--body-bg); color:var(--body-color)"'
+        ' bgcolor="#FFFFFF"><p>hola</p></body></html>'
+    )
+    result = sanitize_email_html(html)
+    assert "var(" not in result
+    normalized = result.replace(" ", "").lower()
+    assert "background-color:#ffffff" in normalized
+
+
+def test_var_use_dropped_from_element_inline_style():
+    """var() uses on regular elements (not just the body) are dropped by the
+    bleach CSSSanitizer subclass while sibling declarations survive."""
+    html = (
+        '<div style="background-color: var(--x); padding: 4px">x</div>'
+    )
+    result = sanitize_email_html(html)
+    assert "var(" not in result
+    assert "padding: 4px" in result or "padding:4px" in result.replace(" ", "")
