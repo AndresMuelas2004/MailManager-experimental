@@ -595,6 +595,15 @@ export const es = {
     untitled: '(Sin nombre)',
   },
 
+  cookies: {
+    ariaLabel: 'Aviso sobre medición de audiencia',
+    message:
+      'Usamos Google Analytics para saber cuánta gente visita nuestras páginas públicas. Solo se activa si lo aceptas, y nunca mide lo que haces dentro de tu correo.',
+    accept: 'Aceptar',
+    reject: 'Rechazar',
+    policyLink: 'Política de privacidad',
+  },
+
   errors: {
     popupBlocked:
       'El navegador ha bloqueado la ventana de autenticación. Permite ventanas emergentes para este sitio e inténtalo de nuevo.',

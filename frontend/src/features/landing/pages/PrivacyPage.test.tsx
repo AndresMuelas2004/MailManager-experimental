@@ -54,7 +54,7 @@ describe('PrivacyPage', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Privacy Policy' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Last updated: July 15, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Last updated: August 13, 2026')).toBeInTheDocument();
     expect(screen.queryByText('Login screen')).not.toBeInTheDocument();
   });
 

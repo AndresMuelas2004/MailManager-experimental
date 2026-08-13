@@ -39,4 +39,5 @@ Cada documento tiene un **gemelo con el mismo nombre** en [`../features/`](../fe
 
 ### Experiencia e interfaz
 - [diseno-responsive-movil.md](diseno-responsive-movil.md) — Punto de corte exacto (1024 px) y reflujo secundario (640 px), tamaños fijos de la chrome móvil (cajón, barra superior, botón flotante, pantalla completa), qué se oculta/transforma, la cadena nueva y lo que NO soporta.
+- [analitica-web.md](analitica-web.md) — Identificadores de la propiedad de Google Analytics, las cuatro rutas medidas, la clave de consentimiento en el navegador, las cookies con su caducidad, los dominios añadidos a la CSP y qué NO soporta (sin Consent Mode, sin eventos de producto, sin medición dentro de la app).
 - [paginas-publicas.md](paginas-publicas.md) — Rutas públicas exactas (`/`, `/privacy`, `/terms`, y el gateway en `/home`), la regla de detección de idioma con su clave de almacenamiento, la fecha fija de "última actualización", los enlaces externos, los umbrales responsive y qué NO soporta (sin SEO en servidor, sin sitemap, sin título por página, contenido legal estático versionado con la app).

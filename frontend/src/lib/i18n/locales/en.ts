@@ -592,6 +592,15 @@ export const en: EsDictionary = {
     untitled: '(Untitled)',
   },
 
+  cookies: {
+    ariaLabel: 'Audience measurement notice',
+    message:
+      'We use Google Analytics to see how many people visit our public pages. It only runs if you accept, and it never measures what you do inside your mail.',
+    accept: 'Accept',
+    reject: 'Reject',
+    policyLink: 'Privacy policy',
+  },
+
   errors: {
     popupBlocked:
       'The browser blocked the authentication window. Allow pop-ups for this site and try again.',

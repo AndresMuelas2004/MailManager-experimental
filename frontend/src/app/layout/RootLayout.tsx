@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
 
+import AnalyticsGate from './AnalyticsGate';
 import DraftComposerProvider from '../providers/DraftComposerProvider';
 import Spinner from '../../components/common/Spinner';
 
@@ -13,9 +14,11 @@ export default function RootLayout() {
         </div>
       }
     >
-      <DraftComposerProvider>
-        <Outlet />
-      </DraftComposerProvider>
+      <AnalyticsGate>
+        <DraftComposerProvider>
+          <Outlet />
+        </DraftComposerProvider>
+      </AnalyticsGate>
     </Suspense>
   );
 }

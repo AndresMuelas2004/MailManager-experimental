@@ -8,7 +8,7 @@ export default function PrivacyContentEn() {
     <>
       <h1>Privacy Policy</h1>
       <p>
-        <strong>Last updated: July 15, 2026</strong>
+        <strong>Last updated: August 13, 2026</strong>
       </p>
       <p>
         Missela ("we", "us") is an email client that lets you read and manage your Gmail and Outlook
@@ -128,7 +128,14 @@ export default function PrivacyContentEn() {
         <li>use your email to train AI or machine-learning models;</li>
         <li>create profiles about you or track you across the web.</li>
       </ul>
-      <p>There are no third-party analytics or tracking scripts on missela.app.</p>
+      <p>
+        We do use Google Analytics on missela.app, but only on the public pages (home, privacy,
+        terms and sign-in) and only if you accept the notice shown the first time you visit them.
+        Its sole purpose is counting how many people visit us. What you do inside the app once you
+        sign in is not measured at all: no mailbox route, no data from your email and no identifier
+        of yours reaches Google. If you decline the notice, Google's script is never even
+        downloaded.
+      </p>
 
       <h2>4. Google user data - Limited Use disclosure</h2>
       <p>
@@ -233,9 +240,17 @@ export default function PrivacyContentEn() {
       <h2>9. Cookies</h2>
       <p>
         Missela uses a single first-party session cookie, strictly necessary to keep you signed in
-        (httpOnly, Secure). No advertising cookies, no third-party cookies, no cross-site tracking.
-        Because only essential cookies are used, no cookie consent banner is required.
+        (httpOnly, Secure). That one requires no consent.
       </p>
+      <p>
+        Beyond that, on the public pages we ask for your permission for the audience measurement
+        described in section 3. If you accept, Google Analytics sets its own cookies (
+        <code>_ga</code> and <code>_ga_*</code>) to tell visitors apart; they expire after two
+        years. If you decline, or simply do not answer, no Google script is downloaded and none of
+        those cookies are set. Your answer is stored in your browser's local storage, not in a
+        cookie; clearing the site data brings the notice back so you can choose again.
+      </p>
+      <p>No advertising cookies and no cross-site tracking.</p>
 
       <h2>10. Children</h2>
       <p>

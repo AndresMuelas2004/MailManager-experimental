@@ -257,3 +257,17 @@ La feature `features/landing/` monta la landing de marketing como índice **púb
 4. **Las páginas públicas NO escriben `document.title`.** El único escritor en runtime sigue siendo el efecto del badge de no-leídos de `MailboxLayoutPage` (cuyo comentario documenta esa unicidad); un title-setter por página pública rompería el invariante de único-escritor sin que nada falle visiblemente.
 
 El comportamiento y los topes exactos viven en `docs/features/paginas-publicas.md` / `docs/limits/paginas-publicas.md`.
+
+## 18. Analítica web (`lib/analytics.ts`, `AnalyticsGate`) — el alcance se sostiene sobre tres piezas acopladas
+
+La medición de audiencia es 100% frontend (sin endpoint, sin columna, sin schema) y toda ella cuelga de `lib/analytics.ts`. Cuatro cosas no deducibles leyendo un solo fichero:
+
+1. **El alcance "solo páginas públicas" lo sostienen DOS interruptores, y uno de ellos NO está en el repositorio.** `TRACKED_PATHS` + el `config` con `send_page_view: false` impiden que *nuestro* código reporte una ruta de buzón, pero gtag.js sabe detectar por sí solo los cambios de ruta de una SPA vía `history`: con ese sub-ajuste activo, un visitante que acepta en la landing y entra a su correo hace que Google reciba `/m/:mailboxId/inbox` sin que ejecutemos una línea. El interruptor que lo apaga vive en la **consola de Google Analytics** (propiedad `missela.app` → flujo `MISSELA Web` → medición mejorada → "page changes based on browser history events", desactivado). Nada en el código lo refleja ni puede detectar que alguien lo reactive; el aviso está en `.env.production.example` junto a `VITE_GA_MEASUREMENT_ID` y en `docs/limits/analitica-web.md`. Reactivarlo rompe en silencio lo que la política de privacidad promete por escrito.
+
+2. **`AnalyticsGate` vive en `app/layout/`, no en `app/providers/`, y es obligatorio que así sea.** Necesita `useLocation`, y `Providers.tsx` compone por ENCIMA del `RouterProvider` — un provider hermano de `QueryProvider` no tiene contexto de router y reventaría en cuanto llamara al hook. Por eso lo monta `RootLayout` (el primer punto que ya está dentro del router y cubre todas las rutas). Moverlo a `providers/` "por coherencia" es la regresión evidente.
+
+3. **`CookieBanner` está en `components/common/` y recibe hasta la URL de la política como prop.** El nivel `common/` prohíbe conocer el dominio y navegar por su cuenta, así que las cadenas traducidas y el `policyHref` los inyecta el gate — que sí puede leer `lib/i18n`. Un futuro `useTranslation` dentro del banner lo baja de nivel y viola la frontera.
+
+4. **La política de privacidad es parte del contrato de esta feature, no documentación adyacente.** Las secciones 3 y 9 de `PrivacyContentEs/En` describen exactamente este alcance, y su copy está espejado en el borrador aprobado (`UtilidadesDelProgramador/despliegue-app/verificacion-oauth/BORRADOR-privacy-policy.md`) según la regla del §17.3. Ampliar lo que se mide obliga a cambiar los cuatro ficheros en el mismo commit.
+
+Sin `VITE_GA_MEASUREMENT_ID` (el default en dev y en cualquier build que no la pase) la feature se apaga entera: sin banner, sin script y sin eventos. Comportamiento y cifras exactas en `docs/features/analitica-web.md` / `docs/limits/analitica-web.md`.

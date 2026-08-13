@@ -8,7 +8,7 @@ export default function PrivacyContentEs() {
     <>
       <h1>Política de privacidad</h1>
       <p>
-        <strong>Última actualización: 15 de julio de 2026</strong>
+        <strong>Última actualización: 13 de agosto de 2026</strong>
       </p>
       <p>
         Missela ("nosotros") es un cliente de correo que te permite leer y gestionar tus cuentas de
@@ -131,7 +131,14 @@ export default function PrivacyContentEs() {
         <li>usar tu correo para entrenar modelos de IA o aprendizaje automático;</li>
         <li>crear perfiles sobre ti o rastrearte por la web.</li>
       </ul>
-      <p>En missela.app no hay analítica de terceros ni scripts de rastreo.</p>
+      <p>
+        En missela.app usamos Google Analytics, pero solo en las páginas públicas (portada,
+        privacidad, términos e inicio de sesión) y solo si lo aceptas en el aviso que aparece la
+        primera vez que las visitas. Sirve únicamente para contar cuánta gente nos visita. Lo que
+        haces dentro de la aplicación una vez inicias sesión no se mide en absoluto: ninguna ruta de
+        tu buzón, ningún dato de tus correos y ningún identificador tuyo llegan a Google. Si
+        rechazas el aviso, el script de Google ni siquiera se descarga.
+      </p>
 
       <h2>4. Datos de usuario de Google - declaración de Limited Use</h2>
       <p>
@@ -240,10 +247,18 @@ export default function PrivacyContentEs() {
       <h2>9. Cookies</h2>
       <p>
         Missela usa una única cookie de sesión propia, estrictamente necesaria para mantener tu
-        sesión iniciada (httpOnly, Secure). Sin cookies publicitarias, sin cookies de terceros, sin
-        rastreo entre sitios. Al usarse solo cookies esenciales, no se requiere banner de
-        consentimiento de cookies.
+        sesión iniciada (httpOnly, Secure). Esa no requiere consentimiento.
       </p>
+      <p>
+        Aparte de esa, en las páginas públicas te pedimos permiso para la medición de audiencia
+        descrita en la sección 3. Si lo aceptas, Google Analytics instala sus propias cookies (
+        <code>_ga</code> y <code>_ga_*</code>) para distinguir visitantes; caducan a los dos años.
+        Si lo rechazas, o si simplemente no respondes, no se descarga ningún script de Google y no
+        se instala ninguna de esas cookies. Tu respuesta se guarda en el almacenamiento local de tu
+        navegador, no en una cookie; si borras los datos del sitio, el aviso volverá a aparecer y
+        podrás elegir de nuevo.
+      </p>
+      <p>Sin cookies publicitarias y sin rastreo entre sitios.</p>
 
       <h2>10. Menores</h2>
       <p>Missela no está dirigida a menores de 16 años y no tratamos sus datos a sabiendas.</p>

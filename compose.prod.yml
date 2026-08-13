@@ -62,6 +62,9 @@ services:
         # Optional (mirrors the backend MICROSOFT_CLIENT_ID being optional): an
         # empty value bakes a disabled "Continue with Microsoft" button.
         VITE_MICROSOFT_CLIENT_ID: ${VITE_MICROSOFT_CLIENT_ID:-}
+        # Optional GA4 measurement id (G-XXXXXXX). Empty disables web analytics
+        # outright: no consent banner, no gtag.js, no events.
+        VITE_GA_MEASUREMENT_ID: ${VITE_GA_MEASUREMENT_ID:-}
     restart: unless-stopped
     depends_on:
       - backend
