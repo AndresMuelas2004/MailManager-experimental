@@ -42,7 +42,7 @@ services:
     volumes:
       - ./backend:/app
       - ./frontend:/frontend:ro
-      - "C:/Users/MiniPC/Desktop/SecureCredentials/MailApp:/secrets:ro"
+      - "C:/Users/amuel/Desktop/SecureCredentials/MailApp:/secrets:ro"
     ports:
       - "8000:8000"
     depends_on:
