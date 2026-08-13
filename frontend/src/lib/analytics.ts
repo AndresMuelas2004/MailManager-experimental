@@ -92,10 +92,16 @@ export function loadAnalytics(): void {
   document.head.appendChild(script);
 
   window.dataLayer = window.dataLayer ?? [];
-  const gtag: Window['gtag'] = (...args: unknown[]) => {
-    window.dataLayer?.push(args);
-  };
-  window.gtag = gtag;
+  // `function` + `arguments` es load-bearing y NO puede reescribirse como una
+  // arrow con rest params: gtag.js reconoce sus comandos porque el elemento
+  // empujado es un objeto `arguments`, y descarta en silencio los arrays
+  // normales. Con un array la cola crece, pero la propiedad nunca se configura
+  // — sin cookie `_ga` y sin un solo hit enviado, sin ningún error visible.
+  function gtag(): void {
+    // eslint-disable-next-line prefer-rest-params
+    window.dataLayer?.push(arguments);
+  }
+  window.gtag = gtag as Window['gtag'];
 
   gtag('js', new Date());
   // send_page_view:false is load-bearing — see the header comment. Without it

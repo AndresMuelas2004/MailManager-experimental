@@ -113,10 +113,25 @@ describe('loadAnalytics', () => {
     analytics.loadAnalytics();
 
     const configCall = (window.dataLayer ?? []).find(
-      (entry) => Array.isArray(entry) && entry[0] === 'config',
-    ) as unknown[] | undefined;
+      (entry) => (entry as Record<number, unknown>)?.[0] === 'config',
+    ) as Record<number, unknown> | undefined;
     expect(configCall?.[1]).toBe('G-TEST12345');
     expect(configCall?.[2]).toEqual({ send_page_view: false });
+  });
+
+  // Regression: gtag.js only processes queue entries that are `arguments`
+  // objects and silently ignores plain arrays. Pushing an array (rest params)
+  // grew the queue but configured nothing — no cookie, no hit, no error.
+  it('queues commands as arguments objects, never as plain arrays', async () => {
+    const analytics = await importWithMeasurementId('G-TEST12345');
+    analytics.loadAnalytics();
+
+    const queued = window.dataLayer ?? [];
+    expect(queued.length).toBeGreaterThan(0);
+    for (const entry of queued) {
+      expect(Array.isArray(entry)).toBe(false);
+      expect(Object.prototype.toString.call(entry)).toBe('[object Arguments]');
+    }
   });
 });
 
