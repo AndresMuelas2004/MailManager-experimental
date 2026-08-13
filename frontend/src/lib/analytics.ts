@@ -97,7 +97,10 @@ export function loadAnalytics(): void {
   // empujado es un objeto `arguments`, y descarta en silencio los arrays
   // normales. Con un array la cola crece, pero la propiedad nunca se configura
   // — sin cookie `_ga` y sin un solo hit enviado, sin ningún error visible.
-  function gtag(): void {
+  // Los parámetros se declaran solo para tipar las llamadas de abajo; el cuerpo
+  // empuja `arguments`, que es lo que gtag.js sabe interpretar.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function gtag(..._args: unknown[]): void {
     // eslint-disable-next-line prefer-rest-params
     window.dataLayer?.push(arguments);
   }
