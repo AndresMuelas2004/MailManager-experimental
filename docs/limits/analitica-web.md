@@ -66,5 +66,6 @@ La CSP sigue en modo **solo-reporte**: no bloquea nada, únicamente registra vio
 - **No se puede cambiar de opinión desde la interfaz.** No hay ajuste para revocar el consentimiento; la vía es borrar los datos del sitio en el navegador. Un panel de preferencias de cookies sería la ampliación natural si algún día hace falta.
 - **No hay banner en la aplicación autenticada**, porque ahí no se mide nada.
 - **No mide a quien rechaza, ni siquiera de forma agregada.** Las cifras de Analytics son un suelo, no el tráfico real.
+- **Los informes por título de página no distinguen entre las cuatro rutas.** Las páginas públicas no escriben `document.title` (invariante de un único escritor, ver `frontend_guide.md` §17.4), así que las cuatro llegan a Google con el mismo `page_title`: `MISSELA`. Para separarlas hay que mirar los informes por **ruta** (`page_location`, que sí es correcta y única por página), no por título. Darles título propio obligaría a romper ese invariante del frontend.
 - **No hay medición del lado del servidor.** Ningún endpoint del backend registra visitas; si el navegador no envía el evento, no existe.
 - **No hay alertas ni informes automáticos.** Los datos solo se consultan entrando a la consola de Google Analytics.
