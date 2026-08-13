@@ -39,6 +39,9 @@
   "enabledMcpjsonServers": [
     "postgres"
   ],
+  "worktree": {
+    "baseRef": "head"
+  },
   "hooks": {
     "PreToolUse": [
       {

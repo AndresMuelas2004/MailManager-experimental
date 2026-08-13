@@ -6,6 +6,12 @@
 .claude/settings.local.json
 .claude/.memory-write-flags/
 .mcp.json
+
+# Worktrees que crea el propio Claude Code (subagentes `isolation: worktree`, sesiones en
+# segundo plano, `claude --worktree`, sesiones paralelas del escritorio). Sin esta entrada
+# aparecen como ficheros sin trackear y abortan las comprobaciones de árbol limpio de
+# /creacion-worktree (G2), /shareChanges (fase 1) y /ship (4.1).
+.claude/worktrees/
 claudePlans/
 .playwright-mcp/
 

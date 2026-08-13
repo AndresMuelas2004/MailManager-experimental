@@ -1,0 +1,51 @@
+# .worktreeinclude — ficheros ignorados por git que deben viajar a cada worktree nuevo.
+#
+# Sintaxis de .gitignore. Semántica: solo se copia un fichero si (a) casa con algún
+# patrón de aquí Y (b) está ignorado por git. Los ficheros trackeados nunca se duplican,
+# así que un patrón de directorio amplio (p. ej. `backend/Scripts/`) no arrastra sus
+# excepciones ya versionadas.
+#
+# Quién lo lee:
+#   - Claude Code de forma nativa, al crear un worktree con `claude --worktree`, con un
+#     subagente `isolation: worktree`, o en las sesiones paralelas de la app de escritorio.
+#   - La skill `/creacion-worktree`, que crea worktrees hermanos con `git worktree add`
+#     (esa vía NO pasa por Claude Code, así que la skill lee este fichero explícitamente).
+#
+# Este fichero es la fuente ÚNICA de la estrategia "Copiar directo". Las otras tres
+# estrategias — Reinstalar, Reconstruir y No hacer nada — no se pueden expresar aquí y
+# viven en la tabla de `~/.claude/skills/creacion-worktree/SKILL.md`, que las mantiene en
+# lockstep con este fichero. Si añades un patrón aquí, quítalo de esa tabla y viceversa.
+
+# --- Configuración local de Claude Code y MCP ---
+.claude/settings.local.json
+.mcp.json
+ClaudePlans/
+
+# --- Variables de entorno y credenciales locales ---
+backend/.env
+backend/.env.docker
+frontend/.env.local
+
+# --- Mapa de cuentas propietarias de las consolas externas ---
+# Load-bearing: el CLAUDE.md raíz lo auto-importa (§15). Un worktree sin este fichero
+# arranca cada sesión con un import roto.
+cuentas-de-la-aplicacion.md
+
+# --- Scripts personales del desarrollador (los ignorados; CLAUDE.md y cli_utilities/ van versionados) ---
+backend/Scripts/
+
+# --- Investigación y documentación local no versionada ---
+externalAPIinformation/
+external-apis-used/
+features-found-needed-implementation/
+Superhuman-features/
+nueva-implementacion-en-curso/
+errores-pendientes-de-corregir/
+UtilidadesDelProgramador/
+
+# --- Historial local de bugs ---
+bug-analisis/bugs-arreglados-historial/
+bug-analisis/funcionalidades-cubiertas.md
+
+# --- Artefactos E2E que merece la pena conservar entre worktrees ---
+frontend/e2e/.artifacts/
