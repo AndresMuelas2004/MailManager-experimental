@@ -58,12 +58,21 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE_PATH="$(dirname "$REPO_ROOT")/<worktree-to-ship>"
 ```
 
-Validate:
-1. The directory exists: `test -d "$WORKTREE_PATH"`
-2. It is a registered git worktree: it appears in the output of `git worktree list`
+Validate against `git worktree list --porcelain` — **always the porcelain form, never the human-readable `git worktree list`**. It emits one record per worktree with labelled fields (`worktree <path>`, `HEAD <sha>`, `branch refs/heads/<branch>`) plus the bare markers `bare`, `detached`, `locked [reason]` and `prunable [reason]`, records separated by blank lines. Paths are read whole even when they contain spaces, and the markers below exist only here. Keep the output — Phase 3.1 reuses it.
 
-If either check fails, **STOP** with message:
+1. The directory exists: `test -d "$WORKTREE_PATH"`
+2. A record in the porcelain output has exactly that path.
+3. That record is **not** `prunable` (a `prunable` record points at a directory git can no longer find — the registration is stale and there is nothing to ship).
+4. That record does **not** live under `$REPO_ROOT/.claude/worktrees/`. Those are Claude Code's own worktrees (subagents with `isolation: worktree`, background sessions, `claude --worktree`, desktop parallel sessions) — short-lived, with no remote branch, no Podman stack and no PowerShell shortcut. Shipping one is never what the user meant.
+
+If any of those four fails, **STOP** with message:
 > "Worktree directory '<worktree-to-ship>' not found or is not a valid git worktree."
+
+Then one more check, which gets its own message because the cause and the fix are different: the record must **not** carry the `locked` marker. A lock is a deliberate "hands off" signal — set by hand with `git worktree lock`, or by Claude Code while a subagent works inside. **STOP** rather than override it:
+
+> "El worktree '<worktree-to-ship>' está bloqueado (razón: <reason>). No lo desbloqueo por mi cuenta. Si de verdad quieres shipearlo, ejecuta `git worktree unlock \"<worktree-path>\"` y vuelve a lanzar /ship."
+
+Stopping here is safe: nothing has been merged or deleted yet. Never reach for the double `-f` that `git worktree remove` suggests for locked worktrees — it could destroy a worktree an agent is using right now. Claude Code holds the same line: its periodic sweep releases locks *it* set for dead sessions, but never one you set yourself.
 
 ### 0.4 Get the branch name
 
@@ -176,7 +185,11 @@ This step is **mandatory before `git worktree remove`** because:
 git worktree remove <worktree-path> --force
 ```
 
-`git worktree remove --force` does two things at once: it deletes the directory contents AND removes the registration from `.git/worktrees/<name>`. On Windows, when the directory cannot be deleted because some process holds an open handle, git will still print a "Permission denied" / "failed to delete" error — but the registration is usually removed anyway, leaving an orphan empty directory on disk. Verify with `git worktree list`.
+`git worktree remove --force` does two things at once: it deletes the directory contents AND removes the registration from `.git/worktrees/<id>` (`<id>` is usually the directory name, but a worktree that went through `/cambiar-nombre-worktree` keeps its original one — `git worktree move` renames the directory, not the registration; it makes no difference here because git resolves by path). `--force` is required because these worktrees are always dirty: `/creacion-worktree` copies gitignored files into them.
+
+One `-f` covers "dirty" but **not** "locked" — on a locked worktree git fails with `fatal: cannot remove a locked working tree` and asks for a second `-f`. **Never add it.** Phase 0.3 already stopped the ship for locked worktrees, so reaching this point with one means something changed mid-run; report it rather than forcing.
+
+On Windows, when the directory cannot be deleted because some process holds an open handle, git will still print a "Permission denied" / "failed to delete" error — but the registration is usually removed anyway, leaving an orphan empty directory on disk. Verify with `git worktree list --porcelain`: the path must be gone entirely, not merely reduced to a `prunable` record.
 
 If the directory is gone, jump to **2.4**.
 
@@ -185,6 +198,16 @@ If the directory is still on disk, also try:
 ```bash
 rm -rf <worktree-path>
 ```
+
+⚠️ **Before running `rm -rf`, delete reparse points first.** A recursive delete can follow an NTFS junction or a directory symlink and wipe the **target's** contents outside the worktree — `node_modules` is the usual carrier. `git worktree remove` is immune to this (it is also what Claude Code does since 2.1.205: removing a worktree deletes only the link and keeps the folder it points to), so this manual fallback is the one place that needs the guard:
+
+```powershell
+Get-ChildItem -Path "<worktree-path>" -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } |
+  ForEach-Object { [System.IO.Directory]::Delete($_.FullName, $false) }
+```
+
+`[System.IO.Directory]::Delete($path, $false)` removes the link entry without following it (`$false` means non-recursive). If a link resists, do **not** fall back to a recursive delete on it — report it and treat the removal as failed.
 
 If `rm -rf` fails too with `Device or resource busy` / `Permission denied`, follow the **Locked Directory Recovery** procedure below before continuing.
 
@@ -321,10 +344,19 @@ The `/creacion-worktree` skill adds a navigation function to the PowerShell prof
 ### 3.1 List remaining worktrees
 
 ```bash
-git worktree list
+git worktree list --porcelain
 ```
 
-Filter out the main repository directory — only show actual worktrees (sibling directories with branches other than master).
+Drop the **first** record: git guarantees it is always the main working tree. Do not identify it by branch name — a main repo checked out on a feature branch would slip through that test.
+
+Then drop these three categories from the rebase set, reporting each one:
+
+1. **Claude Code-managed worktrees** — any record under `$REPO_ROOT/.claude/worktrees/` (see Phase 0.3). Rebasing one would rewrite a temporary branch another agent may be working in right now, and Claude Code removes them itself in its periodic sweep.
+   > Saltado (worktree de Claude Code): `<path>`
+2. **`prunable` records** — the directory is gone, there is nothing to rebase. Suggest `git worktree prune` and continue.
+   > Saltado (prunable — el directorio ya no existe): `<path>`
+3. **`locked` records** — locked deliberately, or left locked by a killed session. Leave it alone and surface the reason.
+   > Saltado (bloqueado: `<reason>`): `<path>`
 
 ### 3.2 Apply the exclusion list from the arguments
 
@@ -457,6 +489,8 @@ After all phases complete, output a structured final summary to chat. This is **
 ### Phase 3 — Worktree Selection
 - Remaining worktrees: <N> | None (nothing to rebase)
 - Excluded (via invocation arguments): none | <list of excluded names>
+- Skipped (Claude Code worktrees under `.claude/worktrees/`): none | <list>
+- Skipped (prunable / locked): none | <list with the marker and its reason>
 - Ignored exclusion tokens (no matching worktree): <list> (omit this line if none)
 
 ### Phase 4 — Rebase (only if worktrees exist)
@@ -503,7 +537,10 @@ After all phases complete, output a structured final summary to chat. This is **
 - Never stage `.env`, credentials, or secret files.
 - Must be invoked from the main repository directory (master branch), never from inside a worktree.
 - The worktree to ship is the **first** argument (the directory name, e.g., `feature-name`); any **additional** arguments name worktrees to exclude from the Phase 4 rebase.
-- Worktree exclusion is decided exclusively by the invocation arguments — Phase 3 must never prompt the user about exclusions.
+- Worktree exclusion is decided exclusively by the invocation arguments — Phase 3 must never prompt the user about exclusions. The three automatic skips (Claude Code worktrees, `prunable`, `locked`) are not exclusions the user chooses; they are records that cannot be shipped or rebased at all, and they are always reported.
+- Never ship or rebase a worktree under `.claude/worktrees/` — those belong to Claude Code, not to `/creacion-worktree`.
+- Never run a recursive delete on a worktree directory without first removing its reparse points (Phase 2.3.1) — it can wipe the target of an NTFS junction outside the worktree.
+- Always enumerate worktrees with `git worktree list --porcelain`; the human-readable form loses the `locked` / `prunable` markers and makes paths with spaces ambiguous.
 - The worktree path is derived as: `<parent-of-repo-root>/<worktree-to-ship>`.
 - All git operations targeting the main repo can omit `git -C` since we are already in the main directory.
 - All git operations targeting the worktree must use `git -C <worktree-path>`.

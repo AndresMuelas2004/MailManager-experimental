@@ -28,10 +28,19 @@ Each worktree is rebased onto the master that already contains the worktrees shi
 ### T1.1 List candidate worktrees
 
 ```bash
-git worktree list
+git worktree list --porcelain
 ```
 
-The first line is always the main repo — **drop it**. From the rest, drop any whose directory name matches a token in the exclusion list. For each excluded match, emit:
+Use the porcelain form for the same reasons as `SKILL.md` § 0.3: labelled fields, unambiguous paths, and the `locked` / `prunable` markers that the human-readable output drops entirely.
+
+The **first record** is always the main repo — **drop it** (git guarantees the order; never identify it by branch name).
+
+From the rest, drop the three unshippable categories first, reporting each one — they are not user exclusions, they simply cannot be shipped:
+> Saltado (worktree de Claude Code): `<path>` — bajo `.claude/worktrees/`, lo gestiona Claude Code
+> Saltado (prunable — el directorio ya no existe): `<path>`
+> Saltado (bloqueado: `<reason>`): `<path>`
+
+Then drop any whose directory name matches a token in the exclusion list. For each excluded match, emit:
 > Excluido del batch (por argumento): `<name>` (branch: `<branch>`)
 
 For an exclusion token matching no active worktree, **WARN and continue** (never stop):
@@ -141,7 +150,7 @@ Print one consolidated table covering **every** input worktree:
 | — | <name> | <br> | —    | ⏭️ excluido (argumento) | |
 ```
 
-Outcome legend: `✅ shipeado` · `⏭️ saltado (nada que shipear)` · `⏭️ excluido (argumento)` · `⚠️ saltado (conflicto manual)` · `⚠️ saltado (PR en conflicto)` · `⚠️ saltado (divergencia local)` · `❌ batch detenido (fallo crítico)`.
+Outcome legend: `✅ shipeado` · `⏭️ saltado (nada que shipear)` · `⏭️ excluido (argumento)` · `⏭️ saltado (worktree de Claude Code)` · `⏭️ saltado (prunable)` · `⏭️ saltado (bloqueado)` · `⚠️ saltado (conflicto manual)` · `⚠️ saltado (PR en conflicto)` · `⚠️ saltado (divergencia local)` · `❌ batch detenido (fallo crítico)`.
 
 Close with the count `X/N shipeados`. If the batch was stopped early by a critical failure, highlight it at the very top, name the worktree and the error, and list which worktrees were never reached. For any worktree left needing manual intervention, restate the `rebase-conflicts-solver` analysis so the user can act.
 
