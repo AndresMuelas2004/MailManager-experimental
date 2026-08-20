@@ -22,8 +22,18 @@ def normalize_cid(value: str | None) -> str:
     return urllib.parse.unquote(value).strip().strip("<>").strip().lower()
 
 
+# The CID body is GREEDY and the closing ``>`` is required only when an opening
+# ``<`` was actually matched (``(?(lt)>)`` conditional). With the previous
+# non-greedy body plus an optional ``>``, an UNQUOTED reference
+# (``<img src=cid:image001@host>``, still emitted by older clients) had nothing
+# forcing it to expand: the backreference to an empty quote matched immediately
+# and the CID collapsed to its first character. That made
+# ``find_referenced_cids`` report a CID no attachment could match, so the inline
+# part was demoted to a downloadable (D-13) and the image rendered broken.
+# The conditional keeps the tag's own ``>`` outside the match, which a blanket
+# greedy ``>?`` would have swallowed.
 _CID_REF_PATTERN = re.compile(
-    r"""(?P<attr>src|background)\s*=\s*(?P<quote>["']?)cid:<?(?P<cid>[^"'>\s]+?)>?(?P=quote)""",
+    r"""(?P<attr>src|background)\s*=\s*(?P<quote>["']?)cid:(?P<lt><)?(?P<cid>[^"'>\s]+)(?(lt)>)(?P=quote)""",
     re.IGNORECASE,
 )
 

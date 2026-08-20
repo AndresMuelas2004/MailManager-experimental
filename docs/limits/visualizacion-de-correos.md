@@ -46,6 +46,8 @@ El CSS de los bloques `<style>` se filtra regla a regla.
 
 > **Resiliencia:** cada regla se procesa de forma aislada. Una regla rota o de sintaxis exótica (p. ej. un `calc()` mal cerrado) se descarta sola, **sin** tumbar el resto del bloque `<style>` — así no se llevan por delante reglas críticas como las que ocultan el preheader.
 
+> **`!important` se conserva** en el bloque `<style>` que sobrevive. Es lo que permite que una regla `@media` gane a los estilos que el propio saneado acaba de volcar en el `style="…"` de cada elemento; sin él, las reglas responsive perdían siempre la cascada y el correo se veía con su diseño de escritorio dentro del visor, que es estrecho.
+
 **Propiedades CSS permitidas:** solo se conserva este vocabulario acotado de propiedades de maquetación, color, tipografía, espaciado y bordes (las que usan las plantillas reales). Cualquier propiedad fuera de esta lista —y cualquier valor que contenga `expression(…)`, `javascript:` o `vbscript:`— se elimina. Aplica tanto al CSS de los bloques `<style>` como al `style="…"` inline de cada elemento.
 
 ```
@@ -149,7 +151,7 @@ Cualquier atributo fuera de esta tabla (incluidos manejadores de eventos como `o
 | `<link>` | Eliminada | Traería hojas/recursos externos. |
 | `<base>` | Eliminada | Cambiaría la resolución de URLs del fragmento. |
 | `<xml>` (islas MSO de Office) | Eliminada con su contenido | Restos de Outlook que no deben renderizarse. |
-| Etiquetas `<html>` / `<head>` / `<body>` | Eliminadas como envoltorio (su contenido se conserva) | Se aplana el documento a un fragmento seguro; el fondo del `<body>` se preserva aparte. |
+| Etiquetas `<html>` / `<head>` / `<body>` | Eliminadas como envoltorio (su contenido se conserva) | Se aplana el documento a un fragmento seguro; el fondo del `<body>` se preserva aparte: su `style`, su `bgcolor` y su `background` (imagen de fondo de página completa) se promueven a un `<div>` envolvente, de modo que ni el reset blanco del visor los tapa ni la imagen de fondo desaparece. |
 
 ---
 
@@ -262,10 +264,15 @@ Al sanear el cuerpo (paso final, tras la lista blanca), estas referencias de ima
 | `background="https://…"` en `td` / `th` / `table` | Sí |
 | `style="… url(https://…)"` inline (propiedades de imagen) | Sí |
 | Bloque `<style>` con `url(https://…)` en propiedades de imagen | Sí |
+| Cualquiera de las anteriores en forma **relativa al protocolo** (`//host/ruta`) | Sí — se normaliza a `https://host/ruta` antes de firmar. Dentro del `srcdoc` del visor resuelve contra la URL de la propia app, así que sin reescribir el navegador la pediría directamente al remitente (fuga de IP) |
 | `@font-face { src: url(https://…) }` | **No** — una fuente no es imagen; el proxy solo sirve `image/*`, una fuente proxeada se rompería |
 | `cid:` / `data:` / URL relativa o de fragmento | **No** — no son remotas |
 
 Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `background`, `background-image`, `list-style`, `list-style-image`.
+
+**El destino de un `url(...)` entrecomillado puede contener paréntesis** (`url("…?fit=crop(1,1)")`, habitual en los parámetros de transformación de los CDN de imágenes): se reescribe entero. Sin comillas, el paréntesis cierra el `url()` como manda CSS.
+
+Antes de firmar, la URL se normaliza como haría el navegador: se eliminan tabulaciones y saltos de línea incrustados y se recortan los espacios de los extremos.
 
 **Reescritura resiliente:** la pasada estructurada (lxml) reescribe atributos y CSS; si tropieza con un HTML roto, un **fallback por regex** reescribe al menos los atributos `src=` / `background=`. En un correo patológico donde actúe el fallback, un `url(...)` raro podría quedar sin reescribir (se cargaría directo del remitente) — residuo aceptado.
 

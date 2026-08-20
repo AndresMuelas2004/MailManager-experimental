@@ -699,6 +699,16 @@ _DDL_STATEMENTS = [
     "TRUNCATE TABLE email_content;",
     "UPDATE alembic_version SET version_num = "
     "'0046_invalidate_email_content_cache_style_fixes';",
+    # Migration 0047: one-shot email_content invalidation after the image
+    # rendering fixes (bleach single-quoted attribute double-escaping, which
+    # baked a corrupt `&amp;` into the signed proxy URLs; !important preserved
+    # in the kept <style>; protocol-relative image URLs proxied;
+    # `<body background>` preserved). Same collapsed-invalidation note as 0044
+    # and 0046: a no-op on a fresh bootstrap, while incremental upgrades run
+    # the per-migration TRUNCATE in 0047 via Alembic.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = "
+    "'0047_invalidate_email_content_cache_image_render_fixes';",
 ]
 
 

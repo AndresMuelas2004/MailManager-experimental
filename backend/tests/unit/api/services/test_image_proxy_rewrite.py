@@ -266,3 +266,73 @@ def test_signature_round_trips_for_entity_encoded_query_string_in_attribute():
     html = '<img src="https://cdn.example.com/i.png?a=1&amp;b=2">'
     result = rewrite_remote_images(html, build_proxy_sentinel_url)
     assert _recovered_urls(result) == [decoded]
+
+
+# ---------------------------------------------------------------------------
+# url(...) targets that legitimately contain a closing paren
+# ---------------------------------------------------------------------------
+
+
+def test_quoted_css_url_containing_parens_is_rewritten():
+    """Image CDNs emit transform parameters with parens (``?fit=crop(1,1)``).
+    A single ``[^'")]+`` class truncated the target at the first ``)``, so the
+    URL failed the remote test and was served straight from the sender."""
+    url = "https://cdn.example.com/t.png?fit=crop(1,1)&w=300"
+    rewriter, calls = _recording_rewriter()
+    result = rewrite_remote_images(
+        f"<div style=\"background-image:url('{url}')\">x</div>", rewriter,
+    )
+    assert calls == [url]
+    # The whole target — parens included — sits behind the rewriter prefix,
+    # so no bare reference to the sender's host survives.
+    assert "PROXY::https://cdn.example.com/t.png?fit=crop(1,1)" in result
+    assert result.count("cdn.example.com") == 1
+
+
+def test_unquoted_css_url_is_still_rewritten():
+    url = "https://cdn.example.com/t.png?w=1"
+    rewriter, calls = _recording_rewriter()
+    rewrite_remote_images(f'<div style="background-image:url({url})">x</div>', rewriter)
+    assert calls == [url]
+
+
+# ---------------------------------------------------------------------------
+# Protocol-relative and whitespace-carrying references
+# ---------------------------------------------------------------------------
+
+
+def test_protocol_relative_src_is_normalised_to_https_before_signing():
+    rewriter, calls = _recording_rewriter()
+    rewrite_remote_images('<img src="//cdn.example.com/a.png">', rewriter)
+    assert calls == ["https://cdn.example.com/a.png"]
+
+
+def test_protocol_relative_css_url_is_normalised_to_https_before_signing():
+    rewriter, calls = _recording_rewriter()
+    rewrite_remote_images(
+        '<div style="background-image:url(//cdn.example.com/a.png)">x</div>', rewriter,
+    )
+    assert calls == ["https://cdn.example.com/a.png"]
+
+
+def test_background_attribute_with_wrapped_value_is_still_rewritten():
+    """lxml does not treat the legacy ``background`` attribute as a URI, so a
+    template that wrapped the value across lines kept its newline — and the
+    leading one made the scheme test fail, letting the URL through unrewritten
+    (straight to the sender's CDN)."""
+    rewriter, calls = _recording_rewriter()
+    rewrite_remote_images(
+        '<table><tr><td background="\n   https://cdn.example.com/bg.png">c</td></tr></table>',
+        rewriter,
+    )
+    assert calls == ["https://cdn.example.com/bg.png"]
+
+
+def test_relative_and_fragment_urls_are_left_alone():
+    """Only remote references are proxied: a same-document or relative URL
+    carries nothing to leak and must not be signed."""
+    rewriter, calls = _recording_rewriter()
+    html = '<img src="/images/a.png"><img src="#top"><img src="data:image/png;base64,AA">'
+    result = rewrite_remote_images(html, rewriter)
+    assert calls == []
+    assert result == html

@@ -282,6 +282,14 @@ _BODY_BGCOLOR_ATTR_RE = re.compile(
     r"""bgcolor\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
     re.IGNORECASE,
 )
+# ``<body background="…">`` is the legacy full-page background image. It is
+# promoted alongside ``bgcolor`` for the same reason: the ``<body>`` tag itself
+# does not survive flattening, so without this the whole-email background image
+# silently disappears. ``\b`` keeps it from matching ``bgcolor=``.
+_BODY_BACKGROUND_ATTR_RE = re.compile(
+    r"""\bbackground\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+    re.IGNORECASE,
+)
 
 # Premailer rewrites HTML attributes like ``width="600"`` into inline styles
 # (``style="width: 600px"``) and drops the original attribute. Mirroring the
@@ -535,6 +543,17 @@ def _sanitize_style_blocks(html: str) -> str:
 def _inline_css_via_premailer(html: str) -> str:
     """Inline style rules into ``style=""`` attrs, keep residual ``<style>`` intact.
 
+    ``strip_important=False`` is load-bearing for responsive layouts. Premailer's
+    default (``True``) removes ``!important`` from EVERY declaration it touches —
+    including the ``<style>`` block ``keep_style_tags=True`` preserves. Email
+    templates rely on ``!important`` inside ``@media (max-width:…)`` precisely to
+    beat the inline styles premailer itself just injected, so stripping it makes
+    the mobile rules lose the cascade every time: ``.wrapper{width:100%}`` never
+    overrides the ``style="width:600px"`` premailer wrote, columns never stack,
+    and ``.mobile-only{display:block}`` never wins over the inlined
+    ``display:none``. The viewer iframe is narrow, so those media queries are the
+    ones that should apply — the desktop layout was rendering compressed instead.
+
     ``allow_network=False`` is load-bearing: premailer's default downloads any
     ``<link rel="stylesheet" href="…">`` the sender put in the email (an SSRF +
     read-tracking vector — the fetch happens server-side, unguarded, with no
@@ -556,6 +575,7 @@ def _inline_css_via_premailer(html: str) -> str:
             cssutils_logging_level="CRITICAL",
             disable_validation=True,
             allow_network=False,
+            strip_important=False,
         )
     except Exception as exc:
         logger.warning("premailer failed (%s): %s", type(exc).__name__, exc)
@@ -567,29 +587,37 @@ def _inline_css_via_premailer(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _attr_value(match: re.Match[str] | None) -> str:
+    """First populated capture group of a ``attr=value`` match (3 quote forms)."""
+    if match is None:
+        return ""
+    return (match.group(1) or match.group(2) or match.group(3) or "").strip()
+
+
 def _extract_body_background(body_attrs: str) -> str:
-    """Read ``style`` + ``bgcolor`` from a ``<body …>`` tag and return a
-    combined CSS declaration string (e.g. ``background-color:#fafafa;margin:0``).
-    Returns an empty string when the body has nothing we need to preserve.
+    """Read ``style`` + ``bgcolor`` + ``background`` from a ``<body …>`` tag and
+    return a combined CSS declaration string (e.g.
+    ``background-color:#fafafa;margin:0``). Returns an empty string when the
+    body has nothing we need to preserve.
     """
     style_match = _BODY_STYLE_ATTR_RE.search(body_attrs)
     style_value = ""
     if style_match:
         style_value = (style_match.group(1) or style_match.group(2) or "").strip()
-    bgcolor_match = _BODY_BGCOLOR_ATTR_RE.search(body_attrs)
-    bgcolor_value = ""
-    if bgcolor_match:
-        bgcolor_value = (
-            bgcolor_match.group(1)
-            or bgcolor_match.group(2)
-            or bgcolor_match.group(3)
-            or ""
-        ).strip()
+    bgcolor_value = _attr_value(_BODY_BGCOLOR_ATTR_RE.search(body_attrs))
+    background_value = _attr_value(_BODY_BACKGROUND_ATTR_RE.search(body_attrs))
     parts: list[str] = []
     if bgcolor_value:
         # Promote the legacy attribute to a style so the iframe's own white
         # background cannot cover it.
         parts.append(f"background-color: {bgcolor_value}")
+    if background_value:
+        # CSS string escaping (backslash first, then the quote) so a URL
+        # carrying a quote cannot break out of the ``url("…")`` token. The
+        # remote-image rewrite later proxies it like any other inline
+        # ``background-image``.
+        escaped = background_value.replace("\\", "\\\\").replace('"', '\\"')
+        parts.append(f'background-image: url("{escaped}")')
     if style_value:
         parts.append(style_value.rstrip(";"))
     return "; ".join(parts)
@@ -784,11 +812,71 @@ def _build_css_sanitizer() -> Any:
     )
 
 
+def _build_amp_safe_serializer_class() -> Any:
+    """Subclass of bleach's serializer that fixes single-quoted attribute values.
+
+    Bleach parses with ``consume_entities=False``, so an attribute value reaches
+    the serializer with its entities UNRESOLVED (``&amp;`` is still the four
+    characters ``&amp;``). html5lib then blanket-applies ``&`` → ``&amp;``, and
+    bleach undoes that over-escaping in ``escape_base_amp``. But its
+    ``serialize`` loop only reaches ``escape_base_amp`` when the token right
+    after ``=`` is NOT ``"``: html5lib emits the quote character as its own
+    token, so a value quoted with ``'`` consumes the "after equals" state on the
+    quote and the VALUE token is yielded raw — double-escaped.
+
+    html5lib picks single quotes exactly when the value contains a double quote,
+    which is the normal shape of a sanitised ``style``: ``CSSSanitizer``
+    normalises ``url('…')`` → ``url("…")`` and ``font-family:'X Y'`` →
+    ``font-family:"X Y"``. So any inline style carrying BOTH a double quote and
+    a remote image URL came out as ``url("…?a=1&amp;amp;b=2")``. The image
+    rewrite then signed that literal ``&amp;`` into the proxy URL and the CDN
+    was asked for a query string with an ``amp;b`` parameter — a permanently
+    broken image baked into the immutable ``email_content`` cache. ``alt`` /
+    ``title`` text showed the same ``&amp;`` leak.
+
+    The fix tracks the attribute position explicitly (``=`` → quote → value)
+    and applies the SAME ``escape_base_amp`` bleach already applies to
+    double-quoted values, so it relaxes nothing: an ambiguous ``&`` is still
+    escaped, and ``escape_base_amp`` never emits a quote character.
+    """
+    from bleach.html5lib_shim import BleachHTMLSerializer, HTMLSerializer
+
+    class _AmpSafeSerializer(BleachHTMLSerializer):
+        def serialize(self, treewalker, encoding=None):  # type: ignore[override]
+            in_tag = False
+            # 0 = outside an attribute value, 1 = next token is the opening
+            # quote, 2 = next token is the attribute value itself.
+            attr_state = 0
+            for stoken in HTMLSerializer.serialize(self, treewalker, encoding):
+                if not in_tag:
+                    if stoken.startswith("<"):
+                        in_tag = True
+                    yield stoken
+                    continue
+                if attr_state == 2:
+                    attr_state = 0
+                    yield from self.escape_base_amp(stoken)
+                    continue
+                if attr_state == 1:
+                    attr_state = 2
+                elif stoken == ">":
+                    in_tag = False
+                elif stoken == "=":
+                    attr_state = 1
+                yield stoken
+
+    return _AmpSafeSerializer
+
+
 def _clean_with_bleach(html: str) -> str:
     """Final allowlist pass: tags, attributes, protocols, inline CSS, links.
 
     Uses a ``Cleaner`` with the shared link-hardening filter appended so the
-    ``<a>`` rewrite happens in the same parse pass as the sanitisation.
+    ``<a>`` rewrite happens in the same parse pass as the sanitisation, and with
+    its serializer re-classed to the double-escaping fix (see
+    ``_build_amp_safe_serializer_class``). Re-classing the instance rather than
+    rebuilding it keeps whatever constructor arguments bleach chose, so a future
+    bleach release cannot silently drop one of them here.
     """
     from bleach.sanitizer import Cleaner
 
@@ -809,6 +897,14 @@ def _clean_with_bleach(html: str) -> str:
             )
         ],
     )
+    try:
+        cleaner.serializer.__class__ = _build_amp_safe_serializer_class()
+    except Exception as exc:  # pragma: no cover — bleach internals changed
+        logger.warning(
+            "could not install the amp-safe serializer (%s): %s — attribute "
+            "entities may be double-escaped",
+            type(exc).__name__, exc,
+        )
     return cleaner.clean(html)
 
 
@@ -912,16 +1008,57 @@ def prepare_email_html(html: str) -> str:
 # Remote-image rewriting (runs AFTER the pure pipeline; injected rewriter)
 # ---------------------------------------------------------------------------
 
-# Only ``http(s)`` targets are rewritten. ``cid:`` / ``data:`` / relative /
+# Remote image targets the proxy must cover. ``cid:`` / ``data:`` / relative /
 # fragment URLs are left untouched — the proxy is for remote images only.
-_REMOTE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+# ``//host/path`` (protocol-relative) IS remote: inside the viewer's ``srcdoc``
+# iframe it resolves against the app's own base URL, so the browser would fetch
+# it straight from the sender's CDN — the exact IP leak the proxy exists to
+# prevent, and one ``/privacy`` promises does not happen.
+_REMOTE_URL_RE = re.compile(r"^(?:https?:)?//", re.IGNORECASE)
 
-# A CSS ``url(...)`` target, quoted or not. ``[^'")]+`` stops at the closing
-# quote or paren so it never over-runs the declaration.
+# Substrings that prove a document can carry a remote reference at all; used to
+# skip the whole rewrite pass on bodies that plainly cannot. Must stay in sync
+# with ``_REMOTE_URL_RE`` (``//`` covers the protocol-relative form).
+_REMOTE_URL_HINTS: tuple[str, ...] = ("http://", "https://", "//")
+
+# Characters the URL parser removes outright (WHATWG URL § "Remove all ASCII
+# tab or newline"). This matters on the paths where the value reaches us RAW:
+# lxml normalises URI attributes it recognises (``img@src``) on serialisation,
+# but the legacy ``background`` attribute and CSS ``url(…)`` are not treated as
+# URIs, so a template that wraps a long value across lines kept its newline —
+# and a leading one made the scheme test fail, letting the URL through
+# unrewritten (straight to the sender's CDN, i.e. an IP leak).
+_URL_STRIPPED_CHARS_RE = re.compile(r"[\t\r\n]")
+
+# A CSS ``url(...)`` target. The three alternatives are needed because a QUOTED
+# target may legitimately contain ``)`` — image CDNs emit them in transform
+# parameters (``?fit=crop(1,1)``) — while an unquoted one may not. Collapsing
+# them into one ``[^'")]+`` class truncated those URLs at the first ``)``, so
+# they failed to match as remote and were served straight from the sender.
 _CSS_URL_RE = re.compile(
-    r"""url\(\s*(?P<q>['"]?)(?P<url>[^'")]+)(?P=q)\s*\)""",
-    re.IGNORECASE,
+    r"""url\(\s*(?:
+            "(?P<dq>[^"]*)"
+          | '(?P<sq>[^']*)'
+          | (?P<uq>[^'"()\s]*)
+        )\s*\)""",
+    re.IGNORECASE | re.VERBOSE,
 )
+
+
+def _normalize_remote_url(raw: str) -> str | None:
+    """Canonical remote image URL, or ``None`` when *raw* is not remote.
+
+    Applies the two normalisations a browser would apply before fetching:
+    drops embedded tab/CR/LF and resolves the protocol-relative form to
+    ``https`` (the scheme the viewer document itself runs on). Callers sign the
+    RESULT, so the proxy asks upstream for the same URL the browser would.
+    """
+    cleaned = _URL_STRIPPED_CHARS_RE.sub("", raw).strip()
+    if not _REMOTE_URL_RE.match(cleaned):
+        return None
+    if cleaned.startswith("//"):
+        return f"https:{cleaned}"
+    return cleaned
 
 # CSS properties whose ``url(...)`` is an IMAGE inside a ``<style>`` block.
 # ``@font-face { src: url(…) }`` is deliberately excluded: a font is not an
@@ -937,7 +1074,7 @@ _IMAGE_CSS_URL_PROPERTIES: frozenset[str] = frozenset(
 # safe. The captured URL is HTML-escaped in the raw string, so it is
 # unescaped before signing and the sentinel is re-escaped for the attribute.
 _IMG_URL_ATTR_RE = re.compile(
-    r"""(?P<pre>\b(?:src|background)\s*=\s*)(?P<q>["'])(?P<url>https?://[^"'<>]*)(?P=q)""",
+    r"""(?P<pre>\b(?:src|background)\s*=\s*)(?P<q>["'])(?P<url>(?:https?:)?//[^"'<>]*)(?P=q)""",
     re.IGNORECASE,
 )
 
@@ -945,11 +1082,15 @@ _IMG_URL_ATTR_RE = re.compile(
 def _rewrite_css_url_values(css_value: str, url_rewriter: Callable[[str], str]) -> str:
     """Rewrite every remote ``url(...)`` target in a raw CSS value string."""
     def _replace(match: re.Match[str]) -> str:
-        raw = match.group("url").strip()
-        if not _REMOTE_URL_RE.match(raw):
-            return match.group(0)
-        q = match.group("q")
-        return f"url({q}{url_rewriter(raw)}{q})"
+        for group, quote in (("dq", '"'), ("sq", "'"), ("uq", "")):
+            raw = match.group(group)
+            if raw is None:
+                continue
+            normalized = _normalize_remote_url(raw)
+            if normalized is None:
+                return match.group(0)
+            return f"url({quote}{url_rewriter(normalized)}{quote})"
+        return match.group(0)
 
     return _CSS_URL_RE.sub(_replace, css_value)
 
@@ -962,7 +1103,7 @@ def _rewrite_style_declarations_images(
         if name.lower() not in _IMAGE_CSS_URL_PROPERTIES:
             continue
         value = style.getPropertyValue(name) or ""
-        if "http://" not in value and "https://" not in value:
+        if not any(hint in value for hint in _REMOTE_URL_HINTS):
             continue
         new_value = _rewrite_css_url_values(value, url_rewriter)
         if new_value != value:
@@ -1049,11 +1190,11 @@ def _rewrite_images_structured(html: str, url_rewriter: Callable[[str], str]) ->
             _rewrite_url_attr(element, "background", url_rewriter)
         if tag == "style":
             css = element.text
-            if css and ("http://" in css or "https://" in css):
+            if css and any(hint in css for hint in _REMOTE_URL_HINTS):
                 element.text = _rewrite_style_block(css, url_rewriter)
         else:
             inline = element.get("style")
-            if inline and ("http://" in inline or "https://" in inline):
+            if inline and any(hint in inline for hint in _REMOTE_URL_HINTS):
                 # Inline styles rewrite EVERY remote ``url(...)`` (no per-property
                 # filter, unlike ``<style>`` blocks which skip ``@font-face src``).
                 # This is safe because this pass runs AFTER bleach: the CSSSanitizer
@@ -1078,8 +1219,11 @@ def _rewrite_url_attr(
     element: Any, attr: str, url_rewriter: Callable[[str], str],
 ) -> None:
     value = element.get(attr)
-    if value and _REMOTE_URL_RE.match(value.strip()):
-        element.set(attr, url_rewriter(value.strip()))
+    if not value:
+        return
+    normalized = _normalize_remote_url(value)
+    if normalized is not None:
+        element.set(attr, url_rewriter(normalized))
 
 
 def _rewrite_image_attrs_regex(html: str, url_rewriter: Callable[[str], str]) -> str:
@@ -1094,8 +1238,10 @@ def _rewrite_image_attrs_regex(html: str, url_rewriter: Callable[[str], str]) ->
     signer is idempotent, so an already-rewritten sentinel is not double-wrapped.
     """
     def _replace_attr(match: re.Match[str]) -> str:
-        raw = html_unescape(match.group("url"))
-        sentinel = html_escape(url_rewriter(raw), quote=True)
+        normalized = _normalize_remote_url(html_unescape(match.group("url")))
+        if normalized is None:
+            return match.group(0)
+        sentinel = html_escape(url_rewriter(normalized), quote=True)
         return f'{match.group("pre")}{match.group("q")}{sentinel}{match.group("q")}'
 
     html = _IMG_URL_ATTR_RE.sub(_replace_attr, html)
@@ -1116,7 +1262,7 @@ def rewrite_remote_images(html: str, url_rewriter: Callable[[str], str]) -> str:
     ``src=`` / ``background=`` attributes (a pathological email may then leak
     a rare ``url(...)`` the fallback does not cover — accepted residual).
     """
-    if not html or ("http://" not in html and "https://" not in html):
+    if not html or not any(hint in html for hint in _REMOTE_URL_HINTS):
         return html
     try:
         return _rewrite_images_structured(html, url_rewriter)

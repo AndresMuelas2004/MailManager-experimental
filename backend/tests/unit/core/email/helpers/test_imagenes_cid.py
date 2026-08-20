@@ -143,3 +143,34 @@ class TestNormalizeCid:
     def test_empty_and_none_return_empty(self):
         assert normalize_cid("") == ""
         assert normalize_cid(None) == ""
+
+
+# -- unquoted cid: references ------------------------------------------------
+
+
+class TestUnquotedCidReferences:
+    """An unquoted ``src=cid:…`` (still emitted by older clients) used to
+    collapse to its first character: the non-greedy body had nothing forcing
+    it to expand because the backreference to the empty quote matched at once.
+    ``find_referenced_cids`` then reported a CID no attachment could match, so
+    the inline part was demoted to a downloadable (D-13) and the image
+    rendered broken."""
+
+    def test_find_referenced_cids_reads_the_whole_unquoted_cid(self):
+        assert find_referenced_cids("<img src=cid:image001.png@01D9 width=10>") == {
+            "image001.png@01d9"
+        }
+
+    def test_unquoted_cid_at_end_of_tag_keeps_the_tag_delimiter(self):
+        html = "<img src=cid:logo@x>"
+        assert find_referenced_cids(html) == {"logo@x"}
+        out = inline_cid_images(html, {"logo@x": "data:image/png;base64,AAA"})
+        assert out == '<img src="data:image/png;base64,AAA">'
+
+    def test_unquoted_cid_is_replaced_mid_tag(self):
+        html = "<img src=cid:logo@x width=10>"
+        out = inline_cid_images(html, {"logo@x": "data:image/png;base64,AAA"})
+        assert out == '<img src="data:image/png;base64,AAA" width=10>'
+
+    def test_quoted_cid_with_angle_brackets_still_consumes_them(self):
+        assert find_referenced_cids('<img src="cid:<logo@x>">') == {"logo@x"}

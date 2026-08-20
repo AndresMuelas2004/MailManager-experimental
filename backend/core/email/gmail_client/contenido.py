@@ -487,17 +487,24 @@ class GmailContenidoMixin:
             size = int(body.get("size") or 0)
             part_id = part.get("partId")
 
+            is_image = mime_type.lower().startswith("image/")
             is_inline_marked = (
                 disposition == "inline"
-                or (mime_type.lower().startswith("image/") and cid is not None)
+                or (is_image and cid is not None)
             )
             # ``find_referenced_cids`` returns normalised entries, so the
             # provider-side Content-ID must be normalised for the membership
             # check (case / percent-encoding tolerant matching).
             referenced = bool(cid and normalize_cid(cid) in referenced_cids)
 
-            if is_inline_marked and referenced:
-                # D-13: inline + referenced → resolve to data: URL.
+            if is_inline_marked and referenced and is_image:
+                # D-13: inline + referenced + image/* → resolve to data: URL.
+                # The ``is_image`` term is the fourth D-13 condition and mirrors
+                # Outlook's ``content_type.startswith("image/")``: without it a
+                # ``Content-Disposition: inline`` PDF that happens to carry a
+                # referenced Content-ID was embedded as a ``data:application/pdf``
+                # URL and never listed as a downloadable — the exact "PDF hidden
+                # inside the HTML" case the strict rule exists to prevent.
                 self._populate_cid_map(
                     part, mime_type, cid, body, provider_message_id, cid_map,
                 )

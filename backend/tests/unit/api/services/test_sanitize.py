@@ -1242,3 +1242,117 @@ def test_var_use_dropped_from_element_inline_style():
     result = sanitize_email_html(html)
     assert "var(" not in result
     assert "padding: 4px" in result or "padding:4px" in result.replace(" ", "")
+
+
+# ---------------------------------------------------------------------------
+# Attribute entity double-escaping (bleach single-quoted serialisation)
+# ---------------------------------------------------------------------------
+
+
+def test_inline_style_with_double_quote_signs_the_decoded_image_url():
+    """The regression that broke images at random.
+
+    ``CSSSanitizer`` normalises ``font-family:'X Y'`` to double quotes, which
+    makes bleach serialise the whole ``style`` attribute with SINGLE quotes —
+    and on that branch bleach skipped its own ``escape_base_amp``, so every
+    ``&`` already sitting there as ``&amp;`` came out as ``&amp;amp;``. The
+    image rewrite then signed a URL carrying a literal ``&amp;``, and the
+    proxy asked the CDN for an ``amp;h`` parameter: a permanently broken
+    image, baked into the immutable cached body together with its signature.
+    """
+    url = "https://cdn.example.com/hero.png?w=600&h=400"
+    html = (
+        "<div style=\"font-family:'Helvetica Neue',Arial;"
+        f"background-image:url('{url}')\">x</div>"
+    )
+    result = sanitize_email_html(html)
+    assert "&amp;amp;" not in result
+    match = re.search(
+        re.escape(SENTINEL_PREFIX) + r"\?u=(?P<u>[^&\"'\s)]+)&(?:amp;)?s=(?P<s>[0-9a-f]+)",
+        result,
+    )
+    assert match is not None
+    assert verify_and_extract(match.group("u"), match.group("s")) == url
+
+
+def test_attribute_entities_are_not_double_escaped_when_value_holds_a_quote():
+    """Same serialiser bug seen on plain text attributes: an ``alt`` carrying
+    both a double quote and an ``&amp;`` rendered as a literal ``&amp;``."""
+    html = '<img src="https://cdn.example.com/a.png" alt=\'Tom &amp; Jerry "best"\'>'
+    result = sanitize_email_html(html)
+    assert "&amp;amp;" not in result
+
+
+def test_bare_ampersand_in_quoted_attribute_is_still_escaped():
+    """The fix must not relax escaping: a bare ``&`` still becomes ``&amp;``
+    (it is the same ``escape_base_amp`` bleach applies to double-quoted
+    values), and an ambiguous entity stays neutralised."""
+    result = sanitize_email_html('<div title=\'say "hi" & bye &notanentity; end\'>x</div>')
+    assert "&amp; bye" in result
+    assert "&amp;notanentity;" in result
+
+
+# ---------------------------------------------------------------------------
+# !important preservation (responsive @media rules must beat inlined styles)
+# ---------------------------------------------------------------------------
+
+
+def test_important_survives_in_the_preserved_style_block():
+    """Premailer's default strips ``!important`` from every declaration it
+    touches, including the ``<style>`` block it preserves. Email templates use
+    it inside ``@media`` precisely to beat the inline styles premailer just
+    injected, so stripping it made the mobile rules lose the cascade and the
+    email rendered with its desktop layout inside the narrow viewer."""
+    html = (
+        "<html><head><style>"
+        ".wrapper{width:600px}"
+        "@media only screen and (max-width:600px){"
+        ".wrapper{width:100% !important}.col{display:block !important}}"
+        "</style></head><body>"
+        '<table class="wrapper" width="600"><tr><td class="col">x</td></tr></table>'
+        "</body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "width: 100% !important" in result
+    assert "display: block !important" in result
+
+
+# ---------------------------------------------------------------------------
+# <body background="..."> — legacy full-page background image
+# ---------------------------------------------------------------------------
+
+
+def test_body_background_attribute_is_promoted_to_the_wrapper_div():
+    """``<body>`` does not survive flattening, so its legacy ``background``
+    image attribute has to be promoted onto the wrapper div exactly like
+    ``bgcolor`` — otherwise the whole-email background silently disappears.
+    It is a remote image, so it must come back proxied, never raw."""
+    html = (
+        '<html><body background="https://cdn.example.com/paper.png" '
+        'bgcolor="#eeeeee"><p>hola</p></body></html>'
+    )
+    result = sanitize_email_html(html)
+    assert "background-image" in result
+    assert "cdn.example.com" not in result
+    assert SENTINEL_PREFIX in result
+
+
+# ---------------------------------------------------------------------------
+# Protocol-relative image URLs (//host/path) must be proxied, never leaked
+# ---------------------------------------------------------------------------
+
+
+def test_protocol_relative_image_url_is_proxied():
+    """Inside the viewer's ``srcdoc`` iframe a ``//host/path`` reference
+    resolves against the app's own base URL, so the browser would fetch it
+    straight from the sender's CDN — the IP leak the proxy exists to prevent."""
+    result = sanitize_email_html('<img src="//cdn.example.com/logo.png" width="20">')
+    assert "cdn.example.com" not in result
+    match = re.search(
+        re.escape(SENTINEL_PREFIX) + r"\?u=(?P<u>[^&\"'\s)]+)&(?:amp;)?s=(?P<s>[0-9a-f]+)",
+        result,
+    )
+    assert match is not None
+    assert verify_and_extract(match.group("u"), match.group("s")) == (
+        "https://cdn.example.com/logo.png"
+    )

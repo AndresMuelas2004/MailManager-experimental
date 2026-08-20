@@ -611,6 +611,24 @@ class TestClassifyAttachments:
         assert attachments[0].filename == "invoice.pdf"
         assert attachments[0].mime_type == "application/pdf"
 
+    def test_inline_disposition_pdf_is_downloadable_never_embedded(self, client: GmailClient):
+        # Same rule, through the other door: ``Content-Disposition: inline``
+        # alone used to satisfy the inline branch without any ``image/*``
+        # check, so a referenced PDF was embedded as a ``data:application/pdf``
+        # URL and never listed as a downloadable. The fourth D-13 condition
+        # (mime starts with ``image/``) closes it, mirroring Outlook.
+        payload = {"parts": [self._part(
+            mime_type="application/pdf", filename="invoice.pdf", cid="pdfcid",
+            disposition="inline",
+        )]}
+        cid_map, attachments = client._classify_attachments(
+            payload, "msg-1", '<img src="cid:pdfcid">',
+        )
+        assert cid_map == {}
+        assert len(attachments) == 1
+        assert attachments[0].filename == "invoice.pdf"
+        assert attachments[0].is_inline is True
+
     def test_inline_image_without_bytes_is_skipped(self, client: GmailClient):
         # Referenced inline image with no inline data and no attachmentId:
         # _populate_cid_map soft-fails, the part is consumed by the inline
