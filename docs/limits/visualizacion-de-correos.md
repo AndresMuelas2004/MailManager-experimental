@@ -37,7 +37,7 @@ El CSS de los bloques `<style>` se filtra regla a regla.
 |---------|----------|---------|
 | `@media` | **Se conserva** | Lleva los diseños responsive; sin ella las plantillas modernas perderían su layout de escritorio. |
 | `@supports` | **Se conserva** | Variantes condicionales legítimas de estilo. |
-| `@font-face` | **Se conserva** | Las firmas corporativas con fuentes web siguen renderizando. |
+| `@font-face` | **Se descarta** | Decisión de **privacidad**, no de capacidad: su `src: url(…)` era la única referencia remota que el proxy de imágenes nunca reescribe (el proxy solo sirve `image/*`), así que el navegador pedía la fuente **directamente al servidor que indicara el remitente** — un canal de rastreo que esquiva el proxy entero. Medido sobre el corpus real: 108 referencias en el 31 % de los correos, no un residuo raro. Gmail también lo elimina. Los correos afectados caen a la siguiente fuente de su propia lista `font-family`. |
 | `@import` | **Se descarta** | Traería hojas de estilo externas (fuga de recursos y de privacidad). |
 | `@keyframes` | **Se descarta** | Animaciones; innecesarias y fuera de scope. |
 | `@namespace` | **Se descarta** | Puede alterar la interpretación del documento. |
@@ -94,7 +94,7 @@ Además del filtro por nombre de propiedad, se aplican estas reglas de **valor y
 | Valores con `var(…)` (usos de custom properties) | Declaración eliminada | Las definiciones `--x` nunca sobreviven al saneado; el uso huérfano computa "vacío" **y además** pisa el fallback clásico (`bgcolor`) que la plantilla trae para este caso. Gmail también los elimina; al quitarlos, el fallback pinta. |
 | Definiciones de custom properties (`--x: …`) | Eliminadas | Nombre fuera de la lista blanca de propiedades. |
 | `@media (prefers-color-scheme: …)` (dark **y** light) | Bloque entero eliminado | El visor es solo-claro (paridad con Gmail web, que también las elimina); sin esto, con el SO en modo oscuro el correo mostraba la paleta oscura del remitente a medias. El visor además fija `color-scheme: light` en el documento y en el propio `<iframe>` (protege los cuerpos cacheados antes del filtro). |
-| El resto de `@media` (ancho, orientación…) y `@supports`, `@font-face` | Se conservan | Diseños responsive y fuentes corporativas. |
+| El resto de `@media` (ancho, orientación…) y `@supports` | Se conservan | Diseños responsive. |
 
 Nota (interna pero *load-bearing*): tras la lista blanca final, las entidades HTML que el serializador deja dentro de los bloques `<style>` se **des-escapan** (`&gt;` → `>`, nunca `&lt;`). `<style>` es *rawtext* — el navegador no decodifica entidades ahí — y un combinador hijo serializado como `&gt;` **parte el selector** en el parser CSS por el `;` de la entidad, convirtiendo reglas acotadas (los hacks de modo oscuro `[data-ogsc]` de Outlook) en reglas globales que pintaban fondos oscuros en el visor claro.
 
@@ -265,7 +265,7 @@ Al sanear el cuerpo (paso final, tras la lista blanca), estas referencias de ima
 | `style="… url(https://…)"` inline (propiedades de imagen) | Sí |
 | Bloque `<style>` con `url(https://…)` en propiedades de imagen | Sí |
 | Cualquiera de las anteriores en forma **relativa al protocolo** (`//host/ruta`) | Sí — se normaliza a `https://host/ruta` antes de firmar. Dentro del `srcdoc` del visor resuelve contra la URL de la propia app, así que sin reescribir el navegador la pediría directamente al remitente (fuga de IP) |
-| `@font-face { src: url(https://…) }` | **No** — una fuente no es imagen; el proxy solo sirve `image/*`, una fuente proxeada se rompería |
+| `@font-face { src: url(https://…) }` | **No aplica** — el `@font-face` se descarta antes (sección 2), así que ninguna referencia a fuente llega hasta aquí |
 | `cid:` / `data:` / URL relativa o de fragmento | **No** — no son remotas |
 
 Propiedades CSS consideradas "de imagen" para reescribir su `url(...)`: `background`, `background-image`, `list-style`, `list-style-image`.
@@ -329,9 +329,9 @@ Antes de firmar, la URL se normaliza como haría el navegador: se eliminan tabul
 | **Ejecutar JavaScript del correo** | Intencional: se elimina todo `<script>` y el iframe no concede permiso de ejecución. Un correo no es una aplicación. |
 | **Cargar hojas de estilo o recursos externos vía CSS** (`@import`, `<link>`) | Evita fugas de privacidad y de recursos; el correo debe ser autocontenido. |
 | **Incrustar partes marcadas inline pero NO referenciadas** por el cuerpo | Por la regla estricta (D-13), si el cuerpo no usa la parte vía `cid:`, se promociona a adjunto descargable en vez de incrustarse en el HTML. |
-| **Proxy de fuentes web remotas** (`@font-face { src: url(https://…) }`) | El proxy solo sirve `image/*`; una fuente proxeada se rompería. Las fuentes remotas se cargan directas, como antes. |
+| **Fuentes web del remitente** (`@font-face`) | No se pueden servir por el proxy (solo sirve `image/*`) y cargarlas directas abría un canal de rastreo que lo esquiva, así que la at-rule se **descarta** entera (§ 2). El correo cae a la siguiente fuente de su lista `font-family`. |
 | **Cierre total de la ventana TOCTOU de DNS** | El anti-SSRF valida el host y luego httpx lo re-resuelve; un DNS con TTL de sub-segundo que pase de IP pública a privada podría colarse. Fijar la conexión a la IP validada queda como endurecimiento futuro (§ 10.3). |
-| **Fidelidad perfecta del cuerpo cuando lxml malinterpreta un fragmento** | Si la pasada estructurada de lxml pierde la mayoría de los elementos de layout (o lanza), se usa un fallback por regex que reescribe `src=` / `background=` **y** todos los `url(...)` remotos sobre la cadena original, sin reestructurar (no se pierde contenido). La **privacidad se preserva** (ninguna URL cruda sobrevive); el coste es que en ese caso raro un `@font-face src` remoto también se proxea y la fuente se rompe. |
+| **Fidelidad perfecta del cuerpo cuando lxml malinterpreta un fragmento** | Si la pasada estructurada de lxml pierde la mayoría de los elementos de layout (o lanza), se usa un fallback por regex que reescribe `src=` / `background=` **y** todos los `url(...)` remotos sobre la cadena original, sin reestructurar (no se pierde contenido). La **privacidad se preserva**: ninguna URL cruda sobrevive. |
 | **Purga del proxy de imágenes por cron o automática** | Solo hay purga manual vía `POST /admin/image-proxy/purge` (igual que los adjuntos). Sin programador en el MVP. |
 | **Descarga asíncrona o paralela del proxy en el servidor** | El endpoint `GET /image-proxy` es **síncrono** por decisión (MVP): la aceleración viene de reutilizar conexiones (keep-alive, § 10.3), no de paralelizar. Dos semáforos (máx. 8 cada uno) acotan las descargas upstream y el servido completo (§ 10.5) para que abrir un correo con muchas imágenes no agote ni el threadpool compartido ni el pool de BD. |
 | **Servir como imagen un cuerpo sin firma de imagen reconocible bajo Content-Type genérico** | El sniffing de magic bytes (§ 10.3) admite solo formatos ráster conocidos; un HTML de error, un SVG o bytes arbitrarios etiquetados `octet-stream` se rechazan — el proxy nunca es un relay ciego. |

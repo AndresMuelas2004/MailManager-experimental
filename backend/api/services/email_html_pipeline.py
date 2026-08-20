@@ -15,8 +15,8 @@ Pipeline
    templates survives the later comment-stripping pass.
 3. ``_sanitize_style_blocks`` — parse each ``<style>`` block with cssutils,
    filter properties against the allowlist, drop unsafe at-rules (``@import``,
-   ``@namespace``, ``@charset``) and keep ``@media`` / ``@supports`` /
-   ``@font-face`` / style rules. Also drops property values containing
+   ``@namespace``, ``@charset``, ``@font-face``) and keep ``@media`` /
+   ``@supports`` / style rules. Also drops property values containing
    ``expression(…)`` or ``javascript:`` schemes.
 4. ``_inline_css_via_premailer`` — inline style rules into ``style=""``
    attributes for parity with mail clients that strip ``<style>`` blocks. The
@@ -142,7 +142,7 @@ _ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset({
     "padding-bottom", "padding-inline", "padding-inline-end",
     "padding-inline-start", "padding-left", "padding-right", "padding-top",
     "page-break-after", "page-break-before", "position", "right", "row-gap",
-    "src", "table-layout", "text-align", "text-decoration",
+    "table-layout", "text-align", "text-decoration",
     "text-decoration-color", "text-decoration-line", "text-decoration-style",
     "text-decoration-thickness", "text-indent",
     "text-overflow", "text-shadow", "text-transform", "top", "unicode-bidi",
@@ -154,8 +154,20 @@ _ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset({
 # At-rules kept inside ``<style>`` blocks. ``@import`` / ``@namespace`` /
 # ``@charset`` are dropped (can fetch remote resources or change parsing) —
 # ``@media`` and ``@supports`` carry responsive layouts and must survive.
-# ``@font-face`` is kept so corporate signatures with web fonts still render.
-_ALLOWED_CSS_AT_RULES: frozenset[str] = frozenset({"media", "supports", "font-face"})
+#
+# ``@font-face`` is dropped too, and that is a PRIVACY decision, not a
+# capability one. Its ``src: url(…)`` is the one remote reference the image
+# rewrite deliberately never proxied (the proxy only serves ``image/*``), so
+# every surviving web font was fetched by the browser DIRECTLY from whatever
+# host the sender named — measured at 108 references across 31% of a real
+# corpus, i.e. not the "rare residual" it was once documented as. Today they
+# all point at Google Fonts, but nothing stops a sender from self-hosting a
+# font and using it as a read-tracking pixel that bypasses the proxy
+# entirely. Dropping the at-rule closes that hole for good and is Gmail
+# parity (Gmail strips ``@font-face`` as well); affected emails fall back to
+# the next family in their own ``font-family`` list, which mail templates
+# always declare.
+_ALLOWED_CSS_AT_RULES: frozenset[str] = frozenset({"media", "supports"})
 
 # ``@media`` blocks whose condition mentions this marker are dropped whole:
 # the viewer renders every email light-only (Gmail-web parity — Gmail strips
@@ -398,7 +410,7 @@ def _unwrap_mso_conditionals(html: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — sanitise <style> blocks (keeps @media, @supports, @font-face)
+# Step 3 — sanitise <style> blocks (keeps @media / @supports only)
 # ---------------------------------------------------------------------------
 
 
@@ -1061,8 +1073,10 @@ def _normalize_remote_url(raw: str) -> str | None:
     return cleaned
 
 # CSS properties whose ``url(...)`` is an IMAGE inside a ``<style>`` block.
-# ``@font-face { src: url(…) }`` is deliberately excluded: a font is not an
-# image and the proxy only serves ``image/*``, so a proxied font would break.
+# This is the complete set of ``url()``-bearing properties that can still
+# reach this pass: ``@font-face`` (the only other one) no longer survives
+# sanitisation, and ``src`` was removed from ``_ALLOWED_CSS_PROPERTIES`` with
+# it, so no font reference can slip past the proxy any more.
 _IMAGE_CSS_URL_PROPERTIES: frozenset[str] = frozenset(
     {"background", "background-image", "list-style", "list-style-image"}
 )
@@ -1111,7 +1125,12 @@ def _rewrite_style_declarations_images(
 
 
 def _rewrite_style_rules_images(rules: Any, url_rewriter: Callable[[str], str]) -> None:
-    """Recurse a ``CSSRuleList`` rewriting image ``url(...)``; skip ``@font-face``."""
+    """Recurse a ``CSSRuleList`` rewriting image ``url(...)`` in style/media rules.
+
+    Any other rule type is left untouched. ``@font-face`` cannot appear here
+    any more (step 3 drops the at-rule), so the branch below is defence in
+    depth rather than the escape hatch it used to be.
+    """
     from cssutils.css import CSSRule  # lazy — transitive dep of premailer
 
     for rule in rules:
@@ -1122,7 +1141,8 @@ def _rewrite_style_rules_images(rules: Any, url_rewriter: Callable[[str], str]) 
             _rewrite_style_rules_images(rule.cssRules, url_rewriter)
         elif type(rule).__name__ == "CSSSupportsRule":
             _rewrite_style_rules_images(rule.cssRules, url_rewriter)
-        # FONT_FACE_RULE / import / etc. are intentionally left untouched.
+        # import / keyframes / etc. are intentionally left untouched (and
+        # ``@font-face`` never reaches this pass — step 3 drops it).
 
 
 def _rewrite_style_block(css: str, url_rewriter: Callable[[str], str]) -> str:
@@ -1195,14 +1215,11 @@ def _rewrite_images_structured(html: str, url_rewriter: Callable[[str], str]) ->
         else:
             inline = element.get("style")
             if inline and any(hint in inline for hint in _REMOTE_URL_HINTS):
-                # Inline styles rewrite EVERY remote ``url(...)`` (no per-property
-                # filter, unlike ``<style>`` blocks which skip ``@font-face src``).
-                # This is safe because this pass runs AFTER bleach: the CSSSanitizer
-                # already dropped every property outside ``_ALLOWED_CSS_PROPERTIES``,
-                # and the only ``url()``-bearing survivors that matter inline are
-                # image properties. ``src`` is allowlisted only for ``@font-face``
-                # (which cannot exist inline), so a stray inline ``src:url()`` is a
-                # visual no-op — over-rewriting it breaks nothing and never leaks.
+                # Inline styles rewrite EVERY remote ``url(...)``, without the
+                # per-property filter the ``<style>`` path uses. This is safe
+                # because the pass runs AFTER bleach: the CSSSanitizer already
+                # dropped every property outside ``_ALLOWED_CSS_PROPERTIES``, and
+                # the only ``url()``-bearing survivors there are image properties.
                 # INVARIANT: keep ``_ALLOWED_CSS_PROPERTIES`` free of any non-image
                 # ``url()`` property that is meaningful inline, or this must filter.
                 element.set("style", _rewrite_css_url_values(inline, url_rewriter))
@@ -1233,9 +1250,9 @@ def _rewrite_image_attrs_regex(html: str, url_rewriter: Callable[[str], str]) ->
     in the raw string. Covering ``url(...)`` too is what keeps the fallback
     privacy-safe: the structured pass filters ``url(...)`` by image property, but
     here — a rare emergency path — leaking a raw remote URL is the worst outcome,
-    so we deliberately over-rewrite (a stray ``@font-face`` url gets proxied and
-    that font breaks) rather than let any remote URL survive uncached. The
-    signer is idempotent, so an already-rewritten sentinel is not double-wrapped.
+    so we deliberately over-rewrite rather than let any remote URL survive
+    unproxied. The signer is idempotent, so an already-rewritten sentinel is not
+    double-wrapped.
     """
     def _replace_attr(match: re.Match[str]) -> str:
         normalized = _normalize_remote_url(html_unescape(match.group("url")))

@@ -1356,3 +1356,60 @@ def test_protocol_relative_image_url_is_proxied():
     assert verify_and_extract(match.group("u"), match.group("s")) == (
         "https://cdn.example.com/logo.png"
     )
+
+
+# ---------------------------------------------------------------------------
+# @font-face — dropped so no remote reference escapes the image proxy
+# ---------------------------------------------------------------------------
+
+
+def test_font_face_at_rule_is_dropped_entirely():
+    """A web font's ``src: url(…)`` is the one remote reference the image
+    rewrite never proxies (the proxy serves ``image/*`` only), so a surviving
+    ``@font-face`` had the browser fetch it STRAIGHT from the sender's host —
+    a read-tracking channel that bypasses the proxy. Measured at 108
+    references across 31% of a real corpus before removal. Gmail strips the
+    at-rule too, so this is rendering parity."""
+    html = (
+        "<html><head><style>"
+        "@font-face{font-family:Fancy;src:url(https://fonts.example.com/f.woff2)}"
+        ".t{color:#111}"
+        "</style></head><body><p class=\"t\">x</p></body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "@font-face" not in result
+    assert "fonts.example.com" not in result
+    # Sibling rules in the same block are untouched.
+    assert "color: #111" in result or "color:#111" in result.replace(" ", "")
+
+
+def test_font_face_removal_leaves_no_remote_url_behind():
+    """The whole point of the removal: after sanitisation the body must carry
+    no remote reference outside a signed proxy sentinel."""
+    html = (
+        "<html><head><style>"
+        "@font-face{font-family:A;src:url('https://fonts.gstatic.com/s/a.woff2') format('woff2')}"
+        "@media (max-width:600px){.c{width:100%!important}}"
+        "</style></head><body>"
+        '<img src="https://cdn.example.com/x.png"><div class="c">y</div>'
+        "</body></html>"
+    )
+    result = sanitize_email_html(html)
+    assert "gstatic.com" not in result
+    assert "cdn.example.com" not in result
+    assert SENTINEL_PREFIX in result
+    # The responsive rule that shares the block still survives.
+    assert "max-width" in result and "!important" in result
+
+
+def test_src_is_not_an_allowed_css_property_any_more():
+    """``src`` was allowlisted solely for ``@font-face``; with the at-rule gone
+    it is dead surface, and keeping it would let a ``url()`` slip past the
+    per-property filter of the ``<style>`` rewrite."""
+    from api.services.email_html_pipeline import (
+        _ALLOWED_CSS_AT_RULES,
+        _ALLOWED_CSS_PROPERTIES,
+    )
+
+    assert "font-face" not in _ALLOWED_CSS_AT_RULES
+    assert "src" not in _ALLOWED_CSS_PROPERTIES

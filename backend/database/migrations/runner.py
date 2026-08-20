@@ -709,6 +709,14 @@ _DDL_STATEMENTS = [
     "TRUNCATE TABLE email_content;",
     "UPDATE alembic_version SET version_num = "
     "'0047_invalidate_email_content_cache_image_render_fixes';",
+    # Migration 0048: one-shot email_content invalidation after dropping the
+    # @font-face at-rule from the sanitiser. A web font's `src: url(…)` was the
+    # only remote reference the image rewrite never proxied, so cached bodies
+    # still carrying one make the viewer fetch it straight from the sender's
+    # host. Same collapsed-invalidation note as 0044/0046/0047.
+    "TRUNCATE TABLE email_content;",
+    "UPDATE alembic_version SET version_num = "
+    "'0048_invalidate_email_content_cache_drop_font_face';",
 ]
 
 

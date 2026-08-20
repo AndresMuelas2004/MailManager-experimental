@@ -104,8 +104,13 @@ def test_leaves_non_remote_img_src_untouched(url):
 
 
 def test_leaves_font_face_src_untouched():
-    """``@font-face { src: url(…) }`` is deliberately excluded — the proxy only
-    serves ``image/*``, so a proxied font would break."""
+    """``@font-face { src: url(…) }`` is never proxied — the proxy only serves
+    ``image/*``, so a proxied font would break.
+
+    Defence in depth only: the at-rule no longer survives sanitisation at all
+    (``_ALLOWED_CSS_AT_RULES`` dropped it, precisely because this pass left its
+    remote ``src`` unproxied), so the full pipeline can never hand one to this
+    rewriter. ``test_sanitize.py`` pins that removal end to end."""
     rw, calls = _recording_rewriter()
     html = (
         "<style>@font-face{font-family:X;src:url(https://cdn.example.com/font.woff2)}</style>"
