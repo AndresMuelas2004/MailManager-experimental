@@ -141,3 +141,69 @@ def test_validate_token_encryption_config_allows_configured_key(monkeypatch):
     monkeypatch.setenv("TOKEN_PLAINTEXT_FALLBACK_ENABLED", "false")
 
     lifecycle_module.validate_token_encryption_config()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Startup migration must not destroy the application's logging configuration
+# ---------------------------------------------------------------------------
+
+
+def test_startup_migration_tells_alembic_not_to_configure_logging(monkeypatch):
+    """The single guard that keeps the app observable in production.
+
+    ``alembic.ini`` carries its own ``[logger_root]`` section and Alembic's
+    ``env.py`` feeds it to ``fileConfig``, whose default
+    ``disable_existing_loggers=True`` flips every already-created logger to
+    ``disabled``. Run in-process at startup, that silenced the WHOLE app from
+    the moment it booted — no 5xx from ``api.errors.handlers``, no swallowed
+    background failures, no ``uvicorn.access`` lines. The embedded caller must
+    therefore hand Alembic ``configure_logging=False``.
+    """
+    captured: dict = {}
+
+    class _FakeConfig:
+        def __init__(self, path):
+            self.path = path
+            self.attributes: dict = {}
+
+    def _fake_upgrade(cfg, revision):
+        captured["attributes"] = dict(cfg.attributes)
+        captured["revision"] = revision
+
+    import sys
+    import types
+
+    fake_command = types.ModuleType("alembic.command")
+    fake_command.upgrade = _fake_upgrade
+    fake_config_mod = types.ModuleType("alembic.config")
+    fake_config_mod.Config = _FakeConfig
+    fake_alembic = types.ModuleType("alembic")
+    monkeypatch.setitem(sys.modules, "alembic", fake_alembic)
+    monkeypatch.setitem(sys.modules, "alembic.command", fake_command)
+    monkeypatch.setitem(sys.modules, "alembic.config", fake_config_mod)
+    monkeypatch.setattr(lifecycle_module, "is_startup_auto_migrate_enabled", lambda: True)
+    monkeypatch.setattr(lifecycle_module, "get_alembic_ini_path", lambda: "alembic.ini")
+
+    assert lifecycle_module.run_startup_migrations_if_enabled() is True
+    assert captured["revision"] == "head"
+    assert captured["attributes"]["configure_logging"] is False
+
+
+def test_alembic_ini_file_config_does_not_disable_app_loggers():
+    """Defence in depth: even when ``env.py`` DOES apply ``alembic.ini`` (the
+    CLI path), passing ``disable_existing_loggers=False`` keeps the app's
+    loggers alive. Without it a CLI run inside a configured process silences
+    the caller."""
+    from logging.config import fileConfig
+
+    from database.settings import get_alembic_ini_path
+
+    app_logger = logging.getLogger("api.errors.handlers")
+    uvicorn_logger = logging.getLogger("uvicorn.access")
+    app_logger.disabled = False
+    uvicorn_logger.disabled = False
+
+    fileConfig(str(get_alembic_ini_path()), disable_existing_loggers=False)
+
+    assert app_logger.disabled is False
+    assert uvicorn_logger.disabled is False

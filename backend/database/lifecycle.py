@@ -37,6 +37,12 @@ def run_startup_migrations_if_enabled() -> bool:
             return True
 
         cfg = Config(str(get_alembic_ini_path()))
+        # Running EMBEDDED inside the app process: the application already
+        # configured logging before uvicorn started, so ``env.py`` must not
+        # re-apply ``alembic.ini``'s own logging section over it. Without this
+        # flag the startup migration left the whole app mute — see the
+        # invariant in ``migrations/env.py``.
+        cfg.attributes["configure_logging"] = False
         command.upgrade(cfg, "head")
     except DatabaseError:
         raise

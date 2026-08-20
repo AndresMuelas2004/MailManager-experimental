@@ -17,8 +17,29 @@ from database.settings import get_database_url
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# LOAD-BEARING for the whole application's observability.
+#
+# ``alembic.ini`` carries its own ``[logger_root]`` section, and
+# ``fileConfig`` defaults to ``disable_existing_loggers=True``. When the app
+# runs the startup migration in-process, every logger created before that
+# point — ``api.errors.handlers`` (the single place 5xx faults are logged),
+# every ``api.services.*`` best-effort swallow point, ``uvicorn.access`` —
+# was flipped to ``disabled=True`` and the root level dropped to WARNING.
+# The result was an application that logged NOTHING from the moment it
+# booted: no 5xx, no swallowed background failures, no access lines.
+#
+# Two independent guards, both needed:
+#  * ``configure_logging`` attribute — the embedded caller
+#    (``database.lifecycle``) sets it to False, so the app's own logging
+#    configuration survives untouched.
+#  * ``disable_existing_loggers=False`` — defence in depth for any other
+#    in-process invocation (a CLI run inside an already-configured process,
+#    a future caller that forgets the attribute). Alembic's own loggers are
+#    named in the file and are configured normally either way.
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logging", True
+):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 
