@@ -19,7 +19,7 @@ Confirmar con el usuario (si hay ambigüedad) qué archivo(s) `CLAUDE.md` se van
 
 ### Paso 2 — Desactivar el hook `protect-claude-md.sh` en `.claude/settings.json`
 
-Editar `C:\Users\MiniPC\Desktop\proyectos\MailManager-experimental\.claude\settings.json` y eliminar el primer entry del array `hooks.PreToolUse` (el que ejecuta `protect-claude-md.sh`). El resto del archivo NO se toca.
+Editar `.claude/settings.json` (relativo a la raíz del repo) y eliminar el primer entry del array `hooks.PreToolUse` (el que ejecuta `protect-claude-md.sh`). El resto del archivo NO se toca.
 
 **Bloque exacto a eliminar** (incluida la coma que lo separa del siguiente entry):
 

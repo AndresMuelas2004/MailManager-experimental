@@ -133,7 +133,7 @@ Los 3 subagentes que navegan (detector, validador, tester) usan el **MCP `chrome
    1. Carga la tool del MCP: `ToolSearch` → `select:mcp__chrome-a11__list_pages`.
    2. Garantiza que Chrome está levantado en el puerto 9223 con el perfil de amuelas11:
       ```powershell
-      & "C:\Users\MiniPC\.claude\skills\navegador-amuelas11\ensure-chrome.ps1"
+      & "$env:USERPROFILE\.claude\skills\navegador-amuelas11\ensure-chrome.ps1"
       ```
       `ALREADY_UP` / `LAUNCHED_UP` → puerto OK. `CHROME_NOT_FOUND` / `LAUNCH_TIMEOUT` → para con condición excepcional (avisa al usuario; puede necesitar cerrar Chrome del perfil o lanzarlo a mano).
    3. Verifica el **enganche del MCP** llamando `mcp__chrome-a11__list_pages`. Si devuelve páginas → listo. Si da error de conexión → el MCP no enganchó al arrancar Claude Code y **no se puede reconectar en caliente**: para con condición excepcional pidiendo al usuario que (re)arranque el navegador y reinicie Claude Code (`claude --continue`) antes de relanzar el ciclo.

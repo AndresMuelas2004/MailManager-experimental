@@ -149,7 +149,7 @@
     <rect x="120" y="1220" width="720" height="136" rx="14" fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
     <text x="140" y="1247" font-size="11" font-weight="700" fill="#92400e" letter-spacing="2">PASO PREVIO OBLIGATORIO — LEER ANTES DE LANZAR</text>
     <text x="140" y="1270" font-size="13" font-weight="700" fill="#854d0e">Leer el cuerpo del agente:</text>
-    <text x="140" y="1289" font-size="12" fill="#b45309">C:\Users\MiniPC\.claude\agents\external-api-docs-researcher.md</text>
+    <text x="140" y="1289" font-size="12" fill="#b45309">~\.claude\agents\external-api-docs-researcher.md</text>
     <text x="140" y="1309" font-size="11.5" fill="#b45309">De ahí: (i) formato de task prompt esperado · (ii) el agente ya hace doble pasada interna y</text>
     <text x="140" y="1326" font-size="11.5" fill="#b45309">persiste en externalAPIinformation/{tema}-{api}.md · (iii) si ya existe, lo REFRESCA Y</text>
     <text x="140" y="1343" font-size="11.5" fill="#b45309">AMPLÍA conservando lo previo (la base de las rondas de revisión).</text>
